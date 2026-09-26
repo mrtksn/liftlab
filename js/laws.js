@@ -167,6 +167,22 @@ function posFixModel(pos, vel, p, st, dt) {
   };
 }
 
+function flowModel(f, q, p, st, dt) {
+  // f: true angular flow of the ground under the camera, sensor frame [rad/s]
+  // q: image quality from ground texture, light and height, 0–1. Returns [fx, fy, quality].
+  if (!st.s) st.s = [1 + randn() * p.scale, 1 + randn() * p.scale];   // lens and calibration scale error
+  if (q < 0.15) return [0, 0, 0];                                     // too dark or featureless: no reading
+  if (Math.hypot(f[0], f[1]) > p.maxRate) return [0, 0, 0];           // ground moving too fast across the image
+  const sd = p.noise / q;                                             // poorer images, noisier flow
+  return [f[0] * st.s[0] + randn() * sd, f[1] * st.s[1] + randn() * sd, q];
+}
+
+function rangeModel(d, p, st) {
+  // d: true distance to the ground along the sensor's boresight [m]. Returns −1 when out of range.
+  if (!(d >= p.minRange && d <= p.maxRange)) return -1;
+  return d + randn() * p.noise * (1 + d);                             // noise grows with distance
+}
+
 // ═════════════ Estimation (what the flight software believes) ═════════════
 
 function attitudeEstimator(st, gyro, accel, mag, dt) {
@@ -206,25 +222,49 @@ function attitudeEstimator(st, gyro, accel, mag, dt) {
   return { q: st.q.slice(), w: st.w.slice() };
 }
 
-function positionEstimator(st, R, accel, baro, fix, m, dt) {
+function flowVelocity(flow, range, w, Rs) {
+  // Turns an optical-flow reading into velocity. flow: [fx, fy] [rad/s]; range: distance to the ground [m];
+  // w: gyro in the sensor frame [rad/s]; Rs: sensor → world rotation (attitude estimate × known mount).
+  // The camera looks along its −Z. Rotation also sweeps the image, so the gyro's share is removed first.
+  const vs = [range * (w[1] - flow[0]), range * (-w[0] - flow[1]), 0];   // sensor velocity across the image plane
+  const v = m3v(Rs, vs);                                                  // → world
+  const down = m3v(Rs, [0, 0, -1]);
+  return [v[0], v[1], range * -down[2]];                                  // [vx, vy, height above ground]
+}
+
+function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
   // Complementary filter. Integrates the accelerometer (rotated by the attitude estimate) and pulls the
-  // result toward the position fix and the barometer. baro and fix are null when not available; their
-  // `age` says how long ago they were measured, so they are compared with the estimate from that moment.
-  // The simulator seeds st.p and st.v with the start point at reset.
+  // result toward whatever references exist: position fix, optical flow, rangefinder, barometer.
+  // Each is null when not available; its `age` says how long ago it was measured, so it is compared
+  // with the estimate from that moment. The simulator seeds st.p and st.v with the start point at reset.
   const kP = 0.8, kV = 0.3, kFixV = 0.6, kBaro = 1.5, kBaroV = 0.6;
+  const kFlow = 2.0, kRange = 2.5, kRangeV = 1.2;        // optical flow velocity, rangefinder height
+  const kBias = 0.4;                                     // learns the accelerometer's horizontal bias from velocity errors
   const cd = 0.25, kDrag = 1.0;                          // airframe drag coefficient [N per m/s] (see bodyDrag), drag-fusion gain
   if (!st.p) { st.p = fix ? fix.p.slice() : [0, 0, baro ? baro.alt : 0]; st.v = [0, 0, 0]; }
-  if (!st.h) { st.h = []; st.af = accel.slice(); }       // recent estimates (newest last), filtered accel
+  if (!st.h) { st.h = []; st.af = accel.slice(); st.ab = [0, 0]; }   // recent estimates (newest last), filtered accel, accel bias
   const a = add(m3v(R, accel), [0, 0, -G]);              // world acceleration from the IMU
+  a[0] -= st.ab[0]; a[1] -= st.ab[1];
   st.v = add(st.v, scl(a, dt)); st.p = add(st.p, scl(st.v, dt));
   const past = age => st.h[Math.max(0, st.h.length - 1 - Math.round(age / dt))] || { p: st.p, v: st.v };
+  const range = flow && flow.h != null;                  // rangefinder height available
   if (fix) {
     const then = past(fix.age);
-    const e = sub(fix.p, then.p); if (baro) e[2] = 0;     // the barometer owns altitude when present
+    const e = sub(fix.p, then.p); if (baro || range) e[2] = 0;   // barometer or rangefinder own altitude
     st.p = add(st.p, scl(e, kP * dt)); st.v = add(st.v, scl(e, kV * dt));
     st.v = add(st.v, scl(sub(fix.v, then.v), kFixV * dt));
-  } else {
-    // No fix. Thrust only pushes along body Z, so the sideways accelerometer reading is air drag,
+    for (let i = 0; i < 2; i++) st.ab[i] -= kBias * kFixV * (fix.v[i] - then.v[i]) * dt;
+  }
+  if (flow && flow.v) {                                  // optical flow: horizontal velocity over the ground
+    const then = past(flow.age);
+    for (let i = 0; i < 2; i++) {
+      const e = flow.v[i] - then.v[i];
+      st.v[i] += kFlow * e * dt; st.ab[i] -= kBias * e * dt;   // a persistent velocity error means accelerometer bias
+    }
+  }
+  st.ab = st.ab.map(b => clamp(b, -0.5, 0.5));
+  if (!fix && !(flow && flow.v)) {
+    // No fix or flow. Thrust only pushes along body Z, so the sideways accelerometer reading is air drag,
     // which reveals the body's airspeed: v_xy ≈ −(m / cd)·f_xy. Pull the estimate toward it.
     const k = dt / (dt + 1 / (2 * Math.PI * 2));
     st.af = st.af.map((x, i) => x + k * (accel[i] - x));
@@ -232,7 +272,11 @@ function positionEstimator(st, R, accel, baro, fix, m, dt) {
     const dv = [-(m / cd) * st.af[0] - vb[0], -(m / cd) * st.af[1] - vb[1], 0];
     st.v = add(st.v, scl(m3v(R, dv), kDrag * dt));
   }
-  if (baro) { const e = baro.alt - past(baro.age).p[2]; st.p[2] += kBaro * e * dt; st.v[2] += kBaroV * e * dt; }
+  if (range) { const e = flow.h - past(flow.age).p[2]; st.p[2] += kRange * e * dt; st.v[2] += kRangeV * e * dt; }  // flat ground assumed
+  if (baro) {
+    const w = range ? 0.15 : 1;                          // near the ground the rangefinder is far better
+    const e = baro.alt - past(baro.age).p[2]; st.p[2] += w * kBaro * e * dt; st.v[2] += w * kBaroV * e * dt;
+  }
   st.h.push({ p: st.p.slice(), v: st.v.slice() }); if (st.h.length > 800) st.h.shift();
   return { p: st.p.slice(), v: st.v.slice() };
 }
@@ -433,18 +477,35 @@ const LAW_DEFS = [
     args: [['pos', 'true antenna position, world [m]'], ['vel', 'true antenna velocity, world [m/s]'], ['p', 'noise, wander, velNoise'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
     returns: '{ p, v }, world', shape: { p: 3, v: 3 }, sample: () => [[0, 0, 1.5], [0, 0, 0], { noise: 0.2, wander: 0.6, velNoise: 0.1 }, {}, 0.2] },
 
+  { key: 'flowModel', group: 'sensor', fn: flowModel, title: 'Optical flow camera',
+    math: [`${V('f')} = (ω<sub>y</sub> − <i>v</i><sub>x</sub>/<i>d</i>, −ω<sub>x</sub> − <i>v</i><sub>y</sub>/<i>d</i>) &nbsp;(sensor frame, camera looking along −Z)`, `${V('f̃')} = <i>s</i>·${V('f')} + ${V('n')}/<i>q</i>, &nbsp;no reading when <i>q</i> < 0.15 or |${V('f')}| > <i>f</i><sub>max</sub>`],
+    doc: 'How fast the ground slides across the image, as an angular rate. Both moving and rotating sweep the image. Image quality q comes from the ground texture, the light and the height; over calm water, snow or in the dark there\'s nothing to track.',
+    args: [['f', 'true flow, sensor frame [rad/s]'], ['q', 'image quality 0–1'], ['p', 'noise, scale, maxRate'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
+    returns: '[fx, fy, quality]', shape: 3, sample: () => [[0.1, -0.2], 0.8, { noise: 0.05, scale: 0.03, maxRate: 7 }, {}, 0.01] },
+  { key: 'rangeModel', group: 'sensor', fn: rangeModel, title: 'Rangefinder',
+    math: [`<i>d̃</i> = <i>d</i> + <i>n</i>(1 + <i>d</i>) &nbsp;for <i>d</i><sub>min</sub> ≤ <i>d</i> ≤ <i>d</i><sub>max</sub>, otherwise no reading`],
+    doc: 'Laser distance along the camera\'s boresight. Tilting the drone lengthens the beam; above its maximum range it reads nothing.',
+    args: [['d', 'true distance to the ground [m]'], ['p', 'noise, minRange, maxRange'], ['st', 'this sensor\'s state']],
+    returns: 'distance [m], or −1', shape: 'n', sample: () => [1.5, { noise: 0.01, minRange: 0.05, maxRange: 4 }, {}] },
+
   { key: 'attitudeEstimator', group: 'est', fn: attitudeEstimator, title: 'Attitude estimator',
     math: [`${V('e')} = ${V('ã')} × ${V('û')} + <i>R̂</i><sup>T</sup>(0, 0, −ψ<sub>err</sub>)`, `${V('ω')}<sub>c</sub> = ${V('ω̃')} + <i>K</i><sub>I</sub>∫${V('e')} d<i>t</i> + <i>K</i><sub>P</sub>${V('e')}, &nbsp; <i>q̂̇</i> = ½ <i>q̂</i> ⊗ ${V('ω')}<sub>c</sub>`],
     doc: 'Mahony complementary filter. A multirotor\'s accelerometer feels thrust rather than gravity whenever it accelerates, so the filter only trusts it for "up" when the low-passed reading is within 5% of 1 g. Without a compass, heading drifts with the gyro bias.',
     args: [['st', 'estimator state'], ['gyro', 'fused gyro reading, body [rad/s]'], ['accel', 'fused accelerometer reading, body [m/s²]'], ['mag', 'fused compass reading, body, or null'], ['dt', 'control period [s]']],
     returns: '{ q: attitude quaternion [w, x, y, z]; w: filtered rate, body }', shape: { q: 4, w: 3 },
     sample: () => [{}, [0, 0, 0], [0, 0, 9.81], [0.5, 0, -0.866], 0.001] },
+  { key: 'flowVelocity', group: 'est', fn: flowVelocity, title: 'Flow to velocity',
+    math: [`${V('v')}<sub>s</sub> = <i>d̃</i> (ω̃<sub>y</sub> − <i>f̃</i><sub>x</sub>, −ω̃<sub>x</sub> − <i>f̃</i><sub>y</sub>, 0), &nbsp;${V('v')} = <i>R̂</i><sub>s</sub>${V('v')}<sub>s</sub>, &nbsp;<i>h</i> = <i>d̃</i> · (−<i>R̂</i><sub>s</sub>ẑ)<sub>z</sub>`],
+    doc: 'Removes the part of the image motion the gyro explains, scales the rest by the measured distance, and rotates it into the world. The result goes to the position estimator after being shifted to the hub.',
+    args: [['flow', '[fx, fy] reading [rad/s]'], ['range', 'distance to the ground [m]'], ['w', 'gyro, sensor frame [rad/s]'], ['Rs', 'sensor → world rotation']],
+    returns: '[vx, vy, height above ground]', shape: 3, sample: () => [[0.05, 0], 1.5, [0, 0, 0], [1, 0, 0, 0, 1, 0, 0, 0, 1]] },
+
   { key: 'positionEstimator', group: 'est', fn: positionEstimator, title: 'Position estimator',
-    math: [`${V('v̂̇')} = <i>R̂</i>${V('f̃')} + ${V('g')} + <i>k</i><sub>V</sub>(${V('p̃')} − ${V('p̂')}) + <i>k</i><sub>fv</sub>(${V('ṽ')} − ${V('v̂')})`, `${V('p̂̇')} = ${V('v̂')} + <i>k</i><sub>P</sub>(${V('p̃')} − ${V('p̂')}), &nbsp;altitude from the barometer when present`, `no fix: ${V('v̂')}<sub>xy</sub> → −(<i>m</i>/<i>c</i><sub>d</sub>) ${V('f̃')}<sub>xy</sub> &nbsp;(drag fusion)`],
-    doc: 'Fuses the accelerometer with the position fix and barometer. The simulator first shifts each reading to the frame hub using the sensor positions the controller knows, and reports how old it is so a delayed fix is compared with the estimate from when it was measured. Without a fix it falls back on drag fusion: a multirotor\'s accelerometer feels air drag sideways, which reveals airspeed, so wind and a wrong drag coefficient make it drift.',
-    args: [['st', 'estimator state'], ['R', 'estimated attitude matrix'], ['accel', 'fused accelerometer reading, body'], ['baro', '{ alt, age } hub altitude, or null'], ['fix', '{ p, v, age } hub position and velocity, or null'], ['m', 'modeled mass [kg]'], ['dt', 'control period [s]']],
+    math: [`${V('v̂̇')} = <i>R̂</i>${V('f̃')} + ${V('g')} + <i>k</i><sub>V</sub>(${V('p̃')} − ${V('p̂')}) + <i>k</i><sub>fv</sub>(${V('ṽ')} − ${V('v̂')}) + <i>k</i><sub>flow</sub>(${V('v')}<sub>flow</sub> − ${V('v̂')})<sub>xy</sub>`, `altitude: rangefinder near the ground, barometer otherwise; &nbsp;${V('b̂')}<sub>a</sub> learned from velocity errors`, `${V('p̂̇')} = ${V('v̂')} + <i>k</i><sub>P</sub>(${V('p̃')} − ${V('p̂')}), &nbsp;altitude from the barometer when present`, `no fix: ${V('v̂')}<sub>xy</sub> → −(<i>m</i>/<i>c</i><sub>d</sub>) ${V('f̃')}<sub>xy</sub> &nbsp;(drag fusion)`],
+    doc: 'Fuses the accelerometer with the position fix, optical flow, rangefinder and barometer. The simulator first shifts each reading to the frame hub using the sensor positions the controller knows, and reports how old it is so a delayed fix is compared with the estimate from when it was measured. Optical flow gives velocity over the ground, so position still drifts slowly without a fix. With neither, it falls back on drag fusion: a multirotor\'s accelerometer feels air drag sideways, which reveals airspeed, so wind and a wrong drag coefficient make it drift.',
+    args: [['st', 'estimator state'], ['R', 'estimated attitude matrix'], ['accel', 'fused accelerometer reading, body'], ['baro', '{ alt, age } hub altitude, or null'], ['fix', '{ p, v, age } hub position and velocity, or null'], ['flow', '{ v: [vx, vy] or null, h: hub height or null, age }, or null'], ['m', 'modeled mass [kg]'], ['dt', 'control period [s]']],
     returns: '{ p: hub position; v: hub velocity }, world', shape: { p: 3, v: 3 },
-    sample: () => [{}, [1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 0, 9.81], { alt: 1.5, age: 0.02 }, { p: [0, 0, 1.5], v: [0, 0, 0], age: 0.15 }, 1, 0.001] },
+    sample: () => [{}, [1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 0, 9.81], { alt: 1.5, age: 0.02 }, { p: [0, 0, 1.5], v: [0, 0, 0], age: 0.15 }, { v: [0.1, 0], h: 1.5, age: 0.02 }, 1, 0.001] },
 
   { key: 'identifyEffectiveness', group: 'learn', fn: identifyEffectiveness, title: 'Effectiveness identification',
     math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')}, &nbsp;both sides band-passed 0.3–12 Hz`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
@@ -491,6 +552,6 @@ const LAW_OVERVIEW = [
   `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'positionEstimator', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
-  plant: ['batteryModel', 'servoResponse', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'positionEstimator', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
+  plant: ['batteryModel', 'servoResponse', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

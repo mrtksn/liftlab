@@ -16,7 +16,7 @@ let running = true, speed = 1;
 
 /* ───────── components ───────── */
 const TAG = { motor: 'Motor', tilt: 'Servo', mass: 'Mass', hang: 'Cable' };
-const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix' };
+const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix', flow: 'Flow' };
 const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
   x: { label: 'X', path: ['pos', 0], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
@@ -63,6 +63,12 @@ const FD = {
   baroDrift: { label: 'Drift', path: ['drift'], min: 0, max: 0.05, step: 0.001, u: 'm/√s', dp: 3 },
   fixNoise: { label: 'Noise', path: ['noise'], min: 0, max: 1, step: 0.001, u: 'm', dp: 3 },
   wander: { label: 'Wandering error (σ)', path: ['wander'], min: 0, max: 3, step: 0.01, u: 'm', dp: 2 },
+  rateFlow: { label: 'Sample rate', path: ['rate'], min: 10, max: 400, step: 10, u: 'Hz', dp: 0 },
+  flowNoise: { label: 'Flow noise (good texture)', path: ['noise'], min: 0, max: 0.3, step: 0.005, u: 'rad/s', dp: 3 },
+  flowScale: { label: 'Scale error (σ)', path: ['scale'], min: 0, max: 0.1, step: 0.005, u: '%', dp: 1, k: 100 },
+  flowMax: { label: 'Max flow rate', path: ['maxRate'], min: 1, max: 15, step: 0.5, u: 'rad/s', dp: 1 },
+  rangeMax: { label: 'Rangefinder max range', path: ['maxRange'], min: 0.5, max: 40, step: 0.5, u: 'm', dp: 1 },
+  rangeNoise: { label: 'Rangefinder noise', path: ['rangeNoise'], min: 0, max: 0.1, step: 0.002, u: 'm', dp: 3 },
   velNoise: { label: 'Velocity noise', path: ['velNoise'], min: 0, max: 0.5, step: 0.01, u: 'm/s', dp: 2 },
 };
 const FIX_TUNED = ['rateFix', 'lat', 'fixNoise', 'wander', 'velNoise'];
@@ -80,6 +86,7 @@ function summary(c) {
     if (c.kind === 'imu') return `${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
     if (c.kind === 'mag') return `${c.rate} Hz · ×${c.interference.toFixed(1)} interference${u} · ${p}`;
     if (c.kind === 'baro') return `${c.rate} Hz · ±${c.noise.toFixed(2)} m${u} · ${p}`;
+    if (c.kind === 'flow') return `${c.rate} Hz · range ${c.maxRange} m${u} · ${p}`;
     return `${c.quality === 'custom' ? 'Custom' : FIX_QUALITY[c.quality].label} · ${c.rate} Hz · ${c.latency} ms${c.dropout ? ' · no fix' : ''}${u}`;
   }
   return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
@@ -155,6 +162,7 @@ function compBody(c) {
       slider(c, 'accNoise'), slider(c, 'accBias'), selectF(c, 'accRange', 'Accel range', [[2, '±2 g'], [4, '±4 g'], [8, '±8 g'], [16, '±16 g']]), slider(c, 'vib'));
     else if (c.kind === 'mag') b.append(pos, mount, slider(c, 'rateMag'), slider(c, 'lat'), slider(c, 'magNoise'), slider(c, 'hardIron'), slider(c, 'interference'));
     else if (c.kind === 'baro') b.append(pos, slider(c, 'rateBaro'), slider(c, 'lat'), slider(c, 'baroNoise'), slider(c, 'baroDrift'));
+    else if (c.kind === 'flow') b.append(el('p', { class: 'hint', text: 'Looks along its own −Z (down, with no mount rotation).' }), pos, mount, slider(c, 'rateFlow'), slider(c, 'lat'), slider(c, 'flowNoise'), slider(c, 'flowScale'), slider(c, 'flowMax'), slider(c, 'rangeMax'), slider(c, 'rangeNoise'));
     else {
       const q = selectF(c, 'quality', 'Type', [['gps', 'GPS'], ['rtk', 'RTK GPS'], ['mocap', 'Motion capture'], ['custom', 'Custom']], () => {
         if (c.quality !== 'custom') Object.assign(c, fixDefaults(c.quality)); rerender(); save();
@@ -201,7 +209,7 @@ function addComp(type) {
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
   else {
     const k = cfg.comps.filter(x => x.type === 'sensor' && x.kind === type).length + 1;
-    const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09] }[type];
+    const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03] }[type];
     c = mkSensor(type, SENSOR_KINDS[type] + ' ' + k, ...at);
   }
   cfg.comps.push(c); openSet.add(c.id); structural();
@@ -293,8 +301,12 @@ function renderEst() {
   if (sensing === 'truth') chip('Flying on ground truth: sensors are ignored', 'accent');
   if (!has('imu')) chip('No IMU: attitude is unknown', 'bad');
   if (!has('mag')) chip('No compass: heading drifts', 'warn');
-  if (!fixOk) chip(has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', 'warn');
-  if (!has('baro') && !fixOk) chip('No altitude reference', 'warn');
+  const fs = est.flowState;
+  if (fs === 'tracking') chip('Optical flow tracking', 'good');
+  else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn');
+  else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn');
+  if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn');
+  if (!has('baro') && !fixOk && !(fs === 'tracking' || fs === 'range only')) chip('No altitude reference', 'warn');
   if (has('imu') && has('mag') && fixOk && sensing !== 'truth') chip('All references present', 'good');
   $('#estMode').textContent = sensing === 'truth' ? 'shown for reference' : 'estimate − truth';
   const e = estimateErrors(); const f = (v, d, u) => (v == null ? '—' : v.toFixed(d) + ' ' + u);
@@ -385,7 +397,8 @@ function syncSp() { for (const r of spRefs) r(); }  // keep the target fields in
 function buildSp() {
   const b = $('#spFields'); b.textContent = '';
   b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
-    spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr));
+    spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
+    spSlider('texture', 'Ground texture (0 water, 1 gravel)', 0, 1, 0.05, '', envr), spSlider('light', 'Light (0 dark, 1 daylight)', 0, 1, 0.05, '', envr));
 }
 
 /* ───────── header ───────── */

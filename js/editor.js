@@ -13,7 +13,7 @@ const handleVis = [];      // the visible shapes, to highlight the active one
 
 const compById = id => cfg.comps.find(c => c.id === id) || null;
 const rotAxesFor = c => c.type === 'motor' ? [0, 1, 2] : c.type === 'tilt' ? [2]
-  : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag') ? [0, 1, 2] : [];
+  : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
 
 function buildGizmo() {
   if (gizmo) { scene.remove(gizmo); gizmo.traverse(o => o.geometry && o.geometry.dispose()); }

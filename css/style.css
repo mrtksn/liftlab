@@ -76,6 +76,7 @@ select{border:1px solid var(--line-strong);background:var(--panel);border-radius
 .hint{margin:0;color:var(--muted);font-size:12.5px;max-width:65ch}
 .addrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .addrow + .lbl{margin-top:2px}
+.addrow .wide{grid-column:1/-1}
 .addrow .btn{text-align:left;display:flex;align-items:center;gap:7px}
 .addrow .btn b{font-family:var(--f-mono);font-weight:500;color:var(--accent)}
 

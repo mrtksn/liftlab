@@ -31,6 +31,7 @@ function buildMaterials() {
     ring: new THREE.LineDashedMaterial({ color: colorOf('--ink-2'), dashSize: 0.012, gapSize: 0.01 }),
     sp: new THREE.LineBasicMaterial({ color: colorOf('--accent'), transparent: true, opacity: 0.7 }),
     trail: new THREE.LineBasicMaterial({ color: colorOf('--muted'), transparent: true, opacity: 0.6 }),
+    beam: new THREE.LineDashedMaterial({ color: colorOf('--sensor'), dashSize: 0.03, gapSize: 0.02 }),
     wake: new THREE.MeshBasicMaterial({ color: colorOf('--wind'), transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
     sensor: new THREE.MeshStandardMaterial({ color: colorOf('--sensor'), roughness: 0.5 }),
     sensorAxis: new THREE.MeshBasicMaterial({ color: colorOf('--sensor') }),
@@ -82,9 +83,13 @@ function rebuildDrone() {
       const g = new THREE.Group(); g.position.set(...c.pos);
       const Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]);
       g.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(Rm[0], Rm[1], Rm[2], 0, Rm[3], Rm[4], Rm[5], 0, Rm[6], Rm[7], Rm[8], 0, 0, 0, 0, 1));
-      const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008] }[c.kind];
+      const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008], flow: [0.02, 0.02, 0.012] }[c.kind];
       g.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
       const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) g.add(ax);   // sensor X axis shows the mount
+      if (c.kind === 'flow') {   // rangefinder beam along the boresight
+        const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), mats.beam);
+        beam.visible = false; g.add(beam); parts.set(c.id, { beam });
+      }
       g.userData.compId = c.id; pickGroups.set(c.id, g); drone.add(g);
     }
   }
@@ -134,6 +139,11 @@ function updateScene() {
     const T = st.T * c.health / 100; p.disc.material.opacity = 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
+  }
+  for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
+    const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
+    const L = rt && rt.latest; p.beam.visible = live;
+    if (live) { p.beam.scale.z = L && L.range > 0 ? L.range : c.maxRange; p.beam.computeLineDistances(); }
   }
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;
   gravArrow.visible = live && view.forces; gravArrow.position.set(S.p[0], S.p[1], S.p[2] - 0.02); gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);

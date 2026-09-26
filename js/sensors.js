@@ -11,7 +11,7 @@ const VIB_ACC = 4, VIB_GYRO = 0.15;         // vibration at a motor at full thru
 const VIB_REACH = 0.12;                     // vibration falls off over this distance [m]
 const MAG_INTERF = 0.3, MAG_REACH = 0.05;   // motor field at the motor at full thrust (Earth = 1), fall-off [m]
 
-const SENSOR_KINDS = { imu: 'IMU', mag: 'Compass', baro: 'Barometer', fix: 'Position fix' };
+const SENSOR_KINDS = { imu: 'IMU', mag: 'Compass', baro: 'Barometer', fix: 'Position fix', flow: 'Optical flow' };
 const FIX_QUALITY = {
   gps: { label: 'GPS', rate: 5, latency: 150, noise: 0.2, wander: 0.6, velNoise: 0.1 },
   rtk: { label: 'RTK GPS', rate: 10, latency: 80, noise: 0.02, wander: 0.02, velNoise: 0.03 },
@@ -24,6 +24,7 @@ function mkSensor(kind, name, x, y, z, o = {}) {
     mag: { rate: 100, latency: 5, noise: 0.01, hardIron: 0.02, interference: 1 },
     baro: { rate: 50, latency: 20, noise: 0.15, drift: 0.01 },
     fix: Object.assign({ quality: 'gps', dropout: false }, fixDefaults('gps')),
+    flow: { rate: 100, latency: 20, noise: 0.05, scale: 0.03, maxRate: 7, minRange: 0.05, maxRange: 4, rangeNoise: 0.01 },   // camera looks along its −Z
   }[kind];
   return base(Object.assign({ type: 'sensor', kind, name, pos: [x, y, z], mount: [0, 0, 0], known: true }, d, o));
 }
@@ -85,6 +86,16 @@ function measure(c, rt, dt) {
     return run('imuModel', m3v(RmT, S.w), m3v(RmT, fb), { a: m3v(RmT, scl(vb.a, c.vib)), w: m3v(RmT, scl(vb.w, c.vib)) }, p, rt.st, dt);
   }
   if (c.kind === 'mag') return run('magModel', m3v(RmT, m3v(RT, MAG_EARTH)), m3v(RmT, scl(motorFieldAt(c.pos), c.interference)), { noise: c.noise, hardIron: c.hardIron }, rt.st);
+  if (c.kind === 'flow') {
+    const Rs = m3m(R, Rm), ps = add(S.p, m3v(R, r)), vs = add(S.v, m3v(R, crs(S.w, r)));
+    const down = m3v(Rs, [0, 0, -1]);
+    const d = down[2] < -0.2 ? ps[2] / -down[2] : Infinity;          // distance to the ground along the boresight
+    const v = m3v(m3T(Rs), vs), w = m3v(RmT, S.w);
+    const f = isFinite(d) && d > 0.01 ? [w[1] - v[0] / d, -w[0] - v[1] / d] : [w[1], -w[0]];
+    const q = isFinite(d) ? envr.texture * envr.light * clamp(1.25 - d / 8, 0, 1) : 0;   // image quality: texture, light, height
+    const fl = run('flowModel', f, q, { noise: c.noise, scale: c.scale, maxRate: c.maxRate }, rt.st, dt);
+    return { flow: [fl[0], fl[1]], q: fl[2], range: run('rangeModel', d, { noise: c.rangeNoise, minRange: c.minRange, maxRange: c.maxRange }, rt.st) };
+  }
   if (c.kind === 'baro') return run('baroModel', add(S.p, m3v(R, r))[2], { noise: c.noise, drift: c.drift }, rt.st, dt);
   return run('posFixModel', add(S.p, m3v(R, r)), add(S.v, m3v(R, crs(S.w, r))), { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
 }
@@ -137,7 +148,21 @@ function senseAndEstimate(dt) {
       v: mean3(fixes.map(c => sub(sens.get(c.id).latest.v, m3v(est.R, crs(est.w, knownPos(c)))))),
       age: age(fixes),
     } : null;
-    const pv = run('positionEstimator', est.pos, est.R, accel, baro, fix, model.m, dt);
+    // Optical flow: velocity over the ground (shifted to the hub) and height from the rangefinder.
+    let flow = null; est.flowState = sensorsOf('flow').length ? 'none' : null;
+    const flows = ready('flow').filter(c => sens.get(c.id).latest.range > 0);
+    if (flows.length) {
+      const vs = [], hs = [];
+      for (const c of flows) {
+        const L = sens.get(c.id).latest, Rm = knownMount(c), rk = knownPos(c);
+        const o = run('flowVelocity', L.flow, L.range, m3v(m3T(Rm), est.w), m3m(est.R, Rm));
+        hs.push(o[2] - m3v(est.R, rk)[2]);
+        if (L.q > 0) vs.push(sub([o[0], o[1], 0], m3v(est.R, crs(est.w, rk))));
+      }
+      flow = { v: vs.length ? mean3(vs).slice(0, 2) : null, h: hs.reduce((a, b) => a + b, 0) / hs.length, age: age(flows) };
+      est.flowState = vs.length ? 'tracking' : 'range only';
+    } else if (ready('flow').length) est.flowState = 'out of range';
+    const pv = run('positionEstimator', est.pos, est.R, accel, baro, fix, flow, model.m, dt);
     est.p = pv.p; est.v = pv.v;
   }
   for (const rt of sens.values()) rt.fresh = false;

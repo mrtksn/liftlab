@@ -29,6 +29,12 @@ const PRESETS = {
     c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }));
     const sn = defaultSensors(); sn[1].pos = [-0.12, -0.12, 0.08];   // compass on a boom, away from the big main motor
     return { frame: 0.5, comps: c.concat(sn), mode: 'tilt' }; } },
+  indoor: { label: 'Indoor quad (optical flow, no GPS)', build() {
+    const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
+    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] }));
+    const sn = defaultSensors().filter(x => x.kind !== 'fix');
+    sn.push(mkSensor('flow', 'Flow', 0, -0.03, -0.03));
+    return { frame: 0.45, comps: c.concat(sn), mode: 'tilt' }; } },
   tiltquad: { label: 'Tilt-rotor quad (thrust vectoring)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkTilt('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360, spin: i % 2 ? -1 : 1, tmax: 6 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
@@ -36,7 +42,7 @@ const PRESETS = {
 const cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
-const envr = { wind: 0, windDir: 0 };
+const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1 };   // texture and light matter to optical flow
 
 /* ───────── state ───────── */
 const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battK: 1, rotors: [], crashed: null, t: 0, steps: 0 };
