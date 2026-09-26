@@ -13,22 +13,24 @@ const r3 = v => +v.toFixed(3);
 const PRESETS = {
   quadx: { label: 'Quad X', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
-    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c, mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   hex: { label: 'Hexacopter', build() {
     const r = 0.25; const c = [0, 60, 120, 180, 240, 300].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1, tmax: 5 }));
-    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.26, size: [0.13, 0.045, 0.035] })); return { frame: 0.55, comps: c, mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.26, size: [0.13, 0.045, 0.035] })); return { frame: 0.55, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   tri: { label: 'Tricopter (yaw servo)', build() {
     const r = 0.22; const c = [mkMotor('Left', r3(r * cosd(60)), r3(r * sind(60)), 0.02, { spin: 1, tmax: 7 }),
       mkMotor('Right', r3(r * cosd(-60)), r3(r * sind(-60)), 0.02, { spin: -1, tmax: 7 }),
       mkTilt('Tail', -r, 0, 0.02, { hingeAz: 0, range: 30, rate: 300, spin: 1, tmax: 7 })];
-    c.push(mkMass('Battery', 0.02, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.4, comps: c, mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0.02, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.4, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   heli: { label: 'Main lifter + 4 steering motors', build() {
     const c = [mkMotor('Main', 0, 0, 0.06, { tmax: 22, kappa: 0.03, mass: 0.22, spin: 1, tau: 0.06 })]; const r = 0.26;
     [0, 90, 180, 270].forEach((a, i) => c.push(mkTilt('S' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 45, rate: 300, tmax: 4, kappa: 0.012, spin: i % 2 ? 1 : -1 })));
-    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] })); return { frame: 0.5, comps: c, mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }));
+    const sn = defaultSensors(); sn[1].pos = [-0.12, -0.12, 0.08];   // compass on a boom, away from the big main motor
+    return { frame: 0.5, comps: c.concat(sn), mode: 'tilt' }; } },
   tiltquad: { label: 'Tilt-rotor quad (thrust vectoring)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkTilt('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360, spin: i % 2 ? -1 : 1, tmax: 6 }));
-    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c, mode: 'level' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
 };
 const cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
@@ -36,7 +38,7 @@ const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
 const envr = { wind: 0, windDir: 0 };
 
 /* ───────── state ───────── */
-const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], crashed: null, t: 0, steps: 0 };
+const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], crashed: null, t: 0, steps: 0 };
 const act = new Map();   // id -> { T, Tcmd, th, thCmd }
 const pend = new Map();  // id -> { p, v, Tn }
 const ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0, vRef: [0, 0, 0] };  // vRef: pilot's commanded velocity
@@ -92,6 +94,7 @@ function syncRuntime() {
     if ((c.type === 'motor' || c.type === 'tilt') && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, th: c.type === 'tilt' && c.mode === 'manual' ? c.manual * D2R : 0, thCmd: 0 });
     if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, sub(c.pos, truth.c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
   }
+  syncSensors();
 }
 function reseatPend(c) {
   const st = pend.get(c.id); if (!st) return;
@@ -137,8 +140,13 @@ function allocate(w) {
 
 function hubState(R) { const hub = sub(S.p, m3v(R, truth.c)); const vh = sub(S.v, m3v(R, crs(S.w, truth.c))); return { hub, vh }; }
 function control(dt) {
+  senseAndEstimate(dt);
   if (S.crashed) { for (const a of act.values()) a.Tcmd = 0; return; }
-  const R = qmat(S.q), RT = m3T(R); const { hub, vh } = hubState(R);
+  // The flight software sees only the estimate, unless you hand it the ground truth.
+  let R, w, hub, vh;
+  if (sensing === 'truth') { R = qmat(S.q); w = S.w; ({ hub, vh } = hubState(R)); }
+  else { R = est.R; w = est.w; hub = est.p; vh = est.v; }
+  const RT = m3T(R);
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, -2, 2);
   const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, model.m, G);
@@ -148,7 +156,7 @@ function control(dt) {
   const eR = run('attitudeError', R, Rd);
   ctl.eAtt = nrm(eR);
   for (let i = 0; i < 3; i++) ctl.iAtt[i] = clamp(ctl.iAtt[i] + eR[i] * dt, -0.5, 0.5);
-  const tau = run('attitudeControl', eR, S.w, ctl.iAtt, model.J);
+  const tau = run('attitudeControl', eR, w, ctl.iAtt, model.J);
   const f = run('forceDemand', m3v(RT, Fd), nb, mode);
   ctl.wDes = [f[0], f[1], f[2], tau[0], tau[1], tau[2]];
   allocate(ctl.wDes);
@@ -201,6 +209,7 @@ function dynamics(dt) {
     const fw = run('groundContact', -pw[2], vel); F = add(F, fw); tau = add(tau, crs(r, m3v(RT, fw)));
   }
   const rb = run('rigidBody', F, tau, truth.m, truth.J, truth.Jinv, S.w);
+  S.acc = rb.a; S.wdot = rb.wdot;                        // what the accelerometers feel next
   S.v = add(S.v, scl(rb.a, dt)); S.p = add(S.p, scl(S.v, dt));
   S.w = add(S.w, scl(rb.wdot, dt));
   const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
@@ -212,15 +221,16 @@ function dynamics(dt) {
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
 }
-function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; if (S.steps % 40 === 0) pushHist(); }
+function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); if (S.steps % 40 === 0) pushHist(); }
 
 function resetSim() {
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   const R = qmat(S.q); S.p = add([setpoint.x, setpoint.y, setpoint.z], m3v(R, truth.c)); S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); syncRuntime();
+  resetEstimation();
   for (let k = 0; k < 4; k++) { control(0); for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; if (c.type === 'tilt') st.th = c.mode === 'manual' ? c.manual * D2R : st.thCmd; } }
-  hist.t.length = hist.tilt.length = hist.err.length = hist.util.length = 0; trail.length = 0;
+  hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
 }
 
 /* ───────── flight envelope ───────── */
@@ -284,12 +294,13 @@ function envelopeCalc() {
 }
 
 /* ───────── history ───────── */
-const hist = { t: [], tilt: [], err: [], util: [] }; const HMAX = 500;
+const hist = { t: [], tilt: [], err: [], est: [], util: [] }; const HMAX = 500;
 const trail = [];
 function pushHist() {
   const R = qmat(S.q); const { hub } = hubState(R); const up = clamp(dot(m3v(R, nb), [0, 0, 1]), -1, 1);
   let util = 0; for (const c of actuators()) { const st = act.get(c.id); util = Math.max(util, st.Tcmd / c.tmax); }
   hist.t.push(S.t); hist.tilt.push(Math.acos(up) * R2D); hist.err.push(nrm(sub(hub, [setpoint.x, setpoint.y, setpoint.z])) * 100); hist.util.push(util * 100);
+  const E = m3m(m3T(R), est.R); hist.est.push(Math.acos(clamp((E[0] + E[4] + E[8] - 1) / 2, -1, 1)) * R2D);
   if (hist.t.length > HMAX) { for (const k in hist) hist[k].shift(); }
   if (S.steps % 200 === 0) { trail.push(hub); if (trail.length > 600) trail.shift(); }
 }

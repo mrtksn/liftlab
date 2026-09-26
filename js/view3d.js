@@ -1,7 +1,7 @@
 'use strict';
 // three.js scene: the airframe, force arrows, cable payloads, target marker and trail.
 
-const view = { follow: true, chase: false, forces: true, trail: true };
+const view = { follow: true, chase: false, forces: true, trail: true, est: true };
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -12,7 +12,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
-let mats = {}, parts = new Map(), pendVis = new Map(), cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let mats = {}, parts = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5) };
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
@@ -31,6 +31,9 @@ function buildMaterials() {
     ring: new THREE.LineDashedMaterial({ color: colorOf('--ink-2'), dashSize: 0.012, gapSize: 0.01 }),
     sp: new THREE.LineBasicMaterial({ color: colorOf('--accent'), transparent: true, opacity: 0.7 }),
     trail: new THREE.LineBasicMaterial({ color: colorOf('--muted'), transparent: true, opacity: 0.6 }),
+    sensor: new THREE.MeshStandardMaterial({ color: colorOf('--sensor'), roughness: 0.5 }),
+    sensorAxis: new THREE.MeshBasicMaterial({ color: colorOf('--sensor') }),
+    ghost: new THREE.LineDashedMaterial({ color: colorOf('--sensor'), dashSize: 0.02, gapSize: 0.015, transparent: true, opacity: 0.9 }),
   };
 }
 function applyTheme() {
@@ -72,8 +75,17 @@ function rebuildDrone() {
       const m = new THREE.Mesh(g, c.known ? mats.mass : mats.massUnknown); m.position.set(...c.pos); drone.add(m);
     } else if (c.type === 'hang') {
       const hk = new THREE.Mesh(new THREE.SphereGeometry(0.009, 10, 8), mats.payload); hk.position.set(...c.pos); drone.add(hk);
+    } else if (c.type === 'sensor') {
+      const g = new THREE.Group(); g.position.set(...c.pos);
+      const Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]);
+      g.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(Rm[0], Rm[1], Rm[2], 0, Rm[3], Rm[4], Rm[5], 0, Rm[6], Rm[7], Rm[8], 0, 0, 0, 0, 1));
+      const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008] }[c.kind];
+      g.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
+      const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) g.add(ax);   // sensor X axis shows the mount
+      drone.add(g);
     }
   }
+  buildGhost();
   cogDot = new THREE.Mesh(new THREE.SphereGeometry(0.014, 14, 10), mats.ink); drone.add(cogDot);
   const rg = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 41 }, (_, i) => { const a = i / 40 * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * 0.03, Math.sin(a) * 0.03, 0); }));
   modelRing = new THREE.Line(rg, mats.ring); modelRing.computeLineDistances(); drone.add(modelRing);
@@ -84,6 +96,16 @@ function rebuildDrone() {
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.025 + 0.035 * Math.cbrt(c.mass), 18, 12), mats.payload);
     worldFx.add(line); worldFx.add(ball); pendVis.set(c.id, { line, ball });
   }
+}
+function buildGhost() {   // outline of where the flight software thinks the drone is
+  if (ghost) { worldFx.remove(ghost); ghost.traverse(o => o.geometry && o.geometry.dispose()); }
+  ghost = new THREE.Group(); const pts = [];
+  const sq = [[0.06, 0.06], [-0.06, 0.06], [-0.06, -0.06], [0.06, -0.06]];
+  for (let i = 0; i < 4; i++) { const a = sq[i], b = sq[(i + 1) % 4]; pts.push(new THREE.Vector3(a[0], a[1], 0), new THREE.Vector3(b[0], b[1], 0)); }
+  pts.push(new THREE.Vector3(0.06, 0, 0), new THREE.Vector3(0.14, 0, 0));
+  for (const c of actuators()) pts.push(new THREE.Vector3(0, 0, 0), new THREE.Vector3(...c.pos));
+  const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mats.ghost); ls.computeLineDistances(); ghost.add(ls);
+  worldFx.add(ghost);
 }
 function buildWorldFx() {
   for (const o of [gravArrow, windArrow, spMarker, trailLine]) if (o) { worldFx.remove(o); o.traverse(x => x.geometry && x.geometry.dispose()); }
@@ -115,6 +137,7 @@ function updateScene() {
     const aw = add(S.p, m3v(R, sub(c.pos, truth.c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
+  ghost.visible = view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
   spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }

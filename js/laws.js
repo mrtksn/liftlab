@@ -72,6 +72,119 @@ function groundContact(depth, v) {
   return [-mu * v[0], -mu * v[1], Math.max(0, k * depth - c * v[2])];
 }
 
+// ═════════════ Sensors (what the hardware reports) ═════════════
+// Each sensor keeps its own state in `st` between samples (biases, drifts). The simulator supplies the
+// true quantity at the sensor's position and mount, and vibration or interference where it applies.
+// randn() gives a standard normal random number.
+
+function imuModel(w, f, vib, p, st, dt) {
+  // w: true angular rate, f: true specific force (what an ideal accelerometer feels), both in the sensor frame
+  // vib: { a, w } motor vibration at the sensor; p: noise, bias and range settings in SI units
+  if (!st.bg) {                                          // turn-on bias, different every power-up
+    st.bg = [0, 1, 2].map(() => randn() * p.gyroBias);
+    st.ba = [0, 1, 2].map(() => randn() * p.accBias);
+  }
+  for (let i = 0; i < 3; i++) st.bg[i] += randn() * p.gyroDrift * Math.sqrt(dt);   // gyro bias random walk
+  const gyro = [0, 1, 2].map(i => clamp(w[i] + vib.w[i] + st.bg[i] + randn() * p.gyroNoise, -p.gyroRange, p.gyroRange));
+  const accel = [0, 1, 2].map(i => clamp(f[i] + vib.a[i] + st.ba[i] + randn() * p.accNoise, -p.accRange, p.accRange));
+  return { gyro, accel };
+}
+
+function magModel(b, interference, p, st) {
+  // b: Earth's field in the sensor frame (strength 1); interference: field from nearby motor currents
+  if (!st.hi) st.hi = [0, 1, 2].map(() => randn() * p.hardIron);   // hard-iron offset from the airframe
+  return [0, 1, 2].map(i => b[i] + st.hi[i] + interference[i] + randn() * p.noise);
+}
+
+function baroModel(alt, p, st, dt) {
+  // alt: true altitude of the sensor [m]
+  if (st.drift === undefined) st.drift = 0;
+  st.drift += randn() * p.drift * Math.sqrt(dt);         // weather and temperature drift
+  return alt + st.drift + randn() * p.noise;
+}
+
+function posFixModel(pos, vel, p, st, dt) {
+  // pos, vel: true position and velocity of the antenna or marker, world frame
+  const tau = 30;                                        // how slowly the error wanders [s]
+  if (!st.e) st.e = [0, 1, 2].map(() => randn() * p.wander);
+  const a = Math.exp(-dt / tau), s = p.wander * Math.sqrt(1 - a * a);
+  st.e = st.e.map(x => a * x + s * randn());             // slowly wandering error (Gauss–Markov)
+  return {
+    p: [0, 1, 2].map(i => pos[i] + st.e[i] * (i === 2 ? 1.5 : 1) + randn() * p.noise),
+    v: [0, 1, 2].map(i => vel[i] + randn() * p.velNoise),
+  };
+}
+
+// ═════════════ Estimation (what the flight software believes) ═════════════
+
+function attitudeEstimator(st, gyro, accel, mag, dt) {
+  // Mahony complementary filter. gyro, accel, mag are body-frame readings (mag is null without a compass).
+  // Integrates the gyro and slowly pulls the estimate toward "up" from the accelerometer and "north"
+  // from the compass. The integral term learns the gyro bias.
+  // A multirotor's accelerometer feels thrust, not gravity, while it accelerates, so "up" is only
+  // trusted when the (vibration-filtered) reading is very close to 1 g.
+  const kP = 0.6, kI = 0.08, kMag = 0.4;                // [1/s], [1/s²], [1/s]
+  const accCutoff = 8, rateCutoff = 60, gate = 0.05;     // [Hz], [Hz], fraction of g
+  if (!st.q) {                                           // initial alignment from the first readings
+    const up = unit(accel);
+    let north = mag ? sub(mag, scl(up, dot(mag, up))) : sub([1, 0, 0], scl(up, up[0]));
+    north = unit(north);
+    const east = crs(up, north);                         // world axes expressed in the body frame
+    st.q = matToQuat([north[0], north[1], north[2], east[0], east[1], east[2], up[0], up[1], up[2]]);
+    st.ie = [0, 0, 0]; st.w = gyro.slice(); st.af = accel.slice();
+  }
+  const lp = fc => dt / (dt + 1 / (2 * Math.PI * fc));
+  st.af = st.af.map((x, i) => x + lp(accCutoff) * (accel[i] - x));
+  const R = qmat(st.q);
+  let e = [0, 0, 0];
+  const n = nrm(st.af);
+  const trust = clamp(1 - Math.abs(n - G) / (gate * G), 0, 1);
+  if (trust > 0) e = add(e, scl(crs(scl(st.af, 1 / n), [R[6], R[7], R[8]]), kP * trust));
+  if (mag) {
+    const mw = m3v(R, mag);                              // compass reading in the estimated world frame
+    const yawErr = Math.atan2(mw[1], mw[0]);             // it should point north (+X)
+    e = add(e, m3v(m3T(R), [0, 0, -kMag * yawErr]));
+  }
+  st.ie = st.ie.map((x, i) => clamp(x + e[i] * dt, -1, 1));
+  const wb = add(gyro, scl(st.ie, kI / kP));            // bias-corrected rate
+  const wc = add(wb, e);                                 // rate used to propagate the attitude
+  const dq = qmul(st.q, [0, wc[0], wc[1], wc[2]]);
+  st.q = qnorm(st.q.map((x, i) => x + 0.5 * dq[i] * dt));
+  st.w = st.w.map((x, i) => x + lp(rateCutoff) * (wb[i] - x));   // low-passed rate for the D-term
+  return { q: st.q.slice(), w: st.w.slice() };
+}
+
+function positionEstimator(st, R, accel, baro, fix, m, dt) {
+  // Complementary filter. Integrates the accelerometer (rotated by the attitude estimate) and pulls the
+  // result toward the position fix and the barometer. baro and fix are null when not available; their
+  // `age` says how long ago they were measured, so they are compared with the estimate from that moment.
+  // The simulator seeds st.p and st.v with the start point at reset.
+  const kP = 0.8, kV = 0.3, kFixV = 0.6, kBaro = 1.5, kBaroV = 0.6;
+  const cd = 0.25, kDrag = 1.0;                          // airframe drag coefficient [N per m/s] (see bodyDrag), drag-fusion gain
+  if (!st.p) { st.p = fix ? fix.p.slice() : [0, 0, baro ? baro.alt : 0]; st.v = [0, 0, 0]; }
+  if (!st.h) { st.h = []; st.af = accel.slice(); }       // recent estimates (newest last), filtered accel
+  const a = add(m3v(R, accel), [0, 0, -G]);              // world acceleration from the IMU
+  st.v = add(st.v, scl(a, dt)); st.p = add(st.p, scl(st.v, dt));
+  const past = age => st.h[Math.max(0, st.h.length - 1 - Math.round(age / dt))] || { p: st.p, v: st.v };
+  if (fix) {
+    const then = past(fix.age);
+    const e = sub(fix.p, then.p); if (baro) e[2] = 0;     // the barometer owns altitude when present
+    st.p = add(st.p, scl(e, kP * dt)); st.v = add(st.v, scl(e, kV * dt));
+    st.v = add(st.v, scl(sub(fix.v, then.v), kFixV * dt));
+  } else {
+    // No fix. Thrust only pushes along body Z, so the sideways accelerometer reading is air drag,
+    // which reveals the body's airspeed: v_xy ≈ −(m / cd)·f_xy. Pull the estimate toward it.
+    const k = dt / (dt + 1 / (2 * Math.PI * 2));
+    st.af = st.af.map((x, i) => x + k * (accel[i] - x));
+    const vb = m3v(m3T(R), st.v);
+    const dv = [-(m / cd) * st.af[0] - vb[0], -(m / cd) * st.af[1] - vb[1], 0];
+    st.v = add(st.v, scl(m3v(R, dv), kDrag * dt));
+  }
+  if (baro) { const e = baro.alt - past(baro.age).p[2]; st.p[2] += kBaro * e * dt; st.v[2] += kBaroV * e * dt; }
+  st.h.push({ p: st.p.slice(), v: st.v.slice() }); if (st.h.length > 800) st.h.shift();
+  return { p: st.p.slice(), v: st.v.slice() };
+}
+
 // ═════════════ Controller ═════════════
 
 function positionControl(ep, v, ip, m, g) {
@@ -182,6 +295,41 @@ const LAW_DEFS = [
     args: [['depth', 'h, depth below ground [m]'], ['v', 'point velocity, world [m/s]']], returns: 'force, world [N]',
     shape: 3, sample: () => [0.01, [0.1, 0, -0.5]] },
 
+  { key: 'imuModel', group: 'sensor', fn: imuModel, title: 'IMU (gyro + accelerometer)',
+    math: [`${V('ω̃')} = sat(${V('ω')}<sub>s</sub> + ${V('ω')}<sub>vib</sub> + ${V('b')}<sub>g</sub> + ${V('n')}<sub>g</sub>), &nbsp;${V('ḃ')}<sub>g</sub> = random walk`, `${V('f̃')} = sat(<i>R</i><sub>s</sub><sup>T</sup>(<i>R</i><sup>T</sup>(${V('a')} − ${V('g')}) + ${V('ω̇')} × ${V('r')} + ${V('ω')} × (${V('ω')} × ${V('r')})) + ${V('a')}<sub>vib</sub> + ${V('b')}<sub>a</sub> + ${V('n')}<sub>a</sub>)`],
+    doc: 'r is the IMU\'s offset from the center of gravity, so an off-center accelerometer also feels rotation. Vibration is a sum of sinusoids at each motor\'s rotation frequency, stronger near busy motors; a slow IMU rate aliases it into low frequencies.',
+    args: [['w', 'true angular rate, sensor frame [rad/s]'], ['f', 'true specific force, sensor frame [m/s²]'], ['vib', '{ a, w } vibration at the sensor'], ['p', 'gyroNoise, gyroBias, gyroDrift, gyroRange, accNoise, accBias, accRange'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
+    returns: '{ gyro, accel }, sensor frame', shape: { gyro: 3, accel: 3 },
+    sample: () => [[0.1, 0, 0], [0, 0, 9.81], { a: [0, 0, 0], w: [0, 0, 0] }, { gyroNoise: 0.002, gyroBias: 0.01, gyroDrift: 0.0003, gyroRange: 35, accNoise: 0.05, accBias: 0.05, accRange: 157 }, {}, 0.001] },
+  { key: 'magModel', group: 'sensor', fn: magModel, title: 'Compass',
+    math: [`${V('m̃')} = <i>R</i><sub>s</sub><sup>T</sup><i>R</i><sup>T</sup>${V('m')}<sub>earth</sub> + ${V('b')}<sub>hard iron</sub> + ${V('m')}<sub>motors</sub> + ${V('n')}`],
+    doc: 'Earth\'s field has strength 1 and points north (+X) and 60° down. Motor currents add a field that grows with throttle and falls off quickly with distance, so where you mount the compass matters.',
+    args: [['b', 'Earth field, sensor frame'], ['interference', 'motor field at the sensor, sensor frame'], ['p', 'noise, hardIron'], ['st', 'this sensor\'s state']],
+    returns: 'field reading, sensor frame', shape: 3, sample: () => [[0.5, 0, -0.866], [0, 0, 0], { noise: 0.01, hardIron: 0.05 }, {}] },
+  { key: 'baroModel', group: 'sensor', fn: baroModel, title: 'Barometer',
+    math: [`<i>h̃</i> = <i>h</i> + <i>d</i> + <i>n</i>, &nbsp;<i>ḋ</i> = random walk`],
+    doc: 'Altitude from air pressure, with white noise and a slow drift.',
+    args: [['alt', 'true altitude of the sensor [m]'], ['p', 'noise, drift'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
+    returns: 'altitude reading [m]', shape: 'n', sample: () => [1.5, { noise: 0.15, drift: 0.01 }, {}, 0.02] },
+  { key: 'posFixModel', group: 'sensor', fn: posFixModel, title: 'Position fix',
+    math: [`${V('p̃')} = ${V('p')}<sub>s</sub> + ${V('e')} + ${V('n')}, &nbsp;${V('ė')} = −${V('e')}/τ + wander`, `${V('ṽ')} = ${V('v')}<sub>s</sub> + ${V('n')}<sub>v</sub>`],
+    doc: 'GPS, RTK or motion capture, depending on the settings. The wandering error is what makes a GPS drone drift slowly while hovering; vertical error is 1.5× horizontal.',
+    args: [['pos', 'true antenna position, world [m]'], ['vel', 'true antenna velocity, world [m/s]'], ['p', 'noise, wander, velNoise'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
+    returns: '{ p, v }, world', shape: { p: 3, v: 3 }, sample: () => [[0, 0, 1.5], [0, 0, 0], { noise: 0.2, wander: 0.6, velNoise: 0.1 }, {}, 0.2] },
+
+  { key: 'attitudeEstimator', group: 'est', fn: attitudeEstimator, title: 'Attitude estimator',
+    math: [`${V('e')} = ${V('ã')} × ${V('û')} + <i>R̂</i><sup>T</sup>(0, 0, −ψ<sub>err</sub>)`, `${V('ω')}<sub>c</sub> = ${V('ω̃')} + <i>K</i><sub>I</sub>∫${V('e')} d<i>t</i> + <i>K</i><sub>P</sub>${V('e')}, &nbsp; <i>q̂̇</i> = ½ <i>q̂</i> ⊗ ${V('ω')}<sub>c</sub>`],
+    doc: 'Mahony complementary filter. A multirotor\'s accelerometer feels thrust rather than gravity whenever it accelerates, so the filter only trusts it for "up" when the low-passed reading is within 5% of 1 g. Without a compass, heading drifts with the gyro bias.',
+    args: [['st', 'estimator state'], ['gyro', 'fused gyro reading, body [rad/s]'], ['accel', 'fused accelerometer reading, body [m/s²]'], ['mag', 'fused compass reading, body, or null'], ['dt', 'control period [s]']],
+    returns: '{ q: attitude quaternion [w, x, y, z]; w: filtered rate, body }', shape: { q: 4, w: 3 },
+    sample: () => [{}, [0, 0, 0], [0, 0, 9.81], [0.5, 0, -0.866], 0.001] },
+  { key: 'positionEstimator', group: 'est', fn: positionEstimator, title: 'Position estimator',
+    math: [`${V('v̂̇')} = <i>R̂</i>${V('f̃')} + ${V('g')} + <i>k</i><sub>V</sub>(${V('p̃')} − ${V('p̂')}) + <i>k</i><sub>fv</sub>(${V('ṽ')} − ${V('v̂')})`, `${V('p̂̇')} = ${V('v̂')} + <i>k</i><sub>P</sub>(${V('p̃')} − ${V('p̂')}), &nbsp;altitude from the barometer when present`, `no fix: ${V('v̂')}<sub>xy</sub> → −(<i>m</i>/<i>c</i><sub>d</sub>) ${V('f̃')}<sub>xy</sub> &nbsp;(drag fusion)`],
+    doc: 'Fuses the accelerometer with the position fix and barometer. The simulator first shifts each reading to the frame hub using the sensor positions the controller knows, and reports how old it is so a delayed fix is compared with the estimate from when it was measured. Without a fix it falls back on drag fusion: a multirotor\'s accelerometer feels air drag sideways, which reveals airspeed, so wind and a wrong drag coefficient make it drift.',
+    args: [['st', 'estimator state'], ['R', 'estimated attitude matrix'], ['accel', 'fused accelerometer reading, body'], ['baro', '{ alt, age } hub altitude, or null'], ['fix', '{ p, v, age } hub position and velocity, or null'], ['m', 'modeled mass [kg]'], ['dt', 'control period [s]']],
+    returns: '{ p: hub position; v: hub velocity }, world', shape: { p: 3, v: 3 },
+    sample: () => [{}, [1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 0, 9.81], { alt: 1.5, age: 0.02 }, { p: [0, 0, 1.5], v: [0, 0, 0], age: 0.15 }, 1, 0.001] },
+
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s. m is the mass the controller believes in.',
@@ -220,6 +368,6 @@ const LAW_OVERVIEW = [
   `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
-  plant: ['servoResponse', 'motorResponse', 'tiltAxis', 'rotorWrench', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody'],
+  ctrl: ['attitudeEstimator', 'positionEstimator', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
+  plant: ['servoResponse', 'motorResponse', 'tiltAxis', 'rotorWrench', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel'],
 };

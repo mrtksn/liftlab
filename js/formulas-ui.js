@@ -92,7 +92,7 @@ function buildFormulas() {
     });
     return el('div', { class: 'chain-wrap' }, el('span', { class: 'lbl', text: label }), row);
   };
-  intro.append(chain('Each control step', LAW_CHAIN.ctrl), chain('Each physics step', LAW_CHAIN.plant));
+  intro.append(chain('Each control step (1 kHz)', LAW_CHAIN.ctrl), chain('Each physics step (2 kHz), sensors at their own rates', LAW_CHAIN.plant));
   const copyBtn = el('button', { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
   const revertAll = el('button', { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
   const copyOut = el('textarea', { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
@@ -113,7 +113,9 @@ function buildFormulas() {
   pane.append(intro);
 
   const groups = [['plant', 'Physics (the plant)', 'What actually happens to the airframe. Edits here change the world the controller has to cope with.'],
-    ['ctrl', 'Controller', 'What the flight software decides. It only knows the modeled mass, inertia and actuator health.']];
+    ['sensor', 'Sensors', 'What the hardware reports. Each model turns the true quantity at the sensor into a reading with noise, bias, drift and limits. Each sensor keeps its own state between samples.'],
+    ['est', 'Estimation', 'What the flight software believes. These turn the sensor readings into the attitude, rate, position and velocity the controller flies on.'],
+    ['ctrl', 'Controller', 'What the flight software decides. It works from the estimate, and only knows the modeled mass, inertia and actuator health.']];
   for (const [g, title, blurb] of groups) {
     const sec = el('section', { class: 'sec' }, el('h2', { text: title }), el('p', { class: 'hint', text: blurb }));
     const list = el('div', { class: 'laws' });
@@ -121,6 +123,6 @@ function buildFormulas() {
     sec.append(list); pane.append(sec);
   }
   pane.append(el('section', { class: 'sec' }, el('h2', { text: 'Available inside formulas' }),
-    el('p', { class: 'hint', html: 'Vectors are <code>[x, y, z]</code> arrays; 3×3 matrices are 9 numbers, row by row. Helpers: <code>add sub scl dot crs nrm unit clamp</code>, <code>m3v m3m m3T m3inv</code>, <code>qmat</code>, <code>bls(cols, lo, hi, w, W)</code>, and constants <code>G D2R R2D</code>. Anything in <code>Math</code> works too. A formula that throws or returns a wrong shape is switched off and the default takes over.' })));
+    el('p', { class: 'hint', html: 'Vectors are <code>[x, y, z]</code> arrays; 3×3 matrices are 9 numbers, row by row. Helpers: <code>add sub scl dot crs nrm unit clamp</code>, <code>m3v m3m m3T m3inv</code>, <code>qmat qmul qnorm matToQuat</code>, <code>randn</code> (standard normal, seeded so each reset replays the same noise), <code>bls(cols, lo, hi, w, W)</code>, and constants <code>G D2R R2D</code>. Anything in <code>Math</code> works too. A formula that throws or returns a wrong shape is switched off and the default takes over.' })));
   for (const d of LAW_DEFS) refreshLaw(d.key);
 }

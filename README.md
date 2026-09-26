@@ -8,6 +8,26 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
+## Sensors and estimation
+
+The controller doesn't see the true state. It flies on what its sensors report, through two estimators, just like real flight software. Sensors are parts you attach on the Airframe tab, each with a position and mount angle you can set:
+
+| Sensor | Imperfections |
+|---|---|
+| IMU (gyro + accelerometer) | Noise, turn-on bias, gyro bias drift, range limits, sample rate, delay. Motor vibration (a sinusoid per motor at its rotation frequency) is stronger near busy motors, and a slow sample rate aliases it. An off-center accelerometer also feels the drone's rotation. |
+| Compass | Noise, hard-iron offset, and interference from motor currents that grows with throttle and falls off with distance. |
+| Barometer | Noise and slow drift. |
+| Position fix | GPS, RTK GPS or motion-capture presets: noise, a slowly wandering error, update rate, delay, and a "signal lost" switch. |
+
+Each sensor can be marked as known or unknown to the controller. When it's unknown, the controller assumes the sensor sits at the hub with no rotation, which is how you model a misplaced or misaligned sensor.
+
+- **Attitude estimator:** a Mahony complementary filter. It trusts the accelerometer for "up" only when the reading is near 1 g, because a multirotor's accelerometer feels thrust, not gravity, while it accelerates.
+- **Position estimator:** a complementary filter over the accelerometer, position fix and barometer. It compares each delayed fix with the estimate from when the fix was measured. Without a fix, it falls back on drag fusion: the sideways accelerometer reading is air drag, which reveals airspeed.
+
+The **State estimate** panel shows estimate-minus-truth errors and warns about missing references. The dashed outline in the 3D view is where the flight software thinks the drone is. **Controller flies on: Ground truth** bypasses the sensors for comparison.
+
+Sensor noise comes from a seeded generator, so every reset replays the same noise.
+
 ## Flying it
 
 The pads on the 3D view and the keyboard steer the drone. They move the target the controller holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls.
@@ -30,10 +50,11 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 16 functions for the physics and the controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 22 functions for the physics, sensors, estimators and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
+| `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
 | `js/formulas-ui.js` | The Formulas tab |
@@ -43,6 +64,10 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 ## The formulas
 
 **Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `tiltAxis`, `motorResponse`, `servoResponse`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
+
+**Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`.
+
+**Estimation:** `attitudeEstimator`, `positionEstimator`.
 
 **Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`.
 
@@ -78,7 +103,8 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 
 ## Known simplifications
 
-- The controller sees the true state (no sensor noise or estimator).
+- Sensors have no temperature effects, cross-axis sensitivity or scale-factor error yet.
+- Magnetic interference comes only from motor currents, not from wiring or the battery.
 - A tilting motor's mass stays at its pivot. Gyroscopic torque from spinning props is ignored.
 - No aerodynamic interaction between rotors, the frame and the payload beyond simple linear drag.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.

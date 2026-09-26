@@ -16,6 +16,8 @@ let running = true, speed = 1;
 
 /* ───────── components ───────── */
 const TAG = { motor: 'Motor', tilt: 'Servo', mass: 'Mass', hang: 'Cable' };
+const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix' };
+const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
   x: { label: 'X', path: ['pos', 0], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   y: { label: 'Y', path: ['pos', 1], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
@@ -37,7 +39,32 @@ const FD = {
   radius: { label: 'Radius', path: ['radius'], min: 0.01, max: 0.25, step: 0.005, u: 'm', dp: 3 },
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   cable: { label: 'Cable length', path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
+  // sensors
+  mr: { label: 'Mount roll', path: ['mount', 0], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  mp: { label: 'Mount pitch', path: ['mount', 1], min: -90, max: 90, step: 5, u: '°', dp: 0 },
+  my: { label: 'Mount yaw', path: ['mount', 2], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  rateImu: { label: 'Sample rate', path: ['rate'], min: 50, max: 2000, step: 50, u: 'Hz', dp: 0 },
+  rateMag: { label: 'Sample rate', path: ['rate'], min: 10, max: 200, step: 10, u: 'Hz', dp: 0 },
+  rateBaro: { label: 'Sample rate', path: ['rate'], min: 5, max: 100, step: 5, u: 'Hz', dp: 0 },
+  rateFix: { label: 'Update rate', path: ['rate'], min: 1, max: 200, step: 1, u: 'Hz', dp: 0 },
+  latImu: { label: 'Delay', path: ['latency'], min: 0, max: 50, step: 0.5, u: 'ms', dp: 1 },
+  lat: { label: 'Delay', path: ['latency'], min: 0, max: 300, step: 1, u: 'ms', dp: 0 },
+  gyroNoise: { label: 'Gyro noise', path: ['gyroNoise'], min: 0, max: 1, step: 0.01, u: '°/s', dp: 2 },
+  gyroBias: { label: 'Gyro turn-on bias (σ)', path: ['gyroBias'], min: 0, max: 5, step: 0.05, u: '°/s', dp: 2 },
+  gyroDrift: { label: 'Gyro bias drift', path: ['gyroDrift'], min: 0, max: 0.2, step: 0.005, u: '°/s/√s', dp: 3 },
+  accNoise: { label: 'Accel noise', path: ['accNoise'], min: 0, max: 0.5, step: 0.01, u: 'm/s²', dp: 2 },
+  accBias: { label: 'Accel bias (σ)', path: ['accBias'], min: 0, max: 0.5, step: 0.01, u: 'm/s²', dp: 2 },
+  vib: { label: 'Vibration pickup (mounting)', path: ['vib'], min: 0, max: 3, step: 0.1, u: '×', dp: 1 },
+  magNoise: { label: 'Noise', path: ['noise'], min: 0, max: 0.1, step: 0.002, u: '% of field', dp: 1, k: 100 },
+  hardIron: { label: 'Hard-iron offset (σ)', path: ['hardIron'], min: 0, max: 0.5, step: 0.01, u: '% of field', dp: 0, k: 100 },
+  interference: { label: 'Motor interference', path: ['interference'], min: 0, max: 3, step: 0.1, u: '×', dp: 1 },
+  baroNoise: { label: 'Noise', path: ['noise'], min: 0, max: 0.5, step: 0.01, u: 'm', dp: 2 },
+  baroDrift: { label: 'Drift', path: ['drift'], min: 0, max: 0.05, step: 0.001, u: 'm/√s', dp: 3 },
+  fixNoise: { label: 'Noise', path: ['noise'], min: 0, max: 1, step: 0.001, u: 'm', dp: 3 },
+  wander: { label: 'Wandering error (σ)', path: ['wander'], min: 0, max: 3, step: 0.01, u: 'm', dp: 2 },
+  velNoise: { label: 'Velocity noise', path: ['velNoise'], min: 0, max: 0.5, step: 0.01, u: 'm/s', dp: 2 },
 };
+const FIX_TUNED = ['rateFix', 'lat', 'fixNoise', 'wander', 'velNoise'];
 const getP = (o, p) => p.reduce((a, k) => a[k], o);
 function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
@@ -47,6 +74,13 @@ function summary(c) {
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'tilt') return `${c.tmax.toFixed(1)} N · ${c.mode === 'auto' ? 'auto ±' + c.range + '°' : 'fixed ' + c.manual + '°'} · ${p}`;
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  if (c.type === 'sensor') {
+    const u = c.known ? '' : ' · mount unknown';
+    if (c.kind === 'imu') return `${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
+    if (c.kind === 'mag') return `${c.rate} Hz · ×${c.interference.toFixed(1)} interference${u} · ${p}`;
+    if (c.kind === 'baro') return `${c.rate} Hz · ±${c.noise.toFixed(2)} m${u} · ${p}`;
+    return `${c.quality === 'custom' ? 'Custom' : FIX_QUALITY[c.quality].label} · ${c.rate} Hz · ${c.latency} ms${c.dropout ? ' · no fix' : ''}${u}`;
+  }
   return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
 }
 function slider(c, key) {
@@ -70,7 +104,7 @@ function checkF(c, key, label) {
 function compBody(c) {
   const b = el('div', { class: 'comp-body' });
   const nid = `f-${c.id}-name`; const ni = el('input', { type: 'text', id: nid, value: c.name, maxlength: '18' });
-  ni.addEventListener('input', () => { c.name = ni.value || TAG[c.type]; document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
+  ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
   b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
   const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
@@ -86,6 +120,20 @@ function compBody(c) {
     if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
     else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
     b.append(checkF(c, 'known', 'Controller knows this mass'));
+  } else if (c.type === 'sensor') {
+    const mount = el('div', { class: 'subgrid' }, slider(c, 'mr'), slider(c, 'mp'), slider(c, 'my'));
+    if (c.kind === 'imu') b.append(pos, mount, slider(c, 'rateImu'), slider(c, 'latImu'), slider(c, 'gyroNoise'), slider(c, 'gyroBias'), slider(c, 'gyroDrift'),
+      selectF(c, 'gyroRange', 'Gyro range', [[250, '±250 °/s'], [500, '±500 °/s'], [1000, '±1000 °/s'], [2000, '±2000 °/s']]),
+      slider(c, 'accNoise'), slider(c, 'accBias'), selectF(c, 'accRange', 'Accel range', [[2, '±2 g'], [4, '±4 g'], [8, '±8 g'], [16, '±16 g']]), slider(c, 'vib'));
+    else if (c.kind === 'mag') b.append(pos, mount, slider(c, 'rateMag'), slider(c, 'lat'), slider(c, 'magNoise'), slider(c, 'hardIron'), slider(c, 'interference'));
+    else if (c.kind === 'baro') b.append(pos, slider(c, 'rateBaro'), slider(c, 'lat'), slider(c, 'baroNoise'), slider(c, 'baroDrift'));
+    else {
+      const q = selectF(c, 'quality', 'Type', [['gps', 'GPS'], ['rtk', 'RTK GPS'], ['mocap', 'Motion capture'], ['custom', 'Custom']], () => {
+        if (c.quality !== 'custom') Object.assign(c, fixDefaults(c.quality)); rerender(); save();
+      });
+      b.append(q, el('p', { class: 'hint', text: 'Antenna or marker position:' }), pos, slider(c, 'rateFix'), slider(c, 'lat'), slider(c, 'fixNoise'), slider(c, 'wander'), slider(c, 'velNoise'), checkF(c, 'dropout', 'Signal lost (no fix)'));
+    }
+    b.append(checkF(c, 'known', c.kind === 'baro' ? 'Controller knows the position' : c.kind === 'fix' ? 'Controller knows the antenna position' : 'Controller knows the position and mount'));
   } else {
     b.append(el('p', { class: 'hint', text: 'Attachment point:' }), pos, slider(c, 'cable'), slider(c, 'mass'), checkF(c, 'known', 'Controller knows the static load'));
   }
@@ -93,7 +141,7 @@ function compBody(c) {
 }
 function compCard(c) {
   const open = openSet.has(c.id);
-  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: TAG[c.type] }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
+  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
   head.addEventListener('click', () => { open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
   const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });
   del.addEventListener('click', () => { cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural(); });
@@ -101,9 +149,13 @@ function compCard(c) {
 }
 function renderComps() {
   const L = $('#compList'); L.textContent = ''; for (const c of cfg.comps) L.append(compCard(c));
-  const na = actuators().length; $('#compCount').textContent = `${na} actuator${na === 1 ? '' : 's'} · ${cfg.comps.length - na} passive`;
+  const na = actuators().length, ns = allSensors().length, np = cfg.comps.length - na - ns;
+  $('#compCount').textContent = `${na} actuator${na === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} passive`;
 }
 function edited(c, key) {
+  if (c.type === 'sensor' && c.kind === 'fix' && FIX_TUNED.includes(key) && c.quality !== 'custom') {
+    c.quality = 'custom'; const q = document.getElementById(`f-${c.id}-quality`); if (q) q.value = 'custom';
+  }
   const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
   recomputeProps(); if (c.type === 'hang' && (key === 'cable' || key === 'x' || key === 'y' || key === 'z')) reseatPend(c);
   cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save();
@@ -114,7 +166,12 @@ function addComp(type) {
   if (type === 'motor') c = mkMotor('Motor ' + n, 0.3, 0, 0.02);
   else if (type === 'tilt') c = mkTilt('Servo ' + n, -0.3, 0, 0.02, { hingeAz: 90 });
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
-  else c = mkHang('Cable ' + n, 0, 0, -0.03);
+  else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
+  else {
+    const k = cfg.comps.filter(x => x.type === 'sensor' && x.kind === type).length + 1;
+    const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09] }[type];
+    c = mkSensor(type, SENSOR_KINDS[type] + ' ' + k, ...at);
+  }
   cfg.comps.push(c); openSet.add(c.id); structural();
   requestAnimationFrame(() => { const card = document.querySelector(`[data-id="${c.id}"]`); if (card) card.scrollIntoView({ block: 'nearest' }); });
 }
@@ -188,7 +245,30 @@ function updateLive() {
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
-  updateActs();
+  updateActs(); renderEst();
+}
+
+/* ───────── state estimate ───────── */
+function setSensing(m) {
+  sensing = m; $('#useSensors').setAttribute('aria-pressed', String(m === 'sensors')); $('#useTruth').setAttribute('aria-pressed', String(m === 'truth'));
+  ctl.iAtt = [0, 0, 0]; save();
+}
+$('#useSensors').addEventListener('click', () => setSensing('sensors')); $('#useTruth').addEventListener('click', () => setSensing('truth'));
+function renderEst() {
+  const chips = $('#senseChips'); chips.textContent = ''; const chip = (t, c) => chips.append(el('span', { class: 'chip ' + (c || ''), text: t }));
+  const has = k => sensorsOf(k).length > 0, fixOk = sensorsOf('fix').some(c => !c.dropout);
+  if (sensing === 'truth') chip('Flying on ground truth: sensors are ignored', 'accent');
+  if (!has('imu')) chip('No IMU: attitude is unknown', 'bad');
+  if (!has('mag')) chip('No compass: heading drifts', 'warn');
+  if (!fixOk) chip(has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', 'warn');
+  if (!has('baro') && !fixOk) chip('No altitude reference', 'warn');
+  if (has('imu') && has('mag') && fixOk && sensing !== 'truth') chip('All references present', 'good');
+  $('#estMode').textContent = sensing === 'truth' ? 'shown for reference' : 'estimate − truth';
+  const e = estimateErrors(); const f = (v, d, u) => (v == null ? '—' : v.toFixed(d) + ' ' + u);
+  const rows = [['Attitude error', f(e.ang, 2, '°')], ['Tilt error', f(e.tilt, 2, '°')], ['Heading error', f(e.head, 1, '°')],
+    ['Horizontal position error', f(e.pos, 1, 'cm')], ['Altitude error', f(e.alt, 1, 'cm')], ['Velocity error', f(e.vel, 1, 'cm/s')],
+    ['Gyro bias (IMU 1) · learned', e.gb == null ? '—' : `${e.gb.toFixed(2)} · ${e.gl == null ? '—' : e.gl.toFixed(2)} °/s`]];
+  const dl = $('#estKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
 }
 
 /* ───────── traces ───────── */
@@ -200,8 +280,8 @@ function drawChart() {
   cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, W, H);
   const acc = tok('--accent'), muted = tok('--muted'), ink = tok('--ink'), line = tok('--line'), lineS = tok('--line-strong');
   const t1 = S.t, t0 = t1 - 10; const xOf = t => (t - t0) / 10 * W;
-  const bands = [{ k: 'tilt', lab: 'Tilt', u: '°', min: 10, dp: 1 }, { k: 'err', lab: 'Position error', u: 'cm', min: 10, dp: 1 }, { k: 'util', lab: 'Peak motor load', u: '%', min: 100, dp: 0, fix: true }];
-  const gap = 10, bh = (H - gap * 2) / 3; let hi = -1;
+  const bands = [{ k: 'tilt', lab: 'Tilt', u: '°', min: 10, dp: 1 }, { k: 'err', lab: 'Position error', u: 'cm', min: 10, dp: 1 }, { k: 'est', lab: 'Attitude estimate error', u: '°', min: 2, dp: 2 }, { k: 'util', lab: 'Peak motor load', u: '%', min: 100, dp: 0, fix: true }];
+  const gap = 10, bh = (H - gap * (bands.length - 1)) / bands.length; let hi = -1;
   if (hoverX != null && hist.t.length) { const th = t0 + hoverX / W * 10; let best = 1e9; hist.t.forEach((t, i) => { const d = Math.abs(t - th); if (d < best) { best = d; hi = i; } }); }
   bands.forEach((b, bi) => {
     const y0 = bi * (bh + gap), top = y0 + 14, bot = y0 + bh; const data = hist[b.k];
@@ -312,7 +392,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
-[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail'], ['tEst', 'est']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
 /* ───────── tabs ───────── */
@@ -330,7 +410,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing }));
   } catch (e) {}
 }
 function load() {
@@ -341,7 +421,10 @@ function load() {
     try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
   }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = s.mode === 'level' ? 'level' : 'tilt'; return true;
+    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = s.mode === 'level' ? 'level' : 'tilt';
+    if (!cfg.comps.some(c => c.type === 'sensor')) cfg.comps.push(...defaultSensors());   // saved before sensors existed
+    sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
+    return true;
   }
   return false;
 }
@@ -355,7 +438,7 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 function boot() {
   buildSp(); buildFormulas(); bindPads();
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
-  buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
+  setSensing(sensing); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   showTab(tab === 'form' ? 'form' : 'air');
   let lastT = performance.now(), envT = 0, uiT = 0;

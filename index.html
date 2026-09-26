@@ -54,6 +54,13 @@
           <button class="btn" type="button" data-add="mass"><b>+</b>Rigid mass</button>
           <button class="btn" type="button" data-add="hang"><b>+</b>Mass on cable</button>
         </div>
+        <span class="lbl">Sensors</span>
+        <div class="addrow">
+          <button class="btn" type="button" data-add="imu"><b>+</b>IMU</button>
+          <button class="btn" type="button" data-add="mag"><b>+</b>Compass</button>
+          <button class="btn" type="button" data-add="baro"><b>+</b>Barometer</button>
+          <button class="btn" type="button" data-add="fix"><b>+</b>Position fix</button>
+        </div>
         <p class="hint">Body axes: X forward, Y left, Z up. Positions are measured from the frame hub. Changes apply mid-flight.</p>
       </section>
       <section class="sec">
@@ -87,6 +94,8 @@
           <span class="key"><i class="sw" style="background:var(--wind)"></i>wind</span>
           <span class="key"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
           <span class="key"><i class="ring"></i>controller's CoG</span>
+          <span class="key"><i class="sq" style="background:var(--sensor)"></i>sensor</span>
+          <span class="key"><i class="sw ghost"></i>estimated pose</span>
         </div>
       </div>
       <div class="hud hud-tr">
@@ -94,6 +103,7 @@
         <button class="btn" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
         <button class="btn" type="button" id="tForces" aria-pressed="true">Forces</button>
         <button class="btn" type="button" id="tTrail" aria-pressed="true">Trail</button>
+        <button class="btn" type="button" id="tEst" aria-pressed="true" title="Show where the flight software thinks the drone is">Estimate</button>
       </div>
       <div class="pilot" aria-label="Flight controls">
         <div class="pad" role="group" aria-label="Altitude and heading">
@@ -140,6 +150,18 @@
         <div class="chips" id="liveChips"></div>
       </section>
       <section class="sec">
+        <h2>State estimate <small id="estMode"></small></h2>
+        <div class="field-row">
+          <span class="lbl" id="senseLbl">Controller flies on</span>
+          <div class="seg seg-sm" role="group" aria-labelledby="senseLbl">
+            <button type="button" id="useSensors" aria-pressed="true">Sensors</button>
+            <button type="button" id="useTruth" aria-pressed="false">Ground truth</button>
+          </div>
+        </div>
+        <div class="chips" id="senseChips"></div>
+        <dl class="kv" id="estKv"></dl>
+      </section>
+      <section class="sec">
         <h2>Actuator commands <small>bar = command, tick = actual</small></h2>
         <div class="acts" id="acts"></div>
       </section>
@@ -150,7 +172,7 @@
       </section>
       <section class="sec">
         <h2>Traces <small>last 10 s</small></h2>
-        <canvas id="chart" aria-label="Tilt, position error and peak motor load over the last 10 seconds"></canvas>
+        <canvas id="chart" aria-label="Tilt, position error, attitude estimate error and peak motor load over the last 10 seconds"></canvas>
       </section>
       <section class="sec">
         <h2>Mass properties</h2>
@@ -169,6 +191,7 @@
 <script src="js/laws.js"></script>
 <script src="js/runtime.js"></script>
 <script src="js/sim.js"></script>
+<script src="js/sensors.js"></script>
 <script src="js/view3d.js"></script>
 <script src="js/pilot.js"></script>
 <script src="js/formulas-ui.js"></script>

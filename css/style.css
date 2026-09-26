@@ -3,7 +3,7 @@
   --line:#CFD7E0; --line-strong:#AEB9C6;
   --accent:#2B55C4; --accent-ink:#FFFFFF; --accent-soft:#DCE4F7;
   --cable:#9A3AA6; --grav:#8A5A2B; --mass:#7D8894; --frame:#3A4552; --wind:#1F7E86;
-  --good:#1D8A57; --warn:#A96E12; --bad:#C0392F; --good-soft:#DDF0E6; --warn-soft:#F6EAD3; --bad-soft:#F6DEDB;
+  --sensor:#5E7F12; --good:#1D8A57; --warn:#A96E12; --bad:#C0392F; --good-soft:#DDF0E6; --warn-soft:#F6EAD3; --bad-soft:#F6DEDB;
   --viewport:#DCE3EA; --grid:#C6CFD9; --grid-strong:#A3B0BE;
   --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --f-body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -16,7 +16,7 @@
     --line:#25303B; --line-strong:#384654;
     --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
     --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB;
-    --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
+    --sensor:#A9CF5A; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
     --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F;
     color-scheme:dark;
   }
@@ -26,7 +26,7 @@
   --line:#25303B; --line-strong:#384654;
   --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
   --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB;
-  --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
+  --sensor:#A9CF5A; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
   --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F;
   color-scheme:dark;
 }
@@ -75,6 +75,7 @@ select{border:1px solid var(--line-strong);background:var(--panel);border-radius
 .sec h2 small{font-family:var(--f-mono);font-size:11px;letter-spacing:0;text-transform:none;color:var(--muted);font-weight:400;margin-left:auto}
 .hint{margin:0;color:var(--muted);font-size:12.5px;max-width:65ch}
 .addrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.addrow + .lbl{margin-top:2px}
 .addrow .btn{text-align:left;display:flex;align-items:center;gap:7px}
 .addrow .btn b{font-family:var(--f-mono);font-weight:500;color:var(--accent)}
 
@@ -88,6 +89,7 @@ select{border:1px solid var(--line-strong);background:var(--panel);border-radius
 .tag-motor,.tag-tilt{color:var(--accent)}
 .tag-mass{color:var(--mass)}
 .tag-hang{color:var(--cable)}
+.tag-sensor{color:var(--sensor)}
 .comp-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp-sum{font-family:var(--f-mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .icon-btn{border:0;background:transparent;cursor:pointer;color:var(--muted);padding:0 10px;font-size:18px;border-radius:6px}
@@ -204,6 +206,9 @@ button.chip{background:transparent;cursor:pointer}
 .key{display:inline-flex;align-items:center;gap:5px}
 .sw{width:14px;height:3px;border-radius:2px;display:inline-block}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.sq{width:8px;height:8px;border-radius:2px;display:inline-block}
+.sw.ghost{background:transparent;border-top:2px dashed var(--sensor);height:0}
+.field-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}
 .ring{width:9px;height:9px;border-radius:50%;display:inline-block;border:1.5px dashed var(--ink-2)}
 .crash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--viewport) 55%,transparent)}
 .crash-card{background:var(--panel);border:1px solid var(--bad);border-radius:8px;padding:14px 18px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;max-width:320px;margin-inline:16px}
@@ -251,7 +256,7 @@ button.chip{background:transparent;cursor:pointer}
 .kv{display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:12.5px}
 .kv dt{color:var(--ink-2)}
 .kv dd{margin:0;font-family:var(--f-mono);font-size:11.5px;font-variant-numeric:tabular-nums;text-align:right}
-#chart{width:100%;height:168px;display:block;touch-action:none}
+#chart{width:100%;height:224px;display:block;touch-action:none}
 .sp{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
 
 @media (max-width:1100px){

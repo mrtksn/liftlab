@@ -19,14 +19,14 @@ function shapeOk(out, shape, args) {
   if (shape === 3) return isV3(out);
   if (shape === 'alloc') return Array.isArray(out) && out.length === args[0].length && out.every(isNum);
   if (!out || typeof out !== 'object') return false;
-  for (const k of Object.keys(shape)) if (!isV3(out[k])) return false;
+  for (const [k, n] of Object.entries(shape)) if (!(Array.isArray(out[k]) && out[k].length === n && out[k].every(isNum))) return false;
   return true;
 }
 function shapeText(shape) {
   if (shape === 'n') return 'a finite number';
   if (shape === 3) return 'an array of 3 finite numbers';
   if (shape === 'alloc') return 'an array with one finite number per input';
-  return '{ ' + Object.keys(shape).map(k => k + ': [x, y, z]').join(', ') + ' }';
+  return '{ ' + Object.entries(shape).map(([k, n]) => k + (n === 4 ? ': [w, x, y, z]' : ': [x, y, z]')).join(', ') + ' }';
 }
 function describe(v) {
   if (v === undefined) return 'undefined';

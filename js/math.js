@@ -124,3 +124,22 @@ function bls(cols, lo, hi, w, W) {
   }
   return x;
 }
+
+// Rotation (sensor → body) from mount angles in degrees: yaw about Z, then pitch about Y, then roll about X.
+function eulerR(roll, pitch, yaw) {
+  const [cr, sr, cp, sp, cy, sy] = [Math.cos(roll * D2R), Math.sin(roll * D2R), Math.cos(pitch * D2R), Math.sin(pitch * D2R), Math.cos(yaw * D2R), Math.sin(yaw * D2R)];
+  return [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr, sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr, -sp, cp * sr, cp * cr];
+}
+
+// Seeded random numbers, so a run replays the same sensor noise after every reset.
+let rngState = 1;
+function seedRng(s) { rngState = s >>> 0 || 1; }
+function rand() { // mulberry32
+  rngState = (rngState + 0x6D2B79F5) >>> 0; let t = rngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+function randn() { // standard normal (Box–Muller)
+  let u = 0; while (u === 0) u = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}

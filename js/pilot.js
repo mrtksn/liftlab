@@ -44,8 +44,8 @@ function pilotStep(dt) {
   if (y) { let a = setpoint.yaw + y * L.yaw * dt; a = ((a + 180) % 360 + 360) % 360 - 180; setpoint.yaw = a; }
   ctl.vRef = pilot.vref.slice();
 }
-function pilotHold() {
-  const { hub } = hubState(qmat(S.q));
+function pilotHold() {   // hold where the flight software believes it is
+  const hub = sensing === 'truth' ? hubState(qmat(S.q)).hub : est.p;
   setpoint.x = clamp(hub[0], -PILOT_BOX.xy, PILOT_BOX.xy); setpoint.y = clamp(hub[1], -PILOT_BOX.xy, PILOT_BOX.xy);
   setpoint.z = clamp(hub[2], PILOT_BOX.zMin, PILOT_BOX.zMax);
   pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];
