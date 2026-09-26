@@ -19,36 +19,36 @@ const TAG = { motor: 'Motor', tilt: 'Servo', mass: 'Mass', hang: 'Cable' };
 const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix' };
 const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
-  x: { label: 'X', path: ['pos', 0], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
-  y: { label: 'Y', path: ['pos', 1], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
-  z: { label: 'Z', path: ['pos', 2], min: -0.3, max: 0.3, step: 0.005, u: 'm', dp: 3 },
-  tilt: { label: 'Axis tilt from vertical', path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
+  x: { label: 'X', path: ['pos', 0], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
+  y: { label: 'Y', path: ['pos', 1], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
+  z: { label: 'Z', path: ['pos', 2], hmin: -2, hmax: 2,  min: -0.3, max: 0.3, step: 0.005, u: 'm', dp: 3 },
+  tilt: { label: 'Axis tilt from vertical', hmax: 180,  path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
   az: { label: 'Tilt toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
-  tmax: { label: 'Max thrust', path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
+  tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
   kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
-  tau: { label: 'Spin-up time constant', path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
-  mass: { label: 'Mass', path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
+  tau: { label: 'Spin-up time constant', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
+  mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
   health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
   hingeAz: { label: 'Hinge axis direction', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   manual: { label: 'Manual angle', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
   range: { label: 'Servo limit ±', path: ['range'], min: 5, max: 90, step: 1, u: '°', dp: 0 },
-  rate: { label: 'Servo speed', path: ['rate'], min: 20, max: 1000, step: 10, u: '°/s', dp: 0 },
+  rate: { label: 'Servo speed', hmax: 5000,  path: ['rate'], min: 20, max: 1000, step: 10, u: '°/s', dp: 0 },
   lx: { label: 'Size X', path: ['size', 0], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
   ly: { label: 'Size Y', path: ['size', 1], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
   lz: { label: 'Size Z', path: ['size', 2], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
   radius: { label: 'Radius', path: ['radius'], min: 0.01, max: 0.25, step: 0.005, u: 'm', dp: 3 },
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
-  cable: { label: 'Cable length', path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
+  cable: { label: 'Cable length', hmax: 10,  path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
   // sensors
   mr: { label: 'Mount roll', path: ['mount', 0], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   mp: { label: 'Mount pitch', path: ['mount', 1], min: -90, max: 90, step: 5, u: '°', dp: 0 },
   my: { label: 'Mount yaw', path: ['mount', 2], min: -180, max: 180, step: 5, u: '°', dp: 0 },
-  rateImu: { label: 'Sample rate', path: ['rate'], min: 50, max: 2000, step: 50, u: 'Hz', dp: 0 },
+  rateImu: { label: 'Sample rate', hmin: 10, hmax: 8000,  path: ['rate'], min: 50, max: 2000, step: 50, u: 'Hz', dp: 0 },
   rateMag: { label: 'Sample rate', path: ['rate'], min: 10, max: 200, step: 10, u: 'Hz', dp: 0 },
   rateBaro: { label: 'Sample rate', path: ['rate'], min: 5, max: 100, step: 5, u: 'Hz', dp: 0 },
   rateFix: { label: 'Update rate', path: ['rate'], min: 1, max: 200, step: 1, u: 'Hz', dp: 0 },
   latImu: { label: 'Delay', path: ['latency'], min: 0, max: 50, step: 0.5, u: 'ms', dp: 1 },
-  lat: { label: 'Delay', path: ['latency'], min: 0, max: 300, step: 1, u: 'ms', dp: 0 },
+  lat: { label: 'Delay', hmax: 2000,  path: ['latency'], min: 0, max: 300, step: 1, u: 'ms', dp: 0 },
   gyroNoise: { label: 'Gyro noise', path: ['gyroNoise'], min: 0, max: 1, step: 0.01, u: '°/s', dp: 2 },
   gyroBias: { label: 'Gyro turn-on bias (σ)', path: ['gyroBias'], min: 0, max: 5, step: 0.05, u: '°/s', dp: 2 },
   gyroDrift: { label: 'Gyro bias drift', path: ['gyroDrift'], min: 0, max: 0.2, step: 0.005, u: '°/s/√s', dp: 3 },
@@ -83,12 +83,38 @@ function summary(c) {
   }
   return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
 }
+// A labelled value with a slider and a box you can type into. The slider covers the usual range;
+// typed values may go further, up to hmin/hmax. `get`/`set` work in SI units, the box shows d.k × value.
+function numField(id, d, get, set) {
+  const k = d.k || 1, lo = d.hmin ?? d.min, hi = d.hmax ?? d.max;
+  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(d.step * k), 'aria-label': `${d.label} in ${d.u}`, inputmode: 'decimal' });
+  const rng = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step });
+  const show = v => { num.value = String(+(v * k).toFixed(d.dp)); rng.value = String(v); };
+  show(get());
+  rng.addEventListener('input', () => { const v = parseFloat(rng.value); num.value = String(+(v * k).toFixed(d.dp)); set(v); });
+  num.addEventListener('input', () => {
+    const t = num.value, v = parseFloat(t) / k; if (t === '' || !isFinite(v)) return;
+    const cv = clamp(v, lo, hi); rng.value = String(cv); set(cv);
+  });
+  num.addEventListener('change', () => show(get()));                       // tidy the box once typing is done
+  num.addEventListener('keydown', e => {
+    if (e.key === 'Enter') num.blur();
+    else if (e.key === 'Escape') { show(get()); num.blur(); }
+  });
+  const refresh = () => { if (document.activeElement !== num) show(get()); };
+  const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, num, el('span', { class: 'unit', text: d.u })), rng);
+  return { node, refresh };
+}
+const cardRefresh = new Map();   // component id -> functions that redraw its open card's values
 function slider(c, key) {
-  const d = FD[key], id = `f-${c.id}-${key}`, v = getP(c, d.path);
-  const out = el('output', { for: id, text: fmtV(v, d) });
-  const inp = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step, value: v });
-  inp.addEventListener('input', () => { setP(c, d.path, parseFloat(inp.value)); out.textContent = fmtV(parseFloat(inp.value), d); edited(c, key); });
-  return el('div', { class: 'field' }, el('label', { for: id, text: d.label }), out, inp);
+  const d = FD[key];
+  const f = numField(`f-${c.id}-${key}`, d, () => getP(c, d.path), v => { setP(c, d.path, v); edited(c, key); });
+  if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(f.refresh);
+  return f.node;
+}
+function refreshCard(c) {
+  for (const f of cardRefresh.get(c.id) || []) f();
+  const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
 }
 function selectF(c, key, label, opts, onchg) {
   const id = `f-${c.id}-${key}`; const s = el('select', { id });
@@ -102,6 +128,7 @@ function checkF(c, key, label) {
   return el('label', { class: 'check', for: id }, i, label);
 }
 function compBody(c) {
+  cardRefresh.set(c.id, []);
   const b = el('div', { class: 'comp-body' });
   const nid = `f-${c.id}-name`; const ni = el('input', { type: 'text', id: nid, value: c.name, maxlength: '18' });
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
@@ -142,10 +169,14 @@ function compBody(c) {
 function compCard(c) {
   const open = openSet.has(c.id);
   const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
-  head.addEventListener('click', () => { open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
+  head.addEventListener('click', () => {
+    if (typeof editMode !== 'undefined' && editMode && edit.sel !== c.id) { selectComp(c.id); return; }   // in edit mode a card click selects the part
+    open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c));
+  });
   const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });
   del.addEventListener('click', () => { cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural(); });
-  return el('div', { class: 'comp' + (open ? ' open' : ''), 'data-id': c.id }, el('div', { class: 'comp-top' }, head, del), open ? compBody(c) : null);
+  const selected = typeof edit !== 'undefined' && edit.sel === c.id;
+  return el('div', { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, el('div', { class: 'comp-top' }, head, del), open ? compBody(c) : null);
 }
 function renderComps() {
   const L = $('#compList'); L.textContent = ''; for (const c of cfg.comps) L.append(compCard(c));
@@ -308,16 +339,13 @@ function drawChart() {
 /* ───────── target & environment ───────── */
 const spRefs = [];
 function spSlider(key, label, min, max, step, u, obj) {
-  const id = 'sp-' + key; const fmt = v => v.toFixed(step < 1 ? 1 : 0) + ' ' + u;
-  const out = el('output', { for: id, text: fmt(obj[key]) });
-  const inp = el('input', { type: 'range', id, min, max, step, value: obj[key] });
-  inp.addEventListener('input', () => { obj[key] = parseFloat(inp.value); out.textContent = fmt(obj[key]); if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; } });
-  spRefs.push({ key, obj, inp, out, fmt });
-  return el('div', { class: 'field' }, el('label', { for: id, text: label }), out, inp);
+  const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? 1 : 0 }, () => obj[key], v => {
+    obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; }
+  });
+  spRefs.push(f.refresh);
+  return f.node;
 }
-function syncSp() {  // keep the sliders in step with flying
-  for (const r of spRefs) { if (document.activeElement === r.inp) continue; const v = r.obj[r.key]; if (Math.abs(parseFloat(r.inp.value) - v) > 1e-6) { r.inp.value = v; r.out.textContent = r.fmt(v); } }
-}
+function syncSp() { for (const r of spRefs) r(); }  // keep the target fields in step with flying
 function buildSp() {
   const b = $('#spFields'); b.textContent = '';
   b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
@@ -331,16 +359,21 @@ for (const [k, p] of Object.entries(PRESETS)) presetSel.append(el('option', { va
 presetSel.addEventListener('change', () => { if (!presetSel.value) return; loadPreset(presetSel.value); presetSel.value = ''; });
 function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); openSet.clear(); afterLoad(); }
 function afterLoad() {
-  $('#frameMass').value = cfg.frame.mass; $('#frameMassOut').textContent = cfg.frame.mass.toFixed(2) + ' kg';
+  frameMassField.refresh();
   truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
 }
-$('#frameMass').addEventListener('input', e => { cfg.frame.mass = parseFloat(e.target.value); $('#frameMassOut').textContent = cfg.frame.mass.toFixed(2) + ' kg'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
+const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
+  v => { cfg.frame.mass = v; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
+$('#frameMassSlot').replaceWith(frameMassField.node);
 function setMode(m, recalc = true) {
   mode = m; $('#modeTilt').setAttribute('aria-pressed', String(m === 'tilt')); $('#modeLevel').setAttribute('aria-pressed', String(m === 'level'));
   ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
 }
 $('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeLevel').addEventListener('click', () => setMode('level'));
-$('#runBtn').addEventListener('click', () => { running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run'; });
+$('#runBtn').addEventListener('click', () => {
+  if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
+  running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run';
+});
 function doReset() { pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
 $('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
 /* Poke: hold to charge, release to hit. Strength grows with hold time up to POKE_FULL seconds. */

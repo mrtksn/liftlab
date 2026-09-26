@@ -8,6 +8,16 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
+## Editing the airframe
+
+- **Type numbers:** every value on the Airframe tab has a box you can type into. Typed values can go beyond the slider's range, for example positions up to ±2 m.
+- **Edit mode:** press **Edit** on the 3D view (or **E**). The simulation pauses and the airframe is drawn level in its own body axes. Hover to see a part's name, click to select it (or click its card), then drag:
+  - **arrows** to move along X (red), Y (green) or Z (blue);
+  - **squares** to move within a plane;
+  - **rings** to rotate: a motor's thrust axis, a servo's hinge direction, or an IMU's or compass's mount.
+- **Snapping and exiting:** positions snap to 5 mm and angles to 5°; hold **Shift** for 1 mm and 1°. **Esc** deselects, then leaves edit mode. **Done** or **Run** resumes the simulation.
+- **Live feedback:** the airframe check, mass properties and the part's card update as you drag.
+
 ## Sensors and estimation
 
 The controller doesn't see the true state. It flies on what its sensors report, through two estimators, just like real flight software. Sensors are parts you attach on the Airframe tab, each with a position and mount angle you can set:
@@ -42,6 +52,7 @@ The pads on the 3D view and the keyboard steer the drone. They move the target t
 | H | Fly back to the start point |
 | 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
 | C | Chase camera: keep the view behind the drone |
+| E | Edit mode: select and drag parts in the 3D view |
 | P (hold) | Charge a poke; release to hit. Tap for a nudge, hold 1.5 s for the strongest. The Poke button works the same way |
 
 Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
@@ -57,6 +68,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
+| `js/editor.js` | Edit mode: picking parts and the move and rotate handles |
 | `js/formulas-ui.js` | The Formulas tab |
 | `js/ui.js` | Airframe editor, telemetry, traces, header controls, persistence and the boot loop |
 | `css/style.css` | Styles, light and dark |

@@ -143,3 +143,12 @@ function randn() { // standard normal (Box–Muller)
   let u = 0; while (u === 0) u = rand();
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
 }
+
+// Rotation by angle a [rad] about unit axis n (Rodrigues), and back from a matrix to mount angles in degrees.
+function axisAngleR(n, a) {
+  const [x, y, z] = unit(n), c = Math.cos(a), s = Math.sin(a), C = 1 - c;
+  return [c + x * x * C, x * y * C - z * s, x * z * C + y * s, y * x * C + z * s, c + y * y * C, y * z * C - x * s, z * x * C - y * s, z * y * C + x * s, c + z * z * C];
+}
+function eulerFromR(R) { // inverse of eulerR: [roll, pitch, yaw] in degrees
+  return [Math.atan2(R[7], R[8]) * R2D, Math.asin(clamp(-R[6], -1, 1)) * R2D, Math.atan2(R[3], R[0]) * R2D];
+}

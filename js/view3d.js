@@ -12,7 +12,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
-let mats = {}, parts = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let mats = {}, parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5) };
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
@@ -40,7 +40,7 @@ function applyTheme() {
   renderer.setClearColor(colorOf('--viewport'), 1);
   if (grid) { scene.remove(grid); grid.geometry.dispose(); }
   grid = new THREE.GridHelper(60, 240, colorOf('--grid-strong'), colorOf('--grid')); grid.rotation.x = Math.PI / 2; scene.add(grid);
-  buildMaterials(); buildWorldFx(); rebuildDrone();
+  buildMaterials(); buildWorldFx(); rebuildDrone(); buildGizmo();
 }
 function rod(a, b, r, mat) {
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b); const len = va.distanceTo(vb); if (len < 1e-4) return null;
@@ -50,13 +50,13 @@ function rod(a, b, r, mat) {
 function disposeGroup(g) { g.traverse(o => { if (o.geometry) o.geometry.dispose(); }); while (g.children.length) g.remove(g.children[0]); }
 
 function rebuildDrone() {
-  disposeGroup(drone); parts = new Map();
+  disposeGroup(drone); parts = new Map(); pickGroups = new Map();
   drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
   for (const c of cfg.comps) {
     const r = rod([0, 0, 0], c.pos, 0.007, mats.frame); if (r) drone.add(r);
     if (c.type === 'motor' || c.type === 'tilt') {
-      const mount = new THREE.Group(); mount.position.set(...c.pos); drone.add(mount);
+      const mount = new THREE.Group(); mount.position.set(...c.pos); mount.userData.compId = c.id; pickGroups.set(c.id, mount); drone.add(mount);
       const axis = new THREE.Group(); mount.add(axis);
       if (c.type === 'tilt') {
         const sv = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.022), mats.servo); sv.position.z = -0.018; mount.add(sv);
@@ -72,9 +72,9 @@ function rebuildDrone() {
       if (c.shape === 'sphere') g = new THREE.SphereGeometry(c.radius, 20, 14);
       else if (c.shape === 'cylinder') g = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
       else g = new THREE.BoxGeometry(...c.size);
-      const m = new THREE.Mesh(g, c.known ? mats.mass : mats.massUnknown); m.position.set(...c.pos); drone.add(m);
+      const m = new THREE.Mesh(g, c.known ? mats.mass : mats.massUnknown); m.position.set(...c.pos); m.userData.compId = c.id; pickGroups.set(c.id, m); drone.add(m);
     } else if (c.type === 'hang') {
-      const hk = new THREE.Mesh(new THREE.SphereGeometry(0.009, 10, 8), mats.payload); hk.position.set(...c.pos); drone.add(hk);
+      const hk = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), mats.payload); hk.position.set(...c.pos); hk.userData.compId = c.id; pickGroups.set(c.id, hk); drone.add(hk);
     } else if (c.type === 'sensor') {
       const g = new THREE.Group(); g.position.set(...c.pos);
       const Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]);
@@ -82,7 +82,7 @@ function rebuildDrone() {
       const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008] }[c.kind];
       g.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
       const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) g.add(ax);   // sensor X axis shows the mount
-      drone.add(g);
+      g.userData.compId = c.id; pickGroups.set(c.id, g); drone.add(g);
     }
   }
   buildGhost();
@@ -121,47 +121,54 @@ function buildWorldFx() {
 const tmpV = new THREE.Vector3();
 function updateScene() {
   const R = qmat(S.q); const { hub } = hubState(R);
-  drone.position.set(...hub); drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
+  drone.position.set(...hub);
+  if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
+  else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
+  const live = !editMode;
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
     p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c, st.th)));   // follows the tilt law exactly
     const T = st.T * c.health / 100; p.disc.material.opacity = 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
-    p.arrow.visible = view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
+    p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
   }
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;
-  gravArrow.visible = view.forces; gravArrow.position.set(S.p[0], S.p[1], S.p[2] - 0.02); gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
-  const wv = windVec(); windArrow.visible = view.forces && envr.wind > 0.05;
+  gravArrow.visible = live && view.forces; gravArrow.position.set(S.p[0], S.p[1], S.p[2] - 0.02); gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
+  const wv = windVec(); windArrow.visible = live && view.forces && envr.wind > 0.05;
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
   for (const c of cfg.comps) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;
+    v.line.visible = v.ball.visible = live;
     const aw = add(S.p, m3v(R, sub(c.pos, truth.c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
-  ghost.visible = view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
-  spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
-  trailLine.visible = view.trail;
+  ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
+  spMarker.visible = live; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
+  trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
-  const tgt = view.follow ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
+  const tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   cam.target.lerp(tgt, view.follow ? 0.12 : 0.06);
-  if (view.chase) {  // swing the camera behind the target heading
+  if (view.chase && live) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.az += d * 0.06;
   }
   const ce = Math.cos(cam.el);
   camera.position.set(cam.target.x + cam.dist * ce * Math.cos(cam.az), cam.target.y + cam.dist * ce * Math.sin(cam.az), cam.target.z + cam.dist * Math.sin(cam.el));
   camera.lookAt(cam.target);
+  updateEditView();
 }
 
 // Orbit and zoom: drag to rotate, wheel or pinch to zoom.
 const ptrs = new Map(); let pinch0 = 0;
-vpEl.addEventListener('pointerdown', e => { vpEl.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); } });
+vpEl.addEventListener('pointerdown', e => { if (editPointerDown(e)) return; vpEl.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); } });
 vpEl.addEventListener('pointermove', e => {
+  if (editPointerMove(e, ptrs.size > 0 && edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) >= 5)) return;
   if (!ptrs.has(e.pointerId)) return; const p = ptrs.get(e.pointerId);
   if (ptrs.size === 1) { cam.az -= (e.clientX - p.x) * 0.008; cam.el = clamp(cam.el + (e.clientY - p.y) * 0.006, -0.2, 1.45); }
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0 > 0) cam.dist = clamp(cam.dist * pinch0 / d, 0.6, 20); pinch0 = d; }
 });
-const endPtr = e => { ptrs.delete(e.pointerId); pinch0 = 0; };
+const endPtr = e => { const handled = e.type === 'pointerup' && editPointerUp(e); ptrs.delete(e.pointerId); pinch0 = 0; return handled; };
+vpEl.addEventListener('pointerleave', () => { if (!edit.drag) setHover(null); });
 vpEl.addEventListener('pointerup', endPtr); vpEl.addEventListener('pointercancel', endPtr);
 vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, 20); }, { passive: false });
 new ResizeObserver(() => { const w = vpEl.clientWidth, h = vpEl.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }).observe(vpEl);
