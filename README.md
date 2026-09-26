@@ -22,6 +22,7 @@ The pads on the 3D view and the keyboard steer the drone. They move the target t
 | H | Fly back to the start point |
 | 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
 | C | Chase camera: keep the view behind the drone |
+| P (hold) | Charge a poke; release to hit. Tap for a nudge, hold 1.5 s for the strongest. The Poke button works the same way |
 
 Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
 

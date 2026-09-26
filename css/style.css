@@ -47,6 +47,17 @@ button,select,input{font:inherit;color:inherit}
 .lbl{font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .btn{border:1px solid var(--line-strong);background:var(--panel);border-radius:6px;padding:5px 11px;cursor:pointer;font-weight:500;white-space:nowrap}
 .btn:hover{border-color:var(--accent)}
+.poke{position:relative;overflow:hidden;min-width:6.4em;font-variant-numeric:tabular-nums;touch-action:none;user-select:none;-webkit-user-select:none;--charge:0%}
+.poke::before{content:"";position:absolute;inset:0;width:var(--charge);background:var(--warn-soft);border-right:2px solid var(--warn);opacity:0;pointer-events:none}
+.poke .poke-lbl{position:relative}
+.poke.charging{border-color:var(--warn);transform:scale(.97)}
+.poke.charging::before{opacity:1}
+.poke.full{border-color:var(--bad)}
+.poke.full::before{background:var(--bad-soft);border-right-color:var(--bad)}
+.poke.full .poke-lbl{animation:jitter .12s linear infinite}
+.poke.fired{animation:fired .45s ease-out}
+@keyframes jitter{0%,100%{transform:translateX(0)}25%{transform:translateX(-1px)}75%{transform:translateX(1px)}}
+@keyframes fired{from{box-shadow:0 0 0 5px color-mix(in srgb,var(--warn) 45%,transparent)}to{box-shadow:0 0 0 0 transparent}}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn:focus-visible,.seg button:focus-visible,select:focus-visible,input:focus-visible,.comp-head:focus-visible,.icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 select{border:1px solid var(--line-strong);background:var(--panel);border-radius:6px;padding:5px 8px}
@@ -267,4 +278,4 @@ button.chip{background:transparent;cursor:pointer}
   .sp{grid-template-columns:1fr}
   .brand h1{font-size:21px}
 }
-@media (prefers-reduced-motion: reduce){ *{transition:none!important} }
+@media (prefers-reduced-motion: reduce){ *{transition:none!important} .poke.full .poke-lbl,.poke.fired{animation:none} .poke.charging{transform:none} }

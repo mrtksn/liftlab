@@ -263,10 +263,54 @@ $('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeLevel')
 $('#runBtn').addEventListener('click', () => { running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run'; });
 function doReset() { pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
 $('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
-$('#pokeBtn').addEventListener('click', () => {
-  if (S.crashed) return; const a = Math.random() * Math.PI * 2; S.w = add(S.w, [Math.cos(a) * 4, Math.sin(a) * 4, (Math.random() - 0.5) * 2]);
-  const b = Math.random() * Math.PI * 2; S.v = add(S.v, [Math.cos(b) * 0.8, Math.sin(b) * 0.8, 0]);
+/* Poke: hold to charge, release to hit. Strength grows with hold time up to POKE_FULL seconds. */
+const POKE_FULL = 1.5;
+const poke = { t0: 0, src: null, raf: 0 };
+const pokeBtn = $('#pokeBtn'), pokeLbl = pokeBtn.querySelector('.poke-lbl');
+const pokeCharge = () => clamp((performance.now() - poke.t0) / 1000 / POKE_FULL, 0, 1);
+function pokeStart(src) {
+  if (poke.src || S.crashed) return;
+  poke.src = src; poke.t0 = performance.now();
+  pokeBtn.classList.add('charging'); pokeBtn.classList.remove('fired', 'full');
+  const tick = () => {
+    const c = pokeCharge();
+    pokeBtn.style.setProperty('--charge', (c * 100).toFixed(1) + '%');
+    pokeLbl.textContent = `Poke ${Math.round(c * 100)}%`;
+    pokeBtn.classList.toggle('full', c >= 1);
+    poke.raf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+function pokeEnd(src, fire) {
+  if (poke.src !== src) return;
+  const c = pokeCharge(); cancelAnimationFrame(poke.raf); poke.src = null;
+  pokeBtn.classList.remove('charging', 'full'); pokeBtn.style.setProperty('--charge', '0%');
+  pokeLbl.textContent = 'Poke';
+  if (!fire || S.crashed) return;
+  const spin = 1.5 + 10.5 * c, push = 0.3 + 2.7 * c;          // rad/s and m/s added to the current motion
+  const a = Math.random() * Math.PI * 2, b = Math.random() * Math.PI * 2;
+  S.w = add(S.w, [Math.cos(a) * spin, Math.sin(a) * spin, (Math.random() - 0.5) * spin * 0.5]);
+  S.v = add(S.v, [Math.cos(b) * push, Math.sin(b) * push, 0]);
+  pokeBtn.title = `Last poke: ${Math.round(c * 100)}% · ${spin.toFixed(1)} rad/s spin, ${push.toFixed(1)} m/s shove. Hold to charge (P).`;
+  void pokeBtn.offsetWidth; pokeBtn.classList.add('fired');
+}
+pokeBtn.addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); try { pokeBtn.setPointerCapture(e.pointerId); } catch (x) {} pokeStart('ptr:' + e.pointerId); });
+pokeBtn.addEventListener('pointerup', e => pokeEnd('ptr:' + e.pointerId, true));
+pokeBtn.addEventListener('pointercancel', e => pokeEnd('ptr:' + e.pointerId, false));
+pokeBtn.addEventListener('lostpointercapture', e => pokeEnd('ptr:' + e.pointerId, true));
+pokeBtn.addEventListener('contextmenu', e => e.preventDefault());
+pokeBtn.addEventListener('keydown', e => {   // Enter/Space on the focused button charges too
+  if (e.code !== 'Space' && e.code !== 'Enter') return;
+  e.preventDefault(); e.stopPropagation(); if (!e.repeat) pokeStart('key:btn');
 });
+pokeBtn.addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); e.stopPropagation(); pokeEnd('key:btn', true); } });
+pokeBtn.addEventListener('blur', () => pokeEnd('key:btn', true));
+window.addEventListener('keydown', e => {
+  if (e.code !== 'KeyP' || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+  e.preventDefault(); if (!e.repeat) pokeStart('key:P');
+});
+window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
+window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
 [['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
