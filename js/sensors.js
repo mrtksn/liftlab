@@ -37,7 +37,7 @@ const defaultSensors = () => [
 /* ───────── runtime ───────── */
 const sens = new Map();   // sensor id -> { st, acc, queue, latest, fresh }
 const vib = new Map();    // motor id -> { ph, u, um }
-const est = { q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], att: {}, pos: {}, haveImu: false };
+const est = { fGyro: [0, 0, 0], fAccel: [0, 0, 9.81], q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], att: {}, pos: {}, haveImu: false };
 let sensing = 'sensors';  // what the controller flies on: 'sensors' or 'truth'
 const sensorsOf = kind => cfg.comps.filter(c => c.type === 'sensor' && c.kind === kind);
 const allSensors = () => cfg.comps.filter(c => c.type === 'sensor');
@@ -125,6 +125,7 @@ function senseAndEstimate(dt) {
     const accel = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.accel)));
     const mags = ready('mag');
     const mag = mags.length ? mean3(mags.map(c => m3v(knownMount(c), sens.get(c.id).latest))) : null;
+    est.fGyro = gyro; est.fAccel = accel;               // fused readings, also used to learn the airframe
     const a = run('attitudeEstimator', est.att, gyro, accel, mag, dt);
     est.q = qnorm(a.q); est.R = qmat(est.q); est.w = a.w;
     const baros = ready('baro');

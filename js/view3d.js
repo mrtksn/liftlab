@@ -1,7 +1,7 @@
 'use strict';
 // three.js scene: the airframe, force arrows, cable payloads, target marker and trail.
 
-const view = { follow: true, chase: false, forces: true, trail: true, est: true };
+const view = { follow: true, chase: false, forces: true, trail: true, est: true, air: false };
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -31,6 +31,7 @@ function buildMaterials() {
     ring: new THREE.LineDashedMaterial({ color: colorOf('--ink-2'), dashSize: 0.012, gapSize: 0.01 }),
     sp: new THREE.LineBasicMaterial({ color: colorOf('--accent'), transparent: true, opacity: 0.7 }),
     trail: new THREE.LineBasicMaterial({ color: colorOf('--muted'), transparent: true, opacity: 0.6 }),
+    wake: new THREE.MeshBasicMaterial({ color: colorOf('--wind'), transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
     sensor: new THREE.MeshStandardMaterial({ color: colorOf('--sensor'), roughness: 0.5 }),
     sensorAxis: new THREE.MeshBasicMaterial({ color: colorOf('--sensor') }),
     ghost: new THREE.LineDashedMaterial({ color: colorOf('--sensor'), dashSize: 0.02, gapSize: 0.015, transparent: true, opacity: 0.9 }),
@@ -63,10 +64,12 @@ function rebuildDrone() {
         const h = hingeAxis(c); const hinge = rod([-h[0] * 0.03, -h[1] * 0.03, -0.018], [h[0] * 0.03, h[1] * 0.03, -0.018], 0.004, mats.ink); if (hinge) mount.add(hinge);
       }
       axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
-      const pr = clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);
+      const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
       const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.02), 0.1, colorOf('--accent'), 0.03, 0.018); axis.add(arrow);
-      parts.set(c.id, { axis, disc, arrow });
+      const wake = new THREE.Mesh(new THREE.CylinderGeometry(0.71 * pr, pr, 3 * pr, 24, 1, true).rotateX(Math.PI / 2), mats.wake.clone());
+      wake.position.z = 0.02 - 1.5 * pr; wake.visible = false; axis.add(wake);   // the wake column below the disc
+      parts.set(c.id, { axis, disc, arrow, wake });
     } else if (c.type === 'mass') {
       let g;
       if (c.shape === 'sphere') g = new THREE.SphereGeometry(c.radius, 20, 14);
@@ -129,6 +132,7 @@ function updateScene() {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
     p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c, st.th)));   // follows the tilt law exactly
     const T = st.T * c.health / 100; p.disc.material.opacity = 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
+    p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
   }
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;

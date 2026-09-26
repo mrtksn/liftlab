@@ -152,3 +152,5 @@ function axisAngleR(n, a) {
 function eulerFromR(R) { // inverse of eulerR: [roll, pitch, yaw] in degrees
   return [Math.atan2(R[7], R[8]) * R2D, Math.asin(clamp(-R[6], -1, 1)) * R2D, Math.atan2(R[3], R[0]) * R2D];
 }
+
+const eye = n => Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));

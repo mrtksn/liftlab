@@ -24,6 +24,7 @@ const FD = {
   z: { label: 'Z', path: ['pos', 2], hmin: -2, hmax: 2,  min: -0.3, max: 0.3, step: 0.005, u: 'm', dp: 3 },
   tilt: { label: 'Axis tilt from vertical', hmax: 180,  path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
   az: { label: 'Tilt toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  prop: { label: 'Prop radius', path: ['prop'], min: 0.03, max: 0.25, hmax: 0.6, step: 0.005, u: 'm', dp: 3 },
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
   kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
   tau: { label: 'Spin-up time constant', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
@@ -137,11 +138,11 @@ function compBody(c) {
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
   } else if (c.type === 'tilt') {
     b.append(pos, slider(c, 'hingeAz'), selectF(c, 'mode', 'Servo control', [['auto', 'Allocator decides'], ['manual', 'Fixed by me']], rerender));
     if (c.mode === 'manual') b.append(slider(c, 'manual'));
-    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'tmax'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
   } else if (c.type === 'mass') {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
     if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
@@ -223,9 +224,9 @@ const fmtSign = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
 function updateActs() {
   for (const c of actuators()) {
     const r = actRows.get(c.id), st = act.get(c.id); if (!r || !st) continue;
-    const pc = clamp(st.Tcmd / c.tmax, 0, 1); r.fill.style.width = (pc * 100).toFixed(1) + '%'; r.fill.classList.toggle('sat', pc > 0.99);
-    r.mk.style.left = `calc(${(clamp(st.T / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
-    r.val.textContent = `${st.Tcmd.toFixed(2)} / ${c.tmax.toFixed(1)} N`;
+    const pc = clamp(st.u || 0, 0, 1), Te = st.Teff ?? st.T; r.fill.style.width = (pc * 100).toFixed(1) + '%'; r.fill.classList.toggle('sat', pc > 0.99);
+    r.mk.style.left = `calc(${(clamp(Te / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
+    r.val.textContent = `${Math.round(pc * 100)}% · ${Te.toFixed(2)} N`;
     if (c.type === 'tilt') { const cmd = c.mode === 'manual' ? c.manual : st.thCmd * R2D; r.sv.textContent = `servo ${fmtSign(st.th * R2D)}° → ${fmtSign(cmd)}°${c.mode === 'manual' ? ' (fixed)' : ''}`; }
   }
 }
@@ -268,6 +269,7 @@ function updateLive() {
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
   if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
   else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
+  const soc = S.batt.soc ?? 1; chip(`Battery ${Math.round(soc * 100)}%`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
   chip(`∫ attitude ${(nrm(ctl.iAtt) * R2D).toFixed(1)}°·s`); chip(`∫ position ${(nrm(ctl.iPos) * 100).toFixed(0)} cm·s`);
   const R = qmat(S.q); const { hub } = hubState(R);
   $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
@@ -276,7 +278,7 @@ function updateLive() {
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
-  updateActs(); renderEst();
+  updateActs(); renderEst(); renderLearn();
 }
 
 /* ───────── state estimate ───────── */
@@ -300,6 +302,40 @@ function renderEst() {
     ['Horizontal position error', f(e.pos, 1, 'cm')], ['Altitude error', f(e.alt, 1, 'cm')], ['Velocity error', f(e.vel, 1, 'cm/s')],
     ['Gyro bias (IMU 1) · learned', e.gb == null ? '—' : `${e.gb.toFixed(2)} · ${e.gl == null ? '—' : e.gl.toFixed(2)} °/s`]];
   const dl = $('#estKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
+}
+
+/* ───────── controller model ───────── */
+function setModelMode(m) {
+  learn.mode = m; $('#useDesc').setAttribute('aria-pressed', String(m === 'config')); $('#useLearned').setAttribute('aria-pressed', String(m === 'ident'));
+  ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0];
+}
+$('#useDesc').addEventListener('click', () => setModelMode('config'));
+$('#useLearned').addEventListener('click', () => setModelMode('ident'));
+$('#keepLearn').addEventListener('change', e => { learn.keep = e.target.checked; save(); });
+$('#calBtn').addEventListener('click', () => {
+  if (learn.cal) { endCalibration('Calibration stopped. The model keeps what it learned so far.'); return; }
+  if (S.crashed) return;
+  if (typeof editMode !== 'undefined' && editMode) setEditMode(false);
+  if (!running) { running = true; $('#runBtn').textContent = 'Pause'; }
+  startCalibration(); renderLearn(true);
+});
+let matchT = 0, matchCache = [];
+function renderLearn(force) {
+  $('#useDesc').setAttribute('aria-pressed', String(learn.mode === 'config')); $('#useLearned').setAttribute('aria-pressed', String(learn.mode === 'ident'));
+  $('#keepLearn').checked = learn.keep;
+  const cal = learn.cal;
+  $('#calBtn').textContent = cal ? 'Stop' : learn.fit ? 'Calibrate again' : 'Calibrate';
+  $('#calBtn').disabled = !!S.crashed || !actuators().length;
+  $('#calProg').hidden = !cal;
+  if (cal) { $('#calFill').style.width = (100 * cal.t / cal.total).toFixed(1) + '%'; $('#calStage').textContent = cal.held ? 'Paused until the drone settles…' : `${cal.stage || 'Starting'} · ${Math.max(0, cal.total - cal.t).toFixed(1)} s left`; }
+  if (learn.msg) $('#learnMsg').textContent = learn.msg;
+  $('#learnSmall').textContent = learn.mode === 'ident' ? (learn.keep ? 'learned · learning' : 'learned') : (learn.keep ? 'description · learning' : 'description');
+  if (force || performance.now() - matchT > 400) { matchT = performance.now(); matchCache = matchScores(); }
+  const box = $('#matchRows'); box.textContent = '';
+  for (const m of matchCache) {
+    const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad';
+    box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, el('i', { class: cls, style: `width:${pc}%` })), el('span', { class: 'mv', text: pc + '%' })));
+  }
 }
 
 /* ───────── traces ───────── */
@@ -425,7 +461,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
-[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail'], ['tEst', 'est']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail'], ['tEst', 'est'], ['tAir', 'air']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
 /* ───────── tabs ───────── */
@@ -443,7 +479,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep }));
   } catch (e) {}
 }
 function load() {
@@ -457,6 +493,8 @@ function load() {
     cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = s.mode === 'level' ? 'level' : 'tilt';
     if (!cfg.comps.some(c => c.type === 'sensor')) cfg.comps.push(...defaultSensors());   // saved before sensors existed
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
+    if (s.keepLearning === false) learn.keep = false;
+    for (const c of cfg.comps) if ((c.type === 'motor' || c.type === 'tilt') && !c.prop) withProp(c);
     return true;
   }
   return false;

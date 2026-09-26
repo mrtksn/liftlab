@@ -8,6 +8,45 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
+## Learning the airframe
+
+The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't need to know prop sizes, mass or inertia. What it needs is the **effectiveness matrix B**: how much linear and angular acceleration each actuator input produces. B comes from one of two sources.
+
+- **Description:** computed from the airframe you entered, including only the parts marked as known to the controller.
+- **Learned:** identified from flight data by recursive least squares (`identifyEffectiveness`), starting from the description. The learner:
+  - uses the accelerometer and gyro as outputs, and the throttle sent as inputs;
+  - band-passes both sides (0.3–12 Hz), so steady offsets like drag can't leak in;
+  - removes the IMU's lever-arm swing.
+
+  A tilting rotor is two inputs, u·cosθ and u·sinθ, so its effect at any servo angle is known.
+
+**Calibrate** (Controller model panel) runs about 10–20 s of small test moves while hovering:
+1. Settle.
+2. Pulse each motor in turn, twice.
+3. Sweep each servo.
+4. Excite everything together.
+5. Validate on a fresh signal.
+
+It then scores the learned model and the description on the same validation data, and switches to the learned model only if it predicts better. On the stock presets the description is already near-perfect and is kept. With hidden masses, weak motors or unknown parts, the learned model wins and the drone flies noticeably better.
+
+**Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
+
+The panel shows how close each actuator's learned effect is to the truth. The truth comes from linearizing the real simulated physics (airflow and battery included) by nudging each input.
+
+## Airflow (physics only)
+
+The simulated world has effects the controller is never told about:
+
+- **Rotor wakes** (`wakeVelocity`): momentum-theory downwash that speeds up and contracts below each disc. A rotor in another's wake loses thrust.
+- **Rotor aerodynamics** (`rotorAero`):
+  - Glauert inflow: climbing and wake inflow cost thrust, and forward flight gains a little (translational lift);
+  - ground effect, from the Cheeseman–Bennett formula;
+  - rotor drag, which grows with thrust and airspeed.
+- **Downwash on parts** (`wakeLoad`): rotor wash pushes the hub, rigid masses and cable payloads.
+- **Battery** (`batteryModel`): drains with load and sags, so the same throttle gives less thrust over a flight.
+
+Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
+
 ## Editing the airframe
 
 - **Type numbers:** every value on the Airframe tab has a box you can type into. Typed values can go beyond the slider's range, for example positions up to ±2 m.
@@ -61,10 +100,11 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 22 functions for the physics, sensors, estimators and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 27 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
+| `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
@@ -79,7 +119,11 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`.
 
+**Airflow and battery (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `batteryModel`.
+
 **Estimation:** `attitudeEstimator`, `positionEstimator`.
+
+**Identification:** `identifyEffectiveness`.
 
 **Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`.
 
@@ -118,5 +162,7 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 - Sensors have no temperature effects, cross-axis sensitivity or scale-factor error yet.
 - Magnetic interference comes only from motor currents, not from wiring or the battery.
 - A tilting motor's mass stays at its pivot. Gyroscopic torque from spinning props is ignored.
-- No aerodynamic interaction between rotors, the frame and the payload beyond simple linear drag.
+- Airflow uses fast engineering models (momentum theory, Glauert inflow), not CFD. Wakes are straight columns and aren't bent by wind or forward flight.
+- The motor command-to-thrust curve is linear. Real ESCs need thrust linearization, which isn't identified yet.
+- Servo angles are assumed measurable (servo feedback) for identification.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.

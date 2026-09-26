@@ -101,6 +101,7 @@
         <button class="btn" type="button" id="tForces" aria-pressed="true">Forces</button>
         <button class="btn" type="button" id="tTrail" aria-pressed="true">Trail</button>
         <button class="btn" type="button" id="tEst" aria-pressed="true" title="Show where the flight software thinks the drone is">Estimate</button>
+        <button class="btn" type="button" id="tAir" aria-pressed="false" title="Show the rotor wakes">Airflow</button>
       </div>
       <div class="edit-bar" id="editBar" role="status" hidden>
         <b>Editing</b>
@@ -164,8 +165,26 @@
         <div class="chips" id="senseChips"></div>
         <dl class="kv" id="estKv"></dl>
       </section>
+      <section class="sec" id="learnSec">
+        <h2>Controller model <small id="learnSmall"></small></h2>
+        <div class="field-row">
+          <span class="lbl" id="modelLbl">Allocation uses</span>
+          <div class="seg seg-sm" role="group" aria-labelledby="modelLbl">
+            <button type="button" id="useDesc" aria-pressed="true">Description</button>
+            <button type="button" id="useLearned" aria-pressed="false">Learned</button>
+          </div>
+        </div>
+        <div class="learn-actions">
+          <button class="btn primary" type="button" id="calBtn">Calibrate</button>
+          <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
+        </div>
+        <div class="calprog" id="calProg" hidden><div class="calbar"><i id="calFill"></i></div><span id="calStage"></span></div>
+        <p class="hint" id="learnMsg">Calibrate runs about 10 seconds of small test moves while hovering, learns what each actuator really does, then flies on it.</p>
+        <span class="lbl">How close each learned effect is to the truth</span>
+        <div class="match" id="matchRows"></div>
+      </section>
       <section class="sec">
-        <h2>Actuator commands <small>bar = command, tick = actual</small></h2>
+        <h2>Actuator commands <small>bar = throttle, tick = thrust</small></h2>
         <div class="acts" id="acts"></div>
       </section>
       <section class="sec">
@@ -195,6 +214,7 @@
 <script src="js/runtime.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/sensors.js"></script>
+<script src="js/learn.js"></script>
 <script src="js/view3d.js"></script>
 <script src="js/pilot.js"></script>
 <script src="js/formulas-ui.js"></script>

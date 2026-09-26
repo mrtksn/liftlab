@@ -115,6 +115,7 @@ function buildFormulas() {
   const groups = [['plant', 'Physics (the plant)', 'What actually happens to the airframe. Edits here change the world the controller has to cope with.'],
     ['sensor', 'Sensors', 'What the hardware reports. Each model turns the true quantity at the sensor into a reading with noise, bias, drift and limits. Each sensor keeps its own state between samples.'],
     ['est', 'Estimation', 'What the flight software believes. These turn the sensor readings into the attitude, rate, position and velocity the controller flies on.'],
+    ['learn', 'Identification', 'What the flight software learns about its own airframe from flight data, so it doesn\'t need prop, mass or inertia figures.'],
     ['ctrl', 'Controller', 'What the flight software decides. It works from the estimate, and only knows the modeled mass, inertia and actuator health.']];
   for (const [g, title, blurb] of groups) {
     const sec = el('section', { class: 'sec' }, el('h2', { text: title }), el('p', { class: 'hint', text: blurb }));
