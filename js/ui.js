@@ -1,0 +1,316 @@
+'use strict';
+// Panels: airframe editor, telemetry, traces, target & environment, header controls, persistence.
+
+const $ = s => document.querySelector(s);
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else if (k === 'html') e.innerHTML = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const c of kids) if (c != null) e.append(c);
+  return e;
+}
+let running = true, speed = 1;
+
+/* ───────── components ───────── */
+const TAG = { motor: 'Motor', tilt: 'Servo', mass: 'Mass', hang: 'Cable' };
+const FD = {
+  x: { label: 'X', path: ['pos', 0], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
+  y: { label: 'Y', path: ['pos', 1], min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
+  z: { label: 'Z', path: ['pos', 2], min: -0.3, max: 0.3, step: 0.005, u: 'm', dp: 3 },
+  tilt: { label: 'Axis tilt from vertical', path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
+  az: { label: 'Tilt toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  tmax: { label: 'Max thrust', path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
+  kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
+  tau: { label: 'Spin-up time constant', path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
+  mass: { label: 'Mass', path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
+  health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
+  hingeAz: { label: 'Hinge axis direction', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  manual: { label: 'Manual angle', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
+  range: { label: 'Servo limit ±', path: ['range'], min: 5, max: 90, step: 1, u: '°', dp: 0 },
+  rate: { label: 'Servo speed', path: ['rate'], min: 20, max: 1000, step: 10, u: '°/s', dp: 0 },
+  lx: { label: 'Size X', path: ['size', 0], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
+  ly: { label: 'Size Y', path: ['size', 1], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
+  lz: { label: 'Size Z', path: ['size', 2], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
+  radius: { label: 'Radius', path: ['radius'], min: 0.01, max: 0.25, step: 0.005, u: 'm', dp: 3 },
+  length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
+  cable: { label: 'Cable length', path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
+};
+const getP = (o, p) => p.reduce((a, k) => a[k], o);
+function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
+const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
+const openSet = new Set();
+function summary(c) {
+  const p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})`;
+  if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
+  if (c.type === 'tilt') return `${c.tmax.toFixed(1)} N · ${c.mode === 'auto' ? 'auto ±' + c.range + '°' : 'fixed ' + c.manual + '°'} · ${p}`;
+  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
+}
+function slider(c, key) {
+  const d = FD[key], id = `f-${c.id}-${key}`, v = getP(c, d.path);
+  const out = el('output', { for: id, text: fmtV(v, d) });
+  const inp = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step, value: v });
+  inp.addEventListener('input', () => { setP(c, d.path, parseFloat(inp.value)); out.textContent = fmtV(parseFloat(inp.value), d); edited(c, key); });
+  return el('div', { class: 'field' }, el('label', { for: id, text: d.label }), out, inp);
+}
+function selectF(c, key, label, opts, onchg) {
+  const id = `f-${c.id}-${key}`; const s = el('select', { id });
+  for (const [v, t] of opts) { const o = el('option', { value: v, text: t }); if (String(c[key]) === String(v)) o.selected = true; s.append(o); }
+  s.addEventListener('change', () => { const v = s.value; c[key] = isNaN(+v) ? v : +v; edited(c, key); if (onchg) onchg(); });
+  return el('div', { class: 'field' }, el('label', { for: id, text: label }), s);
+}
+function checkF(c, key, label) {
+  const id = `f-${c.id}-${key}`; const i = el('input', { type: 'checkbox', id }); i.checked = !!c[key];
+  i.addEventListener('change', () => { c[key] = i.checked; edited(c, key); });
+  return el('label', { class: 'check', for: id }, i, label);
+}
+function compBody(c) {
+  const b = el('div', { class: 'comp-body' });
+  const nid = `f-${c.id}-name`; const ni = el('input', { type: 'text', id: nid, value: c.name, maxlength: '18' });
+  ni.addEventListener('input', () => { c.name = ni.value || TAG[c.type]; document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
+  b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
+  const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
+  const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
+  const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
+  if (c.type === 'motor') {
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+  } else if (c.type === 'tilt') {
+    b.append(pos, slider(c, 'hingeAz'), selectF(c, 'mode', 'Servo control', [['auto', 'Allocator decides'], ['manual', 'Fixed by me']], rerender));
+    if (c.mode === 'manual') b.append(slider(c, 'manual'));
+    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'tmax'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+  } else if (c.type === 'mass') {
+    b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
+    if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
+    else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
+    b.append(checkF(c, 'known', 'Controller knows this mass'));
+  } else {
+    b.append(el('p', { class: 'hint', text: 'Attachment point:' }), pos, slider(c, 'cable'), slider(c, 'mass'), checkF(c, 'known', 'Controller knows the static load'));
+  }
+  return b;
+}
+function compCard(c) {
+  const open = openSet.has(c.id);
+  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: TAG[c.type] }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
+  head.addEventListener('click', () => { open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
+  const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });
+  del.addEventListener('click', () => { cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural(); });
+  return el('div', { class: 'comp' + (open ? ' open' : ''), 'data-id': c.id }, el('div', { class: 'comp-top' }, head, del), open ? compBody(c) : null);
+}
+function renderComps() {
+  const L = $('#compList'); L.textContent = ''; for (const c of cfg.comps) L.append(compCard(c));
+  const na = actuators().length; $('#compCount').textContent = `${na} actuator${na === 1 ? '' : 's'} · ${cfg.comps.length - na} passive`;
+}
+function edited(c, key) {
+  const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
+  recomputeProps(); if (c.type === 'hang' && (key === 'cable' || key === 'x' || key === 'y' || key === 'z')) reseatPend(c);
+  cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save();
+}
+function structural() { recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); refreshEnvelope(); renderMass(); save(); }
+function addComp(type) {
+  const n = cfg.comps.filter(c => c.type === type).length + 1; let c;
+  if (type === 'motor') c = mkMotor('Motor ' + n, 0.3, 0, 0.02);
+  else if (type === 'tilt') c = mkTilt('Servo ' + n, -0.3, 0, 0.02, { hingeAz: 90 });
+  else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
+  else c = mkHang('Cable ' + n, 0, 0, -0.03);
+  cfg.comps.push(c); openSet.add(c.id); structural();
+  requestAnimationFrame(() => { const card = document.querySelector(`[data-id="${c.id}"]`); if (card) card.scrollIntoView({ block: 'nearest' }); });
+}
+document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => addComp(b.dataset.add)));
+
+/* ───────── telemetry ───────── */
+let actRows = new Map(), envRes = null;
+function buildActRows() {
+  const box = $('#acts'); box.textContent = ''; actRows = new Map();
+  const acts = actuators(); if (!acts.length) { box.append(el('p', { class: 'hint', text: 'No actuators attached.' })); return; }
+  for (const c of acts) {
+    const fill = el('div', { class: 'fill' }), mk = el('div', { class: 'act' }); const val = el('span', { class: 'av' }); const sv = el('span', { class: 'as' });
+    box.append(el('div', { class: 'arow' }, el('span', { class: 'an', text: c.name, title: c.name }), el('div', { class: 'tbar' }, fill, mk), val, c.type === 'tilt' ? sv : null));
+    actRows.set(c.id, { fill, mk, val, sv });
+  }
+}
+const fmtSign = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
+function updateActs() {
+  for (const c of actuators()) {
+    const r = actRows.get(c.id), st = act.get(c.id); if (!r || !st) continue;
+    const pc = clamp(st.Tcmd / c.tmax, 0, 1); r.fill.style.width = (pc * 100).toFixed(1) + '%'; r.fill.classList.toggle('sat', pc > 0.99);
+    r.mk.style.left = `calc(${(clamp(st.T / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
+    r.val.textContent = `${st.Tcmd.toFixed(2)} / ${c.tmax.toFixed(1)} N`;
+    if (c.type === 'tilt') { const cmd = c.mode === 'manual' ? c.manual : st.thCmd * R2D; r.sv.textContent = `servo ${fmtSign(st.th * R2D)}° → ${fmtSign(cmd)}°${c.mode === 'manual' ? ' (fixed)' : ''}`; }
+  }
+}
+function refreshEnvelope() { try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }
+function renderEnvelope() {
+  const r = envRes; if (!r) return;
+  const p = $('#verdict'); p.className = 'pill ' + r.verdict; p.querySelector('span').textContent = r.title; $('#verdictWhy').textContent = r.why;
+  $('#envSpace').textContent = r.k === 6 ? '6-axis (stay level)' : '4-axis (tilt body)';
+  const box = $('#env'); box.textContent = '';
+  if (!r.head) { box.append(el('p', { class: 'hint', text: 'No headroom to show until every axis is controllable.' })); return; }
+  r.labels.forEach((lab, i) => {
+    const u = r.units[i];
+    const fmt = t => !isFinite(t) ? '—' : u === 'g' ? (t / G).toFixed(2) + ' g' : u === 'lin' ? t.toFixed(1) + ' m/s²' : t.toFixed(lab === 'Yaw' ? 1 : 0) + ' rad/s²';
+    const scale = u === 'g' ? 2 * G : u === 'lin' ? 6 : lab === 'Yaw' ? 20 : 200;
+    const lim = u === 'g' ? 0.15 * G : u === 'lin' ? 0.5 : lab === 'Yaw' ? 0.5 : 5;
+    const mk = (t, cls, isPos) => {
+      const w = clamp(Math.abs(isFinite(t) ? t : 0) / scale, 0, 1) * 100; let st = '';
+      if (t < 0) st = ' bad'; else if (t < lim && !(u === 'g' && !isPos)) st = ' warn';
+      return el('div', { class: 'ebar ' + cls }, el('div', { class: 'b' + st, style: `width:${w.toFixed(1)}%` }), el('span', { class: 't', text: fmt(t) }));
+    };
+    box.append(el('div', { class: 'erow' }, el('span', { class: 'en', text: lab }), mk(r.head[i][0], 'eneg', false), mk(r.head[i][1], 'epos', true)));
+  });
+}
+function renderMass() {
+  const mp = cfg.comps.filter(c => c.type === 'hang').reduce((s, c) => s + c.mass, 0);
+  const tw = actuators().reduce((s, c) => s + c.tmax * c.health / 100, 0) / ((truth.m + mp) * G);
+  const cm = truth.c.map(x => (x * 1000).toFixed(0)).join(', '); const dc = nrm(sub(truth.c, model.c)) * 1000;
+  const rows = [['Rigid mass', truth.m.toFixed(3) + ' kg'], ['On cables', mp.toFixed(3) + ' kg'], ['Thrust / weight', tw.toFixed(2)], ['True CoG from hub', `(${cm}) mm`],
+    ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller mass error', ((model.m - truth.m - mp) * 1000).toFixed(0) + ' g'],
+    ['Inertia Ixx / Iyy / Izz', `${(truth.J[0] * 1000).toFixed(1)} / ${(truth.J[4] * 1000).toFixed(1)} / ${(truth.J[8] * 1000).toFixed(1)} g·m²`]];
+  const dl = $('#massKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
+}
+function updateLive() {
+  const chips = $('#liveChips'); chips.textContent = ''; const chip = (t, c, onclick) => chips.append(el(onclick ? 'button' : 'span', { class: 'chip ' + (c || ''), text: t, type: onclick ? 'button' : null, onclick }));
+  if (S.crashed) chip('Crashed', 'bad'); else {
+    const last = hist.err.length ? hist.err[hist.err.length - 1] : 0; chip(last < 10 ? 'Holding target' : 'Recovering', last < 10 ? 'good' : 'warn');
+    if (ctl.sat) chip('Motor at limit', 'warn');
+    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('Cable slack', 'warn');
+  }
+  const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
+  if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
+  else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
+  chip(`∫ attitude ${(nrm(ctl.iAtt) * R2D).toFixed(1)}°·s`); chip(`∫ position ${(nrm(ctl.iPos) * 100).toFixed(0)} cm·s`);
+  const R = qmat(S.q); const { hub } = hubState(R);
+  $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
+  $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
+  updateActs();
+}
+
+/* ───────── traces ───────── */
+const cv = $('#chart'), cx = cv.getContext('2d'); let hoverX = null;
+cv.addEventListener('pointermove', e => { const r = cv.getBoundingClientRect(); hoverX = e.clientX - r.left; }); cv.addEventListener('pointerleave', () => hoverX = null);
+function drawChart() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); const W = cv.clientWidth, H = cv.clientHeight; if (!W) return;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, W, H);
+  const acc = tok('--accent'), muted = tok('--muted'), ink = tok('--ink'), line = tok('--line'), lineS = tok('--line-strong');
+  const t1 = S.t, t0 = t1 - 10; const xOf = t => (t - t0) / 10 * W;
+  const bands = [{ k: 'tilt', lab: 'Tilt', u: '°', min: 10, dp: 1 }, { k: 'err', lab: 'Position error', u: 'cm', min: 10, dp: 1 }, { k: 'util', lab: 'Peak motor load', u: '%', min: 100, dp: 0, fix: true }];
+  const gap = 10, bh = (H - gap * 2) / 3; let hi = -1;
+  if (hoverX != null && hist.t.length) { const th = t0 + hoverX / W * 10; let best = 1e9; hist.t.forEach((t, i) => { const d = Math.abs(t - th); if (d < best) { best = d; hi = i; } }); }
+  bands.forEach((b, bi) => {
+    const y0 = bi * (bh + gap), top = y0 + 14, bot = y0 + bh; const data = hist[b.k];
+    const mx = b.fix ? 100 : Math.max(b.min, ...data) * 1.1; const yOf = v => bot - (clamp(v, 0, mx) / mx) * (bot - top);
+    cx.strokeStyle = line; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(0, bot + .5); cx.lineTo(W, bot + .5); cx.moveTo(0, Math.round((top + bot) / 2) + .5); cx.lineTo(W, Math.round((top + bot) / 2) + .5); cx.stroke();
+    cx.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif'; cx.fillStyle = muted; cx.textBaseline = 'top'; cx.fillText(b.lab.toUpperCase(), 0, y0);
+    cx.font = '10px "JetBrains Mono", monospace'; cx.textAlign = 'right'; cx.fillText(`max ${mx.toFixed(0)} ${b.u}`, W, y0); cx.textAlign = 'left';
+    if (data.length > 1) {
+      cx.beginPath(); data.forEach((v, i) => { const x = xOf(hist.t[i]), y = yOf(v); i ? cx.lineTo(x, y) : cx.moveTo(x, y); });
+      cx.lineTo(xOf(hist.t[data.length - 1]), bot); cx.lineTo(xOf(hist.t[0]), bot); cx.closePath(); cx.globalAlpha = 0.12; cx.fillStyle = acc; cx.fill(); cx.globalAlpha = 1;
+      cx.beginPath(); data.forEach((v, i) => { const x = xOf(hist.t[i]), y = yOf(v); i ? cx.lineTo(x, y) : cx.moveTo(x, y); }); cx.strokeStyle = acc; cx.lineWidth = 2; cx.lineJoin = 'round'; cx.stroke();
+      const li = data.length - 1; cx.beginPath(); cx.arc(xOf(hist.t[li]), yOf(data[li]), 3.5, 0, Math.PI * 2); cx.fillStyle = acc; cx.fill();
+      cx.font = '500 11px "JetBrains Mono", monospace'; cx.fillStyle = ink; cx.textAlign = 'right'; if (hi < 0) cx.fillText(`${data[li].toFixed(b.dp)} ${b.u}`, W - 4, top + 2); cx.textAlign = 'left';
+    }
+    if (hi >= 0) {
+      const x = xOf(hist.t[hi]); cx.strokeStyle = lineS; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x + .5, top); cx.lineTo(x + .5, bot); cx.stroke();
+      cx.beginPath(); cx.arc(x, yOf(data[hi]), 4, 0, Math.PI * 2); cx.fillStyle = acc; cx.fill();
+      const txt = `${data[hi].toFixed(b.dp)} ${b.u} @ ${(hist.t[hi] - t1).toFixed(1)} s`; cx.font = '500 11px "JetBrains Mono", monospace'; cx.fillStyle = ink;
+      const tw = cx.measureText(txt).width; cx.fillText(txt, clamp(x + 6, 0, W - tw), top + 2);
+    }
+  });
+}
+
+/* ───────── target & environment ───────── */
+function spSlider(key, label, min, max, step, u, obj) {
+  const id = 'sp-' + key; const out = el('output', { for: id, text: obj[key].toFixed(step < 1 ? 1 : 0) + ' ' + u });
+  const inp = el('input', { type: 'range', id, min, max, step, value: obj[key] });
+  inp.addEventListener('input', () => { obj[key] = parseFloat(inp.value); out.textContent = obj[key].toFixed(step < 1 ? 1 : 0) + ' ' + u; });
+  return el('div', { class: 'field' }, el('label', { for: id, text: label }), out, inp);
+}
+function buildSp() {
+  const b = $('#spFields'); b.textContent = '';
+  b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
+    spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr));
+}
+
+/* ───────── header ───────── */
+const presetSel = $('#preset');
+presetSel.append(el('option', { value: '', text: 'Choose a layout…' }));
+for (const [k, p] of Object.entries(PRESETS)) presetSel.append(el('option', { value: k, text: p.label }));
+presetSel.addEventListener('change', () => { if (!presetSel.value) return; loadPreset(presetSel.value); presetSel.value = ''; });
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); openSet.clear(); afterLoad(); }
+function afterLoad() {
+  $('#frameMass').value = cfg.frame.mass; $('#frameMassOut').textContent = cfg.frame.mass.toFixed(2) + ' kg';
+  truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
+}
+$('#frameMass').addEventListener('input', e => { cfg.frame.mass = parseFloat(e.target.value); $('#frameMassOut').textContent = cfg.frame.mass.toFixed(2) + ' kg'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
+function setMode(m, recalc = true) {
+  mode = m; $('#modeTilt').setAttribute('aria-pressed', String(m === 'tilt')); $('#modeLevel').setAttribute('aria-pressed', String(m === 'level'));
+  ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
+}
+$('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeLevel').addEventListener('click', () => setMode('level'));
+$('#runBtn').addEventListener('click', () => { running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run'; });
+function doReset() { resetSim(); $('#crash').hidden = true; }
+$('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
+$('#pokeBtn').addEventListener('click', () => {
+  if (S.crashed) return; const a = Math.random() * Math.PI * 2; S.w = add(S.w, [Math.cos(a) * 4, Math.sin(a) * 4, (Math.random() - 0.5) * 2]);
+  const b = Math.random() * Math.PI * 2; S.v = add(S.v, [Math.cos(b) * 0.8, Math.sin(b) * 0.8, 0]);
+});
+$('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
+[['tFollow', 'follow'], ['tForces', 'forces'], ['tTrail', 'trail']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
+
+/* ───────── tabs ───────── */
+function showTab(which) {
+  const form = which === 'form';
+  $('#tabAir').setAttribute('aria-selected', String(!form)); $('#tabForm').setAttribute('aria-selected', String(form));
+  $('#paneAir').hidden = form; $('#paneForm').hidden = !form;
+  $('.work').classList.toggle('wide', form);
+  try { localStorage.setItem(LS + '-tab', which); } catch (e) {}
+}
+$('#tabAir').addEventListener('click', () => showTab('air')); $('#tabForm').addEventListener('click', () => showTab('form'));
+
+/* ───────── persistence (this browser only) ───────── */
+const LS = 'drone-force-bench-v1';
+function save() {
+  try {
+    const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws }));
+  } catch (e) {}
+}
+function load() {
+  let s = null; try { s = JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) {}
+  if (!s) return false;
+  if (s.laws) for (const [key, src] of Object.entries(s.laws)) {
+    if (!LAWS[key]) continue;
+    try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
+  }
+  if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
+    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = s.mode === 'level' ? 'level' : 'tilt'; return true;
+  }
+  return false;
+}
+
+/* ───────── theme ───────── */
+const onTheme = () => { applyTheme(); renderEnvelope(); };
+const mq = window.matchMedia('(prefers-color-scheme: dark)'); mq.addEventListener && mq.addEventListener('change', onTheme);
+new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/* ───────── boot ───────── */
+function boot() {
+  buildSp(); buildFormulas();
+  if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
+  buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
+  let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
+  showTab(tab === 'form' ? 'form' : 'air');
+  let lastT = performance.now(), envT = 0, uiT = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+    if (running) { const steps = Math.round(dt * speed / PDT); for (let n = 0; n < steps && n < 200; n++) physStep(); }
+    envT += dt; if (envT > 0.25) { envT = 0; refreshEnvelope(); }
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); }
+    updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
