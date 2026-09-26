@@ -31,6 +31,13 @@
       </select>
     </div>
     <div class="group">
+      <span class="lbl" id="launchLbl">Reset to</span>
+      <div class="seg" role="group" aria-labelledby="launchLbl">
+        <button type="button" id="launchHover" aria-pressed="true" title="Reset starts hovering at the target">Hover</button>
+        <button type="button" id="launchThrow" aria-pressed="false" title="Reset throws the drone with its motors off. It learns what it is while falling, then catches itself (T)">Throw</button>
+      </div>
+    </div>
+    <div class="group">
       <span class="lbl" id="modeLbl">Steering</span>
       <div class="seg" role="group" aria-labelledby="modeLbl">
         <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
@@ -178,9 +185,16 @@
         <div class="learn-actions">
           <button class="btn primary" type="button" id="calBtn">Calibrate</button>
           <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
+          <label class="check" for="holdPulses" title="While one motor is pulsed, the others keep their throttle, so the controller's corrections don't blur which motor did what"><input type="checkbox" id="holdPulses" checked> Freeze other motors during pulses</label>
         </div>
         <div class="calprog" id="calProg" hidden><div class="calbar"><i id="calFill"></i></div><span id="calStage"></span></div>
         <p class="hint" id="learnMsg">Calibrate runs about 10 seconds of small test moves while hovering, learns what each actuator really does, then flies on it.</p>
+        <div class="throw-opts">
+          <span class="lbl">Throw start</span>
+          <div id="throwFields"></div>
+          <label class="check" for="thenCal"><input type="checkbox" id="thenCal" checked> Refine with a hover calibration after the catch</label>
+          <p class="hint" id="throwHint"></p>
+        </div>
         <span class="lbl">How close each learned effect is to the truth</span>
         <div class="match" id="matchRows"></div>
       </section>

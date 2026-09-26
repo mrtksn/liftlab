@@ -22,7 +22,7 @@ The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't
 
 **Calibrate** (Controller model panel) runs about 10–20 s of small test moves while hovering:
 1. Settle.
-2. Pulse each motor in turn, twice.
+2. Pulse each motor in turn, twice. While one motor is pulsed, the others keep the throttle they had when the pulse began (**Freeze other motors during pulses**). Otherwise the controller answers every pulse with the other motors, and inputs that always move together can't be told apart.
 3. Sweep each servo.
 4. Excite everything together.
 5. Validate on a fresh signal.
@@ -31,7 +31,32 @@ It then scores the learned model and the description on the same validation data
 
 **Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
 
+While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
+
 The panel shows how close each actuator's learned effect is to the truth. The truth comes from linearizing the real simulated physics (airflow and battery included) by nudging each input.
+
+## Throw start
+
+**Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
+
+1. **Climb.** It rides the throw with the motors off.
+2. **Pulse near the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. Servo rotors are pulsed twice, near each end of their range, so both halves of a tilting rotor are seen. It pulses near the top because air rushing through the props while climbing or falling changes their thrust.
+3. **Fit** (`identifyThrow`). In free fall the accelerometer feels no gravity, only the rotors and its own swing around the center of gravity. One least-squares fit on under a second of data gives:
+   - the effectiveness matrix;
+   - where the IMU sits relative to the balance point;
+   - the gyroscopic coupling between axes;
+   - the motor lag, found by fitting several candidate lags side by side and keeping the best.
+
+   Nothing fights the pulses, so each motor's effect comes out clean.
+4. **Catch.** The controller takes over on the model it just learned. It gets upright first and turns to the target heading afterwards.
+5. **Refine** (optional, on by default). A hover calibration runs, starting from and competing against the throw model.
+
+If the fit is poor, it catches itself on the airframe description instead and says so. The panel suggests a minimum throw height for the current airframe, since more actuators mean more pulses and a longer fall.
+
+Results on the stock presets:
+- **Identification:** the fit explains 94–100% of the throw data. The IMU offset comes out within about 4 mm.
+- **Hover:** judged in hover, the throw model is rough, anywhere from 0 to about 90% right per actuator. The props see very different air while tumbling and falling than in hover. That's still enough to catch itself, and the hover calibration afterwards brings each actuator to roughly 75–95%.
+- **Recovery:** all six presets catch themselves. The main-lifter layout needs about 10 pulses, and from the default 4 m it touches the ground before it recovers, so throw it higher.
 
 ## Airflow (physics only)
 
@@ -99,6 +124,7 @@ The pads on the 3D view and the keyboard steer the drone. They move the target t
 | ← / → | Left / right, relative to the heading |
 | Space | Stop and hold the current position |
 | H | Fly back to the start point |
+| T | Throw start: throw the drone with its motors off and let it learn itself in free fall |
 | 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
 | C | Chase camera: keep the view behind the drone |
 | E | Edit mode: select and drag parts in the 3D view |
@@ -110,7 +136,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 30 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 31 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
@@ -133,7 +159,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 **Estimation:** `attitudeEstimator`, `flowVelocity`, `positionEstimator`.
 
-**Identification:** `identifyEffectiveness`.
+**Identification:** `identifyThrow`, `identifyEffectiveness`.
 
 **Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`.
 
@@ -175,4 +201,5 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 - Airflow uses fast engineering models (momentum theory, Glauert inflow), not CFD. Wakes are straight columns and aren't bent by wind or forward flight.
 - The motor command-to-thrust curve is linear. Real ESCs need thrust linearization, which isn't identified yet.
 - Servo angles are assumed measurable (servo feedback) for identification.
+- The throw start needs the IMU's mounting angle to be known, and uses the commanded throttle rather than measured motor RPM, which the Delft work uses. Their method also identifies the throttle curve and the spin-up reaction torque; the simulated motors don't have those.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.

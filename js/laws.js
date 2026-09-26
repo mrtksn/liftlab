@@ -326,6 +326,66 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory) {
   return { B: st.th };
 }
 
+function identifyThrow(st, u, f, w, vb, dt, solve) {
+  // Batch least squares over a free fall, for a drone that knows nothing about itself (after Blaha,
+  // Smeur & Remes, TU Delft 2024). The motors start from zero and the drone is falling, so the
+  // accelerometer feels only the rotors plus its own swing around the center of gravity (CoG):
+  //   f = B_f · u_τ + ([α]× + [ω]×²) r − d v_b + c_f    r: IMU offset from the CoG, d: drag; both shared by the rows
+  //   α = B_α · u_τ + K (ω_y ω_z, ω_z ω_x, ω_x ω_y) + c_α     K: gyroscopic coupling (inertia ratios)
+  // u_τ is the command through a first-order motor lag τ. Several τ are fitted side by side; the best
+  // fit wins, which also identifies the motor lag. Call every step while falling; solve = true to fit.
+  // Returns B (6 rows × inputs), r [m], tau [s] and how much of the force and rotation it explains.
+  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09], lpHz = 25, skip = 0.03;
+  const n = u.length, nf = 3 * n + 7, nr = n + 4;
+  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  const k = dt > 0 ? dt / (dt + 1 / (2 * Math.PI * lpHz)) : 0;
+  const zeros = (a, b) => b ? Array.from({ length: a }, () => new Array(b).fill(0)) : new Array(a).fill(0);
+  if (!st.fits) {
+    st.fits = taus.map(tau => ({ tau, um: zeros(n), ul: zeros(n),
+      Af: zeros(nf, nf), bf: zeros(nf), Ar: zeros(nr, nr), br: zeros(3, nr) }));
+    st.wl = w.slice(); st.fl = f.slice(); st.yy = zeros(6); st.ys = zeros(6); st.N = 0; st.t = 0;
+  }
+  if (dt > 0) {
+    const wPrev = st.wl;
+    st.wl = st.wl.map((v, i) => v + k * (w[i] - v));
+    st.fl = st.fl.map((v, i) => v + k * (f[i] - v));
+    const a = st.wl.map((v, i) => (v - wPrev[i]) / dt), W = st.wl;       // angular acceleration
+    const L = [0, 1, 2].map(i => [0, 1, 2].map(j =>                         // [α]× + [ω]×²
+      [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
+    const gyro = [W[1] * W[2], W[2] * W[0], W[0] * W[1]];
+    st.t += dt;
+    for (const F of st.fits) {
+      for (let j = 0; j < n; j++) { F.um[j] += (u[j] - F.um[j]) * Math.min(1, dt / F.tau); F.ul[j] += k * (F.um[j] - F.ul[j]); }
+      if (st.t < skip) continue;                                             // let the filters start up
+      for (let i = 0; i < 3; i++) {                                          // force rows share r
+        const phi = zeros(nf);
+        for (let j = 0; j < n; j++) phi[i * n + j] = F.ul[j];
+        for (let j = 0; j < 3; j++) phi[3 * n + j] = L[i][j];
+        phi[3 * n + 3 + i] = 1;
+        phi[3 * n + 6] = -vb[i];
+        for (let p = 0; p < nf; p++) { if (!phi[p]) continue; F.bf[p] += phi[p] * st.fl[i]; for (let q = 0; q < nf; q++) F.Af[p][q] += phi[p] * phi[q]; }
+      }
+      const phi = [...F.ul, ...gyro, 1];                                     // rotation rows share regressors
+      for (let p = 0; p < nr; p++) { for (let q = 0; q < nr; q++) F.Ar[p][q] += phi[p] * phi[q]; for (let i = 0; i < 3; i++) F.br[i][p] += phi[p] * a[i]; }
+    }
+    if (st.t >= skip) { const y = [...st.fl, ...a]; st.N++; for (let i = 0; i < 6; i++) { st.yy[i] += y[i] * y[i]; st.ys[i] += y[i]; } }
+  }
+  if (!solve || st.N < 20) return st.out || { B: zeros(6, n), r: [0, 0, 0], tau: 0, fitF: 0, fitR: 0 };
+  const ridge = A => A.map((row, i) => row.map((v, j) => v + (i === j ? 1e-9 + 1e-6 * A[i][i] : 0)));
+  const sse = (A, b, th, yy) => yy - 2 * dotn(th, b) + dotn(th, A.map(row => dotn(row, th)));
+  const sst = i => Math.max(1e-9, st.yy[i] - st.ys[i] ** 2 / st.N);
+  let best = null;
+  for (const F of st.fits) {
+    const thF = solveLin(ridge(F.Af), F.bf), thR = [0, 1, 2].map(i => solveLin(ridge(F.Ar), F.br[i]));
+    const fitF = clamp(1 - sse(F.Af, F.bf, thF, st.yy[0] + st.yy[1] + st.yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
+    const fitR = clamp(1 - thR.reduce((s, th, i) => s + sse(F.Ar, F.br[i], th, st.yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1);
+    if (!best || fitR + 0.5 * fitF > best.score) best = { F, thF, thR, fitF, fitR, score: fitR + 0.5 * fitF };
+  }
+  const B = [0, 1, 2].map(i => best.thF.slice(i * n, i * n + n)).concat(best.thR.map(th => th.slice(0, n)));
+  st.out = { B, r: best.thF.slice(3 * n, 3 * n + 3), drag: best.thF[3 * n + 6], tau: best.F.tau, fitF: best.fitF, fitR: best.fitR };
+  return st.out;
+}
+
 // ═════════════ Controller ═════════════
 
 function positionControl(ep, v, ip, m, g) {
@@ -514,6 +574,13 @@ const LAW_DEFS = [
     returns: '{ B: 6 rows × inputs }', shape: { B: 'rows' },
     sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4] },
 
+  { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
+    math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
+    doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling and the motor lag, all without any description of the airframe. It pulses near the top of the throw, where the air through the props is calmest. After Blaha, Smeur and Remes (TU Delft, 2024).',
+    args: [['st', 'identification state'], ['u', 'inputs sent, throttle fractions (tilting rotors as u·cosθ, u·sinθ)'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result']],
+    returns: '{ B: 6 rows × inputs; r: IMU offset from the CoG [m]; tau: motor lag [s]; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
+    sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true] },
+
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s. m is the mass the controller believes in.',
@@ -552,6 +619,6 @@ const LAW_OVERVIEW = [
   `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'flowVelocity', 'positionEstimator', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'positionEstimator', 'identifyThrow', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
   plant: ['batteryModel', 'servoResponse', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

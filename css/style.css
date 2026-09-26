@@ -192,6 +192,8 @@ button.chip{background:transparent;cursor:pointer}
 
 /* controller model */
 .learn-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.throw-opts{display:flex;flex-direction:column;gap:8px;padding:10px 0 4px;border-top:1px solid var(--line);margin-top:4px}
+.throw-opts .hint{margin:0}
 .calprog{display:flex;flex-direction:column;gap:4px}
 .calbar{height:6px;border-radius:3px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden}
 .calbar i{display:block;height:100%;width:0;background:var(--accent)}
@@ -318,3 +320,5 @@ button.chip{background:transparent;cursor:pointer}
   .brand h1{font-size:21px}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} .poke.full .poke-lbl,.poke.fired{animation:none} .poke.charging{transform:none} }
+
+#preset{max-width:220px}

@@ -331,19 +331,55 @@ $('#calBtn').addEventListener('click', () => {
   if (!running) { running = true; $('#runBtn').textContent = 'Pause'; }
   startCalibration(); renderLearn(true);
 });
+$('#holdPulses').addEventListener('change', e => { learn.holdPulses = e.target.checked; save(); });
+$('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; save(); });
+function setLaunch(m, go = true) {
+  launchMode = m;
+  $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));
+  $('#crashReset').textContent = m === 'throw' ? 'Throw again' : 'Reset to hover';
+  if (go) { if (!running) { running = true; $('#runBtn').textContent = 'Pause'; } doReset(); renderLearn(true); save(); }
+}
+$('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));
+const throwFieldRefs = [];
+function buildThrowFields() {
+  const box = $('#throwFields'); box.textContent = '';
+  const f1 = numField('throwH', { label: 'Throw height (top of the arc)', min: 2.5, max: 10, step: 0.1, u: 'm', dp: 1 }, () => throwCfg.height, v => { throwCfg.height = v; save(); });
+  const f2 = numField('throwS', { label: 'Tumble when thrown', min: 0, max: 15, step: 0.5, u: 'rad/s', dp: 1 }, () => throwCfg.spin, v => { throwCfg.spin = v; save(); });
+  box.append(f1.node, f2.node); throwFieldRefs.push(f1.refresh, f2.refresh);
+}
+function throwHintText() {
+  const plan = throwPlan(), T = throwPlanTime(plan);
+  if (!plan.length) return 'Add actuators to throw it.';
+  const v = G * T / 2, need = setpoint.z + 0.5 * G * (T / 2) ** 2 + v * v / 10 + 1.5;
+  return `This airframe has ${plan.length} pulses to fire, about ${T.toFixed(1)} s around the top of the throw. Throw it to at least ${need.toFixed(1)} m so there is room to catch it. Each pulse stops early once the drone turns 4 rad/s faster, well inside the gyro's range.`;
+}
+function throwStageText() {
+  if (!thr) return '';
+  if (thr.phase === 'hand') return 'In the hand, motors off';
+  if (thr.phase === 'free') return 'Thrown, climbing with motors off';
+  if (thr.phase === 'excite') { const P = thr.plan[thr.i]; return P ? `Free fall: pulsing ${P.c.name}${P.second ? ' (servo at the other end)' : ''}` : 'Fitting the model'; }
+  return 'Catching itself on what it learned';
+}
 let matchT = 0, matchCache = [];
 function renderLearn(force) {
   $('#useDesc').setAttribute('aria-pressed', String(learn.mode === 'config')); $('#useLearned').setAttribute('aria-pressed', String(learn.mode === 'ident'));
   $('#keepLearn').checked = learn.keep;
   const cal = learn.cal;
   $('#calBtn').textContent = cal ? 'Stop' : learn.fit ? 'Calibrate again' : 'Calibrate';
-  $('#calBtn').disabled = !!S.crashed || !actuators().length;
-  $('#calProg').hidden = !cal;
+  $('#calBtn').disabled = !!S.crashed || !actuators().length || throwBusy();
+  $('#holdPulses').checked = learn.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate;
+  $('#throwHint').textContent = throwHintText();
+  $('#calProg').hidden = !cal && !thr;
+  if (thr && !cal) {
+    const f = thr.phase === 'hand' ? 0 : thr.phase === 'free' ? 0.1 : thr.phase === 'excite' ? 0.1 + 0.7 * thr.i / Math.max(1, thr.plan.length) : 0.9;
+    $('#calFill').style.width = (100 * f).toFixed(1) + '%'; $('#calStage').textContent = throwStageText();
+  }
   if (cal) { $('#calFill').style.width = (100 * cal.t / cal.total).toFixed(1) + '%'; $('#calStage').textContent = cal.held ? 'Paused until the drone settles…' : `${cal.stage || 'Starting'} · ${Math.max(0, cal.total - cal.t).toFixed(1)} s left`; }
   if (learn.msg) $('#learnMsg').textContent = learn.msg;
   $('#learnSmall').textContent = learn.mode === 'ident' ? (learn.keep ? 'learned · learning' : 'learned') : (learn.keep ? 'description · learning' : 'description');
   if (force || performance.now() - matchT > 400) { matchT = performance.now(); matchCache = matchScores(); }
   const box = $('#matchRows'); box.textContent = '';
+  if (throwBusy()) { $('#useDesc').setAttribute('aria-pressed', 'false'); $('#useLearned').setAttribute('aria-pressed', 'false'); box.append(el('p', { class: 'hint', text: 'Shown once it has caught itself.' })); return; }
   for (const m of matchCache) {
     const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad';
     box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, el('i', { class: cls, style: `width:${pc}%` })), el('span', { class: 'mv', text: pc + '%' })));
@@ -492,7 +528,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 function load() {
@@ -507,6 +543,10 @@ function load() {
     if (!cfg.comps.some(c => c.type === 'sensor')) cfg.comps.push(...defaultSensors());   // saved before sensors existed
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learn.keep = false;
+    if (s.holdPulses === false) learn.holdPulses = false;
+    if (s.launch === 'throw') launchMode = 'throw';
+    if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
+    if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     for (const c of cfg.comps) if ((c.type === 'motor' || c.type === 'tilt') && !c.prop) withProp(c);
     return true;
   }
@@ -520,9 +560,9 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 
 /* ───────── boot ───────── */
 function boot() {
-  buildSp(); buildFormulas(); bindPads();
+  buildSp(); buildThrowFields(); buildFormulas(); bindPads();
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
-  setSensing(sensing); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
+  setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   showTab(tab === 'form' ? 'form' : 'air');
   let lastT = performance.now(), envT = 0, uiT = 0;

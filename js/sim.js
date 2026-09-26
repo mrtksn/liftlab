@@ -141,7 +141,7 @@ function allocate(w, cm) {
   }
   // Stage 2: throttle for every motor at the servos' measured angles.
   const cols = acts.map(c => colAt(c, act.get(c.id).th));
-  const u = run('allocation', cols, acts.map(() => 0), acts.map(() => 1), wa, mode);
+  const u = holdU(run('allocation', cols, acts.map(() => 0), acts.map(() => 1), wa, mode));   // held during calibration pulses
   ctl.sat = false;
   acts.forEach((c, i) => {
     const st = act.get(c.id);
@@ -156,6 +156,8 @@ function control(dt) {
   senseAndEstimate(dt);
   learnStep(dt);
   if (S.crashed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } return; }
+  if (throwTick(dt)) return;             // throw start: open loop until it has identified itself
+  throwRecoverCheck();
   // The flight software sees only the estimate, unless you hand it the ground truth.
   let R, w, hub, vh;
   if (sensing === 'truth') { R = qmat(S.q); w = S.w; ({ hub, vh } = hubState(R)); }
@@ -166,7 +168,8 @@ function control(dt) {
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, -2, 2);
   const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G);
   const nd = unit(run('thrustAxisTarget', Fd, mode));
-  const psi = setpoint.yaw * D2R;
+  let psi = setpoint.yaw * D2R;
+  if (thr && thr.phase === 'recover') { const bx = m3v(R, [1, 0, 0]); psi = Math.atan2(bx[1], bx[0]); }   // catching a throw: get upright first, turn to the heading later
   const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(axis, [1, 0, 0])));
   const eR = run('attitudeError', R, Rd);
   ctl.eAtt = nrm(eR);
@@ -245,6 +248,7 @@ function trueB() {
   return cols;
 }
 function dynamics(dt) {
+  if (thr && thr.phase === 'hand') { S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.acc = [0, 0, 0]; S.wdot = [0, 0, 0]; return; }   // held still in the hand
   const R = qmat(S.q), RT = m3T(R);
   let F = run('gravity', truth.m, G), tau = [0, 0, 0];
   const wv = windVec(), acts = actuators();
@@ -292,7 +296,7 @@ function dynamics(dt) {
   if (!S.crashed) {
     const up = dot(m3v(R, nb), [0, 0, 1]);
     if (!isFinite(S.p[0] + S.p[1] + S.p[2] + S.q[0])) { crash('The state became invalid (NaN). Check your edited formulas.'); S.p = [setpoint.x, setpoint.y, 0.2]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.q = [1, 0, 0, 0]; }
-    else if (up < -0.17) crash('Flipped over. The actuators could not hold the attitude.');
+    else if (up < -0.17 && !thr) crash('Flipped over. The actuators could not hold the attitude.');
     else if (nrm(S.w) > 35) crash('Spun out of control. Check yaw authority and spin directions.');
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
@@ -300,6 +304,7 @@ function dynamics(dt) {
 function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); if (S.steps % 40 === 0) pushHist(); }
 
 function resetSim() {
+  thr = null;
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   const R = qmat(S.q); S.p = add([setpoint.x, setpoint.y, setpoint.z], m3v(R, truth.c)); S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
@@ -308,6 +313,7 @@ function resetSim() {
   resetEstimation(); resetLearning();
   for (let k = 0; k < 4; k++) { control(0); for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; if (c.type === 'tilt') st.th = c.mode === 'manual' ? c.manual * D2R : st.thCmd; } }
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
+  thr = null; if (launchMode === 'throw') startThrow();
 }
 
 /* ───────── flight envelope ───────── */
