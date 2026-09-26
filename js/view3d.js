@@ -1,7 +1,7 @@
 'use strict';
 // three.js scene: the airframe, force arrows, cable payloads, target marker and trail.
 
-const view = { follow: true, forces: true, trail: true };
+const view = { follow: true, chase: false, forces: true, trail: true };
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -36,7 +36,7 @@ function buildMaterials() {
 function applyTheme() {
   renderer.setClearColor(colorOf('--viewport'), 1);
   if (grid) { scene.remove(grid); grid.geometry.dispose(); }
-  grid = new THREE.GridHelper(20, 80, colorOf('--grid-strong'), colorOf('--grid')); grid.rotation.x = Math.PI / 2; scene.add(grid);
+  grid = new THREE.GridHelper(60, 240, colorOf('--grid-strong'), colorOf('--grid')); grid.rotation.x = Math.PI / 2; scene.add(grid);
   buildMaterials(); buildWorldFx(); rebuildDrone();
 }
 function rod(a, b, r, mat) {
@@ -120,6 +120,10 @@ function updateScene() {
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
   const tgt = view.follow ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   cam.target.lerp(tgt, view.follow ? 0.12 : 0.06);
+  if (view.chase) {  // swing the camera behind the target heading
+    let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
+    cam.az += d * 0.06;
+  }
   const ce = Math.cos(cam.el);
   camera.position.set(cam.target.x + cam.dist * ce * Math.cos(cam.az), cam.target.y + cam.dist * ce * Math.sin(cam.az), cam.target.z + cam.dist * Math.sin(cam.el));
   camera.lookAt(cam.target);

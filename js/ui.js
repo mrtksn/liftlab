@@ -184,6 +184,10 @@ function updateLive() {
   const R = qmat(S.q); const { hub } = hubState(R);
   $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
   $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
+  const vh = hubState(R).vh, gs = Math.hypot(vh[0], vh[1]);
+  $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
+  $('#kbdHint').hidden = document.hasFocus();
+  syncSp();
   updateActs();
 }
 
@@ -222,11 +226,17 @@ function drawChart() {
 }
 
 /* ───────── target & environment ───────── */
+const spRefs = [];
 function spSlider(key, label, min, max, step, u, obj) {
-  const id = 'sp-' + key; const out = el('output', { for: id, text: obj[key].toFixed(step < 1 ? 1 : 0) + ' ' + u });
+  const id = 'sp-' + key; const fmt = v => v.toFixed(step < 1 ? 1 : 0) + ' ' + u;
+  const out = el('output', { for: id, text: fmt(obj[key]) });
   const inp = el('input', { type: 'range', id, min, max, step, value: obj[key] });
-  inp.addEventListener('input', () => { obj[key] = parseFloat(inp.value); out.textContent = obj[key].toFixed(step < 1 ? 1 : 0) + ' ' + u; });
+  inp.addEventListener('input', () => { obj[key] = parseFloat(inp.value); out.textContent = fmt(obj[key]); if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; } });
+  spRefs.push({ key, obj, inp, out, fmt });
   return el('div', { class: 'field' }, el('label', { for: id, text: label }), out, inp);
+}
+function syncSp() {  // keep the sliders in step with flying
+  for (const r of spRefs) { if (document.activeElement === r.inp) continue; const v = r.obj[r.key]; if (Math.abs(parseFloat(r.inp.value) - v) > 1e-6) { r.inp.value = v; r.out.textContent = r.fmt(v); } }
 }
 function buildSp() {
   const b = $('#spFields'); b.textContent = '';
@@ -251,14 +261,14 @@ function setMode(m, recalc = true) {
 }
 $('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeLevel').addEventListener('click', () => setMode('level'));
 $('#runBtn').addEventListener('click', () => { running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run'; });
-function doReset() { resetSim(); $('#crash').hidden = true; }
+function doReset() { pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
 $('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
 $('#pokeBtn').addEventListener('click', () => {
   if (S.crashed) return; const a = Math.random() * Math.PI * 2; S.w = add(S.w, [Math.cos(a) * 4, Math.sin(a) * 4, (Math.random() - 0.5) * 2]);
   const b = Math.random() * Math.PI * 2; S.v = add(S.v, [Math.cos(b) * 0.8, Math.sin(b) * 0.8, 0]);
 });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
-[['tFollow', 'follow'], ['tForces', 'forces'], ['tTrail', 'trail']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
 /* ───────── tabs ───────── */
@@ -299,7 +309,7 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 
 /* ───────── boot ───────── */
 function boot() {
-  buildSp(); buildFormulas();
+  buildSp(); buildFormulas(); bindPads();
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
@@ -307,7 +317,7 @@ function boot() {
   let lastT = performance.now(), envT = 0, uiT = 0;
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-    if (running) { const steps = Math.round(dt * speed / PDT); for (let n = 0; n < steps && n < 200; n++) physStep(); }
+    if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
     envT += dt; if (envT > 0.25) { envT = 0; refreshEnvelope(); }
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);

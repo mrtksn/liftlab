@@ -79,19 +79,49 @@
       <div class="hud hud-tl">
         <span id="hudTime">t 0.0 s</span>
         <span id="hudPos"></span>
+        <span id="hudCmd"></span>
+        <div class="legend">
+          <span class="key"><i class="sw" style="background:var(--accent)"></i>thrust</span>
+          <span class="key"><i class="sw" style="background:var(--cable)"></i>cable</span>
+          <span class="key"><i class="sw" style="background:var(--grav)"></i>weight</span>
+          <span class="key"><i class="sw" style="background:var(--wind)"></i>wind</span>
+          <span class="key"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
+          <span class="key"><i class="ring"></i>controller's CoG</span>
+        </div>
       </div>
       <div class="hud hud-tr">
         <button class="btn" type="button" id="tFollow" aria-pressed="true">Follow</button>
+        <button class="btn" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
         <button class="btn" type="button" id="tForces" aria-pressed="true">Forces</button>
         <button class="btn" type="button" id="tTrail" aria-pressed="true">Trail</button>
       </div>
-      <div class="hud hud-bl">
-        <span class="key"><i class="sw" style="background:var(--accent)"></i>thrust</span>
-        <span class="key"><i class="sw" style="background:var(--cable)"></i>cable</span>
-        <span class="key"><i class="sw" style="background:var(--grav)"></i>weight</span>
-        <span class="key"><i class="sw" style="background:var(--wind)"></i>wind</span>
-        <span class="key"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
-        <span class="key"><i class="ring"></i>controller's CoG</span>
+      <div class="pilot" aria-label="Flight controls">
+        <div class="pad" role="group" aria-label="Altitude and heading">
+          <button type="button" class="pk p-up" data-ctrl="up" aria-pressed="false" aria-label="Climb (W)"><span class="gl">▲</span><kbd>W</kbd></button>
+          <button type="button" class="pk p-left" data-ctrl="yawL" aria-pressed="false" aria-label="Turn left (A)"><span class="gl">↺</span><kbd>A</kbd></button>
+          <span class="pad-cap" aria-hidden="true">ALT<br>TURN</span>
+          <button type="button" class="pk p-right" data-ctrl="yawR" aria-pressed="false" aria-label="Turn right (D)"><span class="gl">↻</span><kbd>D</kbd></button>
+          <button type="button" class="pk p-down" data-ctrl="down" aria-pressed="false" aria-label="Descend (S)"><span class="gl">▼</span><kbd>S</kbd></button>
+        </div>
+        <div class="pilot-mid">
+          <p class="kbd-hint" id="kbdHint" hidden>Click the view to fly with the keyboard</p>
+          <div class="seg seg-sm" role="group" aria-label="Flight speed">
+            <button type="button" data-level="gentle" aria-pressed="false" title="Max 1 m/s (1)">Gentle</button>
+            <button type="button" data-level="normal" aria-pressed="true" title="Max 3 m/s (2)">Normal</button>
+            <button type="button" data-level="sport" aria-pressed="false" title="Max 6 m/s (3)">Sport</button>
+          </div>
+          <div class="pilot-acts">
+            <button type="button" class="btn" data-act="hold" title="Stop and hold the current position">Hold <kbd>Space</kbd></button>
+            <button type="button" class="btn" data-act="home" title="Fly back to the start point">Home <kbd>H</kbd></button>
+          </div>
+        </div>
+        <div class="pad" role="group" aria-label="Move">
+          <button type="button" class="pk p-up" data-ctrl="fwd" aria-pressed="false" aria-label="Forward (up arrow)"><span class="gl">▲</span><kbd>↑</kbd></button>
+          <button type="button" class="pk p-left" data-ctrl="left" aria-pressed="false" aria-label="Left (left arrow)"><span class="gl">◀</span><kbd>←</kbd></button>
+          <span class="pad-cap" aria-hidden="true">MOVE</span>
+          <button type="button" class="pk p-right" data-ctrl="right" aria-pressed="false" aria-label="Right (right arrow)"><span class="gl">▶</span><kbd>→</kbd></button>
+          <button type="button" class="pk p-down" data-ctrl="back" aria-pressed="false" aria-label="Back (down arrow)"><span class="gl">▼</span><kbd>↓</kbd></button>
+        </div>
       </div>
       <div class="crash" id="crash" hidden>
         <div class="crash-card" role="alert">
@@ -140,6 +170,7 @@
 <script src="js/runtime.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/view3d.js"></script>
+<script src="js/pilot.js"></script>
 <script src="js/formulas-ui.js"></script>
 <script src="js/ui.js"></script>
 <script>boot();</script>

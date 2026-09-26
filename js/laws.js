@@ -75,7 +75,7 @@ function groundContact(depth, v) {
 // ═════════════ Controller ═════════════
 
 function positionControl(ep, v, ip, m, g) {
-  // ep: position error, v: velocity, ip: integral of ep, all world frame
+  // ep: position error, v: velocity error (hub velocity − commanded velocity), ip: integral of ep; world frame
   const kp = 4, kd = 3.6, ki = 1.0;                      // acceleration units, so they fit any mass
   const a = [0, 1, 2].map(i => kp * ep[i] - kd * v[i] + ki * ip[i]);
   const ah = Math.hypot(a[0], a[1]);
@@ -183,9 +183,9 @@ const LAW_DEFS = [
     shape: 3, sample: () => [0.01, [0.1, 0, -0.5]] },
 
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
-    math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>${V('v')} + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
-    doc: 'PID on the frame hub\'s position. The integral is kept by the simulator and clamped to ±2 m·s. m is the mass the controller believes in.',
-    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²']], returns: 'desired total force, world [N]',
+    math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
+    doc: 'PID on the frame hub\'s position. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s. m is the mass the controller believes in.',
+    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²']], returns: 'desired total force, world [N]',
     shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
     math: [`tilt body: ${V('n')}<sub>d</sub> = ${V('F')}<sub>d</sub> / ‖${V('F')}<sub>d</sub>‖, &nbsp;at most 35° from vertical`, `stay level: ${V('n')}<sub>d</sub> = ${V('ẑ')}`],

@@ -8,6 +8,23 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
+## Flying it
+
+The pads on the 3D view and the keyboard steer the drone. They move the target the controller holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls.
+
+| Key | Action |
+|---|---|
+| W / S | Climb / descend |
+| A / D | Turn left / right |
+| ↑ / ↓ | Forward / back, relative to the heading |
+| ← / → | Left / right, relative to the heading |
+| Space | Stop and hold the current position |
+| H | Fly back to the start point |
+| 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
+| C | Chase camera: keep the view behind the drone |
+
+Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
+
 ## Layout
 
 | File | What it holds |
@@ -16,7 +33,8 @@ Open `index.html` in a browser. There is no build step. It needs an internet con
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
-| `js/view3d.js` | three.js scene |
+| `js/view3d.js` | three.js scene and camera |
+| `js/pilot.js` | Keyboard and on-screen flight controls |
 | `js/formulas-ui.js` | The Formulas tab |
 | `js/ui.js` | Airframe editor, telemetry, traces, header controls, persistence and the boot loop |
 | `css/style.css` | Styles, light and dark |

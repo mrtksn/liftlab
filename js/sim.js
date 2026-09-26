@@ -39,7 +39,7 @@ const envr = { wind: 0, windDir: 0 };
 const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], crashed: null, t: 0, steps: 0 };
 const act = new Map();   // id -> { T, Tcmd, th, thCmd }
 const pend = new Map();  // id -> { p, v, Tn }
-const ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0 };
+const ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0, vRef: [0, 0, 0] };  // vRef: pilot's commanded velocity
 let truth = null, model = null, nb = [0, 0, 1];
 let onCrash = () => {};
 
@@ -141,7 +141,7 @@ function control(dt) {
   const R = qmat(S.q), RT = m3T(R); const { hub, vh } = hubState(R);
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, -2, 2);
-  const Fd = run('positionControl', ep, vh, ctl.iPos, model.m, G);
+  const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, model.m, G);
   const nd = unit(run('thrustAxisTarget', Fd, mode));
   const psi = setpoint.yaw * D2R;
   const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(nb, [1, 0, 0])));
@@ -218,7 +218,7 @@ function resetSim() {
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   const R = qmat(S.q); S.p = add([setpoint.x, setpoint.y, setpoint.z], m3v(R, truth.c)); S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
-  ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; pend.clear(); act.clear(); syncRuntime();
+  ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); syncRuntime();
   for (let k = 0; k < 4; k++) { control(0); for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; if (c.type === 'tilt') st.th = c.mode === 'manual' ? c.manual * D2R : st.thCmd; } }
   hist.t.length = hist.tilt.length = hist.err.length = hist.util.length = 0; trail.length = 0;
 }
