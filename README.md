@@ -42,16 +42,16 @@ The single-actuator tests learn how each actuator responds over time, not just h
 |---|---|---|
 | Motor lag | `identifyMotorResponse`: which spin-up time best explains the response to a step | The effectiveness identification, which used to assume 35 ms for every motor |
 | Servo speed and lag | `identifyServoResponse`: the speed limit and lag that best explain how the drone's response traces the servo's real angle, with no angle feedback needed | `servoPredictor`, the servo angle the controller uses when a servo has no feedback |
-| Throttle-curve bend | `identifyMotorResponse`: whether a step up gives more than the same step down | `thrustLinearization`, only if you turn on **Linearize thrust with the measured curve** |
+| Throttle-curve bend | `identifyMotorResponse`: whether a step up gives more than the same step down | `thrustLinearization`, only if you turn on **Linearize thrust with the measured curve**. Until then it assumes a typical brushless curve (bend 0.7) |
 
 In the tests on the stock presets:
 - **Motor lag:** comes out within 5 ms on every multirotor. The main-lifter's big rotor is usually within 5 ms too, but its fit is poor.
-- **Servo speed and lag:** within about 15% on the tricopter and the tilt-rotor quad. On the main-lifter layout the small steering rotors barely move the drone, and most of its servo tests are rejected as too poor to trust.
-- **Throttle-curve bend:** the tests see it only roughly, typically 0.0–0.3 when the truth is 0.3. It's a small second-order effect, and the air a pulse pushes through the prop and the battery sagging under load produce effects of the same size. With airflow and battery sag switched off, it comes out within 0.07. So it's shown but not used unless you ask. On real hardware this is usually measured on a thrust stand, or over the wide throttle range of a throw.
+- **Servo speed and lag:** the measured speed is what the servo really manages on a short step, below its no-load speed (340 against 360°/s on the tilt-rotor quad, 260 against 300°/s on the tricopter's loaded tail). The command delay comes out within 5 ms.
+- **Throttle-curve bend:** the real curve now comes from the motor physics (about 0.8). The tests see it only roughly, anywhere from 0.1 to 0.9, because the air a pulse pushes through the prop and the battery sagging under load produce effects of the same size. So it's shown but not used unless you ask. On real hardware this is usually measured on a thrust stand.
 
 The hardware has traits the controller is never told, marked **hidden** on the part cards, so there's something to learn:
-- **Throttle curve bend** (0.3 by default): thrust grows faster than throttle.
-- **Servo lag** (20 ms) and **servo trim error** (0°).
+- **Spin-up time** of each motor (sets its prop and rotor inertia).
+- **Servo stall torque** (0.8 N·m), **command delay** (20 ms) and **trim error** (0°).
 - **Servo feedback** (off by default, like hobby servos). Without it, the controller never sees servo angles and relies on its prediction.
 
 
@@ -59,15 +59,16 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
 
 ## Throw start
 
-**Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
+**Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. The throw itself takes 0.12 s of hand push, which the IMU feels, so the drone knows it's climbing. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
 
 1. **Climb.** It rides the throw with the motors off.
-2. **Pulse near the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. A motor on steering joints is pulsed with each of those joints at one end, the middle and the other end, so all its columns can be told apart. It pulses near the top because air rushing through the props while climbing or falling changes their thrust.
+2. **Pulse over the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. A motor on steering joints is pulsed with each of those joints in the middle, at one end and at the other end, so all its columns can be told apart. The pulses are timed to finish just after the top; on the way down it soon needs its height to recover. If it runs out of room (it needs about 0.45 s to spin up and turn upright, then brakes at 0.8 g), it stops pulsing early. A motor it only tried in the middle is then treated as fixed there, and the servos are held in the middle, with the drone leaning to move, until a calibration has measured them.
 3. **Fit** (`identifyThrow`). In free fall the accelerometer feels no gravity, only the rotors and its own swing around the center of gravity. One least-squares fit on under a second of data gives:
    - the effectiveness matrix;
    - where the IMU sits relative to the balance point;
    - the gyroscopic coupling between axes;
-   - the motor lag, found by fitting several candidate lags side by side and keeping the best.
+   - the spin-up reaction (B₂, their G₂): a motor speeding up twists the frame the other way, several times harder than its steady drag torque. Without this term a pulse from standstill looks like a huge yaw effect;
+   - each motor's lag. The drone doesn't measure prop speed, so it runs a generic brushless motor model (back-EMF, a current limit, prop drag) for each motor with its time constant unknown, and tries a few time constants per motor, keeping what explains the rotation best. A big slow rotor and small fast ones can share a frame.
 
    Nothing fights the pulses, so each motor's effect comes out clean.
 4. **Catch.** The controller takes over on the model it just learned. It gets upright first and turns to the target heading afterwards.
@@ -75,22 +76,23 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
 
 If the fit is poor, it catches itself on the airframe description instead and says so. The panel suggests a minimum throw height for the current airframe, since more actuators mean more pulses and a longer fall.
 
-Results on the stock presets:
-- **Identification:** the fit explains 94–100% of the throw data. The IMU offset comes out within about 4 mm.
-- **Hover:** judged in hover, the throw model is rough, anywhere from 0 to about 90% right per actuator. The props see very different air while tumbling and falling than in hover. That's still enough to catch itself, and the hover calibration afterwards brings each actuator to roughly 75–95%.
-- **Recovery:** all six presets catch themselves. The main-lifter layout needs about 10 pulses, and from the default 4 m it can hit the ground before it recovers. Throw it to about 6 m, as the panel suggests.
+Results on the stock presets (thrown to 4 m):
+- **Identification:** the fit explains 97–100% of the rotation and of the force. Motor lag comes out at the true 30 ms; the IMU offset within about 3 mm.
+- **Recovery:** the quad, hexacopter, tricopter, tilt-rotor quad and main-lifter layout all catch themselves. The tilt-rotor quad and main-lifter get through about half their pulses before they have to stop, and hold their servos until the calibration.
+- **Afterwards:** the hover calibration brings the learned model to 92–100% of the force and 96–99% of the rotation on the multirotors and the tilt-rotor quad.
 
 ## Airflow (physics only)
 
 The simulated world has effects the controller is never told about:
 
-- **Rotor wakes** (`wakeVelocity`): momentum-theory downwash that speeds up and contracts below each disc. A rotor in another's wake loses thrust.
+- **Rotor wakes** (`wakeVelocity`): momentum-theory downwash that speeds up and contracts below each disc. Wind and forward flight blow the wake sideways as it travels down, so the rear rotors fly into the front rotors' wash. A rotor in another's wake loses thrust.
 - **Rotor aerodynamics** (`rotorAero`):
   - Glauert inflow: climbing and wake inflow cost thrust, and forward flight gains a little (translational lift);
   - ground effect, from the Cheeseman–Bennett formula;
-  - rotor drag, which grows with thrust and airspeed.
+  - rotor drag, which grows with thrust and airspeed;
+  - vortex ring state: descending straight down at around the rotor's own induced velocity costs it up to 30% of its thrust.
 - **Downwash on parts** (`wakeLoad`): rotor wash pushes the hub, rigid masses and cable payloads.
-- **Battery** (`batteryModel`): drains with load and sags, so the same throttle gives less thrust over a flight.
+- **Battery** (`batteryModel`): a 4-cell 1.3 Ah pack. It supplies the current the motors really draw, drains with it and sags under it, so the same throttle gives less thrust over a flight and during hard manoeuvres.
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
 
@@ -118,13 +120,12 @@ A rod points by presets (down, forward, back, left, right, up) or by exact angle
 - **Positions and mounts** are entered with every joint at 0°, in body axes. The joints above a part carry it from there (`jointRotation`), nearest first.
 - **Control.** A joint carrying a motor can be steered by the allocator. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
 - **Hinge.** Direction (azimuth) plus a tilt up for axes that aren't horizontal.
-- **Servo hardware.** Range, rated speed, and its own mass, plus the hidden traits the controller isn't told: lag, trim error, and whether it reports its angle.
+- **Servo hardware.** Range, no-load speed, and its own mass, plus the hidden traits the controller isn't told: stall torque, command delay, trim error, and whether it reports its angle.
 
 What moving parts do in the physics:
-- **Mass properties.** The CoG and inertia follow the joints every step. The world CoG itself doesn't jump when a part swings (momentum), so the frame shifts the other way.
-- **Reaction torque.** Turning a joint takes torque; the frame feels −I·θ̈ about the hinge, where I is what the joint carries about its axis.
+- **Full coupled dynamics.** Each joint's output is its own rigid body, solved together with the frame (see What it models). Swinging an arm moves and turns the frame the other way, the servo has to fight gravity, thrust and the frame's own motion, and nothing is approximated as quasi-static.
 - **Rotors, cables, contacts.** Rotors, wakes, cable attachments and ground contact points all move with their joints.
-- **Sensors.** A sensor on a joint moves and turns with it. Its gyro also feels the joint turning, and a camera or GPS antenna on it also feels the joint's motion.
+- **Sensors.** A sensor on a joint moves and turns with it. Its gyro also feels the joint turning, its accelerometer feels the arm's own acceleration, and a camera or GPS antenna on it also feels the joint's motion.
 
 What the controller does with them:
 - **Its own model.** It moves its CoG and inertia with the joint angles it believes (feedback, or its prediction), for the masses it knows about.
@@ -224,7 +225,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 ## The formulas
 
-**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `jointRotation`, `throttleCurve`, `motorResponse`, `servoResponse`, `servoLinkage`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
+**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `jointRotation`, `motorDynamics`, `servoTorque`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`, `flowModel`, `rangeModel`.
 
@@ -248,11 +249,14 @@ Edits made in the Formulas tab:
 
 ## What it models
 
-- One rigid body with 6 degrees of freedom, integrated at 2 kHz. The controller runs at 1 kHz.
-- **Motor:** thrust along its axis, first-order spin-up lag, drag torque κ·T opposite to its spin, adjustable health.
-- **Servo joint:** a hinge with an angle limit, speed, lag and trim error that carries whatever is attached to it, including other joints.
-- **Rigid mass:** box, sphere or vertical cylinder, contributing mass, center-of-gravity shift and inertia.
+The physics isn't simplified for speed; every step (2 kHz) does the full version. The controller runs at 1 kHz.
+
+- **Articulated rigid bodies** (`js/multibody.js`, `rigidBody`). The frame is a free-floating body and every servo joint adds another: the servo's output and everything rigidly on it, including rods, further joints and what they carry. The equations of motion for the frame's 6 degrees of freedom plus every joint angle are built each step with the recursive Newton–Euler algorithm (Featherstone) and solved together. So a swinging arm pushes the frame the other way, a load drags its servo, the whole thing conserves momentum in free fall (checked: angular momentum to 0.2%, linear to 0.01% while an arm swings ±60°), and a sensor on an arm feels the arm's own acceleration.
+- **Motors** (`motorDynamics`). Each motor is a brushless motor, ESC and prop sized from its card: throttle sets the voltage, back-EMF and winding resistance set the current, current sets the torque, the prop's inertia sets how fast it spins up, and thrust and drag torque grow with speed squared. From that come a throttle curve that bends upward, spin-up faster than spin-down, a current-limited start from standstill, thrust that fades with the battery, the frame feeling each motor's torque while it speeds up (the spin-up reaction), and the gyroscopic torque of a spinning prop when the frame or its servo turns it. Health scales the thrust. Hover hints (rpm and amps) show on each motor's bar.
+- **Servo joints** (`servoTorque`). A hobby servo is a geared motor with a position loop: full stall torque when stopped, none at its no-load speed, a 3° proportional band, the gearbox's reflected inertia, a command delay, and hard stops just past its travel. It moves by the multibody dynamics, so a light arm snaps to its target, a heavy one lags and overshoots, and thrust or weight on an arm holds it slightly off target (checked: a 100 g weight on a 15 cm arm sags it 0.5°).
+- **Rigid mass:** box, sphere or vertical cylinder, riding on whichever body it's attached to.
 - **Mass on cable:** a point mass on a tension-only spring-damper cable that can swing, go slack and touch the ground.
+- **Sensors:** each rides on its body. The IMU has scale errors and axis misalignment as well as noise, bias and drift; the magnetometer has soft-iron distortion as well as hard iron and motor interference.
 - Masses and cables can be hidden from the controller ("Controller knows" off), so it must absorb them with integral action.
 
 ## Control and allocation
@@ -296,13 +300,13 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 
 ## Known simplifications
 
-- Sensors have no temperature effects, cross-axis sensitivity or scale-factor error yet.
+- Sensors have no temperature effects.
 - Magnetic interference comes only from motor currents, not from wiring or the battery.
-- Gyroscopic torque from spinning props is ignored. A joint's motion adds its reaction torque and shifts the CoG, but not the full coupled multibody dynamics. An accelerometer on a moving joint doesn't feel the joint's own acceleration.
+- Airflow uses engineering models (momentum theory, Glauert inflow, a skewed wake), not CFD. The prop's drag torque doesn't change with inflow.
+- Structure is rigid: frames, rods and servo horns don't flex, and gears have no backlash.
+- The controller's effectiveness model is static. The rotors' gyroscopic torque and the spin-up reaction are real in the physics; the learning measures the spin-up reaction (B₂) so it doesn't corrupt the rest, but the controller doesn't yet use it to cancel those twists, as the Delft INDI controller does. On the main-lifter layout the big rotor's gyroscopic torque is large, and its calibration explains only about 70% of the rotation.
 - Learning treats the CoG as fixed. When a known mass swings on a joint, the controller's model follows it, but the learned columns stay as they were at calibration, and keep-learning catches up over about 30 s.
-- Airflow uses fast engineering models (momentum theory, Glauert inflow), not CFD. Wakes are straight columns and aren't bent by wind or forward flight.
-- The motor command-to-thrust curve is linear. Real ESCs need thrust linearization, which isn't identified yet.
-- Without servo feedback, identification and allocation use the predicted servo angle, so a servo that stalls or slips under load isn't noticed.
+- Without servo feedback, identification and allocation use the predicted servo angle, so a servo that stalls or sags under load isn't noticed.
 - The vertical position integral can trim up to 5 m/s², enough to absorb an unknown hover throttle; sideways it stays at 2 m/s².
-- In the throw start, a motor on two steering joints only has each joint varied on its own, so the cross terms of its 9 columns come from the hover calibration. The throw start also needs the IMU's mounting angle to be known, and uses the commanded throttle rather than measured motor RPM, which the Delft work uses. Their method also identifies the throttle curve and the spin-up reaction torque; the simulated motors don't have those.
+- In the throw start, a motor on two steering joints only has each joint varied on its own, so the cross terms of its 9 columns come from the hover calibration. The throw start also needs the IMU's mounting angle to be known. It uses the commanded throttle and a generic motor model rather than measured motor RPM, which the Delft work uses; the simulated motors have the same structure as that model, so real motors will fit it less exactly.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.

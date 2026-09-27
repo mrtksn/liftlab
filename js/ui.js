@@ -28,8 +28,8 @@ const FD = {
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
   kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
   fm: { label: 'Prop efficiency (figure of merit)', path: ['fm'], min: 0.3, max: 0.85, step: 0.01, u: '', dp: 2 },
-  curve: { label: 'Throttle curve bend · hidden', path: ['curve'], min: 0, max: 1, step: 0.05, u: '', dp: 2 },
-  slag: { label: 'Servo lag · hidden', path: ['lag'], min: 0, max: 0.15, step: 0.005, u: 'ms', dp: 0, k: 1000 },
+  storque: { label: 'Servo stall torque · hidden', path: ['torque'], min: 0.05, max: 5, hmax: 40, step: 0.05, u: 'N·m', dp: 2 },
+  slag: { label: 'Servo command delay · hidden', path: ['lag'], min: 0, max: 0.15, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   offset: { label: 'Servo trim error · hidden', path: ['offset'], min: -10, max: 10, step: 0.5, u: '°', dp: 1 },
   tau: { label: 'Spin-up time constant · hidden', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
@@ -61,11 +61,14 @@ const FD = {
   lat: { label: 'Delay', hmax: 2000,  path: ['latency'], min: 0, max: 300, step: 1, u: 'ms', dp: 0 },
   gyroNoise: { label: 'Gyro noise', path: ['gyroNoise'], min: 0, max: 1, step: 0.01, u: '°/s', dp: 2 },
   gyroBias: { label: 'Gyro turn-on bias (σ)', path: ['gyroBias'], min: 0, max: 5, step: 0.05, u: '°/s', dp: 2 },
+  scaleErr: { label: 'Scale error (σ)', path: ['scaleErr'], min: 0, max: 0.05, step: 0.001, u: '%', dp: 1, k: 100 },
+  misalign: { label: 'Axis misalignment (σ)', path: ['misalign'], min: 0, max: 2, step: 0.05, u: '°', dp: 2 },
   gyroDrift: { label: 'Gyro bias drift', path: ['gyroDrift'], min: 0, max: 0.2, step: 0.005, u: '°/s/√s', dp: 3 },
   accNoise: { label: 'Accel noise', path: ['accNoise'], min: 0, max: 0.5, step: 0.01, u: 'm/s²', dp: 2 },
   accBias: { label: 'Accel bias (σ)', path: ['accBias'], min: 0, max: 0.5, step: 0.01, u: 'm/s²', dp: 2 },
   vib: { label: 'Vibration pickup (mounting)', path: ['vib'], min: 0, max: 3, step: 0.1, u: '×', dp: 1 },
   magNoise: { label: 'Noise', path: ['noise'], min: 0, max: 0.1, step: 0.002, u: '% of field', dp: 1, k: 100 },
+  softIron: { label: 'Soft-iron distortion (σ)', path: ['softIron'], min: 0, max: 0.3, step: 0.005, u: '%', dp: 1, k: 100 },
   hardIron: { label: 'Hard-iron offset (σ)', path: ['hardIron'], min: 0, max: 0.5, step: 0.01, u: '% of field', dp: 0, k: 100 },
   interference: { label: 'Motor interference', path: ['interference'], min: 0, max: 3, step: 0.1, u: '×', dp: 1 },
   baroNoise: { label: 'Noise', path: ['noise'], min: 0, max: 0.5, step: 0.01, u: 'm', dp: 2 },
@@ -173,16 +176,16 @@ function compBody(c) {
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
-      el('p', { class: 'hint', text: 'Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      el('p', { class: 'hint', text: 'The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
     b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
     b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, presetSel(HINGE_PRESETS, 'hingeAz', 'hingeEl', 'Turns about'), slider(c, 'hingeAz'), slider(c, 'hingeEl'),
       selectF(c, 'mode', 'Servo control', [['auto', steer ? 'Allocator steers it' : 'Allocator steers it (needs a motor on it)'], ['manual', 'Set by me']], rerender));
     if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
-    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
-      el('p', { class: 'hint', text: 'Servo speed is the rated speed the controller assumes; the real servo may differ. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
+    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
+      el('p', { class: 'hint', text: 'Servo speed is its no-load speed; under load it runs slower and a heavy load or thrust on an arm holds it off its target (stall torque). Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'link') {
     const carried = descendants(c);
     b.append(el('p', { class: 'hint', text: carried.length ? 'At its far end: ' + carried.map(x => x.name).join(', ') + '.' : 'A stick or lever. Attach parts to it (drag them onto it in the list) and they ride at its far end.' }),
@@ -197,8 +200,8 @@ function compBody(c) {
     const mount = el('div', { class: 'subgrid' }, slider(c, 'mr'), slider(c, 'mp'), slider(c, 'my'));
     if (c.kind === 'imu') b.append(pos, mount, slider(c, 'rateImu'), slider(c, 'latImu'), slider(c, 'gyroNoise'), slider(c, 'gyroBias'), slider(c, 'gyroDrift'),
       selectF(c, 'gyroRange', 'Gyro range', [[250, '±250 °/s'], [500, '±500 °/s'], [1000, '±1000 °/s'], [2000, '±2000 °/s']]),
-      slider(c, 'accNoise'), slider(c, 'accBias'), selectF(c, 'accRange', 'Accel range', [[2, '±2 g'], [4, '±4 g'], [8, '±8 g'], [16, '±16 g']]), slider(c, 'vib'));
-    else if (c.kind === 'mag') b.append(pos, mount, slider(c, 'rateMag'), slider(c, 'lat'), slider(c, 'magNoise'), slider(c, 'hardIron'), slider(c, 'interference'));
+      slider(c, 'accNoise'), slider(c, 'accBias'), selectF(c, 'accRange', 'Accel range', [[2, '±2 g'], [4, '±4 g'], [8, '±8 g'], [16, '±16 g']]), slider(c, 'scaleErr'), slider(c, 'misalign'), slider(c, 'vib'));
+    else if (c.kind === 'mag') b.append(pos, mount, slider(c, 'rateMag'), slider(c, 'lat'), slider(c, 'magNoise'), slider(c, 'hardIron'), slider(c, 'softIron'), slider(c, 'interference'));
     else if (c.kind === 'baro') b.append(pos, slider(c, 'rateBaro'), slider(c, 'lat'), slider(c, 'baroNoise'), slider(c, 'baroDrift'));
     else if (c.kind === 'flow') b.append(el('p', { class: 'hint', text: 'Looks along its own −Z (down, with no mount rotation).' }), pos, mount, slider(c, 'rateFlow'), slider(c, 'lat'), slider(c, 'flowNoise'), slider(c, 'flowScale'), slider(c, 'flowMax'), slider(c, 'rangeMax'), slider(c, 'rangeNoise'));
     else {
@@ -334,7 +337,7 @@ function updateActs() {
     const pc = clamp(st.u || 0, 0, 1), Te = st.Teff ?? st.T; r.fill.style.width = (pc * 100).toFixed(1) + '%'; r.fill.classList.toggle('sat', pc > 0.99);
     r.mk.style.left = `calc(${(clamp(Te / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
     r.val.textContent = `${Math.round(pc * 100)}% · ${Te.toFixed(2)} N`;
-    r.val.title = `Allowance: ${Math.round(Math.min(pc, 1 - pc) * 100)}% of the range left before a limit`;
+    r.val.title = `Allowance: ${Math.round(Math.min(pc, 1 - pc) * 100)}% of the range left before a limit · prop ${Math.round((st.Omega || 0) * 60 / (2 * Math.PI))} rpm · ${(st.i || 0).toFixed(1)} A`;
   }
   for (const j of joints()) {
     const r = actRows.get(j.id), st = jst.get(j.id); if (!r || !st) continue;
@@ -354,10 +357,9 @@ function buildAllocFields() {
   allocFieldRefs.push(m.refresh); box.append(m.node);
 }
 function updateAllocInfo() {
-  let P = 0, tight = null;
+  let P = (S.battV || 0) * (S.battI || 0), tight = null;   // electrical power from the pack
   for (const c of actuators()) {
     const st = act.get(c.id); if (!st) continue;
-    P += Math.pow(Math.max(0, st.Teff ?? st.T), 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
     const m = Math.min(st.u || 0, 1 - (st.u || 0)); if (!tight || m < tight.m) tight = { c, m };
   }
   for (const j of steerJoints()) { const st = jst.get(j.id); if (!st) continue; const ms = (j.range * D2R - Math.abs(st.th)) / (2 * j.range * D2R); if (!tight || ms < tight.m) tight = { c: j, m: ms, servo: true }; }
@@ -403,7 +405,7 @@ function updateLive() {
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
   if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
   else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
-  const soc = S.batt.soc ?? 1; chip(`Battery ${Math.round(soc * 100)}%`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
+  const soc = S.batt.soc ?? 1; chip(`Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
   chip(`∫ attitude ${(nrm(ctl.iAtt) * R2D).toFixed(1)}°·s`); chip(`∫ position ${(nrm(ctl.iPos) * 100).toFixed(0)} cm·s`);
   const R = qmat(S.q); const { hub } = hubState(R);
   $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
@@ -483,6 +485,7 @@ function throwHintText() {
 function throwStageText() {
   if (!thr) return '';
   if (thr.phase === 'hand') return 'In the hand, motors off';
+  if (thr.phase === 'toss') return 'Being thrown';
   if (thr.phase === 'free') return 'Thrown, climbing with motors off';
   if (thr.phase === 'excite') { const P = thr.plan[thr.i]; return P ? `Free fall: pulsing ${P.c.name}${P.second ? ' (servo at the other end)' : ''}` : 'Fitting the model'; }
   return 'Catching itself on what it learned';
@@ -496,11 +499,11 @@ function renderResponses() {
   const row = (name, what, l, t) => tbl.append(el('tr', {}, el('td', { text: `${name} ${what}` }), el('td', { text: l }), el('td', { text: t })));
   for (const c of acts) {
     const r = learn.resp.get(c.id) || {};
-    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), (c.curve || 0).toFixed(2)); }
+    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), trueBend().toFixed(2)); }
   }
   for (const j of joints()) {
     const r = learn.resp.get(j.id) || {};
-    if (r.rate != null) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); }
+    if (r.rate != null) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s no-load`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); }
   }
   if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag.' }));
 }
@@ -514,7 +517,7 @@ function renderLearn(force) {
   $('#throwHint').textContent = throwHintText();
   $('#calProg').hidden = !cal && !thr;
   if (thr && !cal) {
-    const f = thr.phase === 'hand' ? 0 : thr.phase === 'free' ? 0.1 : thr.phase === 'excite' ? 0.1 + 0.7 * thr.i / Math.max(1, thr.plan.length) : 0.9;
+    const f = thr.phase === 'hand' || thr.phase === 'toss' ? 0 : thr.phase === 'free' ? 0.1 : thr.phase === 'excite' ? 0.1 + 0.7 * thr.i / Math.max(1, thr.plan.length) : 0.9;
     $('#calFill').style.width = (100 * f).toFixed(1) + '%'; $('#calStage').textContent = throwStageText();
   }
   if (cal) { $('#calFill').style.width = (100 * cal.t / cal.total).toFixed(1) + '%'; $('#calStage').textContent = cal.held ? 'Paused until the drone settles…' : `${cal.stage || 'Starting'} · ${Math.max(0, cal.total - cal.t).toFixed(1)} s left`; }
@@ -698,7 +701,10 @@ function load() {
     cfg.comps = migrateTiltParts(cfg.comps);   // saved before servo joints existed
     for (const c of cfg.comps) if (c.type === 'motor' && !c.prop) withProp(c);
     for (const c of cfg.comps) {   // saved before the hidden hardware traits existed
-      if (c.type === 'motor' && c.curve == null) c.curve = 0.3;
+      if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
+      if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
+      if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
+      if (c.type === 'sensor' && c.kind === 'mag' && c.softIron == null) c.softIron = 0.03;
       if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
       if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
     }

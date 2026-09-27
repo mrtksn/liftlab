@@ -20,8 +20,8 @@ const FIX_QUALITY = {
 function fixDefaults(q) { const { label, ...rest } = FIX_QUALITY[q]; return rest; }
 function mkSensor(kind, name, x, y, z, o = {}) {
   const d = {
-    imu: { rate: 1000, latency: 0, gyroNoise: 0.1, gyroBias: 0.5, gyroDrift: 0.02, gyroRange: 2000, accNoise: 0.05, accBias: 0.05, accRange: 16, vib: 1 },
-    mag: { rate: 100, latency: 5, noise: 0.01, hardIron: 0.02, interference: 1 },
+    imu: { rate: 1000, latency: 0, gyroNoise: 0.1, gyroBias: 0.5, gyroDrift: 0.02, gyroRange: 2000, accNoise: 0.05, accBias: 0.05, accRange: 16, scaleErr: 0.005, misalign: 0.2, vib: 1 },
+    mag: { rate: 100, latency: 5, noise: 0.01, hardIron: 0.02, softIron: 0.03, interference: 1 },
     baro: { rate: 50, latency: 20, noise: 0.15, drift: 0.01 },
     fix: Object.assign({ quality: 'gps', dropout: false }, fixDefaults('gps')),
     flow: { rate: 100, latency: 20, noise: 0.05, scale: 0.03, maxRate: 7, minRange: 0.05, maxRange: 4, rangeNoise: 0.01 },   // camera looks along its −Z
@@ -74,32 +74,41 @@ function motorFieldAt(pos) {
   return b;
 }
 function advanceVibration(dt) {
-  for (const c of actuators()) { const v = vib.get(c.id), st = act.get(c.id); if (v && st) v.ph += 2 * Math.PI * VIB_FREQ * Math.sqrt(clamp(st.T / c.tmax, 0, 1)) * dt; }
+  for (const c of actuators()) { const v = vib.get(c.id), st = act.get(c.id); if (v && st) v.ph += 2 * Math.PI * VIB_FREQ * clamp((st.Omega || 0) * propR(c) / 180, 0, 1.3) * dt; }   // follows the prop speed
 }
 function measure(c, rt, dt) {
-  // A sensor on a servo joint moves and turns with it: its pose and mount come from the true joint angles,
-  // and its gyro also feels the joints above it turning.
-  const P = poseOf(c), R = qmat(S.q), RT = m3T(R), Rm = m3m(P.R, eulerR(c.mount[0], c.mount[1], c.mount[2])), RmT = m3T(Rm);
-  const r = sub(P.p, truth.c), wS = add(S.w, chainRate(c));
+  // Each sensor rides on a body of the airframe (the frame, or a servo's output and what's on it) and feels
+  // that body's motion at its own spot: rotation of the frame plus every joint above it, and the
+  // acceleration there including the joints swinging it.
+  if (!S.mb || !MB) S.mb = { K: mbKinematics(cat6(S.w, m3v(m3T(qmat(S.q)), S.v))), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
+  const K = S.mb.K, b = Math.min(MB.of.get(c.id) || 0, K.v.length - 1), Pr = sub(c.pos, MB.bodies[b].pivot);   // spot on its body, body axes
+  const R = qmat(S.q), Rbw = m3m(R, K.Rb[b]);                                    // body b → world
+  const Mt = eulerR(c.mount[0], c.mount[1], c.mount[2]), MtT = m3T(Mt);           // sensor → body b
+  const vb = K.v[b], wb = top3(vb);
+  const P = add(K.ob[b], m3v(K.Rb[b], Pr));                                       // where it is now, frame axes
+  const ps = add(S.p, m3v(R, P)), vs = m3v(Rbw, add(bot3(vb), crs(wb, Pr)));      // world position and velocity
   if (c.kind === 'imu') {
-    const fb = add(m3v(RT, add(S.acc, [0, 0, G])), add(crs(S.wdot, r), crs(S.w, crs(S.w, r))));
-    const vb = vibrationAt(P.p);
-    const p = { gyroNoise: c.gyroNoise * D2R, gyroBias: c.gyroBias * D2R, gyroDrift: c.gyroDrift * D2R, gyroRange: c.gyroRange * D2R, accNoise: c.accNoise, accBias: c.accBias, accRange: c.accRange * G };
-    return run('imuModel', m3v(RmT, wS), m3v(RmT, fb), { a: m3v(RmT, scl(vb.a, c.vib)), w: m3v(RmT, scl(vb.w, c.vib)) }, p, rt.st, dt);
+    const ab = S.mb.acc[b] || [0, 0, 0, 0, 0, 0];
+    const acl = add(add(bot3(ab), crs(top3(ab), Pr)), crs(wb, add(bot3(vb), crs(wb, Pr))));   // ordinary acceleration of that spot
+    const fb = add(acl, m3v(m3T(Rbw), [0, 0, G]));                                // minus gravity: what an accelerometer reads
+    const vi = vibrationAt(P);
+    const p = { gyroNoise: c.gyroNoise * D2R, gyroBias: c.gyroBias * D2R, gyroDrift: c.gyroDrift * D2R, gyroRange: c.gyroRange * D2R, accNoise: c.accNoise, accBias: c.accBias, accRange: c.accRange * G, scaleErr: c.scaleErr ?? 0.005, misalign: (c.misalign ?? 0.2) * D2R };
+    const RbT = m3T(K.Rb[b]);   // vibration is described in frame axes
+    return run('imuModel', m3v(MtT, wb), m3v(MtT, fb), { a: m3v(MtT, m3v(RbT, scl(vi.a, c.vib))), w: m3v(MtT, m3v(RbT, scl(vi.w, c.vib))) }, p, rt.st, dt);
   }
-  if (c.kind === 'mag') return run('magModel', m3v(RmT, m3v(RT, MAG_EARTH)), m3v(RmT, scl(motorFieldAt(P.p), c.interference)), { noise: c.noise, hardIron: c.hardIron }, rt.st);
+  const Rs = m3m(Rbw, Mt), RsT = m3T(Rs);                                         // sensor → world
+  if (c.kind === 'mag') return run('magModel', m3v(RsT, MAG_EARTH), m3v(MtT, m3v(m3T(K.Rb[b]), scl(motorFieldAt(P), c.interference))), { noise: c.noise, hardIron: c.hardIron, softIron: c.softIron ?? 0.03 }, rt.st);
   if (c.kind === 'flow') {
-    const Rs = m3m(R, Rm), ps = add(S.p, m3v(R, r)), vs = add(S.v, m3v(R, add(crs(S.w, r), chainVel(c))));
     const down = m3v(Rs, [0, 0, -1]);
     const d = down[2] < -0.2 ? ps[2] / -down[2] : Infinity;          // distance to the ground along the boresight
-    const v = m3v(m3T(Rs), vs), w = m3v(RmT, wS);
+    const v = m3v(RsT, vs), w = m3v(MtT, wb);
     const f = isFinite(d) && d > 0.01 ? [w[1] - v[0] / d, -w[0] - v[1] / d] : [w[1], -w[0]];
     const q = isFinite(d) ? envr.texture * envr.light * clamp(1.25 - d / 8, 0, 1) : 0;   // image quality: texture, light, height
     const fl = run('flowModel', f, q, { noise: c.noise, scale: c.scale, maxRate: c.maxRate }, rt.st, dt);
     return { flow: [fl[0], fl[1]], q: fl[2], range: run('rangeModel', d, { noise: c.rangeNoise, minRange: c.minRange, maxRange: c.maxRange }, rt.st) };
   }
-  if (c.kind === 'baro') return run('baroModel', add(S.p, m3v(R, r))[2], { noise: c.noise, drift: c.drift }, rt.st, dt);
-  return run('posFixModel', add(S.p, m3v(R, r)), add(S.v, m3v(R, add(crs(S.w, r), chainVel(c)))), { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
+  if (c.kind === 'baro') return run('baroModel', ps[2], { noise: c.noise, drift: c.drift }, rt.st, dt);
+  return run('posFixModel', ps, vs, { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
 }
 function sampleSensors(dt) {
   advanceVibration(dt);
@@ -176,7 +185,7 @@ function resetEstimation() {
   seedRng(12345);
   sens.clear(); vib.clear(); syncSensors();
   est.att = {}; est.pos = {};
-  const R = qmat(S.q); const hub = sub(S.p, m3v(R, truth.c));
+  const R = qmat(S.q); const hub = S.p.slice();
   est.pos.p = hub.slice(); est.pos.v = [0, 0, 0];   // the drone starts where it thinks it is
   est.q = S.q.slice(); est.R = R; est.w = [0, 0, 0]; est.p = hub.slice(); est.v = [0, 0, 0];
   S.acc = [0, 0, 0]; S.wdot = [0, 0, 0];

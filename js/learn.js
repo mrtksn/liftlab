@@ -56,6 +56,14 @@ function buildIndex() {
   learn.n = j;
 }
 const seenAngles = c => chainOf(c).map(angleSeen);
+function motorInputs() {   // per input: its motor's believed thrust command and its basis factor
+  const v = new Array(learn.n).fill(0), phi = new Array(learn.n).fill(0), m = new Array(learn.n).fill(0);
+  actuators().forEach((c, i) => {
+    const st = act.get(c.id), ix = learn.index.get(c.id); if (!st || !ix) return;
+    const b = basisVals(seenAngles(c)); ix.cols.forEach((jj, k) => { v[jj] = st.v || 0; phi[jj] = b[k]; m[jj] = i; });
+  });
+  return { v, phi, m };
+}
 function inputVector() {   // what was sent, in the identification's input space
   const x = new Array(learn.n).fill(0);
   for (const c of actuators()) {
@@ -105,7 +113,10 @@ function ctlAxis() {   // nominal thrust axis the controller believes in
 // learn.resp: per motor { tau, curve }, per servo joint { rate, lag }. Until measured, the
 // controller assumes a straight throttle curve, 35 ms motor lag, the servo's rated speed and no servo lag.
 const believedThrust = (u, k) => (1 - k) * u + k * u * u;
-const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? 0;   // bend the thrust linearization uses
+// Bend the thrust linearization uses: the learned one once applied, otherwise a typical brushless prop curve
+// (thrust grows faster than throttle). The flight software isn't told the real motors' curve.
+const BEND_PRIOR = 0.7;
+const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? BEND_PRIOR;
 const motorLagHat = c => (learn.resp.get(c.id) || {}).tau ?? 0.035;
 function servoModelHat(j) { const r = learn.resp.get(j.id) || {}; return { rate: r.rate ?? j.rate * D2R, lag: r.lag ?? 0 }; }
 function inputLags() { const l = new Array(learn.n).fill(0.035); for (const c of actuators()) { const ix = learn.index.get(c.id); if (ix) for (const jj of ix.cols) l[jj] = motorLagHat(c); } return l; }
@@ -121,7 +132,7 @@ function resetLearning(keepResponses = false) {
   if (!keepResponses || learn.sig !== inputSig()) learn.resp = new Map();
   if (!model) model = massProps('model');
   buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
-  learn.cal = null; learn.imuR = null;
+  learn.cal = null; learn.imuR = null; learn.holdServos = false;
 }
 // Filtered accelerometer (lever-arm swing removed) and angular acceleration, for the actuator tests.
 function measStep(dt) {
@@ -151,7 +162,7 @@ function learnStep(dt) {
   if (thr && thr.phase !== 'recover') return;   // the throw runs its own identification while falling
   if (learn.keep || learn.cal) {
     const imus = sensorsOf('imu'); const r0 = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
-    const r = run('identifyEffectiveness', learn.st, inputVector(), est.fAccel, est.fGyro, r0, dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight, inputLags());
+    const r = run('identifyEffectiveness', learn.st, inputVector(), est.fAccel, est.fGyro, r0, dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight, inputLags(), motorInputs());
     learn.B = r.B;
   }
   if (learn.cal) calibrationTick(dt);
@@ -230,7 +241,7 @@ function finishCalibration() {
   const better = learn.fit.rot + 0.5 * learn.fit.force > desc.rot + 0.5 * desc.force + 0.02;
   const good = learn.fit.force > 0.5 && learn.fit.rot > 0.6 && better;
   const fromThrow = learn.cal.base === 'throw', baseName = fromThrow ? 'the model from the throw' : 'the airframe description';
-  if (good) { learn.mode = 'ident'; learn.keep = true; ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0]; }   // integrators were wound up for the old model
+  if (good) { learn.mode = 'ident'; learn.keep = true; learn.holdServos = false; ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0]; }   // integrators were wound up for the old model
   else if (fromThrow) { learn.B = learn.prior.map(r => r.slice()); learn.st = {}; }   // keep the throw model
   else learn.mode = 'config';
   learn.flyB = null;
@@ -371,7 +382,7 @@ function holdU(u) {
 const throwCfg = { height: 4, spin: 6, amp: 0.5, dwMax: 4, thenCalibrate: true };   // apex altitude [m], tumble rate [rad/s], pulse throttle, rate change allowed per pulse [rad/s]
 let thr = null;
 function throwPlan() {
-  // Every motor, pulsed with each steering joint above it at three angles in turn (one end, the middle, the
+  // Every motor, pulsed with each steering joint above it at three angles in turn (the middle, one end, the
   // other end), so its (1, cos θ, sin θ) columns can all be told apart. Passes go motor by motor, so a joint
   // can swing to its next angle while other motors are being pulsed.
   const sj = steerJoints(), variants = [];
@@ -379,8 +390,8 @@ function throwPlan() {
     const js = chainOf(c).filter(j => sj.includes(j)), v = [];
     if (!js.length) v.push(new Map());
     else {
+      v.push(new Map(js.map(j => [j.id, 0])));   // the middle first: if it has to stop early, it knows the motors at rest
       v.push(new Map(js.map((j, i) => [j.id, i === 0 ? -0.9 * j.range * D2R : 0])));
-      v.push(new Map(js.map(j => [j.id, 0])));
       js.forEach((j, i) => {
         if (i === 0) v.push(new Map(js.map(x => [x.id, x === j ? 0.9 * j.range * D2R : 0])));
         else v.push(new Map(js.map(x => [x.id, x === j ? -0.9 * j.range * D2R : 0])), new Map(js.map(x => [x.id, x === j ? 0.9 * j.range * D2R : 0])));
@@ -392,17 +403,21 @@ function throwPlan() {
   for (let k = 0; k < most; k++) for (const { c, v } of variants) if (v[k]) plan.push({ c, angles: v[k] });
   return plan;
 }
-const throwPlanTime = plan => plan.length * 0.1;   // rough length of the pulse sequence [s]
+// Rough length of the pulse sequence [s]: each pulse and rest, plus time for a servo to swing between pulses.
+const throwPlanTime = plan => plan.reduce((s, P, i) => s + 0.13 + (i > 0 && [...P.angles].some(([id, a]) => plan[i - 1].angles.get(id) !== a) ? 0.08 : 0), 0);
+// Height it needs to catch itself, moving up at vz [m/s]: spin up and turn upright (~0.45 s, coasting), then
+// brake at about 0.8 g.
+function throwRoom(vz) { const t = 0.45, v1 = Math.min(0, vz - G * t); return 0.3 - (vz * t - 0.5 * G * t * t) + v1 * v1 / (2 * 0.8 * G); }
 function startThrow() {                  // call right after resetSim()
   thr = { phase: 'hand', t: 0, plan: throwPlan(), i: 0, step: 'move', ts: 0, w0: null, st: {}, res: null, zMax: 0, tRel: 0 };
   learn.mode = 'config'; learn.msg = 'In the hand, motors off. The drone knows its sensors and how many actuators it has, nothing else.';
-  for (const a of act.values()) { a.u = 0; a.Tcmd = 0; a.T = 0; }
+  for (const a of act.values()) { a.u = 0; a.Tcmd = 0; a.T = 0; a.Omega = 0; a.i = 0; }
 }
-function releaseThrow() {
-  const v0 = Math.sqrt(2 * G * Math.max(0.3, throwCfg.height - S.p[2]));
+function releaseThrow() {   // the hand swings it up to speed and spin over a moment (the IMU feels it), then lets go
+  const dur = 0.12, h = Math.max(0.3, throwCfg.height - S.p[2]);   // apex = release height + v0·dur/2 + v0²/2g
+  const v0 = G * (-dur / 2 + Math.sqrt(dur * dur / 4 + 2 * h / G));
   let ax = [randn(), randn(), randn()]; if (nrm(ax) < 1e-6) ax = [1, 0, 0];
-  S.v = [0.3 * randn(), 0.3 * randn(), v0]; S.w = scl(unit(ax), throwCfg.spin);
-  thr.phase = 'free'; thr.t = 0; thr.zRel = S.p[2];
+  thr.phase = 'toss'; thr.toss = { t: 0, dur, dv: [0.3 * randn(), 0.3 * randn(), v0], dw: scl(unit(ax), throwCfg.spin) };
   learn.msg = 'Thrown. Near the top of the arc it pulses each motor on its own and fits what each one does from the gyro and accelerometer.';
 }
 const throwBusy = () => !!thr && thr.phase !== 'recover';
@@ -418,12 +433,14 @@ function throwTick(dt) {
     servo.set(j.id, P ? P.angles.get(j.id) : 0);
   }
   if (thr.phase === 'hand') { if (thr.t > 0.8) releaseThrow(); }
+  else if (thr.phase === 'toss') { if (thr.toss.t >= thr.toss.dur) { thr.phase = 'free'; thr.t = 0; thr.zRel = S.p[2]; } }
   else if (thr.phase === 'free' || thr.phase === 'excite') {
     // Pulse around the top of the throw: climbing or falling air through the props changes their thrust.
     const tPlan = throwPlanTime(thr.plan);
-    if (thr.phase === 'free' && thr.t > 0.06 && est.v[2] < G * tPlan / 2) { thr.phase = 'excite'; thr.ts = thr.t; }
+    // Start so the pulses finish just past the top: on the way down it soon needs its height to recover.
+    if (thr.phase === 'free' && thr.t > 0.06 && est.v[2] < G * (tPlan - 0.1)) { thr.phase = 'excite'; thr.ts = thr.t; }
     const vb = m3v(m3T(est.R), est.v);
-    if (thr.phase === 'free') run('identifyThrow', thr.st, inputVector(), est.fAccel, est.fGyro, vb, dt, false);
+    if (thr.phase === 'free') run('identifyThrow', thr.st, inputVector(), est.fAccel, est.fGyro, vb, dt, false, motorInputs());
     if (thr.phase === 'excite') {
       const P = thr.plan[thr.i], el = thr.t - thr.ts;
       if (P) {
@@ -436,9 +453,11 @@ function throwTick(dt) {
           if ((el > 0.012 && dw > throwCfg.dwMax) || el > 0.08) { thr.step = 'rest'; thr.ts = thr.t; } else cmd.set(P.c.id, throwCfg.amp);
         } else if (el > 0.035) { thr.i++; thr.step = 'move'; thr.ts = thr.t; }
       }
-      const done = thr.i >= thr.plan.length;
+      // Stop early if it has to start catching itself: room to spin the motors up, turn upright and brake.
+      if (thr.i < thr.plan.length && est.p[2] < throwRoom(est.v[2])) thr.cut = thr.i;
+      const done = thr.i >= thr.plan.length || thr.cut != null;
       const x = inputVector();
-      thr.res = run('identifyThrow', thr.st, x, est.fAccel, est.fGyro, vb, dt, done);
+      thr.res = run('identifyThrow', thr.st, x, est.fAccel, est.fGyro, vb, dt, done, motorInputs());
       if (done) finishThrow();
     }
   }
@@ -452,17 +471,42 @@ function throwTick(dt) {
   }
   return false;
 }
+const lagText = r => { const t = (r.taus && r.taus.length ? r.taus : [r.tau]).map(x => Math.round(x * 1000)), lo = Math.min(...t), hi = Math.max(...t);
+  return lo === hi ? `≈ ${lo} ms` : `${lo}–${hi} ms`; };
 function finishThrow() {
   const r = thr.res, ok = r && r.fitR > 0.6 && r.fitF > 0.4;
   thr.phase = 'recover'; thr.tRec = thr.t; ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0];
   const pc = v => Math.round(v * 100) + '%';
+  let partial = false;
+  if (ok && thr.cut != null) {   // motors not pulsed at every servo angle: keep what the angles it did try can tell
+    const done = thr.plan.slice(0, thr.cut);
+    for (const c of actuators()) {
+      const ix = learn.index.get(c.id); if (!ix || ix.cols.length < 2) continue;
+      if (done.filter(P => P.c === c).length >= thr.plan.filter(P => P.c === c).length) continue;
+      const at = th => basisVals(th), val = (row, phi) => ix.cols.reduce((s, jj, b) => s + row[jj] * phi[b], 0);
+      const j = chainOf(c)[0], tried = [...new Set(done.filter(P => P.c === c).map(P => P.angles.get(j.id) ?? 0))].filter(a => Math.abs(a) > 1e-6);
+      for (const row of r.B) {
+        const v0 = val(row, at(new Array(ix.k).fill(0)));
+        if (ix.k === 1 && tried.length) {   // the middle and one end: its effect and how it changes with the servo (cos θ ≈ 1 here)
+          const a1 = tried[0], v1 = val(row, at([a1]));
+          row[ix.cols[0]] = v0; row[ix.cols[1]] = 0; row[ix.cols[2]] = (v1 - v0) / Math.sin(a1);
+        } else ix.cols.forEach((jj, b) => { row[jj] = b === 0 ? v0 : 0; });   // only the middle
+      }
+      if (!(ix.k === 1 && tried.length)) partial = true;
+    }
+  }
   if (ok) {
     learn.B = r.B.map(row => row.slice()); learn.prior = r.B.map(row => row.slice()); learn.st = {};
     learn.mode = 'ident'; learn.keep = true; learn.imuR = r.r.slice();
-    thr.msg = `Identified in ${(thr.t).toFixed(2)} s of free fall: the fit explains ${pc(r.fitR)} of the rotation and ${pc(r.fitF)} of the force, motor lag ≈ ${Math.round(r.tau * 1000)} ms, IMU ${(nrm(r.r) * 100).toFixed(1)} cm from the balance point (true ${(nrm(trueImuOffset()) * 100).toFixed(1)} cm).`;
+    thr.msg = `Identified in ${(thr.t).toFixed(2)} s of free fall: the fit explains ${pc(r.fitR)} of the rotation and ${pc(r.fitF)} of the force, motor lag ${lagText(r)}, IMU ${(nrm(r.r) * 100).toFixed(1)} cm from the balance point (true ${(nrm(trueImuOffset()) * 100).toFixed(1)} cm).`;
   } else {
     learn.mode = 'config';
     thr.msg = `The free-fall fit was poor (rotation ${pc(r ? r.fitR : 0)}, force ${pc(r ? r.fitF : 0)}), so it catches itself on the airframe description instead.`;
+  }
+  if (thr.cut != null) {
+    const sj = steerJoints().length > 0;
+    thr.msg += ` It stopped after ${thr.cut} of ${thr.plan.length} pulses to leave room to catch itself${sj && partial ? ', so it holds its servos in the middle until a calibration has measured them' : ''}.`;
+    if (sj && ok && partial) learn.holdServos = true;
   }
   learn.msg = thr.msg + ' Recovering…';
 }

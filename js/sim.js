@@ -5,7 +5,7 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -40,12 +40,15 @@ const PRESETS = {
 };
 const cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
+// Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
+const flyMode = () => learn.holdServos ? 'tilt' : mode;
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
 const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1 };   // texture and light matter to optical flow
 
 /* ───────── state ───────── */
-const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battK: 1, rotors: [], crashed: null, t: 0, steps: 0 };
-const act = new Map();   // id -> { T, Tcmd, th, thCmd }
+// p, v: the frame's centre (the hub) in the world; q, w: its attitude and body rates. Joints carry their own angles (jst).
+const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battV: 16.8, battK: 1, rotors: [], mb: null, crashed: null, t: 0, steps: 0 };
+const act = new Map();   // id -> { u: throttle, v: believed thrust fraction, Omega: prop speed, i: current, T: still-air thrust, Tcmd: steady thrust for u }
 const pend = new Map();  // id -> { p, v, Tn }
 // Mixed steering: the servos take up to `share` of the sideways force; `rho` tracks how much of what they
 // were asked for they actually made (low-passed), so the body leans more when they can't keep up.
@@ -105,22 +108,21 @@ function syncRuntime() {
   for (const k of [...pend.keys()]) if (!ids.has(k)) pend.delete(k);
   const R = qmat(S.q);
   for (const c of cfg.comps) {
-    if (c.type === 'motor' && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, u: 0, v: 0, k: 1 });
-    if (c.type === 'joint' && !jst.has(c.id)) { const t0 = restAngle(c), tr = t0 + (c.offset || 0) * D2R; jst.set(c.id, { th: tr, thR: tr, thCmd: t0, thHat: t0, pst: {}, rate: 0, acc: 0 }); }
-    if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, sub(posNow(c), truth.c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
+    if (c.type === 'motor' && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, u: 0, v: 0, k: 1, Omega: 0, i: 0 });
+    if (c.type === 'joint' && !jst.has(c.id)) { const t0 = restAngle(c), tr = t0 + (c.offset || 0) * D2R; jst.set(c.id, { th: tr, thR: tr, thCmd: t0, thHat: t0, pst: {}, rate: 0, acc: 0, dq: [] }); }
+    if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, posNow(c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
   }
   syncSensors();
 }
 function reseatPend(c) {
   const st = pend.get(c.id); if (!st) return;
-  const R = qmat(S.q); const a = add(S.p, m3v(R, sub(posNow(c), truth.c)));
+  const R = qmat(S.q); const a = add(S.p, m3v(R, posNow(c)));
   let d = sub(st.p, a); if (nrm(d) < 1e-6) d = [0, 0, -1];
   st.p = add(a, scl(unit(d), c.length)); st.v = S.v.slice();
 }
 function recomputeProps() {
-  const R = qmat(S.q); const hub = truth ? sub(S.p, m3v(R, truth.c)) : [setpoint.x, setpoint.y, setpoint.z];
   truth = massProps('truth'); model = massProps('model');
-  S.p = add(hub, m3v(R, truth.c)); nb = nominalAxis(); syncRuntime();
+  buildBodies(); nb = nominalAxis(); syncRuntime();
 }
 
 /* ───────── control ───────── */
@@ -143,7 +145,10 @@ function allocate(w, cm) {
   // Stage 1: servo joints. Each steering joint adds a small angle change δ as an input. Its effect is what
   // turning it does to every motor it carries, Σ thrust × d(column)/dθ, and δ is bounded by how far the
   // servo can get within the planning horizon.
-  const sj = steerJoints();
+  // After a throw cut short, the servos' effect is only partly known: hold them in the middle until caught.
+  const holdMid = !!learn.holdServos;
+  if (holdMid) for (const j of steerJoints()) jst.get(j.id).thCmd = 0;
+  const sj = holdMid ? [] : steerJoints();
   if (sj.length) {
     const rows = acts.map(thrustIn), who = acts.map(() => null);
     for (const j of sj) {
@@ -156,7 +161,7 @@ function allocate(w, cm) {
     }
     setAuthority(rows);
     const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
-    const x = run('allocation', rows.map(r => r.col), rows.map(r => r.lo), rows.map(r => r.hi), wa, mode, pull);
+    const x = run('allocation', rows.map(r => r.col), rows.map(r => r.lo), rows.map(r => r.hi), wa, flyMode(), pull);
     if (!servoHeld()) who.forEach((j, i) => {   // servos stay put while a calibration step holds them
       if (j) jst.get(j.id).thCmd = clamp(angleSeen(j) + x[i], -j.range * D2R, j.range * D2R);
     });
@@ -166,8 +171,8 @@ function allocate(w, cm) {
   const rows = acts.map(thrustIn);
   setAuthority(rows);
   const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
-  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(() => 1), wa, mode, pull));   // held during calibration pulses
-  if (mode === 'mixed') {   // how much of the asked-for sideways force this step's thrusts actually make
+  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(() => 1), wa, flyMode(), pull));   // held during calibration pulses
+  if (flyMode() === 'mixed') {   // how much of the asked-for sideways force this step's thrusts actually make
     const dem = Math.hypot(wa[0], wa[1]);
     if (dem > 0.2) {
       const gx = rows.reduce((s, r, j) => s + r.col[0] * u[j], 0), gy = rows.reduce((s, r, j) => s + r.col[1] * u[j], 0);
@@ -186,7 +191,7 @@ function allocate(w, cm) {
 }
 
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
-function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * run('throttleCurve', u, c.curve || 0); }
+function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * steadyX(u, S.battV) ** 2; }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
 function updateServoBelief(dt) {
   for (const j of joints()) {
@@ -197,7 +202,7 @@ function updateServoBelief(dt) {
   }
   if (joints().length) model = massProps('model');   // parts on joints move the CoG the controller believes in
 }
-function hubState(R) { const hub = sub(S.p, m3v(R, truth.c)); const vh = sub(S.v, m3v(R, crs(S.w, truth.c))); return { hub, vh }; }
+function hubState() { return { hub: S.p, vh: S.v }; }
 function control(dt) {
   senseAndEstimate(dt);
   updateServoBelief(dt);
@@ -214,7 +219,7 @@ function control(dt) {
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);   // vertical has room to trim out an unknown hover throttle
   const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G);
-  const nd = unit(run('thrustAxisTarget', Fd, mode, mixShare()));
+  const nd = unit(run('thrustAxisTarget', Fd, flyMode(), mixShare()));
   let psi = setpoint.yaw * D2R;
   if (thr && thr.phase === 'recover') { const bx = m3v(R, [1, 0, 0]); psi = Math.atan2(bx[1], bx[0]); }   // catching a throw: get upright first, turn to the heading later
   const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(axis, [1, 0, 0])));
@@ -222,131 +227,171 @@ function control(dt) {
   ctl.eAtt = nrm(eR);
   for (let i = 0; i < 3; i++) ctl.iAtt[i] = clamp(ctl.iAtt[i] + eR[i] * dt, -0.5, 0.5);
   const tau = run('attitudeControl', eR, w, ctl.iAtt, cm.J);
-  const f = run('forceDemand', m3v(RT, Fd), axis, mode);
+  const f = run('forceDemand', m3v(RT, Fd), axis, flyMode());
   ctl.wDes = [f[0], f[1], f[2], tau[0], tau[1], tau[2]];
   allocate(ctl.wDes, cm);
 }
 
 /* ───────── physics ───────── */
 const PDT = 0.0005;
-function contactPoints() {   // where the airframe can touch the ground, with parts where their joints put them
-  const pts = [[0, 0, -0.03]];
+// Where the airframe can touch the ground: rest points on the body that carries them (posed each step).
+function contactPoints() {
+  const on = c => (MB && MB.of.get(c.id)) || 0;
+  const pts = [{ rest: [0, 0, -0.03], b: 0 }];
   for (const c of cfg.comps) {
-    if (c.type === 'motor' || c.type === 'joint') { const p = posNow(c); pts.push([p[0], p[1], p[2] - 0.03]); }
-    else if (c.type === 'mass') { const p = posNow(c), hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2; pts.push([p[0], p[1], p[2] - hz]); }
-    else if (c.type === 'link') pts.push(posePoint(c, linkTip(c)).p, posNow(c));
+    if (c.type === 'motor' || c.type === 'joint') pts.push({ rest: add(c.pos, [0, 0, -0.03]), b: on(c) });
+    else if (c.type === 'mass') { const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2; pts.push({ rest: add(c.pos, [0, 0, -hz]), b: on(c) }); }
+    else if (c.type === 'link') pts.push({ rest: linkTip(c), b: on(c) }, { rest: c.pos.slice(), b: on(c) });
   }
   return pts;
 }
-let cPts = [[0, 0, -0.03]];
+let cPts = [{ rest: [0, 0, -0.03], b: 0 }];
 const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // prop radius [m]
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area)
-  const parts = [{ p: [0, 0, 0], area: 0.12 * 0.12 }];
-  for (const c of cfg.comps) if (c.type === 'mass') parts.push({ p: posNow(c), area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
+  const parts = [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
+  for (const c of cfg.comps) if (c.type === 'mass') parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
   return parts;
 }
-function crash(why) { if (S.crashed) return; S.crashed = why; for (const a of act.values()) a.Tcmd = 0; onCrash(); }
+function crash(why) { if (S.crashed) return; S.crashed = why; for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } onCrash(); }
 function windVec() { return [envr.wind * cosd(envr.windDir), envr.wind * sind(envr.windDir), 0]; }
 
-// Forces (world) and torques (body, about the CoG) from the rotors and their downwash on the frame.
-// Used by the physics each step, and by trueB() to linearize the real airframe for comparison.
-function rotorLoads(rotors, R, RT, wv, record) {
-  let F = [0, 0, 0], tau = [0, 0, 0];
-  for (const ro of rotors) {
-    const r = sub(ro.p, truth.c);
-    const vRotor = add(S.v, m3v(R, crs(S.w, r)));
-    const u = add(m3v(RT, sub(wv, vRotor)), run('wakeVelocity', ro.p, rotors.filter(o => o !== ro)));   // air past this disc
-    const ua = dot(u, ro.d);
-    const h = add(S.p, m3v(R, r))[2];
-    const ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h);
-    if (record) { ro.st.k = ro.T > 1e-6 ? ae.T / ro.T : 1; ro.st.Teff = ae.T; }
-    const rw = run('rotorWrench', ro.d, r, ae.T, ro.c.spin, ro.c.kappa);
-    tau = add(tau, add(rw.tau, crs(r, ae.H))); F = add(F, m3v(R, add(rw.F, ae.H)));
-  }
-  for (const part of washParts()) {   // downwash on the hub and rigid masses
-    const fw = run('wakeLoad', run('wakeVelocity', part.p, rotors), part.area);
-    F = add(F, m3v(R, fw)); tau = add(tau, crs(sub(part.p, truth.c), fw));
-  }
-  return { F, tau };
+/* ───────── motors ───────── */
+// Every motor is a brushless motor, ESC and prop sized from its card: max thrust at V_NOM with the tips at
+// 180 m/s, 80% of the voltage spent on back-EMF at full thrust (the rest across the windings), the prop's
+// torque/thrust ratio, and a prop-plus-rotor inertia that gives the card's spin-up time near hover. The ESC
+// limits the current to twice the full-thrust current.
+const V_NOM = 16;   // pack voltage the max thrust is rated at (a charged 4S pack under load)
+function motorParams(c) {
+  const Om = 180 / propR(c), kT = c.tmax / (Om * Om), kap = Math.max(1e-4, c.kappa), kQ = kap * kT, Qm = kap * c.tmax;
+  const Ke = 0.8 * V_NOM / Om, R = 0.2 * V_NOM * Ke / Qm, Oh = Math.sqrt(0.4) * Om;
+  return { Om, kT, kQ, Ke, R, J: Math.max(0.005, c.tau || 0.03) * (Ke * Ke / R + 2 * kQ * Oh), iMax: 2 * Qm / Ke };
 }
-function dynamics(dt) {
-  if (thr && thr.phase === 'hand') { S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.acc = [0, 0, 0]; S.wdot = [0, 0, 0]; return; }   // held still in the hand
-  const R = qmat(S.q), RT = m3T(R);
-  let F = run('gravity', truth.m, G), tau = [0, 0, 0];
-  const wv = windVec(), acts = actuators();
-  // Battery: the pack sags as it drains and under load.
-  let load = 0, cap = 0; for (const c of acts) { load += act.get(c.id).T; cap += c.tmax; }
-  S.battK = run('batteryModel', S.batt, cap ? load / cap : 0, dt);
-  // Servo joints: the horn moves at the servo's speed, the part follows through the linkage. Moving parts
-  // shift the CoG (the world CoG itself stays put: that's momentum), and turning them takes a torque the
-  // frame feels the other way round.
-  const js = joints();
-  if (js.length) {
-    let react = [0, 0, 0];
-    for (const j of js) {
-      const st = jst.get(j.id); if (!st) continue;
-      const th0 = st.th, rate0 = st.rate || 0;
-      st.thR = run('servoResponse', st.thR ?? st.th, jointTarget(j) + (j.offset || 0) * D2R, j.range * D2R, j.rate * D2R, dt);
-      st.th = run('servoLinkage', st.th, st.thR, j.lag || 0, dt);
-      st.rate = (st.th - th0) / dt; st.acc = (st.rate - rate0) / dt;
-      if (Math.abs(st.acc) > 1e-6) {   // reaction: −I_axis·θ̈ about the joint's current axis
-        const P = poseOf(j), a = m3v(P.R, jointAxis(j));
-        let Ia = 0;
-        for (const c of descendants(j)) {
-          if (!(c.mass > 0) || c.type === 'hang') continue;
-          const at = c.type === 'link' ? posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2))).p : posNow(c);
-          const r = sub(at, P.p), rp = sub(r, scl(a, dot(r, a)));
-          const Iown = c.type === 'mass' ? dot(a, m3v(shapeI(c), a)) : c.type === 'link' ? dot(a, m3v(m3m(m3m(poseOf(c).R, rodI(c)), m3T(poseOf(c).R)), a)) : 0;
-          Ia += c.mass * dot(rp, rp) + Iown;
-        }
-        react = add(react, scl(a, -Ia * st.acc));
-      }
-    }
-    truth = massProps('truth'); cPts = contactPoints();
-    tau = add(tau, react);
+// Steady prop speed for throttle u at pack voltage V, as a fraction of the speed at max thrust. With the
+// sizing above, k_QΩ² + (K_e²/R)Ω = K_e·uV/R becomes x² + 4x = 5uV/V_NOM for every motor.
+const steadyX = (u, V) => -2 + Math.sqrt(4 + 5 * Math.max(0, u) * V / V_NOM);
+// How much the real throttle-to-thrust curve bends, in the controller's terms (thrust ∝ (1−k)u + ku²).
+const trueBend = () => clamp((0.5 - (steadyX(0.5, S.battV) / steadyX(1, S.battV)) ** 2) / 0.25, 0, 1);
+
+// The air each rotor meets (wind, its own motion, the other rotors' wash) and what that does to its thrust.
+function rotorAir(rotors, K, R, RT, wv) {
+  for (const ro of rotors) ro.va = sub(m3v(RT, wv), mbPointVel(K, ro.b, ro.p));   // oncoming air at each disc
+  for (const ro of rotors) {
+    const u = add(ro.va, run('wakeVelocity', ro.p, rotors.filter(o => o !== ro)));   // plus the other rotors' wash
+    const ua = dot(u, ro.d);
+    const h = add(S.p, m3v(R, ro.p))[2];
+    ro.ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h);
+    ro.st.k = ro.T > 1e-6 ? ro.ae.T / ro.T : 1; ro.st.Teff = ro.ae.T;
   }
-  // Rotors: still-air thrust from the motors, then what the airflow does to it.
+}
+
+function dynamics(dt) {
+  if (thr && thr.phase === 'hand') {   // held still in the hand
+    S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.acc = [0, 0, 0]; S.wdot = [0, 0, 0];
+    for (const a of act.values()) { a.Omega = 0; a.T = 0; a.i = 0; }
+    S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
+    return;
+  }
+  if (thr && thr.phase === 'toss') {   // the throwing hand: a steady push up to speed and spin, joints held
+    const T = thr.toss, a = scl(T.dv, 1 / T.dur), al = scl(T.dw, 1 / T.dur), R = qmat(S.q), RT = m3T(R);
+    for (const x of act.values()) { x.Omega = 0; x.T = 0; x.i = 0; }
+    S.acc = a; S.wdot = al;
+    S.v = add(S.v, scl(a, dt)); S.p = add(S.p, scl(S.v, dt)); S.w = add(S.w, scl(al, dt));
+    const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
+    T.t += dt;
+    const vb = m3v(RT, S.v), K = mbKinematics(cat6(S.w, vb));
+    S.mb = { K, acc: mbAccHeld(K, cat6(al, sub(m3v(RT, a), crs(S.w, vb)))) };
+    return;
+  }
+  const R = qmat(S.q), RT = m3T(R), wv = windVec(), acts = actuators(), N = MB.bodies.length;
+  const K = mbKinematics(cat6(S.w, m3v(RT, S.v)));
+  const posed = (b, rest) => add(K.ob[b], m3v(K.Rb[b], sub(rest, MB.bodies[b].pivot)));   // a rest point on body b, now (frame axes)
+  const fext = MB.bodies.map(() => [0, 0, 0, 0, 0, 0]);
+  const push = (b, F, P) => { fext[b] = add6v(fext[b], mbForce(K, b, F, P)); };   // force F (frame axes) at P
+  const pushT = (b, T) => { fext[b] = add6v(fext[b], mbTorque(K, b, T)); };
+  const toWorld = P => add(S.p, m3v(R, P)), velW = (b, P) => m3v(R, mbPointVel(K, b, P));
+
+  // Gravity on every body at its own centre of mass.
+  MB.bodies.forEach((B, i) => { if (B.I.m > 0) push(i, m3v(RT, run('gravity', B.I.m, G)), posed(i, add(B.pivot, B.I.c))); });
+
+  // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
+  let Ibatt = 0.5;   // avionics
   const rotors = acts.map(c => {
-    const st = act.get(c.id);
-    st.T = run('motorResponse', st.T, st.Tcmd, c.tmax, c.tau, dt);
-    const n = rotorNow(c);
-    return { c, st, p: n.p, d: n.d, T: st.T * c.health / 100 * S.battK, R: propR(c) };
+    const st = act.get(c.id), mp = motorParams(c);
+    const md = run('motorDynamics', st.Omega || 0, st.u || 0, S.battV, mp, dt);
+    st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
+    Ibatt += (st.u || 0) * md.i;
+    const b = MB.of.get(c.id) || 0;
+    return { c, st, b, p: posed(b, c.pos), d: m3v(K.Rb[b], actDir(c)), T: md.T * c.health / 100, R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
   });
-  const ld = rotorLoads(rotors, R, RT, wv, true);
-  F = add(F, ld.F); tau = add(tau, ld.tau);
+  S.battV = run('batteryModel', S.batt, Math.max(0, Ibatt), dt);
+  S.battK = steadyX(1, S.battV) ** 2;
+  S.battI = Ibatt;
+
+  // Rotors in the air: inflow, wake interaction, ground effect, then the loads on whatever carries them.
+  rotorAir(rotors, K, R, RT, wv);
+  for (const ro of rotors) {
+    const Tw = Math.max(ro.ae.T, 1e-6);
+    const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, ro.c.spin, ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
+    push(ro.b, add(rw.F, ro.ae.H), ro.p);
+    const h = scl(ro.d, ro.c.spin * ro.J * ro.Om);                                  // the spinning prop's angular momentum
+    pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
+  }
   S.rotors = rotors;
-  const dr = run('bodyDrag', S.v, wv, S.w); F = add(F, dr.F); tau = add(tau, dr.tau);
+  for (const part of washParts()) { const P = posed(part.b, part.rest); push(part.b, run('wakeLoad', run('wakeVelocity', P, rotors), part.area), P); }
+  const dr = run('bodyDrag', S.v, wv, S.w); push(0, m3v(RT, dr.F), [0, 0, 0]); pushT(0, dr.tau);
+
+  // Hanging payloads on cables.
   for (const c of cfg.comps) {
     if (c.type !== 'hang') continue; const st = pend.get(c.id); if (!st) continue;
-    const r = sub(posNow(c), truth.c); const aw = add(S.p, m3v(R, r)); const va = add(S.v, m3v(R, crs(S.w, r)));
+    const b = MB.of.get(c.id) || 0, P = posed(b, c.pos), aw = toWorld(P), va = velW(b, P);
     const dv = sub(st.p, aw), L = nrm(dv); let Fc = [0, 0, 0], Tn = 0;
-    if (L > 1e-9) {
-      const n = scl(dv, 1 / L);
-      Tn = run('cableTension', L - c.length, dot(sub(st.v, va), n), c.mass);
-      Fc = scl(n, Tn);
-    }
-    st.Tn = Tn; F = add(F, Fc); tau = add(tau, crs(r, m3v(RT, Fc)));
-    const pb = add(m3v(RT, sub(st.p, S.p)), truth.c);                   // payload in the body frame, for the downwash
-    const wash = m3v(R, run('wakeLoad', run('wakeVelocity', pb, rotors), Math.PI * payloadR(c) ** 2));
+    if (L > 1e-9) { const n = scl(dv, 1 / L); Tn = run('cableTension', L - c.length, dot(sub(st.v, va), n), c.mass); Fc = scl(n, Tn); }
+    st.Tn = Tn; push(b, m3v(RT, Fc), P);
+    const wash = m3v(R, run('wakeLoad', run('wakeVelocity', m3v(RT, sub(st.p, S.p)), rotors), Math.PI * payloadR(c) ** 2));
     const Fp = add(add(add(scl(Fc, -1), run('gravity', c.mass, G)), run('payloadDrag', st.v, wv)), wash);
     st.v = add(st.v, scl(Fp, dt / c.mass)); st.p = add(st.p, scl(st.v, dt));
     if (st.p[2] < 0.03) { st.p[2] = 0.03; if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
   }
+  // Ground.
   for (const pt of cPts) {
-    const r = sub(pt, truth.c); const pw = add(S.p, m3v(R, r)); if (pw[2] >= 0) continue;
-    const vel = add(S.v, m3v(R, crs(S.w, r)));
+    if (pt.b >= N) continue;
+    const P = posed(pt.b, pt.rest), pw = toWorld(P); if (pw[2] >= 0) continue;
+    const vel = velW(pt.b, P);
     if (vel[2] < -3 && !S.crashed) crash(`Hit the ground at ${(-vel[2]).toFixed(1)} m/s.`);
-    const fw = run('groundContact', -pw[2], vel); F = add(F, fw); tau = add(tau, crs(r, m3v(RT, fw)));
+    push(pt.b, m3v(RT, run('groundContact', -pw[2], vel)), P);
   }
-  const rb = run('rigidBody', F, tau, truth.m, truth.J, truth.Jinv, S.w);
-  S.acc = rb.a; S.wdot = rb.wdot;                        // what the accelerometers feel next
-  S.v = add(S.v, scl(rb.a, dt)); S.p = add(S.p, scl(S.v, dt));
-  S.w = add(S.w, scl(rb.wdot, dt));
+  // Servos: each sees its command after its delay, drives toward it along its torque–speed line, and stops
+  // hard a little past its travel.
+  const tauJ = new Array(N).fill(0);
+  for (let i = 1; i < N; i++) {
+    const j = MB.bodies[i].j, st = jst.get(j.id); if (!st) continue;
+    const Rg = j.range * D2R, off = (j.offset || 0) * D2R;
+    if (!st.dq) st.dq = [];
+    st.dq.push([S.t, clamp(jointTarget(j), -Rg, Rg)]);
+    while (st.dq.length > 1 && st.dq[1][0] <= S.t - (j.lag || 0) + 1e-9) st.dq.shift();
+    st.thR = st.dq[0][1] + off;
+    let t = run('servoTorque', st.thR - st.th, st.rate || 0, { stall: j.torque ?? 0.8, speed: Math.max(1, j.rate) * D2R, band: 3 * D2R });
+    const x = st.th - off, over = Math.abs(x) - (Rg + 5 * D2R);
+    if (over > 0) t += -Math.sign(x) * 50 * over - 0.5 * (st.rate || 0);
+    tauJ[i] = t; st.tq = t;
+  }
+  // Everything together: the frame and every joint, solved as one articulated body.
+  const sol = mbSolve(K, fext, tauJ);
+  const al = top3(sol.a0), acl = add(bot3(sol.a0), crs(S.w, m3v(RT, S.v)));   // spatial → ordinary acceleration of the hub
+  S.acc = m3v(R, acl); S.wdot = al;
+  S.v = add(S.v, scl(S.acc, dt)); S.p = add(S.p, scl(S.v, dt));
+  S.w = add(S.w, scl(al, dt));
   const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
+  for (let i = 1; i < N; i++) {
+    const st = jst.get(MB.bodies[i].j.id); if (!st) continue;
+    st.acc = sol.qdd[i]; st.rate = (st.rate || 0) + st.acc * dt; st.th += st.rate * dt;
+  }
+  if (N > 1) truth = massProps('truth');
+  S.mb = { K: mbKinematics(cat6(S.w, m3v(m3T(qmat(S.q)), S.v))), acc: sol.acc };   // for the sensors
   if (!S.crashed) {
     const up = dot(m3v(R, nb), [0, 0, 1]);
-    if (!isFinite(S.p[0] + S.p[1] + S.p[2] + S.q[0])) { crash('The state became invalid (NaN). Check your edited formulas.'); S.p = [setpoint.x, setpoint.y, 0.2]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.q = [1, 0, 0, 0]; }
+    if (!isFinite(S.p[0] + S.p[1] + S.p[2] + S.q[0] + S.w[0])) { crash('The state became invalid (NaN). Check your edited formulas.'); S.p = [setpoint.x, setpoint.y, 0.2]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.q = [1, 0, 0, 0]; S.mb = null; }
     else if (up < -0.17 && !thr) crash('Flipped over. The actuators could not hold the attitude.');
     else if (nrm(S.w) > 35) crash('Spun out of control. Check yaw authority and spin directions.');
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
@@ -356,18 +401,26 @@ function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynami
 
 function resetSim() {
   thr = null;
+  buildBodies();
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
-  const R = qmat(S.q); S.p = add([setpoint.x, setpoint.y, setpoint.z], m3v(R, truth.c)); S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
+  S.p = [setpoint.x, setpoint.y, setpoint.z]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
-  S.batt = {}; S.battK = 1;
+  S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0); S.battK = steadyX(1, S.battV) ** 2;
+  S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   resetEstimation(); resetLearning();
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < 4; k++) {   // settle into hover: motors at their steady speed, servos where they're told
     control(0);
-    for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; }
-    for (const j of joints()) { const st = jst.get(j.id), t = jointTarget(j); st.th = st.thR = t + (j.offset || 0) * D2R; st.pst = {}; st.thHat = t; st.rate = 0; st.acc = 0; }
+    let I = 0.5;
+    for (const c of actuators()) {
+      const st = act.get(c.id), mp = motorParams(c);
+      st.Omega = steadyX(st.u, S.battV) * mp.Om; st.T = mp.kT * st.Omega ** 2; st.i = mp.kQ * st.Omega ** 2 / mp.Ke; I += st.u * st.i;
+    }
+    S.battV = run('batteryModel', S.batt, I, 0); S.battK = steadyX(1, S.battV) ** 2;
+    for (const j of joints()) { const st = jst.get(j.id), t = jointTarget(j); st.th = st.thR = t + (j.offset || 0) * D2R; st.pst = {}; st.thHat = t; st.rate = 0; st.acc = 0; st.dq = []; }
   }
   truth = massProps('truth'); model = massProps('model'); cPts = contactPoints();
+  S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
   thr = null; if (launchMode === 'throw') startThrow();
 }

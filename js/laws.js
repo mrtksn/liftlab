@@ -14,12 +14,18 @@
 
 // ═════════════ Physics (the plant) ═════════════
 
-function rigidBody(F, tau, m, J, Jinv, w) {
-  // F: total force on the rigid body, world frame [N]
-  // tau: total torque about the center of gravity, body frame [N·m]
-  const a = scl(F, 1 / m);                               // Newton: linear acceleration, world
-  const wdot = m3v(Jinv, sub(tau, crs(w, m3v(J, w))));  // Euler: angular acceleration, body
-  return { a, wdot };
+function rigidBody(I, a, v) {
+  // Newton–Euler for one body of the airframe, in its own axes, as 6-vectors [angular; linear]:
+  //   f = I·a + v ×* (I·v)
+  // I: { m: mass, c: centre of mass, Ic: inertia about the centre of mass }; a: spatial acceleration;
+  // v: spatial velocity. f is the net force and torque the body needs. The simulator chains this through
+  // every servo joint (recursive Newton–Euler) and solves for the accelerations.
+  const w = [v[0], v[1], v[2]], l = [v[3], v[4], v[5]], mc = scl(I.c, I.m);
+  const Iv = (x) => { const xw = [x[0], x[1], x[2]], xl = [x[3], x[4], x[5]];
+    return [...add(sub(m3v(I.Ic, xw), crs(mc, crs(I.c, xw))), crs(mc, xl)), ...sub(scl(xl, I.m), crs(mc, xw))]; };
+  const Ia = Iv(a), h = Iv(v), hn = [h[0], h[1], h[2]], hf = [h[3], h[4], h[5]];
+  const vx = [...add(crs(w, hn), crs(l, hf)), ...crs(w, hf)];     // v ×* (I v): gyroscopic and centripetal terms
+  return Ia.map((x, i) => x + vx[i]);
 }
 
 function gravity(m, g) {
@@ -42,28 +48,9 @@ function jointRotation(axis, theta) {
           z * x * C - y * s, z * y * C + x * s, c + z * z * C];
 }
 
-function motorResponse(T, Tcmd, tmax, tau, dt) {
-  const target = clamp(Tcmd, 0, tmax);                   // props can't push backwards or exceed max
-  return T + (target - T) * Math.min(1, dt / tau);       // first-order spin-up lag
-}
 
-function throttleCurve(u, bend) {
-  // Throttle (0–1) to thrust as a fraction of max. Props make thrust roughly with RPM², so real motors
-  // bend upward: bend 0 is a straight line, 1 is thrust ∝ throttle². The controller isn't told this.
-  const x = clamp(u, 0, 1);
-  return (1 - bend) * x + bend * x * x;
-}
 
-function servoLinkage(theta, horn, lag, dt) {
-  // The rotor follows the servo horn through the servo's own control loop and linkage: a first-order lag.
-  return lag > 0 ? theta + (horn - theta) * Math.min(1, dt / lag) : horn;
-}
 
-function servoResponse(theta, target, range, rate, dt) {
-  const goal = clamp(target, -range, range);             // mechanical limit
-  const step = rate * dt;                                // maximum servo speed
-  return theta + clamp(goal - theta, -step, step);
-}
 
 function bodyDrag(v, wind, w) {
   const cd = 0.1;                                        // frame drag [N per m/s of airspeed]; the rotors add their own (rotorAero)
@@ -90,16 +77,49 @@ function groundContact(depth, v) {
 
 // ─── Airflow. The simulator uses these to decide what really happens; the controller never sees them.
 
+function motorDynamics(Omega, u, V, p, dt) {
+  // A brushless motor and its prop. The ESC puts u·V across the motor; the current is what that voltage
+  // leaves after the back-EMF, through the winding resistance (it may go negative: active braking).
+  //   i = (u·V − Ke·Ω)/R,   τ = Ke·i,   J·dΩ/dt = τ − kQ·Ω²,   thrust = kT·Ω²,   prop drag torque = kQ·Ω²
+  // p: { Ke, R, J, kT, kQ, iMax }. Returns the new speed, current, motor torque and still-air thrust.
+  const i = clamp((u * V - p.Ke * Omega) / p.R, -0.5 * p.iMax, p.iMax);
+  const tau = p.Ke * i;
+  const O = Math.max(0, Omega + (tau - p.kQ * Omega * Omega) / p.J * dt);   // props don't spin backwards
+  return { Omega: O, i, tau, T: p.kT * O * O };
+}
+
+function servoTorque(err, rate, p) {
+  // A hobby servo is a geared DC motor with a position loop. Its torque falls linearly with speed:
+  //   τ = τ_stall · (sat(err / band) − θ̇ / ω_no-load)
+  // So it can't beat its no-load speed, can't push harder than its stall torque, and a heavy or
+  // aerodynamically loaded arm drags it off its target. err: target − angle [rad]; rate: angle rate [rad/s];
+  // p: { stall [N·m], speed: no-load speed [rad/s], band: error that gives full power [rad] }.
+  return p.stall * (clamp(err / p.band, -1, 1) - rate / p.speed);
+}
+
+function batteryModel(st, current, dt) {
+  // A 4-cell LiPo: open-circuit voltage falls as it drains, and the pack sags under current through its
+  // internal resistance. current: total draw [A] (negative when braking motors push charge back).
+  const cells = 4, capacity = 1.3 * 3600, rInt = 0.06;               // [C], [Ω]
+  if (st.soc === undefined) st.soc = 1;
+  st.soc = clamp(st.soc - current * dt / capacity, 0, 1);
+  return cells * (3.5 + 0.7 * st.soc) - rInt * current;             // terminal voltage [V]
+}
+
 function wakeVelocity(point, rotors) {
-  // Air velocity that the rotors' wakes induce at `point`, body frame. rotors: [{ p, d, T, R }]
-  // (p: disc center, d: thrust axis, T: thrust [N], R: prop radius [m]).
+  // Air velocity that the rotors' wakes induce at `point`, body frame. rotors: [{ p, d, T, R, va }]
+  // (p: disc center, d: thrust axis, T: thrust [N], R: prop radius [m], va: oncoming air at the disc, body
+  // frame). Wind and forward flight blow the wake sideways as it travels down, so in forward flight the
+  // rear rotors fly into the front rotors' wash.
   let w = [0, 0, 0];
   for (const r of rotors) {
     if (r.T <= 0) continue;
     const vh = Math.sqrt(r.T / (2 * 1.225 * Math.PI * r.R * r.R));  // induced velocity at the disc (momentum theory)
     const rel = sub(point, r.p), s = -dot(rel, r.d);               // how far downstream of the disc
     if (s < -r.R) continue;                                        // well above the disc: no effect
-    const radial = nrm(add(rel, scl(r.d, s)));
+    const va = r.va || [0, 0, 0], vs = sub(va, scl(r.d, dot(va, r.d)));   // crosswind at the disc
+    const drift = scl(vs, Math.max(0, s) / (1.5 * vh));            // how far the wake has been blown by this depth
+    const radial = nrm(sub(add(rel, scl(r.d, s)), drift));
     const Rw = s > 0 ? r.R * (0.71 + 0.29 * Math.exp(-s / r.R)) : r.R;   // the wake contracts to ~0.71 R
     const edge = clamp((1.1 * Rw - radial) / (0.2 * Rw), 0, 1);          // soft wake boundary
     if (edge <= 0) continue;
@@ -122,6 +142,8 @@ function rotorAero(T, R, vAxial, vInPlane, h) {
   let k = clamp(1 - 0.5 * (vAxial + vi - vh) / vh, 0.3, 1.3);       // more air through the disc than in hover costs thrust
   const hh = Math.max(h, R / 2);
   k *= Math.min(1.3, 1 / (1 - (R / (4 * hh)) ** 2));                 // ground effect (Cheeseman–Bennett)
+  const x = -vAxial / vh;                                           // descending into its own wake…
+  k *= 1 - 0.3 * Math.exp(-(((x - 1.2) / 0.45) ** 2)) * Math.exp(-((ve / vh) ** 2));   // …vortex ring state costs up to 30%, less when moving sideways
   const cH = 0.03;                                                  // rotor drag from blade flapping [1/(m/s)]
   return { T: T * k, H: scl(vInPlane, cH * T) };
 }
@@ -131,14 +153,6 @@ function wakeLoad(w, area) {
   return scl(w, 0.5 * 1.225 * 1.1 * area * nrm(w));
 }
 
-function batteryModel(st, load, dt) {
-  // load: share of the motors' combined maximum thrust in use (0–1). Returns the thrust factor.
-  const endurance = 360;                                            // seconds of flight at a 40% load
-  if (st.soc === undefined) st.soc = 1;
-  st.soc = Math.max(0, st.soc - (load / 0.4) * dt / endurance);
-  const v = 0.86 + 0.14 * st.soc - 0.06 * load;                     // pack voltage vs full, sagging under load
-  return v * v;                                                     // the same command gives thrust ∝ voltage²
-}
 
 // ═════════════ Sensors (what the hardware reports) ═════════════
 // Each sensor keeps its own state in `st` between samples (biases, drifts). The simulator supplies the
@@ -151,7 +165,12 @@ function imuModel(w, f, vib, p, st, dt) {
   if (!st.bg) {                                          // turn-on bias, different every power-up
     st.bg = [0, 1, 2].map(() => randn() * p.gyroBias);
     st.ba = [0, 1, 2].map(() => randn() * p.accBias);
+    // each axis has its own gain error, and the axes aren't quite square to each other or to the package
+    const mis = () => { const e = [0, 1, 2].map(() => randn() * (p.misalign || 0)); return [1, -e[2], e[1], e[2], 1, -e[0], -e[1], e[0], 1]; };
+    st.Mg = mis().map((v, k) => k % 4 === 0 ? 1 + randn() * (p.scaleErr || 0) : v);
+    st.Ma = mis().map((v, k) => k % 4 === 0 ? 1 + randn() * (p.scaleErr || 0) : v);
   }
+  w = m3v(st.Mg, w); f = m3v(st.Ma, f);
   for (let i = 0; i < 3; i++) st.bg[i] += randn() * p.gyroDrift * Math.sqrt(dt);   // gyro bias random walk
   const gyro = [0, 1, 2].map(i => clamp(w[i] + vib.w[i] + st.bg[i] + randn() * p.gyroNoise, -p.gyroRange, p.gyroRange));
   const accel = [0, 1, 2].map(i => clamp(f[i] + vib.a[i] + st.ba[i] + randn() * p.accNoise, -p.accRange, p.accRange));
@@ -160,8 +179,12 @@ function imuModel(w, f, vib, p, st, dt) {
 
 function magModel(b, interference, p, st) {
   // b: Earth's field in the sensor frame (strength 1); interference: field from nearby motor currents
-  if (!st.hi) st.hi = [0, 1, 2].map(() => randn() * p.hardIron);   // hard-iron offset from the airframe
-  return [0, 1, 2].map(i => b[i] + st.hi[i] + interference[i] + randn() * p.noise);
+  if (!st.hi) {
+    st.hi = [0, 1, 2].map(() => randn() * p.hardIron);   // hard-iron offset from the airframe
+    st.si = [0, 1, 2].flatMap(i => [0, 1, 2].map(j => (i === j ? 1 : 0) + randn() * (p.softIron || 0)));   // soft iron: nearby steel bends the field
+  }
+  const bb = m3v(st.si, b);
+  return [0, 1, 2].map(i => bb[i] + st.hi[i] + interference[i] + randn() * p.noise);
 }
 
 function baroModel(alt, p, st, dt) {
@@ -308,9 +331,12 @@ function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
 
 // ═════════════ Identification (learning what the actuators do) ═════════════
 
-function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags) {
+function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags, mot) {
   // Recursive least squares. Learns B, what each actuator input does to the drone, from flight data:
-  //   Δ[f; dω/dt] ≈ B · Δu
+  //   Δ[f; dω/dt] ≈ B · Δu + [0; B₂] · Δ(dx/dt)
+  // B₂: a rotor speeding up or slowing down twists the frame the other way (x ≈ √thrust, its speed). It is
+  // learned alongside so those twists don't get mistaken for B. mot: each input's motor command and basis
+  // factor (as for identifyThrow).
   // Both sides are band-passed (0.3–12 Hz), so it learns from changes and steady offsets such as drag
   // or trim can't leak into B.
   // u: inputs: thrust fractions, times (1, cos θ, sin θ) for every joint a motor sits on
@@ -319,26 +345,38 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags) {
   // lags: each input's motor lag [s], from the actuator tests (35 ms assumed until then).
   // Returns B: 6 rows (ax ay az αx αy αz) × inputs.
   const lpHz = 12, hpHz = 0.3, pMax = 2;                    // band [Hz], covariance cap
-  const n = u.length;
+  const n = u.length, m = mot ? 2 * n : n;
   const k = hz => dt / (dt + 1 / (2 * Math.PI * hz));
-  if (dt <= 0) return { B: st.th || init };
+  const out = () => ({ B: st.th.map(row => row.slice(0, n)), B2: m > n ? st.th.slice(3).map(row => row.slice(n)) : null });
+  if (dt <= 0) return st.th ? out() : { B: init };
   if (!st.P) {                                                   // start the filters from the first real reading
-    st.th = init.map(row => row.slice());
-    st.P = eye(n).map(row => row.map(x => x * 2));
-    st.ua = u.slice(); st.xl = u.slice(); st.xs = u.slice(); st.yl = f.concat([0, 0, 0]); st.ys = st.yl.slice();
+    st.th = init.map(row => row.concat(new Array(m - n).fill(0)));
+    st.P = eye(m).map(row => row.map(x => x * 2));
+    st.ua = u.slice(); st.um = mot ? mot.v.slice() : []; st.sp = new Array(n).fill(0);
+    const x0 = u.concat(new Array(m - n).fill(0));
+    st.xl = x0.slice(); st.xs = x0.slice(); st.yl = f.concat([0, 0, 0]); st.ys = st.yl.slice();
     st.wl = w.slice(); st.n = 0;
   }
-  for (let j = 0; j < n; j++) st.ua[j] += (u[j] - st.ua[j]) * Math.min(1, dt / ((lags && lags[j]) || 0.035));   // what the motors are doing now
+  const raw = new Array(m).fill(0);
+  for (let j = 0; j < n; j++) {
+    const lag = Math.min(1, dt / ((lags && lags[j]) || 0.035));
+    st.ua[j] += (u[j] - st.ua[j]) * lag; raw[j] = st.ua[j];                  // what the motors are doing now
+    if (m > n) {
+      st.um[j] += (mot.v[j] - st.um[j]) * lag;
+      const sp = Math.sqrt(Math.max(0, st.um[j])) * mot.phi[j];            // its speed, as a fraction of full
+      raw[n + j] = (sp - st.sp[j]) / dt; st.sp[j] = sp;
+    }
+  }
   const wPrev = st.wl.slice();
   st.wl = st.wl.map((v, i) => v + k(lpHz) * (w[i] - v));
   const alpha = st.wl.map((v, i) => (v - wPrev[i]) / dt);                     // angular acceleration
   const fHub = sub(sub(f, crs(alpha, r)), crs(st.wl, crs(st.wl, r)));         // remove the IMU's lever-arm swing
   const yRaw = [...fHub, ...alpha];
-  st.xl = st.xl.map((v, j) => v + k(lpHz) * (st.ua[j] - v));
+  st.xl = st.xl.map((v, j) => v + k(lpHz) * (raw[j] - v));
   st.yl = st.yl.map((v, i) => i < 3 ? v + k(lpHz) * (yRaw[i] - v) : alpha[i - 3]);   // alpha is already filtered once, like the inputs
   st.xs = st.xs.map((v, j) => v + k(hpHz) * (st.xl[j] - v));
   st.ys = st.ys.map((v, i) => v + k(hpHz) * (st.yl[i] - v));
-  if (++st.n * dt < 1.5) return { B: st.th };                              // let the filters settle first
+  if (++st.n * dt < 1.5) return out();                                     // let the filters settle first
   const x = st.xl.map((v, j) => v - st.xs[j]), y = st.yl.map((v, i) => v - st.ys[i]);
   const P = st.P, Px = P.map(row => row.reduce((s, v, j) => s + v * x[j], 0));
   const lambda = Math.exp(-dt / memory), den = lambda + x.reduce((s, v, j) => s + v * Px[j], 0);
@@ -349,7 +387,7 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags) {
   let trace = 0;
   for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) { P[a][b] = (P[a][b] - K[a] * Px[b]) / lambda; if (a === b) trace += P[a][a]; }
   if (trace > pMax * n) for (const row of P) for (let b = 0; b < n; b++) row[b] *= pMax * n / trace;   // don't blow up without excitation
-  return { B: st.th };
+  return out();
 }
 
 function identifyMotorResponse(wins, dt) {
@@ -422,63 +460,85 @@ function identifyServoResponse(wins, dt) {
   return { rate: best.rate, lag: best.lag, gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
 }
 
-function identifyThrow(st, u, f, w, vb, dt, solve) {
+function identifyThrow(st, u, f, w, vb, dt, solve, mot) {
   // Batch least squares over a free fall, for a drone that knows nothing about itself (after Blaha,
   // Smeur & Remes, TU Delft 2024). The motors start from zero and the drone is falling, so the
   // accelerometer feels only the rotors plus its own swing around the center of gravity (CoG):
   //   f = B_f · u_τ + ([α]× + [ω]×²) r − d v_b + c_f    r: IMU offset from the CoG, d: drag; both shared by the rows
-  //   α = B_α · u_τ + K (ω_y ω_z, ω_z ω_x, ω_x ω_y) + c_α     K: gyroscopic coupling (inertia ratios)
-  // u_τ is the command through a first-order motor lag τ. Several τ are fitted side by side; the best
-  // fit wins, which also identifies the motor lag. Call every step while falling; solve = true to fit.
-  // Returns B (6 rows × inputs), r [m], tau [s] and how much of the force and rotation it explains.
-  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09], lpHz = 25, skip = 0.03;
-  const n = u.length, nf = 3 * n + 7, nr = n + 4;
+  //   α = B_α · u_τ + B₂ · dx/dt + K (ω_y ω_z, ω_z ω_x, ω_x ω_y) + c_α     K: gyroscopic coupling (inertia ratios)
+  // B₂ is each rotor spinning up or down: the motor's torque pushes the frame back (their G₂). Without it,
+  // pulses from standstill look like a huge yaw effect. This drone doesn't measure prop speed, so it runs a
+  // generic brushless model for each motor (speed x as a fraction of full, back-EMF, a current limit, prop
+  // drag; only its time constant τ unknown): u_τ = x² is the thrust. Each motor's τ is found by trying a
+  // few and keeping what explains the rotation best, one motor at a time, so a big slow rotor and small fast
+  // ones can share a frame. mot: per input, its motor's thrust command v, basis factor phi (inputs are
+  // thrust × (1, cos θ, sin θ) products) and motor number m. Call every step while falling; solve = true to fit.
+  // Returns B (6 rows × inputs), B2 (3 rows), r [m], each motor's lag and how much of the force and rotation it explains.
+  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09, 0.13], lpHz = 25, skip = 0.03;
+  const n = u.length, nf = 3 * n + 7, nr = 2 * n + 4;
   const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
   const k = dt > 0 ? dt / (dt + 1 / (2 * Math.PI * lpHz)) : 0;
   const zeros = (a, b) => b ? Array.from({ length: a }, () => new Array(b).fill(0)) : new Array(a).fill(0);
-  if (!st.fits) {
-    st.fits = taus.map(tau => ({ tau, um: zeros(n), ul: zeros(n),
-      Af: zeros(nf, nf), bf: zeros(nf), Ar: zeros(nr, nr), br: zeros(3, nr) }));
-    st.wl = w.slice(); st.fl = f.slice(); st.yy = zeros(6); st.ys = zeros(6); st.N = 0; st.t = 0;
-  }
-  if (dt > 0) {
+  if (!st.S) { st.S = []; st.wl = w.slice(); st.fl = f.slice(); st.t = 0; }
+  if (dt > 0) {                                                            // record this step
     const wPrev = st.wl;
     st.wl = st.wl.map((v, i) => v + k * (w[i] - v));
     st.fl = st.fl.map((v, i) => v + k * (f[i] - v));
     const a = st.wl.map((v, i) => (v - wPrev[i]) / dt), W = st.wl;       // angular acceleration
     const L = [0, 1, 2].map(i => [0, 1, 2].map(j =>                         // [α]× + [ω]×²
       [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
-    const gyro = [W[1] * W[2], W[2] * W[0], W[0] * W[1]];
     st.t += dt;
-    for (const F of st.fits) {
-      for (let j = 0; j < n; j++) { F.um[j] += (u[j] - F.um[j]) * Math.min(1, dt / F.tau); F.ul[j] += k * (F.um[j] - F.ul[j]); }
-      if (st.t < skip) continue;                                             // let the filters start up
-      for (let i = 0; i < 3; i++) {                                          // force rows share r
-        const phi = zeros(nf);
-        for (let j = 0; j < n; j++) phi[i * n + j] = F.ul[j];
-        for (let j = 0; j < 3; j++) phi[3 * n + j] = L[i][j];
-        phi[3 * n + 3 + i] = 1;
-        phi[3 * n + 6] = -vb[i];
-        for (let p = 0; p < nf; p++) { if (!phi[p]) continue; F.bf[p] += phi[p] * st.fl[i]; for (let q = 0; q < nf; q++) F.Af[p][q] += phi[p] * phi[q]; }
+    st.S.push({ v: mot ? mot.v.slice() : u.slice(), ph: mot ? mot.phi.slice() : u.map(() => 1), fl: st.fl.slice(), a, L,
+      gyro: [W[1] * W[2], W[2] * W[0], W[0] * W[1]], vb: vb.slice(), dt, k, use: st.t >= skip });
+  }
+  const used = st.S.filter(s => s.use), N = used.length;
+  if (!solve || N < 20) return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
+  const grp = mot && mot.m ? mot.m : u.map((_, j) => j), groups = [...new Set(grp)];
+  // Normal equations for one choice of motor lags (tauOf: motor number → τ); the force rows only when asked.
+  const build = (tauOf, force) => {
+    const x = zeros(n), ul = zeros(n), sq = zeros(n), dq = zeros(n);
+    const M = { Ar: zeros(nr, nr), br: zeros(3, nr), Af: force ? zeros(nf, nf) : null, bf: force ? zeros(nf) : null };
+    for (const s of st.S) {
+      for (let j = 0; j < n; j++) {
+        const xt = Math.sqrt(Math.max(0, s.v[j]));
+        const drive = clamp(xt * xt + 4 * xt - 4 * x[j], -1, 2) - x[j] * x[j];   // motor torque − prop drag, per full-thrust torque
+        x[j] = Math.max(0, x[j] + drive / (5.26 * tauOf[grp[j]]) * s.dt);
+        ul[j] += s.k * (x[j] * x[j] * s.ph[j] - ul[j]);                    // thrust, through the same filter as the gyro
+        const q = sq[j] + s.k * (x[j] * s.ph[j] - sq[j]); dq[j] = (q - sq[j]) / s.dt; sq[j] = q;   // prop acceleration
       }
-      const phi = [...F.ul, ...gyro, 1];                                     // rotation rows share regressors
-      for (let p = 0; p < nr; p++) { for (let q = 0; q < nr; q++) F.Ar[p][q] += phi[p] * phi[q]; for (let i = 0; i < 3; i++) F.br[i][p] += phi[p] * a[i]; }
+      if (!s.use) continue;
+      const phi = [...ul, ...dq, ...s.gyro, 1];                            // rotation rows share regressors
+      for (let p = 0; p < nr; p++) { const a = phi[p]; if (!a) continue; const row = M.Ar[p]; for (let q = 0; q < nr; q++) row[q] += a * phi[q]; for (let i = 0; i < 3; i++) M.br[i][p] += a * s.a[i]; }
+      if (force) for (let i = 0; i < 3; i++) {                              // force rows share r and drag
+        const idx = [], val = [];
+        for (let j = 0; j < n; j++) { idx.push(i * n + j); val.push(ul[j]); }
+        for (let j = 0; j < 3; j++) { idx.push(3 * n + j); val.push(s.L[i][j]); }
+        idx.push(3 * n + 3 + i, 3 * n + 6); val.push(1, -s.vb[i]);
+        for (let p = 0; p < idx.length; p++) { M.bf[idx[p]] += val[p] * s.fl[i]; for (let q = 0; q < idx.length; q++) M.Af[idx[p]][idx[q]] += val[p] * val[q]; }
+      }
     }
-    if (st.t >= skip) { const y = [...st.fl, ...a]; st.N++; for (let i = 0; i < 6; i++) { st.yy[i] += y[i] * y[i]; st.ys[i] += y[i]; } }
-  }
-  if (!solve || st.N < 20) return st.out || { B: zeros(6, n), r: [0, 0, 0], tau: 0, fitF: 0, fitR: 0 };
+    return M;
+  };
+  const yy = zeros(6), ys = zeros(6);
+  for (const s of used) [...s.fl, ...s.a].forEach((y, i) => { yy[i] += y * y; ys[i] += y; });
   const ridge = A => A.map((row, i) => row.map((v, j) => v + (i === j ? 1e-9 + 1e-6 * A[i][i] : 0)));
-  const sse = (A, b, th, yy) => yy - 2 * dotn(th, b) + dotn(th, A.map(row => dotn(row, th)));
-  const sst = i => Math.max(1e-9, st.yy[i] - st.ys[i] ** 2 / st.N);
-  let best = null;
-  for (const F of st.fits) {
-    const thF = solveLin(ridge(F.Af), F.bf), thR = [0, 1, 2].map(i => solveLin(ridge(F.Ar), F.br[i]));
-    const fitF = clamp(1 - sse(F.Af, F.bf, thF, st.yy[0] + st.yy[1] + st.yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
-    const fitR = clamp(1 - thR.reduce((s, th, i) => s + sse(F.Ar, F.br[i], th, st.yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1);
-    if (!best || fitR + 0.5 * fitF > best.score) best = { F, thF, thR, fitF, fitR, score: fitR + 0.5 * fitF };
+  const sse = (A, b, th, y2) => y2 - 2 * dotn(th, b) + dotn(th, A.map(row => dotn(row, th)));
+  const sst = i => Math.max(1e-9, yy[i] - ys[i] ** 2 / N);
+  const rot = M => { const th = [0, 1, 2].map(i => solveLin(ridge(M.Ar), M.br[i]));
+    return { th, fit: clamp(1 - th.reduce((s, t, i) => s + sse(M.Ar, M.br[i], t, yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1) }; };
+  const all = tau => Object.fromEntries(groups.map(g => [g, tau]));
+  let tauOf = null, bestFit = -1;
+  for (const tau of taus) { const r = rot(build(all(tau), false)); if (r.fit > bestFit) { bestFit = r.fit; tauOf = all(tau); } }   // one lag for all
+  for (let pass = 0; pass < 2 && groups.length > 1; pass++) for (const g of groups) for (const tau of taus) {   // then each motor's own
+    if (tau === tauOf[g]) continue;
+    const trial = { ...tauOf, [g]: tau }, r = rot(build(trial, false));
+    if (r.fit > bestFit + 1e-4) { bestFit = r.fit; tauOf = trial; }
   }
-  const B = [0, 1, 2].map(i => best.thF.slice(i * n, i * n + n)).concat(best.thR.map(th => th.slice(0, n)));
-  st.out = { B, r: best.thF.slice(3 * n, 3 * n + 3), drag: best.thF[3 * n + 6], tau: best.F.tau, fitF: best.fitF, fitR: best.fitR };
+  const M = build(tauOf, true), R = rot(M), thF = solveLin(ridge(M.Af), M.bf);
+  const fitF = clamp(1 - sse(M.Af, M.bf, thF, yy[0] + yy[1] + yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
+  const B = [0, 1, 2].map(i => thF.slice(i * n, i * n + n)).concat(R.th.map(th => th.slice(0, n)));
+  const B2 = R.th.map(th => th.slice(n, 2 * n)), lagList = groups.map(g => tauOf[g]);
+  st.out = { B, B2, r: thF.slice(3 * n, 3 * n + 3), drag: thF[3 * n + 6], tau: lagList.reduce((s, v) => s + v, 0) / lagList.length, taus: lagList, fitF, fitR: R.fit };
   return st.out;
 }
 
@@ -589,13 +649,12 @@ function allocationPreferences(inputs, prefs) {
 // ─────────────────────────────────────────────────────────────────────────────
 const V = s => `<span class="v">${s}</span>`;
 const LAW_DEFS = [
-  { key: 'rigidBody', group: 'plant', fn: rigidBody, title: 'Rigid-body motion',
-    math: [`${V('a')} = ${V('F')} / <i>m</i>`, `${V('ω̇')} = <i>J</i><sup>−1</sup>(${V('τ')} − ${V('ω')} × <i>J</i>${V('ω')})`],
-    doc: 'Newton–Euler equations for one rigid body. The simulator integrates the result with a 0.5 ms step.',
-    args: [['F', 'total force, world [N]'], ['tau', 'total torque about the CoG, body [N·m]'], ['m', 'rigid mass [kg]'], ['J', 'inertia about the CoG'], ['Jinv', 'J⁻¹'], ['w', 'angular velocity, body [rad/s]']],
-    returns: '{ a: linear acceleration, world; wdot: angular acceleration, body }',
-    shape: { a: 3, wdot: 3 },
-    sample: () => [[0, 0, 9.81], [0.01, 0, 0], 1, [.01, 0, 0, 0, .01, 0, 0, 0, .02], [100, 0, 0, 0, 100, 0, 0, 0, 50], [0.1, 0, 0]] },
+  { key: 'rigidBody', group: 'plant', fn: rigidBody, title: 'Rigid-body motion (each body)',
+    math: [`${V('f')} = <i>I</i>${V('a')} + ${V('v')} ×* <i>I</i>${V('v')} &nbsp;(spatial vectors [angular; linear], in the body's axes)`, `whole airframe: <i>M</i>(${V('q')}) ${V('q̈')} + ${V('c')}(${V('q')}, ${V('q̇')}, forces) = [0; ${V('τ')}<sub>servo</sub>], &nbsp;${V('q')} = frame pose + every joint angle`],
+    doc: 'Newton–Euler for one rigid body. The frame is one body and every servo joint adds another (the servo output and everything rigidly on it). The simulator chains this formula through the joints (recursive Newton–Euler, Featherstone) to get the mass matrix and everything else, then solves for the frame\'s acceleration and every joint\'s angular acceleration each 0.5 ms step. That is why a swinging arm pushes the frame the other way, a load drags its servo, and a sensor on an arm feels the arm\'s own motion.',
+    args: [['I', '{ m, c: centre of mass, Ic: inertia about it }, body axes'], ['a', 'spatial acceleration [α; a]'], ['v', 'spatial velocity [ω; v]']],
+    returns: 'spatial force [torque; force] the body needs', shape: 'vec6',
+    sample: () => [{ m: 1, c: [0, 0, 0], Ic: [0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.02] }, [0, 0, 0, 0, 0, -9.81], [0.1, 0, 0, 0, 0, 0]] },
   { key: 'gravity', group: 'plant', fn: gravity, title: 'Weight',
     math: [`${V('F')}<sub>g</sub> = −<i>m g</i> ${V('ẑ')}`],
     doc: 'Applied at the center of gravity of the frame and of each cable payload.',
@@ -613,26 +672,17 @@ const LAW_DEFS = [
     doc: 'A servo joint turns everything attached to it about its hinge axis a through its pivot q: motors, masses, cable attachments, sensors and further joints. Parts store where they are at rest (all angles zero). Positive θ turns by the right-hand rule about a. Because each rotor\'s effect is linear in cos θ and sin θ for every joint above it, the controller can learn it as a few fixed columns (see Effectiveness identification).',
     args: [['axis', 'hinge axis at rest, body frame'], ['theta', 'joint angle [rad]']], returns: '3×3 rotation, row by row',
     shape: 'mat3', sample: () => [[1, 0, 0], 0.3] },
-  { key: 'motorResponse', group: 'plant', fn: motorResponse, title: 'Motor response',
-    math: [`<i>T</i><sub>k+1</sub> = <i>T</i><sub>k</sub> + (sat(<i>T</i><sub>cmd</sub>) − <i>T</i><sub>k</sub>) · Δ<i>t</i> / τ<sub>m</sub>`],
-    doc: 'How a motor\'s thrust follows its command. Health scales the thrust afterwards.',
-    args: [['T', 'current thrust [N]'], ['Tcmd', 'commanded thrust [N]'], ['tmax', 'max thrust [N]'], ['tau', 'spin-up time constant [s]'], ['dt', 'time step [s]']], returns: 'next thrust [N]',
-    shape: 'n', sample: () => [1, 2, 6, 0.03, 0.0005] },
-  { key: 'servoResponse', group: 'plant', fn: servoResponse, title: 'Servo response',
-    math: [`θ<sub>k+1</sub> = θ<sub>k</sub> + sat<sub>±ω<sub>max</sub>Δt</sub>(sat<sub>±θ<sub>max</sub></sub>(θ<sub>cmd</sub>) − θ<sub>k</sub>)`],
-    doc: 'A rate-limited servo with a mechanical limit. No backlash or load sag yet.',
-    args: [['theta', 'current angle [rad]'], ['target', 'commanded angle [rad]'], ['range', 'limit ± [rad]'], ['rate', 'max speed [rad/s]'], ['dt', 'time step [s]']], returns: 'next angle [rad]',
-    shape: 'n', sample: () => [0, 0.3, 0.6, 4, 0.0005] },
-  { key: 'servoLinkage', group: 'plant', fn: servoLinkage, title: 'Servo linkage lag',
-    math: [`θ<sub>k+1</sub> = θ<sub>k</sub> + (θ<sub>horn</sub> − θ<sub>k</sub>) · Δ<i>t</i> / λ`],
-    doc: 'The rotor follows the servo horn with a small lag from the servo\'s own control loop and the linkage. The servo\'s trim error (its zero being off by a few degrees) is added to the command before the horn. Neither the lag nor the trim error is told to the controller.',
-    args: [['theta', 'rotor angle [rad]'], ['horn', 'servo horn angle [rad]'], ['lag', 'time constant [s]'], ['dt', 'time step [s]']], returns: 'next rotor angle [rad]',
-    shape: 'n', sample: () => [0, 0.3, 0.02, 0.0005] },
-  { key: 'throttleCurve', group: 'plant', fn: throttleCurve, title: 'Throttle curve',
-    math: [`<i>T</i>/<i>T</i><sub>max</sub> = (1 − <i>b</i>) <i>u</i> + <i>b u</i>²`],
-    doc: 'How throttle turns into thrust. Thrust grows roughly with RPM², so real motors bend upward: the same extra throttle gives more thrust near full power than near idle. The controller isn\'t told the bend; the actuator tests measure it.',
-    args: [['u', 'throttle 0–1'], ['bend', '0 straight, 1 thrust ∝ throttle²']], returns: 'thrust as a fraction of max',
-    shape: 'n', sample: () => [0.5, 0.3] },
+  { key: 'motorDynamics', group: 'plant', fn: motorDynamics, title: 'Motor, ESC and prop',
+    math: [`<i>i</i> = (<i>u V</i> − <i>K</i><sub>e</sub>Ω)/<i>R</i>, &nbsp;τ = <i>K</i><sub>e</sub><i>i</i>, &nbsp;<i>J</i>Ω̇ = τ − <i>k</i><sub>Q</sub>Ω²`, `<i>T</i> = <i>k</i><sub>T</sub>Ω², &nbsp;prop drag torque <i>k</i><sub>Q</sub>Ω², &nbsp;frame feels −τ about the motor axis and −ω × <i>J</i>Ω (gyroscopic)`],
+    doc: 'Each motor has a speed, not just a thrust. Throttle sets the voltage fraction; back-EMF and winding resistance set the current; current sets the torque; the prop\'s inertia sets how fast it spins up. From that come a throttle-to-thrust curve that bends upward, spin-up faster than spin-down, thrust that drops as the battery sags, the frame feeling the motor\'s torque while it accelerates (the reaction torque the Delft work identifies as B₂), and the gyroscopic torque of a spinning prop when the drone or its servo turns it. The constants come from the motor card: max thrust, prop radius, drag torque ratio and spin-up time.',
+    args: [['Omega', 'prop speed [rad/s]'], ['u', 'throttle 0–1'], ['V', 'battery voltage [V]'], ['p', '{ Ke, R, J, kT, kQ, iMax }'], ['dt', 'time step [s]']],
+    returns: '{ Omega, i: current [A], tau: motor torque [N·m], T: still-air thrust [N] }', shape: { Omega: 1, i: 1, tau: 1, T: 1 },
+    sample: () => [1300, 0.5, 15.4, { Ke: 0.0064, R: 0.2, J: 7e-6, kT: 1.4e-6, kQ: 2.2e-8, iMax: 30 }, 0.0005] },
+  { key: 'servoTorque', group: 'plant', fn: servoTorque, title: 'Servo',
+    math: [`τ = τ<sub>stall</sub> (sat(<i>e</i>/<i>b</i>) − θ̇/ω<sub>no-load</sub>), &nbsp;<i>e</i> = command (delayed, plus trim error) − angle`, `plus the gearbox's reflected inertia on the joint and hard stops a little past the range`],
+    doc: 'A hobby servo is a geared DC motor with a position loop, so it has a torque–speed line: full stall torque when stopped, none at its no-load speed. The joint then moves by the multibody dynamics: a light arm snaps to its target, a heavy one lags and overshoots, and thrust or weight on the arm can hold it off its target. The command reaches it after the PWM delay.',
+    args: [['err', 'target − angle [rad]'], ['rate', 'angle rate [rad/s]'], ['p', '{ stall [N·m], speed: no-load [rad/s], band [rad] }']], returns: 'torque on the joint [N·m]',
+    shape: 'n', sample: () => [0.1, 0, { stall: 0.8, speed: 5, band: 0.05 }] },
   { key: 'bodyDrag', group: 'plant', fn: bodyDrag, title: 'Aerodynamic drag',
     math: [`${V('F')}<sub>d</sub> = <i>c</i><sub>d</sub>(${V('v')}<sub>wind</sub> − ${V('v')})`, `${V('τ')}<sub>d</sub> = −<i>c</i><sub>ω</sub> ${V('ω')}`],
     doc: 'Linear drag on the airframe and a little rotational damping.',
@@ -655,13 +705,13 @@ const LAW_DEFS = [
     shape: 3, sample: () => [0.01, [0.1, 0, -0.5]] },
 
   { key: 'wakeVelocity', group: 'plant', fn: wakeVelocity, title: 'Rotor wakes',
-    math: [`<i>v</i><sub>h</sub> = √(<i>T</i> / 2ρ<i>A</i>), &nbsp;${V('w')}(<i>s</i>) = −${V('d')} <i>v</i><sub>h</sub>(1 + <i>s</i>/√(<i>s</i>² + <i>R</i>²)) · e<sup>−<i>s</i>/12<i>R</i></sup> &nbsp;inside the wake`, `wake radius <i>R</i>(0.71 + 0.29 e<sup>−<i>s</i>/<i>R</i></sup>), &nbsp;<i>s</i> = distance downstream`],
+    math: [`<i>v</i><sub>h</sub> = √(<i>T</i> / 2ρ<i>A</i>), &nbsp;${V('w')}(<i>s</i>) = −${V('d')} <i>v</i><sub>h</sub>(1 + <i>s</i>/√(<i>s</i>² + <i>R</i>²)) · e<sup>−<i>s</i>/12<i>R</i></sup> &nbsp;inside the wake`, `wake radius <i>R</i>(0.71 + 0.29 e<sup>−<i>s</i>/<i>R</i></sup>), &nbsp;<i>s</i> = distance downstream, centre blown sideways by ${V('v')}<sub>cross</sub>·<i>s</i>/1.5<i>v</i><sub>h</sub>`],
     doc: 'Each rotor blows a column of air along −d that speeds up to twice its induced velocity and contracts. Another rotor inside that column loses thrust; parts and payloads inside it get pushed. Physics only: the controller never uses this.',
-    args: [['point', 'where to evaluate, body frame [m]'], ['rotors', '[{ p, d, T, R }] disc center, axis, thrust, prop radius']],
+    args: [['point', 'where to evaluate, body frame [m]'], ['rotors', '[{ p, d, T, R, va }] disc center, axis, thrust, prop radius, oncoming air']],
     returns: 'induced air velocity, body frame [m/s]', shape: 3, sample: () => [[0, 0, -0.1], [{ p: [0, 0, 0], d: [0, 0, 1], T: 3, R: 0.08 }]] },
   { key: 'rotorAero', group: 'plant', fn: rotorAero, title: 'Rotor aerodynamics',
-    math: [`<i>v</i><sub>i</sub> = <i>v</i><sub>h</sub>² / √(<i>V</i><sub>edge</sub>² + (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub>)²) &nbsp;(Glauert)`, `<i>T</i><sub>eff</sub> = <i>T</i> · sat(1 − 0.5 (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub> − <i>v</i><sub>h</sub>)/<i>v</i><sub>h</sub>) · 1/(1 − (<i>R</i>/4<i>h</i>)²)`, `${V('H')} = <i>c</i><sub>H</sub> <i>T</i> ${V('u')}<sub>in-plane</sub> &nbsp;(rotor drag)`],
-    doc: 'Air coming down through the disc (from climbing or from another rotor\'s wake) costs thrust at the same command. Air crossing the disc edgewise, in forward flight, lowers the induced velocity and adds a little thrust (translational lift). The ground adds thrust within about a rotor diameter. Air moving across the disc tilts it back and makes rotor drag, which is most of a multirotor\'s drag.',
+    math: [`<i>v</i><sub>i</sub> = <i>v</i><sub>h</sub>² / √(<i>V</i><sub>edge</sub>² + (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub>)²) &nbsp;(Glauert)`, `<i>T</i><sub>eff</sub> = <i>T</i> · sat(1 − 0.5 (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub> − <i>v</i><sub>h</sub>)/<i>v</i><sub>h</sub>) · 1/(1 − (<i>R</i>/4<i>h</i>)²) · (1 − 0.3 e<sup>−((<i>x</i> − 1.2)/0.45)²</sup>), &nbsp;<i>x</i> = descent rate/<i>v</i><sub>h</sub> (vortex ring state)`, `${V('H')} = <i>c</i><sub>H</sub> <i>T</i> ${V('u')}<sub>in-plane</sub> &nbsp;(rotor drag)`],
+    doc: 'Air coming down through the disc (from climbing or from another rotor\'s wake) costs thrust at the same command. Air crossing the disc edgewise, in forward flight, lowers the induced velocity and adds a little thrust (translational lift). The ground adds thrust within about a rotor diameter. Descending straight into its own wake at around its induced velocity puts a rotor in vortex ring state and costs it up to 30% of its thrust. Air moving across the disc tilts it back and makes rotor drag, which is most of a multirotor\'s drag.',
     args: [['T', 'still-air thrust for this command [N]'], ['R', 'prop radius [m]'], ['vAxial', 'inflow from above along the axis [m/s]'], ['vInPlane', 'air velocity across the disc, body frame [m/s]'], ['h', 'height above ground [m]']],
     returns: '{ T: effective thrust [N]; H: rotor drag force, body frame [N] }', shape: { T: 1, H: 3 }, sample: () => [3, 0.08, 0.5, [1, 0, 0], 2] },
   { key: 'wakeLoad', group: 'plant', fn: wakeLoad, title: 'Downwash on parts',
@@ -669,21 +719,20 @@ const LAW_DEFS = [
     doc: 'Rotor wash hitting the hub, rigid masses and cable payloads pushes them along the wake.',
     args: [['w', 'wake air velocity at the part [m/s]'], ['area', 'frontal area of the part [m²]']], returns: 'force [N]', shape: 3, sample: () => [[0, 0, -5], 0.01] },
   { key: 'batteryModel', group: 'plant', fn: batteryModel, title: 'Battery',
-    math: [`<i>V</i>/<i>V</i><sub>full</sub> = 0.86 + 0.14·SoC − 0.06·load, &nbsp;thrust × (<i>V</i>/<i>V</i><sub>full</sub>)²`],
-    doc: 'The pack drains with load and its voltage sags, so the same command gives less thrust as the flight goes on. Reset restores a full pack.',
-    args: [['st', 'battery state (soc)'], ['load', 'share of combined max thrust in use'], ['dt', 'time step [s]']], returns: 'thrust factor', shape: 'n', sample: () => [{}, 0.4, 0.0005] },
-
+    math: [`<i>V</i> = 4 (3.5 + 0.7·SoC) − <i>R</i><sub>int</sub> <i>I</i>, &nbsp;SoĊ = −<i>I</i> / capacity`],
+    doc: 'A 4-cell, 1.3 Ah LiPo. It drains with the current all the motors draw and sags under load, so the same throttle gives less thrust as the flight goes on and during hard manoeuvres. Reset restores a full pack.',
+    args: [['st', 'battery state (soc)'], ['current', 'total draw [A]'], ['dt', 'time step [s]']], returns: 'terminal voltage [V]', shape: 'n', sample: () => [{}, 12, 0.0005] },
   { key: 'imuModel', group: 'sensor', fn: imuModel, title: 'IMU (gyro + accelerometer)',
-    math: [`${V('ω̃')} = sat(${V('ω')}<sub>s</sub> + ${V('ω')}<sub>vib</sub> + ${V('b')}<sub>g</sub> + ${V('n')}<sub>g</sub>), &nbsp;${V('ḃ')}<sub>g</sub> = random walk`, `${V('f̃')} = sat(<i>R</i><sub>s</sub><sup>T</sup>(<i>R</i><sup>T</sup>(${V('a')} − ${V('g')}) + ${V('ω̇')} × ${V('r')} + ${V('ω')} × (${V('ω')} × ${V('r')})) + ${V('a')}<sub>vib</sub> + ${V('b')}<sub>a</sub> + ${V('n')}<sub>a</sub>)`],
+    math: [`${V('ω̃')} = sat(${V('ω')}<sub>s</sub> + ${V('ω')}<sub>vib</sub> + ${V('b')}<sub>g</sub> + ${V('n')}<sub>g</sub>), &nbsp;${V('ḃ')}<sub>g</sub> = random walk`, `${V('f̃')} = sat(<i>S</i><sub>a</sub>${V('f')} + ${V('a')}<sub>vib</sub> + ${V('b')}<sub>a</sub> + ${V('n')}<sub>a</sub>), &nbsp;${V('f')} = the acceleration of the body the IMU is on, at the IMU, minus gravity`, `<i>S</i> = scale errors on the diagonal, small axis misalignments off it`],
     doc: 'r is the IMU\'s offset from the center of gravity, so an off-center accelerometer also feels rotation. Vibration is a sum of sinusoids at each motor\'s rotation frequency, stronger near busy motors; a slow IMU rate aliases it into low frequencies.',
-    args: [['w', 'true angular rate, sensor frame [rad/s]'], ['f', 'true specific force, sensor frame [m/s²]'], ['vib', '{ a, w } vibration at the sensor'], ['p', 'gyroNoise, gyroBias, gyroDrift, gyroRange, accNoise, accBias, accRange'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
+    args: [['w', 'true angular rate, sensor frame [rad/s]'], ['f', 'true specific force, sensor frame [m/s²]'], ['vib', '{ a, w } vibration at the sensor'], ['p', 'gyroNoise, gyroBias, gyroDrift, gyroRange, accNoise, accBias, accRange, scaleErr, misalign'], ['st', 'this sensor\'s state'], ['dt', 'sample period [s]']],
     returns: '{ gyro, accel }, sensor frame', shape: { gyro: 3, accel: 3 },
-    sample: () => [[0.1, 0, 0], [0, 0, 9.81], { a: [0, 0, 0], w: [0, 0, 0] }, { gyroNoise: 0.002, gyroBias: 0.01, gyroDrift: 0.0003, gyroRange: 35, accNoise: 0.05, accBias: 0.05, accRange: 157 }, {}, 0.001] },
+    sample: () => [[0.1, 0, 0], [0, 0, 9.81], { a: [0, 0, 0], w: [0, 0, 0] }, { gyroNoise: 0.002, gyroBias: 0.01, gyroDrift: 0.0003, gyroRange: 35, accNoise: 0.05, accBias: 0.05, accRange: 157, scaleErr: 0.005, misalign: 0.0035 }, {}, 0.001] },
   { key: 'magModel', group: 'sensor', fn: magModel, title: 'Compass',
-    math: [`${V('m̃')} = <i>R</i><sub>s</sub><sup>T</sup><i>R</i><sup>T</sup>${V('m')}<sub>earth</sub> + ${V('b')}<sub>hard iron</sub> + ${V('m')}<sub>motors</sub> + ${V('n')}`],
+    math: [`${V('m̃')} = <i>S</i><sub>soft iron</sub><i>R</i><sub>s</sub><sup>T</sup><i>R</i><sup>T</sup>${V('m')}<sub>earth</sub> + ${V('b')}<sub>hard iron</sub> + ${V('m')}<sub>motors</sub> + ${V('n')}`],
     doc: 'Earth\'s field has strength 1 and points north (+X) and 60° down. Motor currents add a field that grows with throttle and falls off quickly with distance, so where you mount the compass matters.',
-    args: [['b', 'Earth field, sensor frame'], ['interference', 'motor field at the sensor, sensor frame'], ['p', 'noise, hardIron'], ['st', 'this sensor\'s state']],
-    returns: 'field reading, sensor frame', shape: 3, sample: () => [[0.5, 0, -0.866], [0, 0, 0], { noise: 0.01, hardIron: 0.05 }, {}] },
+    args: [['b', 'Earth field, sensor frame'], ['interference', 'motor field at the sensor, sensor frame'], ['p', 'noise, hardIron, softIron'], ['st', 'this sensor\'s state']],
+    returns: 'field reading, sensor frame', shape: 3, sample: () => [[0.5, 0, -0.866], [0, 0, 0], { noise: 0.01, hardIron: 0.05, softIron: 0.03 }, {}] },
   { key: 'baroModel', group: 'sensor', fn: baroModel, title: 'Barometer',
     math: [`<i>h̃</i> = <i>h</i> + <i>d</i> + <i>n</i>, &nbsp;<i>ḋ</i> = random walk`],
     doc: 'Altitude from air pressure, with white noise and a slow drift.',
@@ -732,11 +781,11 @@ const LAW_DEFS = [
     sample: () => [{}, [1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 0, 9.81], { alt: 1.5, age: 0.02 }, { p: [0, 0, 1.5], v: [0, 0, 0], age: 0.15 }, { v: [0.1, 0], h: 1.5, age: 0.02 }, 1, 0.001] },
 
   { key: 'identifyEffectiveness', group: 'learn', fn: identifyEffectiveness, title: 'Effectiveness identification',
-    math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')}, &nbsp;both sides band-passed 0.3–12 Hz`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
+    math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')} + [0; <i>B̂</i><sub>2</sub>] Δ<i>ẋ</i>, &nbsp;both sides band-passed 0.3–12 Hz, <i>x</i> = √thrust (rotor speed)`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
     doc: 'Recursive least squares with forgetting (about 4 s of memory). A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on, so its effect at any joint angles is a fixed sum of learned columns (3 for one joint, 9 for two). It learns, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. Runs during calibration and, if you leave learning on, all through the flight.',
-    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests']],
-    returns: '{ B: 6 rows × inputs }', shape: { B: 'rows' },
-    sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4, [0.03, 0.03]] },
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, basis factor and motor number']],
+    returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs (rotation from rotors speeding up) }', shape: { B: 'rows' },
+    sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4, [0.03, 0.03], { v: [0.5, 0.5], phi: [1, 1], m: [0, 1] }] },
   { key: 'identifyMotorResponse', group: 'learn', fn: identifyMotorResponse, title: 'Motor response test',
     math: [`<i>y</i> = <i>g</i> · lag<sub>τ</sub>((1 − <i>k</i>)<i>u</i> + <i>k u</i>²) + <i>d I</i> + <i>e</i>(lag<sub>τ</sub>(<i>u</i>) − <i>u</i><sub>0</sub>)<i>I</i> + <i>c</i><sub>w</sub>, &nbsp;<i>I</i> = ∫(lag<sub>τ</sub>(<i>u</i>) − <i>u</i><sub>0</sub>)d<i>t</i>`, `least squares for each τ on a grid (10–100 ms); the best fit gives the motor lag τ and the throttle-curve bend <i>k</i>`],
     doc: 'Runs on the calibration\'s motor pulses. While one motor steps up and down, every other actuator holds still, so the drone\'s response along that motor\'s effect is that motor alone. How slowly it responds gives the lag; a step up giving more than the same step down gives the bend of its throttle curve. The two pulse sizes (6% and 16%) make the bend easier to see, and the I terms take out the air the pulse itself pushes through the prop as the drone moves. The result goes into the thrust linearization and into the effectiveness identification.',
@@ -751,11 +800,11 @@ const LAW_DEFS = [
     sample: () => [[{ cmd: [0, 0.2, 0.2, 0.2, -0.2, -0.2], y: [0, 0.02, 0.1, 0.19, 0.1, -0.1] }], 0.001] },
 
   { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
-    math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
+    math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>B</i><sub>2</sub> d<i>x</i>/d<i>t</i> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
     doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling and the motor lag, all without any description of the airframe. It pulses near the top of the throw, where the air through the props is calmest. After Blaha, Smeur and Remes (TU Delft, 2024).',
-    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result']],
-    returns: '{ B: 6 rows × inputs; r: IMU offset from the CoG [m]; tau: motor lag [s]; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
-    sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true] },
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, its basis factor and the motor\'s number']],
+    returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs, rotation from each rotor spinning up; r: IMU offset from the CoG [m]; taus: each motor\'s lag [s], tau: their mean; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
+    sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true, { v: [0.5, 0.2], phi: [1, 1], m: [0, 1] }] },
 
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
@@ -801,10 +850,10 @@ const LAW_DEFS = [
 
 // Wrench sum and control chain shown at the top of the Formulas tab.
 const LAW_OVERVIEW = [
-  `<i>m</i>${V('a')} = Σ<sub>i</sub> <i>R</i>${V('F')}<sub>i</sub> + ${V('F')}<sub>g</sub> + ${V('F')}<sub>d</sub> + Σ<sub>j</sub> <i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + Σ ${V('F')}<sub>ground</sub>`,
-  `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
+  `<i>M</i>(${V('q')}) ${V('q̈')} + ${V('c')}(${V('q')}, ${V('q̇')}) = Σ<sub>bodies</sub> <i>J</i><sub>b</sub><sup>T</sup>(${V('f')}<sub>rotors</sub> + ${V('f')}<sub>gravity</sub> + ${V('f')}<sub>drag</sub> + ${V('f')}<sub>cables</sub> + ${V('f')}<sub>ground</sub>) + [0; ${V('τ')}<sub>servos</sub>]`,
+  `${V('q')} = frame position and attitude + every servo joint angle; each body obeys ${V('f')} = <i>I</i>${V('a')} + ${V('v')} ×* <i>I</i>${V('v')}`,
 ];
 const LAW_CHAIN = {
   ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization'],
-  plant: ['batteryModel', 'servoResponse', 'servoLinkage', 'throttleCurve', 'motorResponse', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
+  plant: ['batteryModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

@@ -169,13 +169,13 @@ function updateScene() {
     if (live) { p.beam.scale.z = L && L.range > 0 ? L.range : c.maxRange; p.beam.computeLineDistances(); }
   }
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;
-  gravArrow.visible = live && view.forces; gravArrow.position.set(S.p[0], S.p[1], S.p[2] - 0.02); gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
+  gravArrow.visible = live && view.forces; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
   const wv = windVec(); windArrow.visible = live && view.forces && envr.wind > 0.05;
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
   for (const c of cfg.comps) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;
     v.line.visible = v.ball.visible = live;
-    const aw = add(S.p, m3v(R, sub(posNow(c), truth.c))); const pos = v.line.geometry.attributes.position;
+    const aw = add(S.p, m3v(R, posNow(c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }

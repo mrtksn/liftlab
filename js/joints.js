@@ -10,7 +10,7 @@
 
 function mkJoint(name, x, y, z, o = {}) {
   return base(Object.assign({ type: 'joint', name, pos: [x, y, z], hingeAz: 0, hingeEl: 0, mode: 'auto', manual: 0,
-    range: 40, rate: 240, lag: 0.02, offset: 0, feedback: false, mass: 0.015 }, o));
+    range: 40, rate: 240, lag: 0.02, torque: 0.8, offset: 0, feedback: false, mass: 0.015 }, o));
 }
 // A motor on its own servo joint, both at the same point, the way a tilt-rotor is usually built.
 function mkServoMotor(name, x, y, z, jo = {}, mo = {}) {
@@ -137,7 +137,7 @@ function migrateTiltParts(comps) {
   for (const c of comps) {
     if (c.type !== 'tilt') { out.push(c); continue; }
     const j = { id: uid++, type: 'joint', name: c.name + ' servo', pos: c.pos.slice(), hingeAz: c.hingeAz || 0, hingeEl: 0, mode: c.mode || 'auto', manual: c.manual || 0,
-      range: c.range ?? 40, rate: c.rate ?? 240, lag: c.lag ?? 0.02, offset: c.offset || 0, feedback: !!c.feedback, mass: 0.015, parent: c.parent };
+      range: c.range ?? 40, rate: c.rate ?? 240, lag: c.lag ?? 0.02, torque: 0.8, offset: c.offset || 0, feedback: !!c.feedback, mass: 0.015, parent: c.parent };
     const m = Object.assign({}, c, { type: 'motor', tilt: 0, az: 0, parent: j.id, mass: Math.max(0.01, (c.mass ?? 0.075) - 0.015) });
     for (const k of ['hingeAz', 'mode', 'manual', 'range', 'rate', 'lag', 'offset', 'feedback']) delete m[k];
     out.push(j, m);
