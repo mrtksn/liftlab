@@ -134,19 +134,22 @@ function numField(id, d, get, set) {
 }
 // A servo's swing, relative to what it's mounted on: quick picks, then the exact angle and lean.
 function hingeFields(c, rerender) {
-  const id = `f-${c.id}-swing`, sel = el('select', { id }), pre = swingPresets(c), cur = swingPreset(c);
-  for (const o of pre) { const n = el('option', { value: o.k, text: o.label }); if (cur && cur.k === o.k) n.selected = true; sel.append(n); }
-  const cu = el('option', { value: 'custom', text: 'Another direction (angle below)' }); if (!cur) cu.selected = true; sel.append(cu);
-  sel.addEventListener('change', () => { const o = pre.find(x => x.k === sel.value); if (!o) return; setSwing(c, o.deg, 0); edited(c, 'swing'); rerender(); });
+  const pre = swingPresets(c), cur = swingPreset(c);
+  const seg = el('div', { class: 'seg seg-sm seg-fill', role: 'group', 'aria-label': 'Swings' });
+  for (const o of pre) {
+    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
+    b.addEventListener('click', () => { setSwing(c, o.deg, 0); edited(c, 'swing'); rerender(); });
+    seg.append(b);
+  }
   const f = (key, label, min, max, get, set) => {
     const r = numField(`f-${c.id}-${key}`, { label, min, max, step: 1, u: '°', dp: 0 }, get, v => { set(v); edited(c, 'swing'); });
     if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(r.refresh);
     return r.node;
   };
-  return [el('div', { class: 'field' }, el('label', { for: id, text: 'Swings' }), sel),
+  return [el('div', { class: 'field stack' }, el('span', { class: 'flab', text: 'Swings' }), seg),
     f('swingdeg', 'Swing direction', -180, 180, () => swingOf(c).swing, v => setSwing(c, v)),
-    f('swinglean', 'Hinge lean', -80, 80, () => swingOf(c).lean, v => setSwing(c, swingOf(c).swing, v)),
-    el('p', { class: 'hint', text: `It swings what it carries toward that direction and back, up to its limit either side of where the parts sit now (0°). The angle is relative to ${mountName(c)} (0° swings toward ${swingRefName(c)}) and stays that way when ${mountName(c)} is moved or turned. Lean tilts the hinge so the load sweeps a cone instead of a flat arc. In Edit mode, select the servo to see it swing; drag the ring round it to change the direction.` })];
+    f('swinglean', 'Hinge lean (cone sweep)', -80, 80, () => swingOf(c).lean, v => setSwing(c, swingOf(c).swing, v)),
+    el('p', { class: 'hint', text: `Which way it swings what it carries. Relative to ${mountName(c)}: 0° swings toward ${swingRefName(c)}, and it stays that way when ${mountName(c)} moves.` })];
 }
 const cardRefresh = new Map();   // component id -> functions that redraw its open card's values
 function slider(c, key) {
@@ -198,11 +201,13 @@ function compBody(c) {
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
     b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
-    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, ...hingeFields(c, rerender),
+    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, el('span', { class: 'lbl', text: 'Swing' }), ...hingeFields(c, rerender),
+      el('span', { class: 'lbl', text: 'Control' }),
       selectF(c, 'mode', 'Servo control', [['auto', steer ? 'Allocator steers it' : 'Allocator steers it (needs a motor on it)'], ['manual', 'Set by me']], rerender));
     if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
-    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
-      el('p', { class: 'hint', text: 'Servo speed is its no-load speed; under load it runs slower and a heavy load or thrust on an arm holds it off its target (stall torque). Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
+    b.append(slider(c, 'range'), slider(c, 'rate'), el('span', { class: 'lbl', text: 'Servo hardware' }),
+      slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
+      el('p', { class: 'hint', text: 'Speed is no-load; under load it runs slower, and a heavy load or thrust on an arm can hold it off its target (stall torque). Hidden values are traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'link') {
     const carried = descendants(c);
     b.append(el('p', { class: 'hint', text: carried.length ? 'At its far end: ' + carried.map(x => x.name).join(', ') + '.' : 'A stick or lever. Attach parts to it (drag them onto it in the list) and they ride at its far end.' }),

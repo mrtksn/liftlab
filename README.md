@@ -125,12 +125,12 @@ Placement follows what you drop onto:
 - Moving or turning a servo or rod (typed values, sliders or edit-mode handles) carries everything on it along. Lengthening a rod moves what's at its end.
 
 **How a servo is mounted.** You describe a servo by which way it swings what it carries. What it carries sticks out from it one way: toward the parts, or along a rotor's thrust when the rotor sits on the pivot. The servo swings that load toward a chosen direction and back; the hinge axis follows from the two.
-- **In edit mode:** select a servo and it plays its swing, moving everything on it (a rotor's thrust arrow shows where the thrust points). A ring round the servo has two arrows where the load swings to; drag them round to swing it any other way (5° steps, 1° with Shift). The edit bar has quick picks (forward–back, left–right, up–down, along the rod), the exact angle, − / + for the travel, and play/pause with a slider to hold it at any angle.
-- **On its card:** **Swings** (the same quick picks), **Swing direction** in degrees, and **Hinge lean**, which tilts the hinge so the load sweeps a cone instead of a flat arc.
+- **In edit mode:** select a servo and the view centres on it and plays its swing, moving everything on it (a rotor's thrust arrow shows where the thrust points). A ring round the servo has two arrows where the load swings to; drag them round to swing it any other way (5° steps, 1° with Shift). Drag either dot at the ends of the fan to change the travel. The edit bar's servo panel has three rows: **Swings** (quick picks: forward–back, left–right, up–down, along the rod; the exact angle; ⟲ ⟳ to turn it 15°), **Travel** (− / +), and **Preview** (play/pause, hold at either limit, or a slider to hold any angle).
+- **On its card**, grouped as Pivot, Swing, Control and Servo hardware: **Swings** (the same quick picks), **Swing direction** in degrees, and **Hinge lean**, which tilts the hinge so the load sweeps a cone instead of a flat arc.
 - **What "relative" means:** the angle is measured from the mount's own X (its Z when X runs along the load). On the frame or on another servo's output that's the body axes; on a rod, X runs along the rod and Z is as near to up as the rod allows. Turning the rod keeps the servo at the same angle to it, and swings everything it carries along.
 
 **Seeing the travel.** In edit mode each servo shows what it can sweep:
-- **The fan:** a shaded sector in its plane of motion, out to the farthest part it carries (a rotor's rim), between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.
+- **The fan:** an amber sector in its plane of motion (amber is used for servo travel everywhere, so it doesn't mix with the rotors' blue), out to the farthest part it carries (a rotor's rim), between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.
 - **The paths:** each carried part's path as a dashed arc.
 - **The hinge axis:** a dashed line through the pivot, and the servo's case and horn are drawn on it.
 

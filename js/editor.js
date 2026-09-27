@@ -8,7 +8,7 @@ let editMode = false, editWasRunning = true;
 const edit = { hover: null, sel: null, drag: null, down: null };
 const raycaster = new THREE.Raycaster();
 const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]], AXIS_NAME = ['X', 'Y', 'Z'];
-let gizmo = null, hoverBox = null, selBox = null;
+let gizmo = null, travelG = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
 const handleVis = [];      // the visible shapes, to highlight the active one
 
@@ -47,7 +47,7 @@ function buildGizmo() {
     gizmo.add(g); handleVis.push({ kind: 'rot', axis: i, meshes: [ring], base: 0.9 });
   }
   {   // a servo's swing ring: round what it carries (local Z), with grips where the load swings to (local ±X)
-    const acol = colorOf('--accent');
+    const acol = colorOf('--swing');
     const ring = vis(new THREE.TorusGeometry(0.46, 0.009, 6, 72), acol, 0.6);
     const bar = vis(new THREE.CylinderGeometry(0.008, 0.008, 0.92, 8).rotateZ(Math.PI / 2), acol, 0.35);
     const grips = [1, -1].map(k => { const m = vis(new THREE.ConeGeometry(0.05, 0.13, 16).rotateZ(-k * Math.PI / 2).translate(k * 0.5, 0, 0), acol, 1); return m; });
@@ -57,6 +57,16 @@ function buildGizmo() {
     gizmo.add(g); handleVis.push({ kind: 'swing', axis: -1, meshes: [ring, ...grips], base: 0.7 });
   }
   scene.add(gizmo);
+  if (travelG) { scene.remove(travelG); travelG.traverse(o => o.geometry && o.geometry.dispose()); }
+  travelG = new THREE.Group(); travelG.visible = false; travelG.renderOrder = 20;
+  for (const side of [1, -1]) {   // the fan's two ends: drag either to change the travel
+    const g = new THREE.Group(); g.userData = { side };
+    const dot = vis(new THREE.SphereGeometry(1, 18, 12), colorOf('--swing'), 1);
+    const ring = vis(new THREE.TorusGeometry(1.5, 0.22, 6, 24), colorOf('--swing'), 0.5);
+    g.add(dot, ring, hit(new THREE.SphereGeometry(2.6, 10, 8), { kind: 'travel', axis: -1, side }));
+    travelG.add(g); handleVis.push({ kind: 'travel', axis: -1, meshes: [dot, ring], base: 1 });
+  }
+  scene.add(travelG);
   if (!hoverBox) { hoverBox = new THREE.BoxHelper(undefined, 0xffffff); hoverBox.visible = false; scene.add(hoverBox); selBox = new THREE.BoxHelper(undefined, 0xffffff); selBox.visible = false; scene.add(selBox); }
   hoverBox.material.color = colorOf('--ink-2'); selBox.material.color = colorOf('--accent');
   hoverBox.material.depthTest = false; selBox.material.depthTest = false; hoverBox.renderOrder = selBox.renderOrder = 19;
@@ -92,11 +102,14 @@ function updateEditMsg() {
   const m = $('#editMsg'); if (!m) return;
   const c = compById(edit.sel);
   renderEditTools(c);
+  $('#editBar').classList.toggle('servo', !!c && c.type === 'joint');
   if (!c) { m.textContent = 'Click a part to select it. The simulation is paused.'; return; }
   if (c.type === 'joint') {
-    const n = descendants(c).length;
-    m.textContent = n ? `${c.name} swings what it carries, as shown. Drag the ring's arrows to swing it another way, or pick one:`
-      : `${c.name} carries nothing yet: set a part's "Attached to" to it, or drag the part onto it in the list.`;
+    const kids = descendants(c);
+    m.textContent = '';
+    m.append(el('strong', { text: c.name }), ` on ${mountName(c)}`,
+      el('span', { class: 'sub', text: kids.length ? ` · carries ${kids.map(k => k.name).join(', ')}. Drag the ring's arrows to swing it another way, the dots at the fan's ends to change how far.`
+        : ' · carries nothing yet. Set a part\'s "Attached to" to it, or drag the part onto it in the list.' }));
     return;
   }
   const rot = rotAxesFor(c).length ? ', rings rotate' : '';
@@ -112,34 +125,47 @@ function previewAngle(j) {
   return clamp(swingPrev.th, -R, R);
 }
 const previewing = () => { const c = editMode && compById(edit.sel); return c && c.type === 'joint' ? c : null; };
-// A selected servo: which way it swings, how far, and the preview.
+// A selected servo, laid out in rows: which way it swings, how far, and the preview.
 function renderEditTools(c) {
   const box = $('#editTools'); if (!box) return;
-  box.textContent = ''; box.hidden = !(c && c.type === 'joint'); if (box.hidden) return;
+  box.textContent = ''; box.hidden = !(c && c.type === 'joint' && descendants(c).length); if (box.hidden) return;
   if (swingPrev.id !== c.id) { swingPrev.id = c.id; swingPrev.play = true; swingPrev.t0 = performance.now(); }
   const changed = key => { edited(c, key); refreshCard(c); updateEditMsg(); };
   const cur = swingPreset(c), w = swingOf(c);
+  const btn = (text, title, on) => { const b = el('button', { class: 'btn', type: 'button', title, 'aria-label': title, text }); b.addEventListener('click', on); return b; };
+  const row = (label, ...kids) => el('div', { class: 'st-row' }, el('span', { class: 'st-lab', text: label }), el('div', { class: 'st-ctl' }, ...kids));
+
   const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Swing direction' });
   for (const o of swingPresets(c)) {
-    const btn = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
-    btn.addEventListener('click', () => { setSwing(c, o.deg, 0); changed('swing'); });
-    seg.append(btn);
+    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
+    b.addEventListener('click', () => { setSwing(c, o.deg, 0); changed('swing'); });
+    seg.append(b);
   }
-  const ang = el('input', { type: 'number', class: 'num', min: -180, max: 180, step: 5, value: String(Math.round(w.swing)), 'aria-label': 'Swing direction in degrees', title: `Swing direction, relative to ${mountName(c)} (0°: toward ${swingRefName(c)})` });
+  const ang = el('input', { type: 'number', class: 'num', min: -180, max: 180, step: 5, value: String(Math.round(w.swing)), 'aria-label': 'Swing direction in degrees' });
   ang.addEventListener('change', () => { const v = parseFloat(ang.value); if (isFinite(v)) { setSwing(c, clamp(v, -180, 180)); changed('swing'); } });
   ang.addEventListener('keydown', e => { if (e.key === 'Enter') ang.blur(); });
+  const nudge = d => { setSwing(c, ((Math.round(swingOf(c).swing) + d + 540) % 360) - 180); changed('swing'); };
+  const angBox = el('span', { class: 'ang', title: `Relative to ${mountName(c)}; 0° swings toward ${swingRefName(c)}` },
+    btn('⟲', 'Turn the swing 15° one way', () => nudge(-15)), ang, el('span', { class: 'unit', text: '°' }), btn('⟳', 'Turn the swing 15° the other way', () => nudge(15)));
+
   const step = d => { c.range = clamp(c.range + d, 5, 90); changed('range'); };
-  const minus = el('button', { class: 'btn', type: 'button', title: 'Less travel (5°)', 'aria-label': 'Less travel', text: '−' }), plus = el('button', { class: 'btn', type: 'button', title: 'More travel (5°)', 'aria-label': 'More travel', text: '+' });
-  minus.addEventListener('click', () => step(-5)); plus.addEventListener('click', () => step(5));
+  const travel = el('span', { class: 'range-step' }, btn('−', 'Less travel (5°)', () => step(-5)), el('b', { class: 'rv', text: `±${c.range}°` }), btn('+', 'More travel (5°)', () => step(5)));
+
   const R = c.range;
-  const play = el('button', { class: 'btn', type: 'button', id: 'swingPlay', 'aria-label': swingPrev.play ? 'Pause the preview' : 'Play the preview', title: swingPrev.play ? 'Pause' : 'Play', text: swingPrev.play ? '❚❚' : '▶' });
+  const play = btn(swingPrev.play ? '❚❚' : '▶', swingPrev.play ? 'Pause the preview' : 'Play the preview', () => {
+    swingPrev.play = !swingPrev.play;
+    if (swingPrev.play) swingPrev.t0 = performance.now() - 1000 * 2.8 / (2 * Math.PI) * Math.asin(clamp(swingPrev.th / (R * D2R), -1, 1));
+    renderEditTools(c);
+  });
+  play.id = 'swingPlay';
   const scrub = el('input', { type: 'range', id: 'swingScrub', min: -R, max: R, step: 1, value: String(Math.round(swingPrev.th * R2D)), 'aria-label': 'Preview angle' });
-  const shown = el('span', { class: 'rv', id: 'swingAt', text: '' });
-  play.addEventListener('click', () => { swingPrev.play = !swingPrev.play; if (swingPrev.play) swingPrev.t0 = performance.now() - 1000 * 2.8 / (2 * Math.PI) * Math.asin(clamp(swingPrev.th / (R * D2R), -1, 1)); renderEditTools(c); });
-  scrub.addEventListener('input', () => { swingPrev.play = false; swingPrev.th = parseFloat(scrub.value) * D2R; play.textContent = '▶'; play.title = 'Play'; play.setAttribute('aria-label', 'Play the preview'); });
-  box.append(seg, el('label', { class: 'ang' }, ang, el('span', { class: 'unit', text: '°' })),
-    el('span', { class: 'range-step', title: 'Travel either side of 0°' }, el('span', { class: 'lab', text: 'Travel' }), minus, el('b', { class: 'rv', text: `±${c.range}°` }), plus),
-    el('span', { class: 'preview' }, play, scrub, shown));
+  scrub.addEventListener('input', () => { swingPrev.play = false; swingPrev.th = parseFloat(scrub.value) * D2R; play.textContent = '▶'; play.title = 'Play the preview'; play.setAttribute('aria-label', 'Play the preview'); });
+  const at = el('span', { class: 'rv', id: 'swingAt' });
+  const hold = (label, deg) => btn(label, `Hold at ${label}`, () => { swingPrev.play = false; swingPrev.th = deg * D2R; renderEditTools(c); });
+
+  box.append(row('Swings', seg, angBox),
+    row('Travel', travel, el('span', { class: 'st-note', text: `either side of where its parts sit now` })),
+    row('Preview', play, hold(`−${R}°`, -R), scrub, hold(`+${R}°`, R), at));
 }
 
 /* ───────── picking ───────── */
@@ -180,7 +206,8 @@ function startDrag(h, e) {
   const P0 = gizmo.position.clone(), ray = rayFrom(e), a = h.axis >= 0 ? new THREE.Vector3(...AXES[h.axis]) : null;
   const d = { h, c, P0, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null,
     axis0: c.type === 'joint' ? jointAxis(c) : null, dir0: c.type === 'link' ? linkDir(c) : null };
-  if (h.kind === 'swing') { d.n = new THREE.Vector3(...carriedDir(c)); d.p0 = onPlane(ray, P0, d.n) || onPlane(ray, P0, d.n.clone().negate()); if (!d.p0) return false; d.sw0 = swingOf(c).swing; }
+  if (h.kind === 'travel') { const sw = servoSweep(c); d.n = new THREE.Vector3(...sw.a); d.rest = sw.rest; d.v = crs(sw.a, sw.rest); swingPrev.play = false; }
+  else if (h.kind === 'swing') { d.n = new THREE.Vector3(...carriedDir(c)); d.p0 = onPlane(ray, P0, d.n) || onPlane(ray, P0, d.n.clone().negate()); if (!d.p0) return false; d.sw0 = swingOf(c).swing; }
   else if (h.kind === 'move') { d.t0 = closestOnAxis(ray, P0, a); if (d.t0 == null) return false; }
   else { d.p0 = onPlane(ray, P0, a); if (!d.p0) return false; }
   if (typeof undo !== 'undefined') undo.lastKey = null;   // a drag is its own undo step
@@ -190,7 +217,12 @@ function startDrag(h, e) {
 function dragTo(e) {
   const d = edit.drag, c = d.c, fine = e.shiftKey, ray = rayFrom(e), a = d.h.axis >= 0 ? new THREE.Vector3(...AXES[d.h.axis]) : null;
   const step = fine ? 0.001 : 0.005, astep = (fine ? 1 : 5) * D2R;
-  if (d.h.kind === 'swing') {   // turn the swing direction round what the servo carries
+  if (d.h.kind === 'travel') {   // drag a fan end round the hinge: the travel is how far it is from 0°
+    const p = onPlane(ray, d.P0, d.n) || onPlane(ray, d.P0, d.n.clone().negate()); if (!p) return;
+    const v = [p.x - d.P0.x, p.y - d.P0.y, p.z - d.P0.z], th = Math.atan2(dot(v, d.v), dot(v, d.rest)) * R2D;
+    c.range = clamp(snapTo(Math.abs(th), fine ? 1 : 5), 5, 90); swingPrev.th = Math.sign(th || 1) * c.range * D2R;
+    edited(c, 'range');
+  } else if (d.h.kind === 'swing') {   // turn the swing direction round what the servo carries
     const p = onPlane(ray, d.P0, d.n) || onPlane(ray, d.P0, d.n.clone().negate()); if (!p) return;
     const v0 = d.p0.clone().sub(d.P0), v1 = p.clone().sub(d.P0);
     const turn = Math.atan2(new THREE.Vector3().crossVectors(v0, v1).dot(d.n), v0.dot(v1)) * R2D;
@@ -228,7 +260,7 @@ function dragTo(e) {
   }
   refreshCard(c); showDragReadout(c);
 }
-function endDrag() { edit.drag = null; vpEl.style.cursor = ''; highlightHandle(null); save(); updateEditMsg(); }
+function endDrag() { if (edit.drag && edit.drag.h.kind === 'travel') { swingPrev.play = true; swingPrev.t0 = performance.now(); } edit.drag = null; vpEl.style.cursor = ''; highlightHandle(null); save(); updateEditMsg(); }
 function highlightHandle(h) {
   for (const v of handleVis) {
     const on = h && v.kind === h.kind && v.axis === h.axis;
@@ -238,7 +270,8 @@ function highlightHandle(h) {
 function showDragReadout(c) {
   const f = x => x.toFixed(3);
   let t = `${c.name}: position (${f(c.pos[0])}, ${f(c.pos[1])}, ${f(c.pos[2])}) m`;
-  if (edit.drag && edit.drag.h.kind === 'swing') { const p = swingPreset(c), w = swingOf(c); t = `${c.name}: swings ${p ? p.label.toLowerCase() : 'at ' + w.swing.toFixed(0) + '°'} (${w.swing.toFixed(0)}° from ${swingRefName(c)}). Shift for 1° steps.`; }
+  if (edit.drag && edit.drag.h.kind === 'travel') t = `${c.name}: travels ±${c.range}° either side of 0°. Shift for 1° steps.`;
+  else if (edit.drag && edit.drag.h.kind === 'swing') { const p = swingPreset(c), w = swingOf(c); t = `${c.name}: swings ${p ? p.label.toLowerCase() : 'at ' + w.swing.toFixed(0) + '°'} (${w.swing.toFixed(0)}° from ${swingRefName(c)}). Shift for 1° steps.`; }
   else if (edit.drag && edit.drag.h.kind === 'rot') {
     if (c.type === 'motor') t = `${c.name}: axis tilted ${c.tilt.toFixed(1)}° toward ${c.az.toFixed(1)}°`;
     else if (c.type === 'joint') t = `${c.name}: hinge axis toward ${c.hingeAz.toFixed(1)}°, tilted up ${c.hingeEl.toFixed(1)}°`;
@@ -281,13 +314,22 @@ function editPointerUp(e) {
 /* ───────── per-frame ───────── */
 function updateEditView() {
   if (!gizmo) return;
-  if (!editMode) { gizmo.visible = hoverBox.visible = selBox.visible = false; return; }
+  if (!editMode) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);
   selBox.visible = !!g; if (g) selBox.setFromObject(g);
   const hg = edit.hover != null && edit.hover !== edit.sel ? pickGroups.get(edit.hover) : null;
   hoverBox.visible = !!hg; if (hg) hoverBox.setFromObject(hg);
   gizmo.visible = !!c;
+  travelG.visible = !!c && c.type === 'joint' && descendants(c).length > 0;
+  if (travelG.visible) {   // on the fan's two ends
+    const sw = servoSweep(c), v = crs(sw.a, sw.rest), R = c.range * D2R, k = camera.position.distanceTo(gizmo.position) * 0.16 * 0.045;
+    for (const g of travelG.children) {
+      const p = add(c.pos, add(scl(sw.rest, sw.radius * Math.cos(R)), scl(v, sw.radius * Math.sin(R) * g.userData.side)));
+      g.position.copy(drone.localToWorld(new THREE.Vector3(...p))); g.scale.setScalar(k);
+      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...sw.a));
+    }
+  }
   if (c && c.type === 'joint') {
     const sc = $('#swingScrub'), at = $('#swingAt'), th = previewAngle(c) * R2D;
     if (sc && swingPrev.play) sc.value = String(Math.round(th)); if (at) at.textContent = `${th >= 0 ? '+' : '−'}${Math.abs(th).toFixed(0)}°`;

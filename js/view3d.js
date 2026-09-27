@@ -70,7 +70,7 @@ function servoSweep(j) {
 function buildRangeVis(j, p) {
   const { a, rest, radius, arcs } = servoSweep(j), v = crs(a, rest), R = j.range * D2R, N = 36;
   const at = (rad, th, off = [0, 0, 0]) => new THREE.Vector3(...add(off, add(scl(rest, rad * Math.cos(th)), scl(v, rad * Math.sin(th)))));
-  const col = colorOf('--accent');
+  const col = colorOf('--swing');   // servo travel has its own colour, apart from the rotors' blue
   const m = {
     fan: new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false }),
     line: new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.5 }),
@@ -237,7 +237,12 @@ function updateScene() {
   spMarker.visible = live; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
-  const tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
+  let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
+  const selC = editMode && compById(edit.sel);
+  if (selC) {   // editing: orbit round the selected part; with the servo panel open, keep it clear of the panel
+    tgt = drone.localToWorld(new THREE.Vector3(...selC.pos));
+    if (selC.type === 'joint') tgt.addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion), -0.09 * cam.dist);
+  }
   cam.target.lerp(tgt, view.follow ? 0.12 : 0.06);
   if (view.chase && live) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
