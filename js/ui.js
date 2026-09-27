@@ -176,7 +176,7 @@ function compBody(c) {
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('p', { class: 'hint', text: 'The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
@@ -499,7 +499,7 @@ function renderResponses() {
   const row = (name, what, l, t) => tbl.append(el('tr', {}, el('td', { text: `${name} ${what}` }), el('td', { text: l }), el('td', { text: t })));
   for (const c of acts) {
     const r = learn.resp.get(c.id) || {};
-    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), trueBend().toFixed(2)); }
+    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), trueBend(c).toFixed(2)); }
   }
   for (const j of joints()) {
     const r = learn.resp.get(j.id) || {};

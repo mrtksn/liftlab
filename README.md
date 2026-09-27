@@ -81,7 +81,18 @@ If the fit is poor, it catches itself on the airframe description instead and sa
 Results on the stock presets (thrown to 4 m):
 - **Identification:** the fit explains 97–100% of the rotation and of the force. Motor lag comes out at the true 30 ms; the IMU offset within about 3 mm.
 - **Recovery:** the quad, hexacopter, tricopter and tilt-rotor quad catch themselves reliably. The tilt-rotor quad gets through about half its pulses before it has to stop, and holds its servos until the calibration. The main-lifter layout is marginal: its big rotor's slow spin-up and strong gyroscopic torque leave it skimming the ground or crashing, whatever the throw height.
+- **Helicopter:** the throw start doesn't work. Its only way to roll and pitch is the two-servo rotor head, and the free fall is too short to measure the head's nine basis columns well enough to fly on.
 - **Afterwards:** the hover calibration brings the learned model to 92–100% of the force and 96–99% of the rotation on the multirotors and the tilt-rotor quad.
+
+## Helicopter
+
+**Helicopter (main rotor + tail rotor)** under Start from:
+- **Main rotor:** a 0.6 m collective-pitch rotor on a two-servo head that tilts it fore–aft and sideways. This stands in for a swashplate's cyclic: tilting the lift off-centre is what rolls and pitches the body.
+- **Tail rotor:** out on a 45 cm boom, pushing sideways.
+- **Counter-torque:** the main rotor's drag twists the body the opposite way to its spin, and the tail rotor pushes against that.
+- **Hover:** the tail rotor's sideways push makes it hang a few degrees to one side, as real helicopters do.
+
+It hovers, manoeuvres and calibrates (98% of the rotation and 100% of the force explained). With a single rotor and nothing to counter its torque, the body spins the opposite way to the rotor.
 
 ## Airflow (physics only)
 
@@ -257,6 +268,7 @@ The physics isn't simplified for speed; every step (2 kHz) does the full version
 
 - **Articulated rigid bodies** (`js/multibody.js`, `rigidBody`). The frame is a free-floating body and every servo joint adds another: the servo's output and everything rigidly on it, including rods, further joints and what they carry. The equations of motion for the frame's 6 degrees of freedom plus every joint angle are built each step with the recursive Newton–Euler algorithm (Featherstone) and solved together. So a swinging arm pushes the frame the other way, a load drags its servo, the whole thing conserves momentum in free fall (checked: angular momentum to 0.2%, linear to 0.01% while an arm swings ±60°), and a sensor on an arm feels the arm's own acceleration.
 - **Motors** (`motorDynamics`). Each motor is a brushless motor, ESC and prop sized from its card: throttle sets the voltage, back-EMF and winding resistance set the current, current sets the torque, the prop's inertia sets how fast it spins up, and thrust and drag torque grow with speed squared. From that come a throttle curve that bends upward, spin-up faster than spin-down, a current-limited start from standstill, thrust that fades with the battery, the frame feeling each motor's torque while it speeds up (the spin-up reaction), and the gyroscopic torque of a spinning prop when the frame or its servo turns it. Health scales the thrust. Hover hints (rpm and amps) show on each motor's bar.
+- **Collective-pitch rotors** (a motor's **Blade pitch** setting), as on a helicopter. The ESC's governor holds the rotor at a set speed and the blade pitch sets the thrust, so thrust follows the command after the pitch servo's 30 ms lag. The rotor never speeds up or slows down, so there's no spin-up twist, but more pitch means more drag torque, which twists the frame. The blades flap: the disc follows the mast a few milliseconds behind (flapping time constant 16/(γΩ), Lock number γ ≈ 4), so turning the airframe doesn't meet the rotor's gyroscopic stiffness the way a rigid prop does. With rigid blades, a helicopter-sized rotor couples the axes so strongly the controller can't hold it.
 - **Servo joints** (`servoTorque`). A hobby servo is a geared motor with a position loop: full stall torque when stopped, none at its no-load speed, a 3° proportional band, the gearbox's reflected inertia, a command delay, and hard stops just past its travel. It moves by the multibody dynamics, so a light arm snaps to its target, a heavy one lags and overshoots, and thrust or weight on an arm holds it slightly off target (checked: a 100 g weight on a 15 cm arm sags it 0.5°).
 - **Rigid mass:** box, sphere or vertical cylinder, riding on whichever body it's attached to.
 - **Mass on cable:** a point mass on a tension-only spring-damper cable that can swing, go slack and touch the ground.
@@ -276,9 +288,10 @@ The physics isn't simplified for speed; every step (2 kHz) does the full version
 
 ## Allocation: limits, margin, power and servo speed
 
-Every throttle stays within 0–1 and every servo within its range; those are hard limits. On top of that, the allocation (`allocation`) works in two passes:
-1. **The move itself.** Get as close to the wanted accelerations as the limits allow.
-2. **The choice.** Keep exactly that move, and where it can be made in more than one way, pick using `allocationPreferences`. Examples: a hexacopter's spare motors, a servo against a motor, or a big lifting rotor against small steering ones.
+Every throttle stays within 0–1 and every servo within its range; those are hard limits. On top of that, the allocation (`allocation`) works in three passes:
+1. **The move itself.** Get as close to the wanted lift, roll and pitch (and sideways force, where servos make it) as the limits allow.
+2. **Then yaw.** As much yaw as it can get without giving any of that up. Most flight controllers put yaw last. Otherwise, when yaw can't be had, the cheapest way to cut the yaw error is to cut the thrust: a lone rotor would never lift, and saturated motors would drop the drone to hold its heading.
+3. **The choice.** Keep exactly that move, and where it can be made in more than one way, pick using `allocationPreferences`. Examples: a hexacopter's spare motors, a servo against a motor, or a big lifting rotor against small steering ones.
 
 The preferences never give up any of the move. They are three sliders under **Allocation**:
 - **Keep margin (allowance).** Pulls each device toward the middle of its range, gently in the middle and about 100× harder near a limit. It weighs most on the devices that do the steering, so a big lifting rotor near its limit matters less than a steering motor near its limit.
@@ -311,12 +324,13 @@ Measured on the presets, ESP32 at 1 kHz:
 | Preset | Hover | Calibrating | Throw, while falling | Memory, most | Throw's first fit |
 |---|---|---|---|---|---|
 | Quad | 7% of a core | 7% | 14% | 47 KB | 1.4 ms |
-| Hexacopter | 9% | 9% | 21% | 60 KB | 3 ms |
-| Tricopter | 11% | 11% | 19% | 52 KB | 2 ms |
-| Tilt-rotor quad | 25% | 35% | 52% | 113 KB | 14 ms |
-| Main lifter + 4 steering | 28% | 44% | 58% | 125 KB | 17 ms |
+| Hexacopter | 11% | 11% | 21% | 60 KB | 3 ms |
+| Tricopter | 12% | 12% | 19% | 52 KB | 2 ms |
+| Tilt-rotor quad | 28% | 44% | 52% | 113 KB | 14 ms |
+| Main lifter + 4 steering | 32% | 62% | 58% | 125 KB | 17 ms |
+| Helicopter | 20% | 23% | (throw start not supported) | 91 KB | — |
 
-The biggest items are the in-flight learning (its matrix grows with the square of the inputs, and a motor on a servo is three inputs), the allocation, and rebuilding the controller's model as servos move. The end-of-test fits take 8–30 ms each. The per-motor lag search after a throw takes 0.1–0.3 s on the spare core. The ESP32-C3 can't run the 1 kHz loop; the panel shows the fastest loop it could keep.
+The biggest items are the in-flight learning (its matrix grows with the square of the inputs, and a motor on a servo is three inputs), the allocation (three passes: lift and tilt, then yaw, then preferences), and rebuilding the controller's model as servos move. The end-of-test fits take 8–30 ms each. The per-motor lag search after a throw takes 0.1–0.3 s on the spare core. The ESP32-C3 can't run the 1 kHz loop; the panel shows the fastest loop it could keep.
 
 ## Flight envelope
 

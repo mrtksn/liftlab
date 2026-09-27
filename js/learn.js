@@ -57,12 +57,12 @@ function buildIndex() {
 }
 const seenAngles = c => chainOf(c).map(angleSeen);
 function motorInputs() {   // per input: its motor's believed thrust command and its basis factor
-  const v = new Array(learn.n).fill(0), phi = new Array(learn.n).fill(0), m = new Array(learn.n).fill(0);
+  const v = new Array(learn.n).fill(0), phi = new Array(learn.n).fill(0), m = new Array(learn.n).fill(0), coll = new Array(learn.n).fill(false);
   actuators().forEach((c, i) => {
     const st = act.get(c.id), ix = learn.index.get(c.id); if (!st || !ix) return;
-    const b = basisVals(seenAngles(c)); ix.cols.forEach((jj, k) => { v[jj] = st.v || 0; phi[jj] = b[k]; m[jj] = i; });
+    const b = basisVals(seenAngles(c)); ix.cols.forEach((jj, k) => { v[jj] = st.v || 0; phi[jj] = b[k]; m[jj] = i; coll[jj] = c.pitch === 'collective'; });
   });
-  return { v, phi, m };
+  return { v, phi, m, coll };
 }
 function inputVector() {   // what was sent, in the identification's input space
   const x = new Array(learn.n).fill(0);
@@ -112,7 +112,10 @@ const ctlModel = () => flyingLearned() ? UNIT : model;
 function ctlAxis() {   // nominal thrust axis the controller believes in
   if (!flyingLearned()) return nb;
   let s = [0, 0, 0];
-  for (const c of actuators()) s = add(s, colAtAngles(c, chainOf(c).map(restAngle)).slice(0, 3));
+  for (const c of actuators()) {   // the lifting rotors' force (a sideways tail rotor doesn't say which way is up)
+    const f = colAtAngles(c, chainOf(c).map(restAngle)).slice(0, 3), n = nrm(f);
+    if (n > 1e-9) s = add(s, scl(f, Math.max(0, f[2] / n)));
+  }
   return nrm(s) > 1e-6 ? unit(s) : nb;
 }
 /* ───────── what the actuator tests learned ───────── */
@@ -122,7 +125,7 @@ const believedThrust = (u, k) => (1 - k) * u + k * u * u;
 // Bend the thrust linearization uses: the learned one once applied, otherwise a typical brushless prop curve
 // (thrust grows faster than throttle). The flight software isn't told the real motors' curve.
 const BEND_PRIOR = 0.7;
-const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? BEND_PRIOR;
+const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? (c.pitch === 'collective' ? 0 : BEND_PRIOR);   // pitch control is close to linear
 const motorLagHat = c => (learn.resp.get(c.id) || {}).tau ?? 0.035;
 function servoModelHat(j) { const r = learn.resp.get(j.id) || {}; return { rate: r.rate ?? j.rate * D2R, lag: r.lag ?? 0 }; }
 function inputLags() { const l = new Array(learn.n).fill(0.035); for (const c of actuators()) { const ix = learn.index.get(c.id); if (ix) for (const jj of ix.cols) l[jj] = motorLagHat(c); } return l; }

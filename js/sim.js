@@ -5,7 +5,7 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -28,6 +28,18 @@ const PRESETS = {
     c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }));
     const sn = defaultSensors(); sn[1].pos = [-0.12, -0.12, 0.08];   // compass on a boom, away from the big main motor
     return { frame: 0.5, comps: c.concat(sn), mode: 'tilt' }; } },
+  helicopter: { label: 'Helicopter (main rotor + tail rotor)', build() {
+    // The main rotor sits on a two-servo head that tilts it fore–aft and sideways (in place of a swashplate's
+    // cyclic): tilting the lift off-centre is what turns the body. Its drag twists the body the other way,
+    // which the tail rotor on the boom pushes against.
+    const pitch = mkJoint('Head pitch servo', 0, 0, 0.14, { hingeAz: 90, range: 15, rate: 300, torque: 2 });
+    const roll = mkJoint('Head roll servo', 0, 0, 0.14, { hingeAz: 0, range: 15, rate: 300, torque: 2, parent: pitch.id });
+    const main = mkMotor('Main rotor', 0, 0, 0.14, { tmax: 24, prop: 0.3, kappa: 0.035, tau: 0.1, pitch: 'collective', mass: 0.2, spin: 1, parent: roll.id });
+    const boom = mkLink('Tail boom', -0.03, 0, 0.04, { az: 180, el: 0, length: 0.45, mass: 0.05 });
+    const tail = mkMotor('Tail rotor', -0.48, 0, 0.04, { tilt: 90, az: -90, tmax: 4, prop: 0.06, kappa: 0.012, tau: 0.02, mass: 0.04, spin: 1, parent: boom.id });
+    const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] })];   // battery forward, to balance the tail
+    const sn = defaultSensors(); sn[1].pos = [-0.25, 0, 0.07];   // compass back along the boom, away from the main motor
+    return { frame: 0.4, comps: c.concat(sn), mode: 'tilt' }; } },
   indoor: { label: 'Indoor quad (optical flow, no GPS)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] }));
@@ -99,7 +111,9 @@ function massProps(which) {
 }
 function nominalAxis() {
   let s = [0, 0, 0];
-  for (const c of actuators()) s = add(s, scl(rotorNow(c, restAngle).d, c.tmax * hModel(c)));   // at rest (manual joints at their set angle)
+  // At rest (manual joints at their set angle), from the rotors that lift: a sideways rotor, like a
+  // helicopter's tail rotor, steers but doesn't set which way is up.
+  for (const c of actuators()) { const d = rotorNow(c, restAngle).d; s = add(s, scl(d, c.tmax * hModel(c) * Math.max(0, d[2]))); }
   return nrm(s) > 1e-9 ? unit(s) : [0, 0, 1];
 }
 function syncRuntime() {
@@ -192,7 +206,7 @@ function allocate(w, cm) {
 }
 
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
-function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * steadyX(u, S.battV) ** 2; }
+function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(u, 0, 1) : steadyX(u, S.battV) ** 2); }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
 function updateServoBelief(dt) {
   for (const j of joints()) {
@@ -275,7 +289,29 @@ function motorParams(c) {
 // sizing above, k_QΩ² + (K_e²/R)Ω = K_e·uV/R becomes x² + 4x = 5uV/V_NOM for every motor.
 const steadyX = (u, V) => -2 + Math.sqrt(4 + 5 * Math.max(0, u) * V / V_NOM);
 // How much the real throttle-to-thrust curve bends, in the controller's terms (thrust ∝ (1−k)u + ku²).
-const trueBend = () => clamp((0.5 - (steadyX(0.5, S.battV) / steadyX(1, S.battV)) ** 2) / 0.25, 0, 1);
+const trueBend = c => c && isCollective(c) ? 0 : clamp((0.5 - (steadyX(0.5, S.battV) / steadyX(1, S.battV)) ** 2) / 0.25, 0, 1);
+
+// A collective-pitch rotor (as on a helicopter): the ESC's governor holds the rotor at a set speed and the
+// blade pitch sets the thrust, so thrust follows the command after the pitch servo's short lag, the rotor
+// doesn't speed up or slow down (no spin-up twist), and it keeps its gyroscopic stiffness. More pitch means
+// more drag torque, which the motor supplies and the frame feels the other way.
+const isCollective = c => c.pitch === 'collective';
+const GOV = 0.85;                                        // governed speed, as a fraction of the fixed-pitch full speed
+function collectiveLoad(c, mp, col) {                    // thrust and drag coefficients at blade pitch col (0–1)
+  const Og = GOV * mp.Om, kT = c.tmax / (Og * Og), kQf = Math.max(1e-4, c.kappa) * c.tmax / (Og * Og);
+  return { Og, kT: kT * col, kQ: kQf * (0.3 + 0.7 * col ** 1.5) };
+}
+// One step of a motor: speed from the throttle (fixed pitch), or pitch from the command with the governor
+// holding speed (collective). Returns motorDynamics' result; st.esc is the ESC duty (for the battery current).
+function rotorStep(c, st, mp, V, dt) {
+  if (!isCollective(c)) { st.esc = st.u || 0; return run('motorDynamics', st.Omega || 0, st.esc, V, mp, dt); }
+  st.col = (st.col ?? 0) + ((st.u || 0) - (st.col ?? 0)) * Math.min(1, dt / 0.03);   // pitch servo
+  const L = collectiveLoad(c, mp, clamp(st.col, 0, 1)), Om = st.Omega || 0, e = (L.Og - Om) / L.Og;
+  st.gi = clamp((st.gi || 0) + 4 * e * dt, -0.3, 0.3);
+  const ff = (mp.Ke * L.Og + mp.R * L.kQ * L.Og * L.Og / mp.Ke) / Math.max(1, V);   // duty that holds the speed under this load
+  st.esc = clamp(ff + 3 * e + st.gi, 0, 1);
+  return run('motorDynamics', Om, st.esc, V, { ...mp, kT: L.kT, kQ: L.kQ }, dt);
+}
 
 // The air each rotor meets (wind, its own motion, the other rotors' wash) and what that does to its thrust.
 function rotorAir(rotors, K, R, RT, wv) {
@@ -292,13 +328,13 @@ function rotorAir(rotors, K, R, RT, wv) {
 function dynamics(dt) {
   if (thr && thr.phase === 'hand') {   // held still in the hand
     S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.acc = [0, 0, 0]; S.wdot = [0, 0, 0];
-    for (const a of act.values()) { a.Omega = 0; a.T = 0; a.i = 0; }
+    for (const c of actuators()) { const a = act.get(c.id); a.Omega = isCollective(c) ? GOV * motorParams(c).Om : 0; a.T = 0; a.i = 0; a.col = 0; }   // a helicopter's rotor is spooled up before the throw
     S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
     return;
   }
   if (thr && thr.phase === 'toss') {   // the throwing hand: a steady push up to speed and spin, joints held
     const T = thr.toss, a = scl(T.dv, 1 / T.dur), al = scl(T.dw, 1 / T.dur), R = qmat(S.q), RT = m3T(R);
-    for (const x of act.values()) { x.Omega = 0; x.T = 0; x.i = 0; }
+    for (const c of actuators()) { const x = act.get(c.id); x.Omega = isCollective(c) ? GOV * motorParams(c).Om : 0; x.T = 0; x.i = 0; x.col = 0; }
     S.acc = a; S.wdot = al;
     S.v = add(S.v, scl(a, dt)); S.p = add(S.p, scl(S.v, dt)); S.w = add(S.w, scl(al, dt));
     const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
@@ -322,11 +358,17 @@ function dynamics(dt) {
   let Ibatt = 0.5;   // avionics
   const rotors = acts.map(c => {
     const st = act.get(c.id), mp = motorParams(c);
-    const md = run('motorDynamics', st.Omega || 0, st.u || 0, S.battV, mp, dt);
+    const md = rotorStep(c, st, mp, S.battV, dt);
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
-    Ibatt += (st.u || 0) * md.i;
+    Ibatt += st.esc * md.i;
     const b = MB.of.get(c.id) || 0;
-    return { c, st, b, p: posed(b, c.pos), d: m3v(K.Rb[b], actDir(c)), T: md.T * c.health / 100, R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
+    let d = m3v(K.Rb[b], actDir(c));
+    if (isCollective(c)) {   // helicopter blades flap: the disc follows the mast a moment behind (world axes), instead of the whole airframe acting as a gyroscope
+      const mast = m3v(R, d), tf = 16 / (4 * Math.max(50, md.Omega));   // flapping time constant 16/(γΩ), Lock number γ ≈ 4
+      st.disc = st.disc ? unit(add(st.disc, scl(sub(mast, st.disc), Math.min(1, dt / tf)))) : mast;
+      d = m3v(RT, st.disc);
+    }
+    return { c, st, b, p: posed(b, c.pos), d, T: md.T * c.health / 100, R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
   });
   S.battV = run('batteryModel', S.batt, Math.max(0, Ibatt), dt);
   S.battK = steadyX(1, S.battV) ** 2;
@@ -338,7 +380,7 @@ function dynamics(dt) {
     const Tw = Math.max(ro.ae.T, 1e-6);
     const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, ro.c.spin, ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
     push(ro.b, add(rw.F, ro.ae.H), ro.p);
-    const h = scl(ro.d, ro.c.spin * ro.J * ro.Om);                                  // the spinning prop's angular momentum
+    const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, ro.c.spin * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
   }
   S.rotors = rotors;
@@ -418,7 +460,11 @@ function resetSim() {
     let I = 0.5;
     for (const c of actuators()) {
       const st = act.get(c.id), mp = motorParams(c);
-      st.Omega = steadyX(st.u, S.battV) * mp.Om; st.T = mp.kT * st.Omega ** 2; st.i = mp.kQ * st.Omega ** 2 / mp.Ke; I += st.u * st.i;
+      if (isCollective(c)) {   // spooled up at the governed speed, blades at the pitch hover needs
+        const L = collectiveLoad(c, mp, st.u); st.col = st.u; st.gi = 0; st.Omega = L.Og; st.T = L.kT * L.Og ** 2; st.i = L.kQ * L.Og ** 2 / mp.Ke;
+        st.esc = (mp.Ke * L.Og + mp.R * st.i) / S.battV;
+      } else { st.Omega = steadyX(st.u, S.battV) * mp.Om; st.T = mp.kT * st.Omega ** 2; st.i = mp.kQ * st.Omega ** 2 / mp.Ke; st.esc = st.u; }
+      I += st.esc * st.i;
     }
     S.battV = run('batteryModel', S.batt, I, 0); S.battK = steadyX(1, S.battV) ** 2;
     for (const j of joints()) { const st = jst.get(j.id), t = jointTarget(j); st.th = st.thR = t + (j.offset || 0) * D2R; st.pst = {}; st.thHat = t; st.rate = 0; st.acc = 0; st.dq = []; }
@@ -439,12 +485,14 @@ function envelopeCalc() {
   for (const c of actuators()) {
     const h = c.health / 100; if (h <= 0) continue;
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
-    const j = chainOf(c).find(x => sj.includes(x));
-    if (j) {   // a rotor its nearest steering joint can swing: its thrust at the middle, plus the swing (linearized over the range)
-      const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); };
-      const e = 1e-3, sb = Math.sin(j.range * D2R) * c.tmax * h;
-      gens.push({ g: toK(at(0)), lo: 0, hi: c.tmax * h });
-      gens.push({ g: toK(at(e).map((v, i) => (v - at(-e)[i]) / (2 * e))), lo: -sb, hi: sb });
+    const js = chainOf(c).filter(x => sj.includes(x));
+    if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)
+      gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); })()), lo: 0, hi: c.tmax * h });
+      for (const j of js) {
+        const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); };
+        const e = 1e-3, sb = Math.sin(j.range * D2R) * c.tmax * h;
+        gens.push({ g: toK(at(e).map((v, i) => (v - at(-e)[i]) / (2 * e))), lo: -sb, hi: sb });
+      }
     } else { const n = rotorNow(c); gens.push({ g: toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)), lo: 0, hi: c.tmax * h }); }
   }
   let mp = 0, treq = [0, 0, 0];

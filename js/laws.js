@@ -363,7 +363,7 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags, mot) {
     st.ua[j] += (u[j] - st.ua[j]) * lag; raw[j] = st.ua[j];                  // what the motors are doing now
     if (m > n) {
       st.um[j] += (mot.v[j] - st.um[j]) * lag;
-      const sp = Math.sqrt(Math.max(0, st.um[j])) * mot.phi[j];            // its speed, as a fraction of full
+      const sp = mot.coll && mot.coll[j] ? 0 : Math.sqrt(Math.max(0, st.um[j])) * mot.phi[j];   // its speed, as a fraction of full (a collective rotor's is held)
       raw[n + j] = (sp - st.sp[j]) / dt; st.sp[j] = sp;
     }
   }
@@ -469,7 +469,8 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   // B₂ is each rotor spinning up or down: the motor's torque pushes the frame back (their G₂). Without it,
   // pulses from standstill look like a huge yaw effect. This drone doesn't measure prop speed, so it runs a
   // generic brushless model for each motor (speed x as a fraction of full, back-EMF, a current limit, prop
-  // drag; only its time constant τ unknown): u_τ = x² is the thrust.
+  // drag; only its time constant τ unknown): u_τ = x² is the thrust. A collective-pitch rotor (mot.coll) holds its
+  // speed, so its thrust just follows the command through a lag τ and it has no spin-up reaction.
   // Built to fit a microcontroller:
   //   while falling (solve false), it keeps one running fit per candidate τ (all motors the same), a fixed
   //     cost per step, and logs a compact 250 Hz record;
@@ -485,6 +486,7 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
   const zeros = (a, b) => b ? Array.from({ length: a }, () => new Array(b).fill(0)) : new Array(a).fill(0);
   const grp = mot && mot.m ? mot.m : u.map((_, j) => j), groups = [...new Set(grp)];
+  const coll = mot && mot.coll ? mot.coll : u.map(() => false);           // collective-pitch rotors (helicopter blades)
   const firstOf = groups.map(g => grp.indexOf(g));
   const Lof = (a, W) => [0, 1, 2].map(i => [0, 1, 2].map(j =>             // [α]× + [ω]×²
     [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
@@ -494,6 +496,10 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   const stepRegs = (z, v, ph, h, tauOf) => {
     const k = kOf(h);
     for (let j = 0; j < n; j++) {
+      if (coll[j]) {                                                       // collective pitch: speed held, thrust follows the pitch with a lag
+        z.x[j] += (Math.max(0, v[j]) - z.x[j]) * Math.min(1, h / tauOf[grp[j]]);
+        z.ul[j] += k * (z.x[j] * ph[j] - z.ul[j]); z.dq[j] = 0; continue;
+      }
       const xt = Math.sqrt(Math.max(0, v[j]));
       const drive = clamp(xt * xt + 4 * xt - 4 * z.x[j], -1, 2) - z.x[j] * z.x[j];   // motor torque − prop drag, per full-thrust torque
       z.x[j] = Math.max(0, z.x[j] + drive / (5.26 * tauOf[grp[j]]) * h);
@@ -669,12 +675,19 @@ function allocation(cols, lo, hi, wd, mode, pull) {
   // wd: the 6 accelerations wanted; lo/hi: input limits
   // pull: { q, r } from allocationPreferences — how strongly each input is drawn toward a preferred value
   const W = mode === 'tilt' ? [0.3, 0.3, 3, 10, 10, 1] : [3, 3, 3, 10, 10, 1];   // sideways force only counts when servos are asked for it
-  const x = bls(cols, lo, hi, wd, W);                    // 1. the best move the limits allow (bounded weighted least squares)
+  const made = x => [0, 1, 2, 3, 4, 5].map(k => cols.reduce((s, c, j) => s + c[k] * x[j], 0));
+  // 1. The best move the limits allow (bounded weighted least squares), yaw aside: lift and tilt come first,
+  //    as in most flight controllers. Otherwise, when yaw can't be had (a lone rotor, saturated motors), the
+  //    cheapest way to cut the yaw error would be to cut the thrust, and the drone would drop.
+  let x = bls(cols, lo, hi, wd, W.map((v, k) => k === 5 ? v * 1e-4 : v));
+  // 2. Then as much yaw as it can get without giving up any lift, roll or pitch (sideways force, which only
+  //    counts where servos can make it, trades with yaw as usual).
+  const kept = made(x); kept[0] = wd[0]; kept[1] = wd[1]; kept[5] = wd[5];
+  x = bls(cols, lo, hi, kept, W.map((v, k) => k === 2 || k === 3 || k === 4 ? v * 1e3 : v));
   if (!pull) return x;
-  // 2. Of all the ways to make that same move, the preferred one. The pulls are tiny next to the move, so
+  // 3. Of all the ways to make that same move, the preferred one. The pulls are tiny next to the move, so
   //    they only decide where there is a real choice: a hexacopter's spare motors, a servo vs. a motor.
-  const got = [0, 1, 2, 3, 4, 5].map(k => cols.reduce((s, c, j) => s + c[k] * x[j], 0));
-  return bls(cols, lo, hi, got, W, { q: pull.q, r: pull.r, rel: 1e-5 });
+  return bls(cols, lo, hi, made(x), W, { q: pull.q, r: pull.r, rel: 1e-5 });
 }
 
 function allocationPreferences(inputs, prefs) {
@@ -908,8 +921,8 @@ const LAW_DEFS = [
     args: [['v', 'wanted thrust as a fraction of max'], ['bend', 'learned bend k̂ (0 until measured)']], returns: 'throttle 0–1',
     shape: 'n', sample: () => [0.4, 0.3] },
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
-    math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub>`, `2. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₁)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
-    doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted move as the limits allow; the second keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
+    math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sub>−yaw</sub><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub> &nbsp;(lift and tilt first)`, `2. ${V('u')}₂: as much yaw as it can get while keeping <i>B</i>${V('u')}₁'s lift, roll and pitch`, `3. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₂)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
+    doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted lift and tilt as the limits allow, then yaw gets what is left: when yaw can\'t be had, it gives way rather than the thrust. The last solve keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
     args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt", "mixed" or "level"'], ['pull', '{ q, r }: preferences per input']], returns: 'one value per input',
     shape: 'alloc', sample: () => [[[0, 0, 1, 1, 1, 0.1], [0, 0, 1, -1, 1, -0.1], [0, 0, 1, -1, -1, 0.1], [0, 0, 1, 1, -1, -0.1]], [0, 0, 0, 0], [6, 6, 6, 6], [0, 0, 9.81, 0, 0, 0], 'tilt', { q: [0.02, 0.02, 0.02, 0.02], r: [3, 3, 3, 3] }] },
   { key: 'allocationPreferences', group: 'ctrl', fn: allocationPreferences, title: 'Allocation preferences',
