@@ -88,12 +88,8 @@ const getP = (o, p) => p.reduce((a, k) => a[k], o);
 function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
 const openSet = new Set();
-// How a servo is mounted: the plane it swings in (at right angles to its hinge axis). Quick picks, relative
-// to what it's mounted on (see mountFrame).
-const HINGE_PRESETS = [['z', 'Axis along the mount\'s Z (swivels flat)', 0, 90], ['y', 'Axis along Y (tips in the X–Z plane)', 90, 0], ['x', 'Axis along X (tips in the Y–Z plane)', 0, 0], ['custom', 'Any direction (angles below)', null, null]];
-const relPreset = j => { const r = hingeRel(j); return presetOf(HINGE_PRESETS, +r.az.toFixed(1), +r.el.toFixed(1)); };
-const planeTag = j => { const r = hingeRel(j); return `axis ${r.az.toFixed(0)}°, ${r.el.toFixed(0)}° up`; };
-const planeName = j => { const r = hingeRel(j); return `the plane across its axis (heading ${r.az.toFixed(0)}°, ${r.el.toFixed(0)}° up from ${mountName(j)})`; };
+// How a servo is mounted: which way it swings what it carries (see swingOf), relative to what it's on.
+const swingTag = j => { const p = swingPreset(j), w = swingOf(j); return 'swings ' + (p ? p.label.toLowerCase() : `${w.swing.toFixed(0)}°`) + (Math.abs(w.lean) > 0.5 ? `, lean ${w.lean.toFixed(0)}°` : ''); };
 const ROD_PRESETS = [['down', 'Straight down', 0, -90], ['fwd', 'Forward', 0, 0], ['back', 'Back', 180, 0], ['left', 'Left', 90, 0], ['right', 'Right', -90, 0], ['up', 'Straight up', 0, 90], ['custom', 'Custom direction', null, null]];
 const near = (a, b) => Math.abs(((a - b + 540) % 360) - 180) < 0.5;
 function presetOf(list, az, el) { const p = list.find(([k, , a, e]) => k !== 'custom' && Math.abs(el - e) < 0.5 && (Math.abs(e) > 89.5 || near(az, a))); return p ? p[0] : 'custom'; }
@@ -102,7 +98,7 @@ function summary(c) {
   const on = parentOf(c), p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})` + (on ? ` · on ${on.name}` : '');
   if (c.type === 'link') { const n = descendants(c).length; return `${Math.round(c.length * 100)} cm · ${linkPointing(c)} · carries ${n}${on ? ' · on ' + on.name : ''}`; }
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
-  if (c.type === 'joint') { const n = descendants(c).length; return `${planeTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
+  if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'sensor') {
     const u = c.known ? '' : ' · mount unknown';
@@ -136,21 +132,21 @@ function numField(id, d, get, set) {
   const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, num, el('span', { class: 'unit', text: d.u })), rng);
   return { node, refresh };
 }
-// A servo's hinge axis, relative to what it's mounted on: quick picks, then heading and tilt.
+// A servo's swing, relative to what it's mounted on: quick picks, then the exact angle and lean.
 function hingeFields(c, rerender) {
-  const id = `f-${c.id}-hinge`, sel = el('select', { id }), cur = relPreset(c);
-  for (const [k, t] of HINGE_PRESETS) { const o = el('option', { value: k, text: t }); if (k === cur) o.selected = true; sel.append(o); }
-  sel.addEventListener('change', () => { const p = HINGE_PRESETS.find(x => x[0] === sel.value); if (p[2] == null) return; setHingeRel(c, p[2], p[3]); edited(c, 'hingeAz'); rerender(); });
-  const rel = (key, label, min, max) => {
-    const f = numField(`f-${c.id}-rel${key}`, { label, min, max, step: 1, u: '°', dp: 1 }, () => hingeRel(c)[key],
-      v => { const r = hingeRel(c); setHingeRel(c, key === 'az' ? v : r.az, key === 'el' ? v : r.el); edited(c, 'hingeAz'); });
-    if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(f.refresh);
-    return f.node;
+  const id = `f-${c.id}-swing`, sel = el('select', { id }), pre = swingPresets(c), cur = swingPreset(c);
+  for (const o of pre) { const n = el('option', { value: o.k, text: o.label }); if (cur && cur.k === o.k) n.selected = true; sel.append(n); }
+  const cu = el('option', { value: 'custom', text: 'Another direction (angle below)' }); if (!cur) cu.selected = true; sel.append(cu);
+  sel.addEventListener('change', () => { const o = pre.find(x => x.k === sel.value); if (!o) return; setSwing(c, o.deg, 0); edited(c, 'swing'); rerender(); });
+  const f = (key, label, min, max, get, set) => {
+    const r = numField(`f-${c.id}-${key}`, { label, min, max, step: 1, u: '°', dp: 0 }, get, v => { set(v); edited(c, 'swing'); });
+    if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(r.refresh);
+    return r.node;
   };
-  const axes = parentOf(c) && parentOf(c).type === 'link' ? 'X along the rod, Z as near to up as the rod allows' : 'X forward, Y left, Z up';
-  return [el('div', { class: 'field' }, el('label', { for: id, text: 'Hinge axis' }), sel),
-    rel('az', 'Axis heading', -180, 180), rel('el', 'Axis tilt up', -90, 90),
-    el('p', { class: 'hint', text: `Relative to ${mountName(c)} (${axes}). It swings in the plane at right angles to its hinge axis, up to its limit either side of where its parts sit now (0°). In Edit mode, drag the round knob on the axis arrow to point it anywhere; the shaded fan shows the sweep.` })];
+  return [el('div', { class: 'field' }, el('label', { for: id, text: 'Swings' }), sel),
+    f('swingdeg', 'Swing direction', -180, 180, () => swingOf(c).swing, v => setSwing(c, v)),
+    f('swinglean', 'Hinge lean', -80, 80, () => swingOf(c).lean, v => setSwing(c, swingOf(c).swing, v)),
+    el('p', { class: 'hint', text: `It swings what it carries toward that direction and back, up to its limit either side of where the parts sit now (0°). The angle is relative to ${mountName(c)} (0° swings toward ${swingRefName(c)}) and stays that way when ${mountName(c)} is moved or turned. Lean tilts the hinge so the load sweeps a cone instead of a flat arc. In Edit mode, select the servo to see it swing; drag the ring round it to change the direction.` })];
 }
 const cardRefresh = new Map();   // component id -> functions that redraw its open card's values
 function slider(c, key) {
@@ -323,7 +319,7 @@ function addComp(type) {
   const n = cfg.comps.filter(c => c.type === type).length + 1; let c;
   if (type === 'motor') c = mkMotor('Motor ' + n, 0.3, 0, 0.02);
   else if (type === 'link') c = mkLink('Rod ' + (links().length + 1), 0, 0, -0.03);
-  else if (type === 'joint') c = mkJoint('Servo ' + (joints().length + 1), -0.3, 0, 0.02, { hingeAz: 90, mode: 'manual' });
+  else if (type === 'joint') c = mkJoint('Servo ' + (joints().length + 1), -0.3, 0, 0.02, { hingeAz: 90 });
   else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; }
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);

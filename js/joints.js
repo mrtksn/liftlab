@@ -63,6 +63,59 @@ function setHingeRel(j, az, el) {
   const A = az * D2R, E = el * D2R;
   setDirAzEl(j, m3v(mountFrame(j), [Math.cos(E) * Math.cos(A), Math.cos(E) * Math.sin(A), Math.sin(E)]), 'hingeAz', 'hingeEl');
 }
+
+// The way people think about a servo: what it carries sticks out from it one way (d), and the servo swings
+// that load toward some direction s, at right angles to d; the hinge axis is d × s. `swing` is the angle of
+// s around d, measured from the mount's own X (its Z when X runs along d), so it's relative to the mount and
+// stays put when the mount turns. `lean` tips the hinge toward d, for a load that sweeps a cone (rare).
+// d: toward the parts it carries, or a carried rotor's thrust when that sits on the pivot, else the mount's Z.
+function carriedDir(j) {
+  let s = [0, 0, 0];
+  for (const c of descendants(j)) for (const q of c.type === 'link' ? [c.pos, linkTip(c)] : [c.pos]) { const r = sub(q, j.pos); if (nrm(r) > 0.008) s = add(s, unit(r)); }
+  if (nrm(s) < 1e-3) { const m = descendants(j).find(c => c.type === 'motor'); if (m) s = actDir(m); }
+  if (nrm(s) < 1e-3) { const M = mountFrame(j); s = [M[2], M[5], M[8]]; }
+  return unit(s);
+}
+function swingBasis(j) {
+  const d = carriedDir(j), M = mountFrame(j);
+  let r = [0, 0, 0];
+  for (const k of [0, 2, 1]) { const x = [M[k], M[3 + k], M[6 + k]]; r = sub(x, scl(d, dot(x, d))); if (nrm(r) > 0.3) break; }
+  const e1 = unit(r); return { d, e1, e2: crs(d, e1) };
+}
+const swingRefName = j => {   // what 0° swings toward, in words: where that points on the drone at rest
+  const e = swingBasis(j).e1, names = [['the front', [1, 0, 0]], ['the back', [-1, 0, 0]], ['the left', [0, 1, 0]], ['the right', [0, -1, 0]], ['the top', [0, 0, 1]], ['the bottom', [0, 0, -1]]];
+  const best = names.reduce((b, n) => dot(n[1], e) > dot(b[1], e) ? n : b);
+  return dot(best[1], e) > 0.94 ? best[0] : `${mountName(j)}'s ${(parentOf(j) || {}).type === 'link' ? 'far end' : 'front'}`;
+};
+const swingVec = (b, deg) => add(scl(b.e1, Math.cos(deg * D2R)), scl(b.e2, Math.sin(deg * D2R)));
+function swingOf(j) {   // { swing, lean } in degrees, and the swing direction s at rest (body axes)
+  const b = swingBasis(j), a = jointAxis(j), ad = clamp(dot(a, b.d), -1, 1), ap = sub(a, scl(b.d, ad));
+  if (nrm(ap) < 1e-6) return { swing: 0, lean: ad > 0 ? 90 : -90, s: b.e1 };
+  const s = unit(crs(ap, b.d));
+  return { swing: Math.atan2(dot(s, b.e2), dot(s, b.e1)) * R2D, lean: Math.asin(ad) * R2D, s };
+}
+function setSwing(j, swing, lean = swingOf(j).lean) {
+  const b = swingBasis(j), s = swingVec(b, swing), L = lean * D2R;
+  setDirAzEl(j, add(scl(crs(b.d, s), Math.cos(L)), scl(b.d, Math.sin(L))), 'hingeAz', 'hingeEl');
+}
+// Quick picks: swing the load toward the drone's forward, left or up (whichever aren't along the load),
+// and, on a rod, along the rod. Each is a swing angle; none is fixed to the body once set.
+function swingPresets(j) {
+  const b = swingBasis(j), out = [];
+  const add1 = (k, label, v) => {
+    const p = sub(v, scl(b.d, dot(v, b.d))); if (nrm(p) < 0.35) return;
+    const deg = Math.atan2(dot(p, b.e2), dot(p, b.e1)) * R2D;
+    if (out.some(o => Math.abs(Math.sin((o.deg - deg) * D2R)) < 0.17)) return;   // same plane as one already listed
+    out.push({ k, label, deg: +deg.toFixed(1) });
+  };
+  add1('fb', 'Forward–back', [1, 0, 0]); add1('lr', 'Left–right', [0, 1, 0]); add1('ud', 'Up–down', [0, 0, 1]);
+  const p = parentOf(j); if (p && p.type === 'link') add1('rod', 'Along the rod', linkDir(p));
+  return out;
+}
+function swingPreset(j) {   // the quick pick the servo matches now (either way round), or null
+  const w = swingOf(j); if (Math.abs(w.lean) > 0.5) return null;
+  return swingPresets(j).find(o => Math.abs(Math.sin((o.deg - w.swing) * D2R)) < 0.01) || null;
+}
 const chainOf = c => ancestorsOf(c).filter(a => a.type === 'joint');   // joints above a part, nearest first
 const isUnder = (c, a) => ancestorsOf(c).includes(a);
 const descendants = a => cfg.comps.filter(c => c !== a && isUnder(c, a));
@@ -144,12 +197,15 @@ function rotationBetween(a, b) {   // smallest rotation taking unit a to unit b
   if (s < 1e-9) return c > 0 ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : axisAngleR(Math.abs(u[0]) < 0.9 ? crs(u, [1, 0, 0]) : crs(u, [0, 1, 0]), Math.PI);
   return axisAngleR(ax, Math.atan2(s, c));
 }
-// Attach a part to a holder (or to the frame with null).
+// Attach a part to a holder (or to the frame with null). On a rod a part goes to the rod's far end; on a
+// servo it goes onto the servo's output: a motor or rod right on the pivot (a tilt-rotor, an arm), anything
+// else just below it. A servo given its first motor is there to steer it, so it's handed to the allocator.
 function attachTo(c, a) {
+  const firstMotor = a && a.type === 'joint' && c.type === 'motor' && !motorsUnder(a).length;
   c.parent = a ? a.id : null;
-  // On a rod, a part goes to the rod's far end; a rod put on a servo starts at the servo's pivot.
-  const to = a && a.type === 'link' ? linkTip(a) : a && a.type === 'joint' && c.type === 'link' ? a.pos : null;
+  const to = !a ? null : a.type === 'link' ? linkTip(a) : c.type === 'motor' || c.type === 'link' ? a.pos : add(a.pos, [0, 0, -0.04]);
   if (to) { const d = sub(to, c.pos); c.pos = to.map(v => +v.toFixed(4)); shiftSubtree(c, d); }
+  if (firstMotor && a.mode === 'manual') a.mode = 'auto';
 }
 
 /* ───────── saved airframes from before joints existed ───────── */

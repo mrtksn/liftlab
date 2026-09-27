@@ -120,27 +120,26 @@ A **servo joint** is a hinge mounted on the frame, on a rod or on another joint.
 
 Placement follows what you drop onto:
 - A part put on a rod goes to the rod's far end.
-- A rod put on a servo starts at the servo's pivot.
+- A motor or rod put on a servo goes onto the servo's pivot (a tilt-rotor, an arm); anything else goes just below it.
+- A servo given its first motor is handed to the allocator to steer (new servos start that way).
 - Moving or turning a servo or rod (typed values, sliders or edit-mode handles) carries everything on it along. Lengthening a rod moves what's at its end.
 
-**How a servo is mounted.** A servo swings in the plane at right angles to its hinge axis, and the axis can point any way at all, relative to what the servo is mounted on:
-- **On its card:** **Axis heading** and **Axis tilt up** (type them or drag the sliders), plus quick picks for the mount's three axes.
-- **In edit mode:** select a servo and drag the round knob on its axis arrow to point the hinge anywhere (5° steps, 1° with Shift). The edit bar has the same two angles to type, and − / + for its travel.
-- **What "relative" means:**
-  - On the frame, or on another servo's output, the angles are from the body axes (X forward, Y left, Z up).
-  - On a rod, X runs along the rod and Z is as near to up as the rod allows. Turning the rod keeps the servo at the same angles to it, and swings everything it carries along.
+**How a servo is mounted.** You describe a servo by which way it swings what it carries. What it carries sticks out from it one way: toward the parts, or along a rotor's thrust when the rotor sits on the pivot. The servo swings that load toward a chosen direction and back; the hinge axis follows from the two.
+- **In edit mode:** select a servo and it plays its swing, moving everything on it (a rotor's thrust arrow shows where the thrust points). A ring round the servo has two arrows where the load swings to; drag them round to swing it any other way (5° steps, 1° with Shift). The edit bar has quick picks (forward–back, left–right, up–down, along the rod), the exact angle, − / + for the travel, and play/pause with a slider to hold it at any angle.
+- **On its card:** **Swings** (the same quick picks), **Swing direction** in degrees, and **Hinge lean**, which tilts the hinge so the load sweeps a cone instead of a flat arc.
+- **What "relative" means:** the angle is measured from the mount's own X (its Z when X runs along the load). On the frame or on another servo's output that's the body axes; on a rod, X runs along the rod and Z is as near to up as the rod allows. Turning the rod keeps the servo at the same angle to it, and swings everything it carries along.
 
 **Seeing the travel.** In edit mode each servo shows what it can sweep:
-- **The fan:** a shaded sector in its plane of motion, out to the farthest part it carries, between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.
+- **The fan:** a shaded sector in its plane of motion, out to the farthest part it carries (a rotor's rim), between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.
 - **The paths:** each carried part's path as a dashed arc.
-- **The hinge axis:** a dashed line through the pivot.
+- **The hinge axis:** a dashed line through the pivot, and the servo's case and horn are drawn on it.
 
-For a rotor sitting on its own pivot (a tilt-rotor), the fan shows how far its thrust can tip. The servo you've selected is drawn brighter, as is any servo carrying the part you've selected.
+The servo you've selected is drawn brighter, as is any servo carrying the part you've selected. In flight, with Forces on, a servo steering a rotor keeps a faint fan so you can see the rotor tip across it.
 
 A rod points by presets (down, forward, back, left, right, up) or by exact angles, and its rings swing it with everything it carries.
 
 - **Positions and mounts** are entered with every joint at 0°, in body axes. The joints above a part carry it from there (`jointRotation`), nearest first.
-- **Control.** A joint carrying a motor can be steered by the allocator. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
+- **Control.** A joint carrying a motor can be steered by the allocator. How much it's used depends on the steering mode: under **Tilt body** the allocator tips the whole drone and moves such a servo only a little; under **Mixed** or **Stay level** it swings the rotor to push the drone along. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
 - **Servo hardware.** Range, no-load speed, and its own mass, plus the hidden traits the controller isn't told: stall torque, command delay, trim error, and whether it reports its angle.
 
 What moving parts do in the physics:

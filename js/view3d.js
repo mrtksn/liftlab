@@ -61,10 +61,10 @@ function servoSweep(j) {
   for (const c of descendants(j)) { pts.push(c.pos); if (c.type === 'link') pts.push(linkTip(c)); }
   const arcs = pts.map(q => { const r = radial(q); return { r, h: sub(sub(q, j.pos), r) }; }).filter(x => nrm(x.r) > 0.008);
   const rs = arcs.map(x => x.r);
-  let rest = rs.reduce((s, r) => add(s, unit(r)), [0, 0, 0]);
-  if (nrm(rest) < 1e-3) for (const c of descendants(j)) if (c.type === 'motor') { const d = rotorNow(c, restAngle).d; const t = sub(d, scl(a, dot(d, a))); if (nrm(t) > 0.1) { rest = t; break; } }
-  if (nrm(rest) < 1e-3) rest = crs(a, Math.abs(a[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1]);
-  const radius = clamp(Math.max(0, ...rs.map(nrm)) || 0.07, 0.05, 0.45);
+  const cd = carriedDir(j); let rest = sub(cd, scl(a, dot(cd, a)));
+  if (nrm(rest) < 0.05) rest = crs(a, Math.abs(a[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1]);
+  const props = descendants(j).filter(c => c.type === 'motor').map(c => nrm(radial(c.pos)) + propR(c));   // a rotor's disc swings out to its rim
+  const radius = clamp(Math.max(0, ...rs.map(nrm), ...props) || 0.08, 0.07, 0.45);
   return { a, rest: unit(rest), radius, arcs };
 }
 function buildRangeVis(j, p) {
@@ -104,13 +104,17 @@ function rebuildDrone() {
   for (const j of js) {
     const { g, p, from } = rel(j);
     const r = rod(from, p, 0.007, mats.frame); if (r) g.add(r);
-    const body = new THREE.Group(); body.position.set(...p);   // the servo case, fixed to what it's mounted on
-    body.add(new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.028, 0.022), mats.servo));
-    const a = jointAxis(j); const hinge = rod(scl(a, -0.024), scl(a, 0.024), 0.004, mats.ink); if (hinge) body.add(hinge);
+    // The servo case, fixed to what it's mounted on: its output shaft on the hinge axis, the case behind it
+    // (away from the load). The horn on the output points at the load and turns with it.
+    const a = jointAxis(j), rest = servoSweep(j).rest, basis = new THREE.Matrix4().makeBasis(new THREE.Vector3(...rest), new THREE.Vector3(...crs(a, rest)), new THREE.Vector3(...a));
+    const body = new THREE.Group(); body.position.set(...p); body.quaternion.setFromRotationMatrix(basis);
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.02, 0.036), mats.servo); box.position.set(-0.01, 0, -0.022); body.add(box);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.012, 12).rotateX(Math.PI / 2), mats.ink); shaft.position.z = -0.002; body.add(shaft);
     body.userData.compId = j.id; pickGroups.set(j.id, body); g.add(body);
     const jg = new THREE.Group(); jg.position.set(...p); g.add(jg); jointGroups.set(j.id, jg);   // the output: turns with the joint
     const rv = buildRangeVis(j, p); g.add(rv.g); rangeVis.set(j.id, rv);
-    const horn = rod([0, 0, 0], scl(unit(crs(a, Math.abs(a[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1])), 0.03), 0.005, mats.servoHorn || mats.ink); if (horn) jg.add(horn);
+    const horn = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.008, 0.003), mats.ink); horn.position.set(0.012, 0, 0.004);
+    const hg = new THREE.Group(); hg.quaternion.setFromRotationMatrix(basis); hg.add(horn); jg.add(hg);
   }
   for (const c of cfg.comps) {
     if (c.type === 'joint') continue;
@@ -196,20 +200,23 @@ function updateScene() {
   else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
   const live = !editMode;
   for (const j of joints()) {   // each joint's group turns about its hinge (level and at rest while editing)
-    const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? 0 : angleTrue(j));
+    const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? previewAngle(j) : angleTrue(j));   // editing: at rest, or the preview
     const rv = rangeVis.get(j.id); if (!rv) continue;
-    rv.g.visible = editMode;
-    if (editMode) {   // brighter for the servo you're working on, or one carrying it
+    rv.g.visible = editMode || (view.forces && motorsUnder(j).length > 0);   // flying: a faint fan behind a servo that steers a rotor
+    if (!editMode) { rv.m.fan.opacity = 0.08; rv.m.line.opacity = 0.3; rv.m.dash.opacity = 0; }
+    else {   // brighter for the servo you're working on, or one carrying it
       const sel = compById(edit.sel), on = edit.sel === j.id || edit.hover === j.id || (sel && isUnder(sel, j));
       rv.m.fan.opacity = on ? 0.22 : 0.07; rv.m.line.opacity = on ? 0.95 : 0.35; rv.m.dash.opacity = on ? 0.9 : 0.3;
     }
   }
+  const pj = previewing();
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
     p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c)));   // the motor's own mounting; its joints turn the group above
-    const T = st.T * c.health / 100; p.disc.material.opacity = 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
+    const T = st.T * c.health / 100, shown = pj && isUnder(c, pj); p.disc.material.opacity = shown ? 0.45 : 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
+    else if (shown) { p.arrow.visible = true; p.arrow.setLength(0.16, 0.035, 0.022); }   // where its thrust points as the servo swings
   }
   for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
     const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
