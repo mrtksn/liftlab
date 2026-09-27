@@ -12,7 +12,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
-let mats = {}, jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5) };
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
@@ -51,8 +51,49 @@ function rod(a, b, r, mat) {
 }
 function disposeGroup(g) { g.traverse(o => { if (o.geometry) o.geometry.dispose(); }); while (g.children.length) g.remove(g.children[0]); }
 
+// What a servo can sweep, drawn while editing: a fan in its plane of motion out to the farthest part it
+// carries, its limits either side of 0° (where the parts sit now), the path each carried part would trace,
+// and the hinge axis. rest: the direction the fan is centred on (towards what it carries, or a carried
+// rotor's thrust when that sits on the pivot).
+function servoSweep(j) {
+  const a = jointAxis(j), radial = q => { const r = sub(q, j.pos); return sub(r, scl(a, dot(r, a))); };
+  const pts = [];
+  for (const c of descendants(j)) { pts.push(c.pos); if (c.type === 'link') pts.push(linkTip(c)); }
+  const arcs = pts.map(q => { const r = radial(q); return { r, h: sub(sub(q, j.pos), r) }; }).filter(x => nrm(x.r) > 0.008);
+  const rs = arcs.map(x => x.r);
+  let rest = rs.reduce((s, r) => add(s, unit(r)), [0, 0, 0]);
+  if (nrm(rest) < 1e-3) for (const c of descendants(j)) if (c.type === 'motor') { const d = rotorNow(c, restAngle).d; const t = sub(d, scl(a, dot(d, a))); if (nrm(t) > 0.1) { rest = t; break; } }
+  if (nrm(rest) < 1e-3) rest = crs(a, Math.abs(a[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1]);
+  const radius = clamp(Math.max(0, ...rs.map(nrm)) || 0.07, 0.05, 0.45);
+  return { a, rest: unit(rest), radius, arcs };
+}
+function buildRangeVis(j, p) {
+  const { a, rest, radius, arcs } = servoSweep(j), v = crs(a, rest), R = j.range * D2R, N = 36;
+  const at = (rad, th, off = [0, 0, 0]) => new THREE.Vector3(...add(off, add(scl(rest, rad * Math.cos(th)), scl(v, rad * Math.sin(th)))));
+  const col = colorOf('--accent');
+  const m = {
+    fan: new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false }),
+    line: new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.5 }),
+    dash: new THREE.LineDashedMaterial({ color: col, dashSize: 0.012, gapSize: 0.008, transparent: true, opacity: 0.6 }),
+  };
+  const g = new THREE.Group(); g.position.set(...p); g.visible = false;
+  const fan = [], edge = [];
+  for (let i = 0; i <= N; i++) edge.push(at(radius, -R + 2 * R * i / N));
+  for (let i = 0; i < N; i++) fan.push(new THREE.Vector3(), edge[i], edge[i + 1]);
+  g.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(fan), m.fan));
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([at(radius, -R), new THREE.Vector3(), at(radius, R)]), m.line));   // the two limits
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(edge), m.line));
+  const mid = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), at(radius * 1.08, 0)]), m.dash); mid.computeLineDistances(); g.add(mid);   // 0°
+  const axis = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...scl(a, -0.06)), new THREE.Vector3(...scl(a, 0.06))]), m.dash); axis.computeLineDistances(); g.add(axis);
+  for (const { r, h } of arcs) {   // the path each carried part would trace
+    const n = nrm(r), u = unit(r), w = crs(a, u), path = [];
+    for (let i = 0; i <= N; i++) { const th = -R + 2 * R * i / N; path.push(new THREE.Vector3(...add(h, add(scl(u, n * Math.cos(th)), scl(w, n * Math.sin(th)))))); }
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(path), m.dash); l.computeLineDistances(); g.add(l);
+  }
+  return { g, m };
+}
 function rebuildDrone() {
-  disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map();
+  disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
   drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
@@ -68,6 +109,7 @@ function rebuildDrone() {
     const a = jointAxis(j); const hinge = rod(scl(a, -0.024), scl(a, 0.024), 0.004, mats.ink); if (hinge) body.add(hinge);
     body.userData.compId = j.id; pickGroups.set(j.id, body); g.add(body);
     const jg = new THREE.Group(); jg.position.set(...p); g.add(jg); jointGroups.set(j.id, jg);   // the output: turns with the joint
+    const rv = buildRangeVis(j, p); g.add(rv.g); rangeVis.set(j.id, rv);
     const horn = rod([0, 0, 0], scl(unit(crs(a, Math.abs(a[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1])), 0.03), 0.005, mats.servoHorn || mats.ink); if (horn) jg.add(horn);
   }
   for (const c of cfg.comps) {
@@ -155,6 +197,12 @@ function updateScene() {
   const live = !editMode;
   for (const j of joints()) {   // each joint's group turns about its hinge (level and at rest while editing)
     const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? 0 : angleTrue(j));
+    const rv = rangeVis.get(j.id); if (!rv) continue;
+    rv.g.visible = editMode;
+    if (editMode) {   // brighter for the servo you're working on, or one carrying it
+      const sel = compById(edit.sel), on = edit.sel === j.id || edit.hover === j.id || (sel && isUnder(sel, j));
+      rv.m.fan.opacity = on ? 0.22 : 0.07; rv.m.line.opacity = on ? 0.95 : 0.35; rv.m.dash.opacity = on ? 0.9 : 0.3;
+    }
   }
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);

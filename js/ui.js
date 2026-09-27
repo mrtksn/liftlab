@@ -34,7 +34,7 @@ const FD = {
   tau: { label: 'Spin-up time constant · hidden', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
   health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
-  hingeAz: { label: 'Hinge axis direction', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
+  hingeAz: { label: 'Hinge axis heading', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   manual: { label: 'Angle (set by you)', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
   hingeEl: { label: 'Hinge axis tilt up', path: ['hingeEl'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
   laz: { label: 'Points toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
@@ -88,7 +88,11 @@ const getP = (o, p) => p.reduce((a, k) => a[k], o);
 function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
 const openSet = new Set();
-const HINGE_PRESETS = [['y', 'Left–right axis (tips front and back)', 90, 0], ['x', 'Front–back axis (tips sideways)', 0, 0], ['z', 'Vertical axis (swivels)', 0, 90], ['custom', 'Custom direction', null, null]];
+// How a servo is mounted: the plane it swings in (at right angles to its hinge axis).
+const HINGE_PRESETS = [['z', 'Horizontal plane (swivels; axis vertical)', 0, 90], ['y', 'Vertical plane, front–back (tips fore and aft)', 90, 0], ['x', 'Vertical plane, sideways (tips left and right)', 0, 0], ['custom', 'Custom (set the axis below)', null, null]];
+const PLANE_SHORT = { z: 'horizontal plane', y: 'vertical plane, front–back', x: 'vertical plane, sideways' };
+const planeTag = j => ({ z: 'horizontal', y: 'vertical, front–back', x: 'vertical, sideways' })[presetOf(HINGE_PRESETS, j.hingeAz, j.hingeEl)] || (Math.abs(j.hingeEl) < 0.5 ? `vertical, axis ${j.hingeAz}°` : 'tilted plane');
+const planeName = j => PLANE_SHORT[presetOf(HINGE_PRESETS, j.hingeAz, j.hingeEl)] || (Math.abs(j.hingeEl) < 0.5 ? `vertical plane (axis at ${j.hingeAz}°)` : `tilted plane (axis at ${j.hingeAz}°, ${j.hingeEl}° up)`);
 const ROD_PRESETS = [['down', 'Straight down', 0, -90], ['fwd', 'Forward', 0, 0], ['back', 'Back', 180, 0], ['left', 'Left', 90, 0], ['right', 'Right', -90, 0], ['up', 'Straight up', 0, 90], ['custom', 'Custom direction', null, null]];
 const near = (a, b) => Math.abs(((a - b + 540) % 360) - 180) < 0.5;
 function presetOf(list, az, el) { const p = list.find(([k, , a, e]) => k !== 'custom' && Math.abs(el - e) < 0.5 && (Math.abs(e) > 89.5 || near(az, a))); return p ? p[0] : 'custom'; }
@@ -97,7 +101,7 @@ function summary(c) {
   const on = parentOf(c), p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})` + (on ? ` · on ${on.name}` : '');
   if (c.type === 'link') { const n = descendants(c).length; return `${Math.round(c.length * 100)} cm · ${linkPointing(c)} · carries ${n}${on ? ' · on ' + on.name : ''}`; }
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
-  if (c.type === 'joint') { const n = descendants(c).length; return `${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
+  if (c.type === 'joint') { const n = descendants(c).length; return `${planeTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'sensor') {
     const u = c.known ? '' : ' · mount unknown';
@@ -181,7 +185,8 @@ function compBody(c) {
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
     b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
-    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, presetSel(HINGE_PRESETS, 'hingeAz', 'hingeEl', 'Turns about'), slider(c, 'hingeAz'), slider(c, 'hingeEl'),
+    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, presetSel(HINGE_PRESETS, 'hingeAz', 'hingeEl', 'Moves in'), slider(c, 'hingeAz'), slider(c, 'hingeEl'),
+      el('p', { class: 'hint', text: 'It swings in the plane at right angles to its hinge axis, up to its limit either side of where its parts sit now (0°). In Edit mode the shaded fan shows the sweep.' }),
       selectF(c, 'mode', 'Servo control', [['auto', steer ? 'Allocator steers it' : 'Allocator steers it (needs a motor on it)'], ['manual', 'Set by me']], rerender));
     if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
     b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
@@ -279,6 +284,7 @@ function edited(c, key) {
   const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
   recomputeProps(); if (c.type === 'hang' && (key === 'cable' || key === 'x' || key === 'y' || key === 'z')) reseatPend(c);
   cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save();
+  if (typeof edit !== 'undefined' && editMode && edit.sel === c.id && c.type === 'joint') updateEditMsg();   // keep the edit bar's servo tools in step
 }
 // Last seen place of every servo and rod, so editing one carries what's on it along.
 const holderSnap = new WeakMap();

@@ -80,9 +80,29 @@ function setHover(id) {
 function updateEditMsg() {
   const m = $('#editMsg'); if (!m) return;
   const c = compById(edit.sel);
+  renderEditTools(c);
   if (!c) { m.textContent = 'Click a part to select it. The simulation is paused.'; return; }
+  if (c.type === 'joint') { m.textContent = `${c.name} swings ±${c.range}° in the ${planeName(c)}.`; return; }
   const rot = rotAxesFor(c).length ? ', rings rotate' : '';
   m.textContent = `${c.name}: drag the arrows or squares to move${rot}. Shift for fine steps, Esc to deselect.`;
+}
+// A selected servo: which plane it swings in, and how far either way.
+const PLANE_BTNS = [['z', 'Horizontal', 0, 90, 'Swings in the horizontal plane (axis vertical)'], ['y', 'Vertical ↕', 90, 0, 'Swings in the vertical plane front to back (axis left–right)'], ['x', 'Vertical ↔', 0, 0, 'Swings in the vertical plane side to side (axis front–back)']];
+function renderEditTools(c) {
+  const box = $('#editTools'); if (!box) return;
+  box.textContent = ''; box.hidden = !(c && c.type === 'joint'); if (box.hidden) return;
+  const changed = key => { edited(c, key); refreshCard(c); updateEditMsg(); };
+  const cur = presetOf(HINGE_PRESETS, c.hingeAz, c.hingeEl);
+  const seg = el('span', { class: 'seg', role: 'group', 'aria-label': 'Moves in' });
+  for (const [k, label, az, elv, tip] of PLANE_BTNS) {
+    const b = el('button', { type: 'button', title: tip, 'aria-pressed': String(cur === k), text: label });
+    b.addEventListener('click', () => { c.hingeAz = az; c.hingeEl = elv; changed('hingeAz'); selectComp(c.id); });
+    seg.append(b);
+  }
+  const step = d => { c.range = clamp(c.range + d, 5, 90); changed('range'); };
+  const minus = el('button', { class: 'btn', type: 'button', title: 'Less travel (5°)', 'aria-label': 'Less travel', text: '−' }), plus = el('button', { class: 'btn', type: 'button', title: 'More travel (5°)', 'aria-label': 'More travel', text: '+' });
+  minus.addEventListener('click', () => step(-5)); plus.addEventListener('click', () => step(5));
+  box.append(seg, el('span', { class: 'range-step' }, minus, el('b', { class: 'rv', text: `±${c.range}°` }), plus));
 }
 
 /* ───────── picking ───────── */

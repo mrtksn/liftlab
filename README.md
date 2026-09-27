@@ -123,16 +123,22 @@ Placement follows what you drop onto:
 - A rod put on a servo starts at the servo's pivot.
 - Moving or turning a servo or rod (typed values, sliders or edit-mode handles) carries everything on it along. Lengthening a rod moves what's at its end.
 
-**Orientation.** A servo's hinge axis can point anywhere:
-- **Presets:** left–right (tips front and back), front–back (tips sideways), or vertical (swivels).
-- **Exact angles:** an azimuth and an upward tilt.
-- **In edit mode:** any of the three rings turns the axis.
+**How a servo is mounted.** A servo swings in the plane at right angles to its hinge axis, and the axis can point anywhere:
+- **Moves in** on its card: the horizontal plane (it swivels), the vertical plane front–back (it tips an arm fore and aft), the vertical plane sideways, or Custom.
+- **Exact angles:** the hinge axis heading and its tilt up, for any plane in between.
+- **In edit mode:** select a servo and the edit bar offers **Horizontal**, **Vertical ↕** and **Vertical ↔**, plus − / + for its travel in 5° steps. Any of the three rings also turns the axis.
+
+**Seeing the travel.** In edit mode each servo shows what it can sweep:
+- **The fan:** a shaded sector in its plane of motion, out to the farthest part it carries, between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.
+- **The paths:** each carried part's path as a dashed arc.
+- **The hinge axis:** a dashed line through the pivot.
+
+For a rotor sitting on its own pivot (a tilt-rotor), the fan shows how far its thrust can tip. The servo you've selected is drawn brighter, as is any servo carrying the part you've selected.
 
 A rod points by presets (down, forward, back, left, right, up) or by exact angles, and its rings swing it with everything it carries.
 
 - **Positions and mounts** are entered with every joint at 0°, in body axes. The joints above a part carry it from there (`jointRotation`), nearest first.
 - **Control.** A joint carrying a motor can be steered by the allocator. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
-- **Hinge.** Direction (azimuth) plus a tilt up for axes that aren't horizontal.
 - **Servo hardware.** Range, no-load speed, and its own mass, plus the hidden traits the controller isn't told: stall torque, command delay, trim error, and whether it reports its angle.
 
 What moving parts do in the physics:
