@@ -527,11 +527,54 @@ function thrustLinearization(v, bend) {
   return clamp((-a + Math.sqrt(disc)) / (2 * bend), 0, 1);
 }
 
-function allocation(cols, lo, hi, wd, mode) {
+function allocation(cols, lo, hi, wd, mode, pull) {
   // cols[j]: what one unit of input j does, as [ax, ay, az, αx, αy, αz] (acceleration units)
   // wd: the 6 accelerations wanted; lo/hi: input limits
+  // pull: { q, r } from allocationPreferences — how strongly each input is drawn toward a preferred value
   const W = mode === 'level' ? [3, 3, 3, 10, 10, 1] : [0.3, 0.3, 3, 10, 10, 1];
-  return bls(cols, lo, hi, wd, W);                       // bounded weighted least squares
+  const x = bls(cols, lo, hi, wd, W);                    // 1. the best move the limits allow (bounded weighted least squares)
+  if (!pull) return x;
+  // 2. Of all the ways to make that same move, the preferred one. The pulls are tiny next to the move, so
+  //    they only decide where there is a real choice: a hexacopter's spare motors, a servo vs. a motor.
+  const got = [0, 1, 2, 3, 4, 5].map(k => cols.reduce((s, c, j) => s + c[k] * x[j], 0));
+  return bls(cols, lo, hi, got, W, { q: pull.q, r: pull.r, rel: 1e-5 });
+}
+
+function allocationPreferences(inputs, prefs) {
+  // What to prefer when a move can be made more than one way. Each preference becomes a quadratic pull
+  // q·((x − r)/span)² on one input; the allocation only lets the pulls choose between equally good moves,
+  // so only the ratios between them matter.
+  // inputs[j]: { kind: 'thrust' | 'servo', x: value now, lo, hi,
+  //              authority: 0–1, this input's share of the attitude control (how much it can turn the drone),
+  //              power: W at full thrust (thrust inputs),
+  //              th, range: servo angle now and its limit [rad], reach: how far it can get in time (servo inputs) }
+  // prefs: { allowance, efficiency, servoMove } weights; 0 turns one off.
+  const q = [], r = [];
+  const Ptot = inputs.reduce((s, i) => s + (i.kind === 'thrust' ? i.power : 0), 0) || 1;
+  for (const i of inputs) {
+    let qs = 0, qr = 0;
+    const add = (w, target) => { qs += w; qr += w * target; };
+    if (i.kind === 'thrust') {
+      // Allowance: room to move both ways. The pull toward the middle grows steeply near a limit
+      // (1× in the middle, about 100× at the limit), and counts most for the inputs that steer: a big
+      // lifting rotor near its limit costs less control than a steering motor near its limit.
+      const m = clamp(Math.min(i.x - i.lo, i.hi - i.x) / (i.hi - i.lo), 0, 0.5);
+      add(prefs.allowance * (0.2 + 0.8 * (i.authority ?? 1)) * (0.55 / (m + 0.05)) ** 2, (i.lo + i.hi) / 2);
+      // Efficiency: rotor power grows as thrust^1.5 (momentum theory). Its quadratic model around the
+      // thrust now is a pull toward less thrust, weighted by this rotor's share of the full power.
+      const u = Math.max(0.05, i.x), e = prefs.efficiency * i.power / Ptot;
+      add(0.375 * e / Math.sqrt(u), -u);
+    } else {
+      // Servo input is the angle change δ this step. Allowance pulls the angle toward the middle of its
+      // range; moving costs in proportion to how much of its reach a move uses, so quick corrections go
+      // to the motors and a slow or lagging servo takes the steady part.
+      const m = clamp((i.range - Math.abs(i.th)) / (2 * i.range), 0, 0.5);
+      add(prefs.allowance * (0.2 + 0.8 * (i.authority ?? 1)) * (0.55 / (m + 0.05)) ** 2 * ((i.hi - i.lo) / (2 * i.range)) ** 2, clamp(-i.th, i.lo, i.hi));
+      add(prefs.servoMove * ((i.hi - i.lo) / (2 * Math.max(i.reach, 1e-3))) ** 2, 0);
+    }
+    q.push(qs); r.push(qs > 0 ? qr / qs : 0);
+  }
+  return { q, r };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -740,10 +783,15 @@ const LAW_DEFS = [
     args: [['v', 'wanted thrust as a fraction of max'], ['bend', 'learned bend k̂ (0 until measured)']], returns: 'throttle 0–1',
     shape: 'n', sample: () => [0.4, 0.3] },
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
-    math: [`${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub>`],
-    doc: 'Inputs are throttle fractions from 0 to 1, so B is in acceleration per full throttle; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 includes servo-driven rotors as two virtual inputs each, (T cos θ, T sin θ), and the servo angle is taken from their ratio. Stage 2 solves every motor\'s thrust at the servos\' actual angles.',
-    args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt" or "level"']], returns: 'one value per input',
-    shape: 'alloc', sample: () => [[[0, 0, 1, 1, 1, 0.1], [0, 0, 1, -1, 1, -0.1], [0, 0, 1, -1, -1, 0.1], [0, 0, 1, 1, -1, -0.1]], [0, 0, 0, 0], [6, 6, 6, 6], [0, 0, 9.81, 0, 0, 0], 'tilt'] },
+    math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub>`, `2. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₁)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
+    doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted move as the limits allow; the second keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
+    args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt" or "level"'], ['pull', '{ q, r }: preferences per input']], returns: 'one value per input',
+    shape: 'alloc', sample: () => [[[0, 0, 1, 1, 1, 0.1], [0, 0, 1, -1, 1, -0.1], [0, 0, 1, -1, -1, 0.1], [0, 0, 1, 1, -1, -0.1]], [0, 0, 0, 0], [6, 6, 6, 6], [0, 0, 9.81, 0, 0, 0], 'tilt', { q: [0.02, 0.02, 0.02, 0.02], r: [3, 3, 3, 3] }] },
+  { key: 'allocationPreferences', group: 'ctrl', fn: allocationPreferences, title: 'Allocation preferences',
+    math: [`allowance: <i>q</i> = <i>k</i><sub>a</sub>(0.2 + 0.8<i>a</i>)(0.55 / (<i>m</i> + 0.05))², pulling toward the middle; <i>m</i> = distance to the nearer limit as a share of the range, <i>a</i> = the input's share of the steering`, `efficiency: <i>P</i> ∝ <i>T</i><sup>1.5</sup> → <i>q</i> = 0.375 <i>k</i><sub>e</sub> (<i>P</i><sub>j</sub>/Σ<i>P</i>) / √<i>u</i>, pulling toward less thrust`, `servo moves: <i>q</i> = <i>k</i><sub>s</sub>(span / 2·reach)², pulling toward staying put; reach = speed × (horizon − lag)`],
+    doc: 'The tie-breakers the allocation uses when the same move can be made in more than one way. Allowance keeps every device away from its limits, so there is room to react to the next surprise; near a limit it dominates, for example easing off a nearly maxed motor and tilting a servo to make up the difference. Efficiency prefers the move that costs the least rotor power. Servo moves cost more for a slow or laggy servo, so fast corrections go to the motors and the servos take the steady part. The weights are the three sliders under Allocation; the servo speed and lag come from the actuator tests.',
+    args: [['inputs', '[{ kind, x, lo, hi, power | th, range, reach }] one per input'], ['prefs', '{ allowance, efficiency, servoMove }']], returns: '{ q, r } one pull per input',
+    shape: 'pull', sample: () => [[{ kind: 'thrust', x: 0.5, lo: 0, hi: 1, power: 100, authority: 1 }, { kind: 'thrust', x: 0.95, lo: 0, hi: 1, power: 100, authority: 0.5 }, { kind: 'servo', x: 0, lo: -0.2, hi: 0.2, th: 0.3, range: 0.6, reach: 0.2, authority: 0.8 }], { allowance: 0.02, efficiency: 0.02, servoMove: 0.01 }] },
 ];
 
 // Wrench sum and control chain shown at the top of the Formulas tab.
@@ -752,6 +800,6 @@ const LAW_OVERVIEW = [
   `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation', 'thrustLinearization'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization'],
   plant: ['batteryModel', 'servoResponse', 'servoLinkage', 'throttleCurve', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

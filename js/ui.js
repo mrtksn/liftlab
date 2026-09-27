@@ -27,6 +27,7 @@ const FD = {
   prop: { label: 'Prop radius', path: ['prop'], min: 0.03, max: 0.25, hmax: 0.6, step: 0.005, u: 'm', dp: 3 },
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
   kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
+  fm: { label: 'Prop efficiency (figure of merit)', path: ['fm'], min: 0.3, max: 0.85, step: 0.01, u: '', dp: 2 },
   curve: { label: 'Throttle curve bend · hidden', path: ['curve'], min: 0, max: 1, step: 0.05, u: '', dp: 2 },
   slag: { label: 'Servo lag · hidden', path: ['lag'], min: 0, max: 0.15, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   offset: { label: 'Servo trim error · hidden', path: ['offset'], min: -10, max: 10, step: 0.5, u: '°', dp: 1 },
@@ -148,13 +149,13 @@ function compBody(c) {
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('p', { class: 'hint', text: 'Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'tilt') {
     b.append(pos, slider(c, 'hingeAz'), selectF(c, 'mode', 'Servo control', [['auto', 'Allocator decides'], ['manual', 'Fixed by me']], rerender));
     if (c.mode === 'manual') b.append(slider(c, 'manual'));
     b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'),
-      slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('p', { class: 'hint', text: 'Servo speed is the rated speed the controller assumes; the real servo may differ. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'mass') {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
@@ -241,8 +242,26 @@ function updateActs() {
     const pc = clamp(st.u || 0, 0, 1), Te = st.Teff ?? st.T; r.fill.style.width = (pc * 100).toFixed(1) + '%'; r.fill.classList.toggle('sat', pc > 0.99);
     r.mk.style.left = `calc(${(clamp(Te / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
     r.val.textContent = `${Math.round(pc * 100)}% · ${Te.toFixed(2)} N`;
+    r.val.title = `Allowance: ${Math.round(Math.min(pc, 1 - pc) * 100)}% of the range left before a limit`;
     if (c.type === 'tilt') { const cmd = c.mode === 'manual' ? c.manual : st.thCmd * R2D; r.sv.textContent = `servo ${fmtSign(st.th * R2D)}° → ${fmtSign(cmd)}°${c.mode === 'manual' ? ' (fixed)' : ''}`; }
   }
+}
+// Allocation preference sliders, and a live readout of rotor power and the tightest allowance.
+const allocFieldRefs = [];
+function buildAllocFields() {
+  const box = $('#allocFields'); box.textContent = '';
+  const f = (key, label) => { const n = numField('ap-' + key, { label, min: 0, max: 0.2, step: 0.005, u: '', dp: 3 }, () => allocPrefs[key], v => { allocPrefs[key] = v; save(); }); allocFieldRefs.push(n.refresh); return n.node; };
+  box.append(f('allowance', 'Keep margin (allowance)'), f('efficiency', 'Save power (efficiency)'), f('servoMove', 'Servo move cost (uses speed and lag)'));
+}
+function updateAllocInfo() {
+  let P = 0, tight = null;
+  for (const c of actuators()) {
+    const st = act.get(c.id); if (!st) continue;
+    P += Math.pow(Math.max(0, st.Teff ?? st.T), 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
+    const m = Math.min(st.u || 0, 1 - (st.u || 0)); if (!tight || m < tight.m) tight = { c, m };
+    if (c.type === 'tilt' && c.mode === 'auto') { const ms = (c.range * D2R - Math.abs(st.th)) / (2 * c.range * D2R); if (ms < tight.m) tight = { c, m: ms, servo: true }; }
+  }
+  $('#allocSmall').textContent = tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name}${tight.servo ? ' servo' : ''} ${Math.round(tight.m * 100)}%` : '';
 }
 function refreshEnvelope() { try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }
 function renderEnvelope() {
@@ -292,7 +311,7 @@ function updateLive() {
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
-  updateActs(); renderEst(); renderLearn();
+  updateActs(); updateAllocInfo(); renderEst(); renderLearn();
 }
 
 /* ───────── state estimate ───────── */
@@ -549,7 +568,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 function load() {
@@ -566,12 +585,14 @@ function load() {
     if (s.keepLearning === false) learn.keep = false;
     if (s.holdPulses === false) learn.holdPulses = false;
     if (s.applyCurve === true) learn.applyCurve = true;
+    if (s.allocPrefs) for (const k of ['allowance', 'efficiency', 'servoMove']) if (isFinite(s.allocPrefs[k])) allocPrefs[k] = +s.allocPrefs[k];
     if (s.launch === 'throw') launchMode = 'throw';
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     for (const c of cfg.comps) if ((c.type === 'motor' || c.type === 'tilt') && !c.prop) withProp(c);
     for (const c of cfg.comps) {   // saved before the hidden hardware traits existed
       if ((c.type === 'motor' || c.type === 'tilt') && c.curve == null) c.curve = 0.3;
+      if ((c.type === 'motor' || c.type === 'tilt') && c.fm == null) c.fm = 0.6;
       if (c.type === 'tilt') { if (c.lag == null) c.lag = 0.02; if (c.offset == null) c.offset = 0; if (c.feedback == null) c.feedback = false; }
     }
     return true;
@@ -586,9 +607,9 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 
 /* ───────── boot ───────── */
 function boot() {
-  buildSp(); buildThrowFields(); buildFormulas(); bindPads();
+  buildSp(); buildThrowFields(); buildAllocFields(); buildFormulas(); bindPads();
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
-  setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
+  setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   showTab(tab === 'form' ? 'form' : 'air');
   let lastT = performance.now(), envT = 0, uiT = 0;

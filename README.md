@@ -78,7 +78,7 @@ If the fit is poor, it catches itself on the airframe description instead and sa
 Results on the stock presets:
 - **Identification:** the fit explains 94–100% of the throw data. The IMU offset comes out within about 4 mm.
 - **Hover:** judged in hover, the throw model is rough, anywhere from 0 to about 90% right per actuator. The props see very different air while tumbling and falling than in hover. That's still enough to catch itself, and the hover calibration afterwards brings each actuator to roughly 75–95%.
-- **Recovery:** all six presets catch themselves. The main-lifter layout needs about 10 pulses, and from the default 4 m it touches the ground before it recovers, so throw it higher.
+- **Recovery:** all six presets catch themselves. The main-lifter layout needs about 10 pulses, and from the default 4 m it can hit the ground before it recovers. Throw it to about 6 m, as the panel suggests.
 
 ## Airflow (physics only)
 
@@ -158,7 +158,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 37 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 38 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
@@ -183,7 +183,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 **Identification:** `identifyThrow`, `identifyMotorResponse`, `identifyServoResponse`, `identifyEffectiveness`.
 
-**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`, `thrustLinearization`.
+**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocationPreferences`, `allocation`, `thrustLinearization`.
 
 The simulator only calls these by name through `run(key, …)`. To change a default, edit the function in `js/laws.js`.
 
@@ -208,8 +208,32 @@ Edits made in the Formulas tab:
 
 - Position PID produces a desired force. Attitude uses geometric control on SO(3) with integral action.
 - Gains are in acceleration units and multiplied by the modeled mass and inertia, so they carry over to new geometry.
-- Allocation is two-stage bounded weighted least squares. Stage 1 picks servo angles using virtual inputs (T·cos θ, T·sin θ). Stage 2 solves motor thrusts at the servos' actual angles.
+- Allocation is two-stage bounded weighted least squares. Stage 1 picks servo angle changes, each capped by what the servo can reach in the planning horizon. Stage 2 solves motor thrusts at the servos' actual angles. Each stage first finds the best achievable move, then chooses among equal ways of making it (see Allocation above).
 - Two steering modes: "Tilt body" (4 controlled axes: climb, roll, pitch, yaw) and "Stay level" (all 6 axes, needs thrust vectoring).
+
+## Allocation: limits, margin, power and servo speed
+
+Every throttle stays within 0–1 and every servo within its range; those are hard limits. On top of that, the allocation (`allocation`) works in two passes:
+1. **The move itself.** Get as close to the wanted accelerations as the limits allow.
+2. **The choice.** Keep exactly that move, and where it can be made in more than one way, pick using `allocationPreferences`. Examples: a hexacopter's spare motors, a servo against a motor, or a big lifting rotor against small steering ones.
+
+The preferences never give up any of the move. They are three sliders under **Allocation**:
+- **Keep margin (allowance).** Pulls each device toward the middle of its range, gently in the middle and about 100× harder near a limit. It weighs most on the devices that do the steering, so a big lifting rotor near its limit matters less than a steering motor near its limit.
+- **Save power (efficiency).** Rotor power grows with thrust^1.5, so it spreads lift toward the big, efficient discs. Each motor's figure of merit is a setting on its card.
+- **Servo move cost.** Moving a servo costs in proportion to how much of its reach the move uses. Reach is the learned speed × (planning horizon − learned lag). A slow or laggy servo therefore gets the steady part of the work, and the motors get the quick corrections. Each step's servo change is also capped at that reach, and the motors cover whatever the servo hasn't reached yet.
+
+The panel header shows the estimated rotor power and the device closest to a limit.
+
+What it changed in the tests:
+
+| Case | Before | After |
+|---|---|---|
+| Tilt-rotor quad with a 0.45 kg load over one arm, time a motor sits at a limit (hover / manoeuvre) | 67% / 66% | 3–8% / 22–60% |
+| Main-lifter layout: servo angle, hover power, tightest margin in hover | 44° (at its limit), 157 W, 0% | 8°, 136 W, 40% |
+| Main-lifter layout: servo response tests that pass | 0–2 of 4 | 4 of 4 |
+| Quad, hexacopter, tricopter | | Unchanged; there is no real choice to make, or the old tie-break already picked the same |
+
+The cost: with slow, laggy servos, the motors take more of the quick work, so their tightest margin during a manoeuvre drops (25% → 10% in the test).
 
 ## Flight envelope
 

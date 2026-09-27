@@ -18,6 +18,7 @@ function shapeOk(out, shape, args) {
   if (shape === 'n') return isNum(out);
   if (shape === 3) return isV3(out);
   if (shape === 'alloc') return Array.isArray(out) && out.length === args[0].length && out.every(isNum);
+  if (shape === 'pull') return !!out && ['q', 'r'].every(k => Array.isArray(out[k]) && out[k].length === args[0].length && out[k].every(isNum));
   if (!out || typeof out !== 'object') return false;
   for (const [k, n] of Object.entries(shape)) {
     if (n === 1) { if (!isNum(out[k])) return false; continue; }
@@ -30,6 +31,7 @@ function shapeText(shape) {
   if (shape === 'n') return 'a finite number';
   if (shape === 3) return 'an array of 3 finite numbers';
   if (shape === 'alloc') return 'an array with one finite number per input';
+  if (shape === 'pull') return '{ q, r }: two arrays with one finite number per input';
   return '{ ' + Object.entries(shape).map(([k, n]) => k + (n === 1 ? ': number' : n === 'rows' ? ': 6 rows, one number per input' : n === 4 ? ': [w, x, y, z]' : ': [x, y, z]')).join(', ') + ' }';
 }
 function describe(v) {

@@ -101,7 +101,9 @@ function rankOf(vecs, k) {
 //   minimize  Σ_k W[k]·(Σ_j cols[j][k]·x[j] − w[k])²   subject to  lo[j] ≤ x[j] ≤ hi[j]
 // Active-set method that clips the worst bound violation each pass. A tiny ridge term picks the
 // minimum-effort solution when several inputs can do the same job.
-function bls(cols, lo, hi, w, W) {
+function bls(cols, lo, hi, w, W, pull) {
+  // pull (optional): { q, r, rel } adds rel·meanEff·q_j·((x_j − r_j)/span_j)² per input, meanEff being the
+  // typical effect of one input (rel defaults to 1)
   const n = cols.length, x = new Array(n).fill(0), fixed = new Array(n).fill(false);
   if (!n) return x;
   const K = w.length;
@@ -116,6 +118,10 @@ function bls(cols, lo, hi, w, W) {
     let meanEff = 0; for (let a = 0; a < m; a++) { const sp = hi[F[a]] - lo[F[a]] || 1; meanEff += H[a][a] * sp * sp; } meanEff /= m;
     const lam = 1e-8 * meanEff + 1e-12;
     for (let a = 0; a < m; a++) { const sp = hi[F[a]] - lo[F[a]] || 1; H[a][a] += lam / (sp * sp); }
+    if (pull) for (let a = 0; a < m; a++) {
+      const j = F[a], sp = hi[j] - lo[j] || 1, q = (pull.q[j] || 0) * (pull.rel ?? 1) * meanEff / (sp * sp);
+      H[a][a] += q; g[a] += q * (pull.r[j] || 0);
+    }
     const y = solveLin(H, g);
     let worst = -1, wv = 1e-9;
     for (let a = 0; a < m; a++) { const j = F[a], sp = hi[j] - lo[j] || 1; const viol = Math.max(lo[j] - y[a], y[a] - hi[j]) / sp; if (viol > wv) { wv = viol; worst = a; } }

@@ -5,8 +5,8 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, mass: 0.06, health: 100, healthKnown: true }, o))); }
-function mkTilt(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'tilt', name, pos: [x, y, z], hingeAz: 0, mode: 'auto', manual: 0, range: 40, rate: 240, lag: 0.02, offset: 0, feedback: false, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, mass: 0.075, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkTilt(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'tilt', name, pos: [x, y, z], hingeAz: 0, mode: 'auto', manual: 0, range: 40, rate: 240, lag: 0.02, offset: 0, feedback: false, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, fm: 0.6, mass: 0.075, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -117,31 +117,47 @@ function recomputeProps() {
 
 /* ───────── control ───────── */
 
+// Weights for how the allocation breaks ties (see allocationPreferences). horizon: how far ahead a servo
+// move is planned [s]; what it can reach in that time bounds each step's servo change.
+const allocPrefs = { allowance: 0.02, efficiency: 0.02, servoMove: 0.01, horizon: 0.08 };
+const powerFull = c => Math.pow(c.tmax, 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));   // W at full thrust
+// Each input's share of the steering: the size of its effect on rotation (over its whole range), relative to the largest.
+function setAuthority(rows) {
+  const a = rows.map(r => Math.hypot(r.col[3], r.col[4], r.col[5]) * (r.hi - r.lo)), mx = Math.max(1e-9, ...a);
+  rows.forEach((r, i) => { r.inp.authority = a[i] / mx; });
+}
+function servoReach(c) { const m = servoModelHat(c); return m.rate * Math.max(0.005, allocPrefs.horizon - m.lag); }
 function allocate(w, cm) {
-  // w: wanted [force; torque] in the controller's model units. Columns are acceleration per full throttle.
+  // w: wanted [force; torque] in the controller's model units. Columns are acceleration per full thrust.
   const wa = (() => { const f = scl([w[0], w[1], w[2]], 1 / cm.m); const a = m3v(cm.Jinv, [w[3], w[4], w[5]]); return [...f, ...a]; })();
   const acts = actuators();
-  // Stage 1: servo angles. Each auto servo rotor becomes two virtual inputs (u cos θ, u sin θ).
-  if (acts.some(c => c.type === 'tilt' && c.mode === 'auto')) {
-    const cols = [], lo = [], hi = [], who = [];
-    for (const c of acts) {
-      const k = colsFor(c);
-      if (c.type === 'tilt' && c.mode === 'auto') {
-        const sb = Math.sin(c.range * D2R);
-        cols.push(k.a); lo.push(0); hi.push(1); who.push({ c, k: 'a' });
-        cols.push(k.b); lo.push(-sb); hi.push(sb); who.push({ c, k: 'b' });
-      } else { cols.push(colAt(c, thSeen(c))); lo.push(0); hi.push(1); who.push({ c, k: 'u' }); }
+  const thrustIn = c => { const st = act.get(c.id); return { col: colAt(c, thSeen(c)), lo: 0, hi: 1, inp: { kind: 'thrust', x: st.v || 0, lo: 0, hi: 1, power: powerFull(c) } }; };
+  // Stage 1: servo angles. Each auto servo rotor adds a small angle change δ as an input: its effect is
+  // thrust × d(column)/dθ, and δ is bounded by how far the servo can get within the planning horizon.
+  const servos = acts.filter(c => c.type === 'tilt' && c.mode === 'auto');
+  if (servos.length) {
+    const rows = acts.map(thrustIn), who = acts.map(c => ({ c, k: 'u' }));
+    for (const c of servos) {
+      const st = act.get(c.id), th = thSeen(c), k = colsFor(c), R = c.range * D2R, reach = servoReach(c);
+      const d = add6(scl6(k.a, -Math.sin(th)), scl6(k.b, Math.cos(th)));
+      const lo = Math.min(0, Math.max(-R - th, -reach)), hi = Math.max(0, Math.min(R - th, reach));
+      rows.push({ col: scl6(d, Math.max(st.v || 0, 0.02)), lo, hi, inp: { kind: 'servo', x: 0, lo, hi, th, range: R, reach } });
+      who.push({ c, k: 'd' });
     }
-    const x = run('allocation', cols, lo, hi, wa, mode);
-    for (let i = 0; i < who.length; i++) {
-      if (who[i].k !== 'a' || servoHeld()) continue;   // servos stay put while a calibration step holds them
-      const c = who[i].c, a = x[i], b = x[i + 1];
-      if (Math.hypot(a, b) > 0.02) act.get(c.id).thCmd = clamp(Math.atan2(b, a), -c.range * D2R, c.range * D2R);
-    }
+    setAuthority(rows);
+    const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
+    const x = run('allocation', rows.map(r => r.col), rows.map(r => r.lo), rows.map(r => r.hi), wa, mode, pull);
+    if (!servoHeld()) who.forEach((wh, i) => {   // servos stay put while a calibration step holds them
+      if (wh.k !== 'd') return;
+      const c = wh.c; act.get(c.id).thCmd = clamp(thSeen(c) + x[i], -c.range * D2R, c.range * D2R);
+    });
   }
-  // Stage 2: thrust for every motor at the servos' angles (measured, or predicted without feedback).
-  const cols = acts.map(c => colAt(c, thSeen(c)));
-  const u = holdU(run('allocation', cols, acts.map(() => 0), acts.map(() => 1), wa, mode));   // held during calibration pulses
+  // Stage 2: thrust for every motor at the servos' angles now (measured, or predicted without feedback),
+  // so the motors cover whatever a moving servo hasn't reached yet.
+  const rows = acts.map(thrustIn);
+  setAuthority(rows);
+  const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
+  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(() => 1), wa, mode, pull));   // held during calibration pulses
   ctl.sat = false;
   acts.forEach((c, i) => {
     const st = act.get(c.id);
