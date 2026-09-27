@@ -158,6 +158,17 @@ Tests (quad unless noted):
 | Hand or IMU unknown to the controller | Flips. A heavy offset load or a misread IMU is more than the integrators can absorb, as on real hardware |
 | All stock presets | Unchanged: the same hover, manoeuvre, calibration, throw and optical-flow results as before |
 
+## Designs, undo and redo
+
+The **Design** section at the top of the Airframe panel:
+- **Save** keeps the current airframe under the name in the box. Saving under a name that's already in the list replaces it; a new name makes a new entry. The header shows "unsaved changes" once you edit a saved design.
+- **Saved designs** lists them newest first, with their motor and servo counts. Click one to open it; it also appears under Start from. ⤓ saves it to a file, and × deletes it (click twice).
+- **Where they're kept:** as a published artifact, in your account, private to you and there on any device. Opened from the repository, in that browser.
+- **Save to file** and **Open file…** write and read a design as JSON (`"format": "drone-force-bench-design"`), so a design can live in the repository or go to another machine.
+- **Undo and Redo** (buttons here and in the edit bar, or Ctrl+Z / ⌘Z and Ctrl+Shift+Z / ⌘⇧Z / Ctrl+Y) step through every change to the airframe: moving, rotating, adding and removing parts, attaching them, editing their cards, loading a layout or opening a design. A continuous drag of a handle or slider is one step. Up to 300 steps.
+
+A design is the airframe alone: frame mass, every part and the steering mode. Flight state, what the drone has learned and edited formulas aren't part of it.
+
 ## Editing the airframe
 
 - **Type numbers:** every value on the Airframe tab has a box you can type into. Typed values can go beyond the slider's range, for example positions up to ±2 m.
@@ -236,6 +247,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/editor.js` | Edit mode: picking parts and the move and rotate handles |
 | `js/formulas-ui.js` | The Formulas tab |
 | `js/ui.js` | Airframe editor, telemetry, traces, header controls, persistence and the boot loop |
+| `js/designs.js` | Undo and redo, saved designs (your account or this browser) and design files |
 | `css/style.css` | Styles, light and dark |
 
 ## The formulas

@@ -54,6 +54,26 @@
         <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false">Formulas <span class="count" id="editedCount" hidden></span></button>
       </div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
+      <section class="sec" id="designSec">
+        <h2>Design <small id="designState"></small></h2>
+        <div class="design-row">
+          <input type="text" id="designName" placeholder="Name this design" aria-label="Design name" maxlength="60" autocomplete="off">
+          <button class="btn primary" id="designSave" type="button">Save</button>
+        </div>
+        <div class="design-row">
+          <button class="btn" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">Undo</button>
+          <button class="btn" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">Redo</button>
+        </div>
+        <p class="note" id="designNote" role="status" hidden></p>
+        <span class="lbl">Saved designs</span>
+        <div class="designs" id="designList"></div>
+        <div class="design-row">
+          <button class="btn" id="designImport" type="button" title="Open a design file">Open file…</button>
+          <button class="btn" id="designExport" type="button" title="Save this design as a file">Save to file</button>
+          <input type="file" id="designFile" accept=".json,application/json" hidden>
+        </div>
+        <p class="hint" id="designWhere"></p>
+      </section>
       <section class="sec">
         <h2>Attach</h2>
         <div class="addrow">
@@ -117,6 +137,8 @@
       <div class="edit-bar" id="editBar" role="status" hidden>
         <b>Editing</b>
         <span id="editMsg"></span>
+        <button class="btn" type="button" id="undoBtn2" title="Undo (Ctrl+Z or ⌘Z)">Undo</button>
+        <button class="btn" type="button" id="redoBtn2" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">Redo</button>
         <button class="btn primary" type="button" id="editDone">Done</button>
       </div>
       <div class="pick-tip" id="pickTip" hidden></div>
@@ -253,6 +275,7 @@
 <script src="js/pilot.js"></script>
 <script src="js/formulas-ui.js"></script>
 <script src="js/ui.js"></script>
+<script src="js/designs.js"></script>
 <script src="js/editor.js"></script>
 <script>boot();</script>
 </body>

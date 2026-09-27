@@ -271,6 +271,7 @@ function renderComps() {
   $('#compCount').textContent = `${na} motor${na === 1 ? '' : 's'} · ${nj} servo${nj === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} other`;
 }
 function edited(c, key) {
+  undoKey = `${c.id}:${key}`;   // repeated edits to the same field (a slider or handle drag) are one undo step
   if (c.type === 'sensor' && c.kind === 'fix' && FIX_TUNED.includes(key) && c.quality !== 'custom') {
     c.quality = 'custom'; const q = document.getElementById(`f-${c.id}-quality`); if (q) q.value = 'custom';
   }
@@ -586,16 +587,18 @@ function buildSp() {
 
 /* ───────── header ───────── */
 const presetSel = $('#preset');
-presetSel.append(el('option', { value: '', text: 'Choose a layout…' }));
-for (const [k, p] of Object.entries(PRESETS)) presetSel.append(el('option', { value: k, text: p.label }));
-presetSel.addEventListener('change', () => { if (!presetSel.value) return; loadPreset(presetSel.value); presetSel.value = ''; });
-function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); openSet.clear(); afterLoad(); }
+presetSel.addEventListener('change', () => {   // layouts and your saved designs (options built by designs.js)
+  const v = presetSel.value; presetSel.value = ''; if (!v) return;
+  if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) openDesign(d); }
+  else loadPreset(v.slice(2));
+});
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad(); }
 function afterLoad() {
   frameMassField.refresh();
   truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
 }
 const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
-  v => { cfg.frame.mass = v; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
+  v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
 $('#frameMassSlot').replaceWith(frameMassField.node);
 function setMode(m, recalc = true) {
   mode = m; steerMix.rho = 1;
@@ -674,11 +677,29 @@ $('#tabAir').addEventListener('click', () => showTab('air')); $('#tabForm').addE
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';
 function save() {
+  if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
+// Brings a design saved by an older version up to date.
+function migrateComps(comps) {
+  if (!comps.some(c => c.type === 'sensor')) comps.push(...defaultSensors());   // saved before sensors existed
+  comps = migrateTiltParts(comps);   // saved before servo joints existed
+  for (const c of comps) if (c.type === 'motor' && !c.prop) withProp(c);
+  for (const c of comps) {   // saved before the hidden hardware traits existed
+    if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
+    if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
+    if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
+    if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
+    if (c.type === 'sensor' && c.kind === 'mag' && c.softIron == null) c.softIron = 0.03;
+    if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
+    if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
+  }
+  return comps;
+}
+let bootDesign = null;   // which saved design the page was showing when it was last closed
 function load() {
   let s = null; try { s = JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) {}
   if (!s) return false;
@@ -688,7 +709,6 @@ function load() {
   }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
-    if (!cfg.comps.some(c => c.type === 'sensor')) cfg.comps.push(...defaultSensors());   // saved before sensors existed
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learn.keep = false;
     if (s.holdPulses === false) learn.holdPulses = false;
@@ -698,16 +718,8 @@ function load() {
     if (s.launch === 'throw') launchMode = 'throw';
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
-    cfg.comps = migrateTiltParts(cfg.comps);   // saved before servo joints existed
-    for (const c of cfg.comps) if (c.type === 'motor' && !c.prop) withProp(c);
-    for (const c of cfg.comps) {   // saved before the hidden hardware traits existed
-      if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
-      if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
-      if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
-      if (c.type === 'sensor' && c.kind === 'mag' && c.softIron == null) c.softIron = 0.03;
-      if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
-      if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
-    }
+    cfg.comps = migrateComps(cfg.comps);
+    if (s.designCur || s.designName) bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean };
     return true;
   }
   return false;
@@ -725,6 +737,7 @@ function boot() {
   cs.value = budget.chip; cs.addEventListener('change', () => setChip(cs.value));
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
+  initDesigns(bootDesign);
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   showTab(tab === 'form' ? 'form' : 'air');
   let lastT = performance.now(), envT = 0, uiT = 0;
