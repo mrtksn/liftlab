@@ -123,10 +123,12 @@ Placement follows what you drop onto:
 - A rod put on a servo starts at the servo's pivot.
 - Moving or turning a servo or rod (typed values, sliders or edit-mode handles) carries everything on it along. Lengthening a rod moves what's at its end.
 
-**How a servo is mounted.** A servo swings in the plane at right angles to its hinge axis, and the axis can point anywhere:
-- **Moves in** on its card: the horizontal plane (it swivels), the vertical plane front–back (it tips an arm fore and aft), the vertical plane sideways, or Custom.
-- **Exact angles:** the hinge axis heading and its tilt up, for any plane in between.
-- **In edit mode:** select a servo and the edit bar offers **Horizontal**, **Vertical ↕** and **Vertical ↔**, plus − / + for its travel in 5° steps. Any of the three rings also turns the axis.
+**How a servo is mounted.** A servo swings in the plane at right angles to its hinge axis, and the axis can point any way at all, relative to what the servo is mounted on:
+- **On its card:** **Axis heading** and **Axis tilt up** (type them or drag the sliders), plus quick picks for the mount's three axes.
+- **In edit mode:** select a servo and drag the round knob on its axis arrow to point the hinge anywhere (5° steps, 1° with Shift). The edit bar has the same two angles to type, and − / + for its travel.
+- **What "relative" means:**
+  - On the frame, or on another servo's output, the angles are from the body axes (X forward, Y left, Z up).
+  - On a rod, X runs along the rod and Z is as near to up as the rod allows. Turning the rod keeps the servo at the same angles to it, and swings everything it carries along.
 
 **Seeing the travel.** In edit mode each servo shows what it can sweep:
 - **The fan:** a shaded sector in its plane of motion, out to the farthest part it carries, between its limits either side of 0°. The 0° line is dashed; it is where the parts sit as placed.

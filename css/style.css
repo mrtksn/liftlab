@@ -376,3 +376,6 @@ button.chip{background:transparent;cursor:pointer}
 .range-step{display:inline-flex;align-items:center;gap:4px}
 .range-step .btn{padding:1px 8px;font-size:14px;line-height:1.2}
 .edit-bar .range-step .rv{font-family:var(--f-mono);font-size:12px;letter-spacing:0;text-transform:none;color:var(--ink);min-width:36px;text-align:center}
+.edit-tools .ang{display:inline-flex;align-items:center;gap:4px;font-size:12px}
+.edit-tools .ang .num{width:58px}
+.edit-tools .ang .num{border:1px solid var(--line-strong);border-radius:5px;padding:2px 4px;background:var(--panel);color:var(--ink);font:inherit}

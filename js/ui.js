@@ -88,11 +88,12 @@ const getP = (o, p) => p.reduce((a, k) => a[k], o);
 function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
 const openSet = new Set();
-// How a servo is mounted: the plane it swings in (at right angles to its hinge axis).
-const HINGE_PRESETS = [['z', 'Horizontal plane (swivels; axis vertical)', 0, 90], ['y', 'Vertical plane, front–back (tips fore and aft)', 90, 0], ['x', 'Vertical plane, sideways (tips left and right)', 0, 0], ['custom', 'Custom (set the axis below)', null, null]];
-const PLANE_SHORT = { z: 'horizontal plane', y: 'vertical plane, front–back', x: 'vertical plane, sideways' };
-const planeTag = j => ({ z: 'horizontal', y: 'vertical, front–back', x: 'vertical, sideways' })[presetOf(HINGE_PRESETS, j.hingeAz, j.hingeEl)] || (Math.abs(j.hingeEl) < 0.5 ? `vertical, axis ${j.hingeAz}°` : 'tilted plane');
-const planeName = j => PLANE_SHORT[presetOf(HINGE_PRESETS, j.hingeAz, j.hingeEl)] || (Math.abs(j.hingeEl) < 0.5 ? `vertical plane (axis at ${j.hingeAz}°)` : `tilted plane (axis at ${j.hingeAz}°, ${j.hingeEl}° up)`);
+// How a servo is mounted: the plane it swings in (at right angles to its hinge axis). Quick picks, relative
+// to what it's mounted on (see mountFrame).
+const HINGE_PRESETS = [['z', 'Axis along the mount\'s Z (swivels flat)', 0, 90], ['y', 'Axis along Y (tips in the X–Z plane)', 90, 0], ['x', 'Axis along X (tips in the Y–Z plane)', 0, 0], ['custom', 'Any direction (angles below)', null, null]];
+const relPreset = j => { const r = hingeRel(j); return presetOf(HINGE_PRESETS, +r.az.toFixed(1), +r.el.toFixed(1)); };
+const planeTag = j => { const r = hingeRel(j); return `axis ${r.az.toFixed(0)}°, ${r.el.toFixed(0)}° up`; };
+const planeName = j => { const r = hingeRel(j); return `the plane across its axis (heading ${r.az.toFixed(0)}°, ${r.el.toFixed(0)}° up from ${mountName(j)})`; };
 const ROD_PRESETS = [['down', 'Straight down', 0, -90], ['fwd', 'Forward', 0, 0], ['back', 'Back', 180, 0], ['left', 'Left', 90, 0], ['right', 'Right', -90, 0], ['up', 'Straight up', 0, 90], ['custom', 'Custom direction', null, null]];
 const near = (a, b) => Math.abs(((a - b + 540) % 360) - 180) < 0.5;
 function presetOf(list, az, el) { const p = list.find(([k, , a, e]) => k !== 'custom' && Math.abs(el - e) < 0.5 && (Math.abs(e) > 89.5 || near(az, a))); return p ? p[0] : 'custom'; }
@@ -134,6 +135,22 @@ function numField(id, d, get, set) {
   const refresh = () => { if (document.activeElement !== num) show(get()); };
   const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, num, el('span', { class: 'unit', text: d.u })), rng);
   return { node, refresh };
+}
+// A servo's hinge axis, relative to what it's mounted on: quick picks, then heading and tilt.
+function hingeFields(c, rerender) {
+  const id = `f-${c.id}-hinge`, sel = el('select', { id }), cur = relPreset(c);
+  for (const [k, t] of HINGE_PRESETS) { const o = el('option', { value: k, text: t }); if (k === cur) o.selected = true; sel.append(o); }
+  sel.addEventListener('change', () => { const p = HINGE_PRESETS.find(x => x[0] === sel.value); if (p[2] == null) return; setHingeRel(c, p[2], p[3]); edited(c, 'hingeAz'); rerender(); });
+  const rel = (key, label, min, max) => {
+    const f = numField(`f-${c.id}-rel${key}`, { label, min, max, step: 1, u: '°', dp: 1 }, () => hingeRel(c)[key],
+      v => { const r = hingeRel(c); setHingeRel(c, key === 'az' ? v : r.az, key === 'el' ? v : r.el); edited(c, 'hingeAz'); });
+    if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(f.refresh);
+    return f.node;
+  };
+  const axes = parentOf(c) && parentOf(c).type === 'link' ? 'X along the rod, Z as near to up as the rod allows' : 'X forward, Y left, Z up';
+  return [el('div', { class: 'field' }, el('label', { for: id, text: 'Hinge axis' }), sel),
+    rel('az', 'Axis heading', -180, 180), rel('el', 'Axis tilt up', -90, 90),
+    el('p', { class: 'hint', text: `Relative to ${mountName(c)} (${axes}). It swings in the plane at right angles to its hinge axis, up to its limit either side of where its parts sit now (0°). In Edit mode, drag the round knob on the axis arrow to point it anywhere; the shaded fan shows the sweep.` })];
 }
 const cardRefresh = new Map();   // component id -> functions that redraw its open card's values
 function slider(c, key) {
@@ -185,8 +202,7 @@ function compBody(c) {
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
     b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
-    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, presetSel(HINGE_PRESETS, 'hingeAz', 'hingeEl', 'Moves in'), slider(c, 'hingeAz'), slider(c, 'hingeEl'),
-      el('p', { class: 'hint', text: 'It swings in the plane at right angles to its hinge axis, up to its limit either side of where its parts sit now (0°). In Edit mode the shaded fan shows the sweep.' }),
+    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, ...hingeFields(c, rerender),
       selectF(c, 'mode', 'Servo control', [['auto', steer ? 'Allocator steers it' : 'Allocator steers it (needs a motor on it)'], ['manual', 'Set by me']], rerender));
     if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
     b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
@@ -295,7 +311,7 @@ function carryAlong(c) {
   if (nrm(d) > 1e-9) shiftSubtree(c, d);
   if (c.type === 'link') {
     const dir = linkDir(c);
-    if (nrm(sub(dir, s0.dir)) > 1e-9) rotateSubtree(c, rotationBetween(s0.dir, dir), c.pos);
+    if (nrm(sub(dir, s0.dir)) > 1e-9) rotateSubtree(c, m3m(rodFrame(dir), m3T(rodFrame(s0.dir))), c.pos);   // what's on it keeps its place and angle relative to the rod
     if (Math.abs(c.length - s0.len) > 1e-9) shiftSubtree(c, scl(dir, c.length - s0.len));
   }
   snapHolder(c); for (const k of descendants(c)) snapHolder(k);

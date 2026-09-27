@@ -41,6 +41,28 @@ function jointAxis(j) {   // hinge axis at rest, body frame
   const a = j.hingeAz * D2R, e = (j.hingeEl || 0) * D2R;
   return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)];
 }
+// The axes of the surface a part is mounted on, in body axes at rest (columns: its X, Y, Z). On the frame,
+// or on a servo's output (which sits at 0° at rest), they're the body axes. On a rod: X runs along the rod,
+// Z is as close to up as the rod allows (forward, for a rod pointing straight up or down), Y completes them.
+function rodFrame(x) {
+  const up = Math.abs(x[2]) > 0.95 ? [1, 0, 0] : [0, 0, 1];
+  const z = unit(sub(up, scl(x, dot(up, x)))), y = crs(z, x);
+  return [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]];
+}
+function mountFrame(c) {
+  const p = parentOf(c);
+  return p && p.type === 'link' ? rodFrame(linkDir(p)) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+}
+const mountName = c => { const p = parentOf(c); return p && p.type === 'link' ? p.name : p ? p.name + '\'s output' : 'the frame'; };
+// A servo's hinge axis as a heading and tilt relative to what it's mounted on (degrees), and back.
+function hingeRel(j) {
+  const a = m3v(m3T(mountFrame(j)), jointAxis(j));
+  return { az: Math.hypot(a[0], a[1]) > 1e-6 ? Math.atan2(a[1], a[0]) * R2D : 0, el: Math.asin(clamp(a[2], -1, 1)) * R2D };
+}
+function setHingeRel(j, az, el) {
+  const A = az * D2R, E = el * D2R;
+  setDirAzEl(j, m3v(mountFrame(j), [Math.cos(E) * Math.cos(A), Math.cos(E) * Math.sin(A), Math.sin(E)]), 'hingeAz', 'hingeEl');
+}
 const chainOf = c => ancestorsOf(c).filter(a => a.type === 'joint');   // joints above a part, nearest first
 const isUnder = (c, a) => ancestorsOf(c).includes(a);
 const descendants = a => cfg.comps.filter(c => c !== a && isUnder(c, a));
