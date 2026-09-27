@@ -8,26 +8,31 @@
 
 const G = 9.81, D2R = Math.PI / 180, R2D = 180 / Math.PI;
 
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const scl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const crs = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const nrm = a => Math.hypot(a[0], a[1], a[2]);
-const unit = a => { const n = nrm(a); return n > 1e-12 ? scl(a, 1 / n) : [0, 0, 1]; };
+// Operation counter for the flight budget (budget.js). While `on`, the helpers below add the arithmetic
+// they do (a multiply-add counts 2, a square root or trig call about 15).
+const OPS = { on: false, n: 0 };
+const opc = k => { if (OPS.on) OPS.n += k; };
+
+const add = (a, b) => (opc(3), [a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
+const sub = (a, b) => (opc(3), [a[0] - b[0], a[1] - b[1], a[2] - b[2]]);
+const scl = (a, s) => (opc(3), [a[0] * s, a[1] * s, a[2] * s]);
+const dot = (a, b) => (opc(5), a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+const crs = (a, b) => (opc(9), 0) || [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const nrm = a => (opc(20), Math.hypot(a[0], a[1], a[2]));
+const unit = a => { opc(1); const n = nrm(a); return n > 1e-12 ? scl(a, 1 / n) : [0, 0, 1]; };
 const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
-const cosd = a => Math.cos(a * D2R), sind = a => Math.sin(a * D2R);
+const cosd = a => (opc(16), Math.cos(a * D2R)), sind = a => (opc(16), Math.sin(a * D2R));
 
 // 3×3 matrices
-const m3v = (M, v) => [M[0] * v[0] + M[1] * v[1] + M[2] * v[2], M[3] * v[0] + M[4] * v[1] + M[5] * v[2], M[6] * v[0] + M[7] * v[1] + M[8] * v[2]];
+const m3v = (M, v) => (opc(15), 0) || [M[0] * v[0] + M[1] * v[1] + M[2] * v[2], M[3] * v[0] + M[4] * v[1] + M[5] * v[2], M[6] * v[0] + M[7] * v[1] + M[8] * v[2]];
 const m3T = M => [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]];
 function m3m(A, B) {
-  const C = new Array(9);
+  opc(45); const C = new Array(9);
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j];
   return C;
 }
 function m3inv(M) {
-  const [a, b, c, d, e, f, g, h, i] = M;
+  opc(50); const [a, b, c, d, e, f, g, h, i] = M;
   const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
   const det = a * A + b * B + c * C;
   if (Math.abs(det) < 1e-15) return [0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -36,14 +41,14 @@ function m3inv(M) {
 }
 
 // Quaternions
-const qmul = (a, b) => [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2], a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
+const qmul = (a, b) => (opc(28), 0) || [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2], a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
 function qmat(q) {
-  const [w, x, y, z] = q;
+  opc(30); const [w, x, y, z] = q;
   return [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y), 2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x), 2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)];
 }
-const qnorm = q => { const n = Math.hypot(q[0], q[1], q[2], q[3]); return q.map(c => c / n); };
+const qnorm = q => { opc(27); const n = Math.hypot(q[0], q[1], q[2], q[3]); return q.map(c => c / n); };
 function matToQuat(M) {
-  const tr = M[0] + M[4] + M[8]; let w, x, y, z;
+  opc(30); const tr = M[0] + M[4] + M[8]; let w, x, y, z;
   if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; w = 0.25 * s; x = (M[7] - M[5]) / s; y = (M[2] - M[6]) / s; z = (M[3] - M[1]) / s; }
   else if (M[0] > M[4] && M[0] > M[8]) { const s = Math.sqrt(1 + M[0] - M[4] - M[8]) * 2; w = (M[7] - M[5]) / s; x = 0.25 * s; y = (M[1] + M[3]) / s; z = (M[2] + M[6]) / s; }
   else if (M[4] > M[8]) { const s = Math.sqrt(1 + M[4] - M[0] - M[8]) * 2; w = (M[2] - M[6]) / s; x = (M[1] + M[3]) / s; y = 0.25 * s; z = (M[5] + M[7]) / s; }
@@ -61,7 +66,8 @@ function frameFrom(n, xref) {
 
 // Dense linear algebra
 function solveLin(A, b) { // Gaussian elimination with partial pivoting
-  const n = b.length, M = A.map((r, i) => r.slice().concat([b[i]]));
+  const n = b.length; opc(2 * n * n * n / 3 + 3 * n * n);
+  const M = A.map((r, i) => r.slice().concat([b[i]]));
   for (let c = 0; c < n; c++) {
     let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
     if (p !== c) { const t = M[p]; M[p] = M[c]; M[c] = t; }
@@ -110,6 +116,7 @@ function bls(cols, lo, hi, w, W, pull) {
   for (let iter = 0; iter <= n; iter++) {
     const F = []; for (let i = 0; i < n; i++) if (!fixed[i]) F.push(i);
     if (!F.length) break;
+    opc(K * (3 * F.length + 1.5 * F.length * (F.length + 1)) + 2 * K * (n - F.length) + 16 * F.length);
     const r = w.slice();
     for (let i = 0; i < n; i++) if (fixed[i]) for (let k = 0; k < K; k++) r[k] -= cols[i][k] * x[i];
     const m = F.length, H = [], g = [];
@@ -133,7 +140,7 @@ function bls(cols, lo, hi, w, W, pull) {
 
 // Rotation (sensor → body) from mount angles in degrees: yaw about Z, then pitch about Y, then roll about X.
 function eulerR(roll, pitch, yaw) {
-  const [cr, sr, cp, sp, cy, sy] = [Math.cos(roll * D2R), Math.sin(roll * D2R), Math.cos(pitch * D2R), Math.sin(pitch * D2R), Math.cos(yaw * D2R), Math.sin(yaw * D2R)];
+  opc(110); const [cr, sr, cp, sp, cy, sy] = [Math.cos(roll * D2R), Math.sin(roll * D2R), Math.cos(pitch * D2R), Math.sin(pitch * D2R), Math.cos(yaw * D2R), Math.sin(yaw * D2R)];
   return [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr, sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr, -sp, cp * sr, cp * cr];
 }
 

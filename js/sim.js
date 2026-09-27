@@ -88,6 +88,7 @@ function massProps(which) {
     else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
   }
   let m = 0, cm = [0, 0, 0]; for (const it of items) { m += it.m; cm = add(cm, scl(it.r, it.m)); } cm = scl(cm, 1 / m);
+  opc(30 * items.length);
   const J = [0, 0, 0, 0, 0, 0, 0, 0, 0];
   for (const it of items) {
     if (it.I) for (let i = 0; i < 9; i++) J[i] += it.I[i];
@@ -203,7 +204,10 @@ function updateServoBelief(dt) {
   if (joints().length) model = massProps('model');   // parts on joints move the CoG the controller believes in
 }
 function hubState() { return { hub: S.p, vh: S.v }; }
-function control(dt) {
+// One step of the flight software. Everything in it is what the drone's own computer would run, and the
+// flight budget (budget.js) counts it.
+function control(dt) { budgetBegin(); try { controlStep(dt); } finally { budgetEnd(dt); } }
+function controlStep(dt) {
   senseAndEstimate(dt);
   updateServoBelief(dt);
   learnStep(dt);
@@ -408,7 +412,7 @@ function resetSim() {
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
-  resetEstimation(); resetLearning();
+  resetEstimation(); resetLearning(); budgetReset();
   for (let k = 0; k < 4; k++) {   // settle into hover: motors at their steady speed, servos where they're told
     control(0);
     let I = 0.5;

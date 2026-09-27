@@ -46,7 +46,9 @@ function describe(v) {
 
 // Calls the active version of a law. If an edited version fails, it is switched off and the
 // default answers instead, so the simulation keeps running.
-function run(key, ...args) {
+// While the flight budget counts a control step, every call is counted (budget.js).
+function run(key, ...args) { return OPS.on ? budgetCall(key, args, () => runLaw(key, ...args)) : runLaw(key, ...args); }
+function runLaw(key, ...args) {
   const L = LAWS[key];
   if (L.fn !== L.def.fn) {
     try {

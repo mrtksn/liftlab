@@ -68,7 +68,9 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
    - where the IMU sits relative to the balance point;
    - the gyroscopic coupling between axes;
    - the spin-up reaction (B₂, their G₂): a motor speeding up twists the frame the other way, several times harder than its steady drag torque. Without this term a pulse from standstill looks like a huge yaw effect;
-   - each motor's lag. The drone doesn't measure prop speed, so it runs a generic brushless motor model (back-EMF, a current limit, prop drag) for each motor with its time constant unknown, and tries a few time constants per motor, keeping what explains the rotation best. A big slow rotor and small fast ones can share a frame.
+   - the motor lag. The drone doesn't measure prop speed, so it runs a generic brushless motor model (back-EMF, a current limit, prop drag) with its time constant unknown.
+
+   It's built to run on a microcontroller. While falling it keeps one running fit per candidate lag (all motors the same), a fixed cost per step, and a compact 250 Hz log. At the moment it has to catch itself it picks the best of those fits at once. Then, on the spare core, it works out each motor's own lag from the log, one motor at a time, and switches to that if it explains the fall better. A big slow rotor and small fast ones can then share a frame.
 
    Nothing fights the pulses, so each motor's effect comes out clean.
 4. **Catch.** The controller takes over on the model it just learned. It gets upright first and turns to the target heading afterwards.
@@ -78,7 +80,7 @@ If the fit is poor, it catches itself on the airframe description instead and sa
 
 Results on the stock presets (thrown to 4 m):
 - **Identification:** the fit explains 97–100% of the rotation and of the force. Motor lag comes out at the true 30 ms; the IMU offset within about 3 mm.
-- **Recovery:** the quad, hexacopter, tricopter, tilt-rotor quad and main-lifter layout all catch themselves. The tilt-rotor quad and main-lifter get through about half their pulses before they have to stop, and hold their servos until the calibration.
+- **Recovery:** the quad, hexacopter, tricopter and tilt-rotor quad catch themselves reliably. The tilt-rotor quad gets through about half its pulses before it has to stop, and holds its servos until the calibration. The main-lifter layout is marginal: its big rotor's slow spin-up and strong gyroscopic torque leave it skimming the ground or crashing, whatever the throw height.
 - **Afterwards:** the hover calibration brings the learned model to 92–100% of the force and 96–99% of the rotation on the multirotors and the tilt-rotor quad.
 
 ## Airflow (physics only)
@@ -209,10 +211,12 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 38 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 36 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
+| `js/budget.js` | Flight computer budget: counts what the flight code costs per control step and keeps in memory, for an ESP32 |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
+| `js/multibody.js` | Articulated-body dynamics: the frame and every servo joint solved together (recursive Newton–Euler) |
 | `js/joints.js` | Servo joints and rods: the attachment tree, poses from the joint angles (true and believed), carrying parts along, servo state |
 | `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
@@ -293,6 +297,26 @@ What it changed in the tests:
 | Quad, hexacopter, tricopter | | Unchanged; there is no real choice to make, or the old tie-break already picked the same |
 
 The cost: with slow, laggy servos, the motors take more of the quick work, so their tightest margin during a manoeuvre drops (25% → 10% in the test).
+
+## Flight computer budget
+
+The **Flight computer** panel shows what the flight software alone would cost on the drone's own computer: an ESP32, ESP32-S3 or ESP32-C3. The simulator's physics isn't counted. Only what runs inside the control step is: estimation, learning, control, allocation and the code around them, plus the throw's background refinement.
+
+- **Operations:** the math helpers add up the arithmetic they do while a control step runs, and formulas with loops of their own are counted from their sizes. A multiply-add counts 2, a square root or trig call about 15. Time assumes plain C in 32-bit floats: about 60 million operations per second on the ESP32, 80 on the S3 and 4 on the C3, which has no float unit.
+- **Memory:** the numbers the flight code keeps between steps, at 4 bytes each.
+- **One-off fits:** the fits at the end of each actuator test, and the throw's first fit, are listed separately. On the drone the test fits belong on the second core.
+
+Measured on the presets, ESP32 at 1 kHz:
+
+| Preset | Hover | Calibrating | Throw, while falling | Memory, most | Throw's first fit |
+|---|---|---|---|---|---|
+| Quad | 7% of a core | 7% | 14% | 47 KB | 1.4 ms |
+| Hexacopter | 9% | 9% | 21% | 60 KB | 3 ms |
+| Tricopter | 11% | 11% | 19% | 52 KB | 2 ms |
+| Tilt-rotor quad | 25% | 35% | 52% | 113 KB | 14 ms |
+| Main lifter + 4 steering | 28% | 44% | 58% | 125 KB | 17 ms |
+
+The biggest items are the in-flight learning (its matrix grows with the square of the inputs, and a motor on a servo is three inputs), the allocation, and rebuilding the controller's model as servos move. The end-of-test fits take 8–30 ms each. The per-motor lag search after a throw takes 0.1–0.3 s on the spare core. The ESP32-C3 can't run the 1 kHz loop; the panel shows the fastest loop it could keep.
 
 ## Flight envelope
 

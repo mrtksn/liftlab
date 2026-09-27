@@ -25,15 +25,15 @@ const learn = {
 
 /* ───────── inputs ───────── */
 // Basis over a motor's joints (nearest first): products of (1, cos θ, sin θ), first joint most significant.
-function basisVals(angles) { let v = [1]; for (const a of angles) { const c = Math.cos(a), s = Math.sin(a); v = v.flatMap(x => [x, x * c, x * s]); } return v; }
+function basisVals(angles) { opc(32 * angles.length + 2 * 3 ** angles.length); let v = [1]; for (const a of angles) { const c = Math.cos(a), s = Math.sin(a); v = v.flatMap(x => [x, x * c, x * s]); } return v; }
 function dBasisVals(angles, m) {   // derivative of the basis with respect to joint m
-  let v = [1];
+  opc(32 * angles.length + 3 * 3 ** angles.length); let v = [1];
   angles.forEach((a, i) => { const f = i === m ? [0, -Math.sin(a), Math.cos(a)] : [1, Math.cos(a), Math.sin(a)]; v = v.flatMap(x => f.map(y => x * y)); });
   return v;
 }
 // Turns a motor's effect, evaluated at joint angles {0, π/2, π} for each of its k joints, into its basis columns.
 function decompose(evalAt, k) {
-  const n = 3 ** k, A = [0, Math.PI / 2, Math.PI], V = [];
+  opc(18 * k * 3 ** k); const n = 3 ** k, A = [0, Math.PI / 2, Math.PI], V = [];
   for (let idx = 0; idx < n; idx++) {
     const ang = []; let r = idx; for (let i = k - 1; i >= 0; i--) { ang[i] = A[r % 3]; r = Math.floor(r / 3); }
     V.push(evalAt(ang));
@@ -80,7 +80,13 @@ function describedAt(c, angles) {   // from the airframe description, with the m
   const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
   return cfgToAccel(scl6(wrenchCol(n.p, n.d, c.spin, c.kappa, model.c), c.tmax * hModel(c)));
 }
-const describedCols = c => decompose(a => describedAt(c, a), chainOf(c).length);
+// Cached per model: the description only changes when the believed mass properties do (a new `model`).
+const descCache = new WeakMap();
+function describedCols(c) {
+  let m = descCache.get(model); if (!m) { m = new Map(); descCache.set(model, m); }
+  let cols = m.get(c.id); if (!cols) { cols = decompose(a => describedAt(c, a), chainOf(c).length); m.set(c.id, cols); }
+  return cols;
+}
 function learnedCols(c) {
   const ix = learn.index.get(c.id); if (!learn.B || !ix) return null;
   return ix.cols.map(jj => learn.B.map(row => row[jj]));
@@ -91,7 +97,7 @@ function frozenCols(c) {   // the learned model as it was when a calibration beg
   return ix.cols.map(jj => learn.flyB.map(row => row[jj]));
 }
 const colsFor = c => (flyingLearned() && ((learn.cal && frozenCols(c)) || learnedCols(c))) || describedCols(c);
-function sumCols(cols, w) { const out = [0, 0, 0, 0, 0, 0]; cols.forEach((col, b) => { if (w[b]) for (let i = 0; i < 6; i++) out[i] += w[b] * col[i]; }); return out; }
+function sumCols(cols, w) { opc(12 * cols.length); const out = [0, 0, 0, 0, 0, 0]; cols.forEach((col, b) => { if (w[b]) for (let i = 0; i < 6; i++) out[i] += w[b] * col[i]; }); return out; }
 const colAtAngles = (c, angles) => sumCols(colsFor(c), basisVals(angles));
 const colAt = c => colAtAngles(c, seenAngles(c));                 // effect per full thrust at the joint angles believed now
 function dColAt(c, j) {                                            // how that effect changes as joint j turns
@@ -132,7 +138,7 @@ function resetLearning(keepResponses = false) {
   if (!keepResponses || learn.sig !== inputSig()) learn.resp = new Map();
   if (!model) model = massProps('model');
   buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
-  learn.cal = null; learn.imuR = null; learn.holdServos = false;
+  learn.cal = null; learn.imuR = null; learn.holdServos = false; learn.refine = null;
 }
 // Filtered accelerometer (lever-arm swing removed) and angular acceleration, for the actuator tests.
 function measStep(dt) {
@@ -159,6 +165,7 @@ function learnStep(dt) {
   if (learn.sig !== inputSig()) { resetLearning(); learn.msg = 'The actuators changed, so learning restarted from the airframe description.'; }
   if (!est.haveImu || !learn.n || S.crashed) { if (learn.cal && S.crashed) endCalibration('Calibration stopped: the drone crashed.'); return; }
   measStep(dt);
+  refineThrowStep(dt);
   if (thr && thr.phase !== 'recover') return;   // the throw runs its own identification while falling
   if (learn.keep || learn.cal) {
     const imus = sensorsOf('imu'); const r0 = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
@@ -473,31 +480,41 @@ function throwTick(dt) {
 }
 const lagText = r => { const t = (r.taus && r.taus.length ? r.taus : [r.tau]).map(x => Math.round(x * 1000)), lo = Math.min(...t), hi = Math.max(...t);
   return lo === hi ? `≈ ${lo} ms` : `${lo}–${hi} ms`; };
-function finishThrow() {
-  const r = thr.res, ok = r && r.fitR > 0.6 && r.fitF > 0.4;
-  thr.phase = 'recover'; thr.tRec = thr.t; ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0];
-  const pc = v => Math.round(v * 100) + '%';
+// Use a throw fit as the flight model. Motors not pulsed at every servo angle (the pulses were cut short)
+// keep what the angles tried can tell; returns true if some servo's effect is still unknown.
+function adoptThrowModel(r, plan, cut) {
+  const B = r.B.map(row => row.slice());
   let partial = false;
-  if (ok && thr.cut != null) {   // motors not pulsed at every servo angle: keep what the angles it did try can tell
-    const done = thr.plan.slice(0, thr.cut);
+  if (cut != null) {
+    const done = plan.slice(0, cut);
     for (const c of actuators()) {
       const ix = learn.index.get(c.id); if (!ix || ix.cols.length < 2) continue;
-      if (done.filter(P => P.c === c).length >= thr.plan.filter(P => P.c === c).length) continue;
-      const at = th => basisVals(th), val = (row, phi) => ix.cols.reduce((s, jj, b) => s + row[jj] * phi[b], 0);
+      if (done.filter(P => P.c === c).length >= plan.filter(P => P.c === c).length) continue;
+      const val = (row, phi) => ix.cols.reduce((s, jj, b) => s + row[jj] * phi[b], 0);
       const j = chainOf(c)[0], tried = [...new Set(done.filter(P => P.c === c).map(P => P.angles.get(j.id) ?? 0))].filter(a => Math.abs(a) > 1e-6);
-      for (const row of r.B) {
-        const v0 = val(row, at(new Array(ix.k).fill(0)));
+      for (const row of B) {
+        const v0 = val(row, basisVals(new Array(ix.k).fill(0)));
         if (ix.k === 1 && tried.length) {   // the middle and one end: its effect and how it changes with the servo (cos θ ≈ 1 here)
-          const a1 = tried[0], v1 = val(row, at([a1]));
+          const a1 = tried[0], v1 = val(row, basisVals([a1]));
           row[ix.cols[0]] = v0; row[ix.cols[1]] = 0; row[ix.cols[2]] = (v1 - v0) / Math.sin(a1);
         } else ix.cols.forEach((jj, b) => { row[jj] = b === 0 ? v0 : 0; });   // only the middle
       }
       if (!(ix.k === 1 && tried.length)) partial = true;
     }
   }
+  learn.B = B.map(row => row.slice()); learn.prior = B.map(row => row.slice()); learn.st = {};
+  learn.mode = 'ident'; learn.keep = true; learn.imuR = r.r.slice();
+  return partial;
+}
+function finishThrow() {
+  const r = thr.res, ok = r && r.fitR > 0.6 && r.fitF > 0.4;
+  thr.phase = 'recover'; thr.tRec = thr.t; ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0];
+  const pc = v => Math.round(v * 100) + '%';
+  let partial = false;
+  learn.refine = null;
   if (ok) {
-    learn.B = r.B.map(row => row.slice()); learn.prior = r.B.map(row => row.slice()); learn.st = {};
-    learn.mode = 'ident'; learn.keep = true; learn.imuR = r.r.slice();
+    partial = adoptThrowModel(r, thr.plan, thr.cut);
+    if (!r.refined) learn.refine = { st: thr.st, plan: thr.plan, cut: thr.cut, fitR: r.fitR, fitF: r.fitF, t0: S.t };   // each motor's own lag, in the background
     thr.msg = `Identified in ${(thr.t).toFixed(2)} s of free fall: the fit explains ${pc(r.fitR)} of the rotation and ${pc(r.fitF)} of the force, motor lag ${lagText(r)}, IMU ${(nrm(r.r) * 100).toFixed(1)} cm from the balance point (true ${(nrm(trueImuOffset()) * 100).toFixed(1)} cm).`;
   } else {
     learn.mode = 'config';
@@ -509,6 +526,25 @@ function finishThrow() {
     if (sj && ok && partial) learn.holdServos = true;
   }
   learn.msg = thr.msg + ' Recovering…';
+}
+// After a throw: work out each motor's own lag from the logged fall, with only the time the flight
+// computer has spare (the ESP32's second core), and switch to it if it explains the fall better.
+function refineThrowStep(dt) {
+  const J = learn.refine; if (!J || !(dt > 0)) return;
+  if (learn.sig !== inputSig()) { learn.refine = null; return; }
+  const z = new Array(learn.n).fill(0), r = run('identifyThrow', J.st, z, [0, 0, 0], [0, 0, 0], [0, 0, 0], 0, 'refine', motorInputs(), budgetBackgroundOps(dt));
+  J.spent = r.spent || 0; J.progress = r.progress ?? (r.refined ? 1 : 0);
+  if (!r.refined) return;
+  learn.refine = null;
+  const secs = (S.t - J.t0).toFixed(1), differ = new Set(r.taus || []).size > 1;
+  const better = differ && r.improved;   // lags that differ explained the fall's rotation better
+  let note = ` Worked out each motor's own lag in the background (${lagText(r)}, ${secs} s on the spare core)`;
+  if (better && !learn.cal && learn.mode === 'ident') {
+    const partial = adoptThrowModel(r, J.plan, J.cut); learn.holdServos = learn.holdServos && partial;
+    note += `; it now explains ${Math.round(r.fitR * 100)}% of the fall's rotation and flies on that.`;
+  } else note += better ? '; the calibration running now supersedes it.' : differ ? '; it didn\'t fit the fall any better, so nothing changed.' : '; all the motors share one lag, so nothing changed.';
+  learn.msg += note;
+  if (typeof renderLearn === 'function') renderLearn(true);
 }
 function trueImuOffset() {   // mean IMU position relative to the true CoG, body frame (for the report only)
   const imus = sensorsOf('imu'); if (!imus.length) return [0, 0, 0];

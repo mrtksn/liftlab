@@ -414,7 +414,7 @@ function updateLive() {
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
-  updateActs(); updateAllocInfo(); renderEst(); renderLearn();
+  updateActs(); updateAllocInfo(); renderEst(); renderLearn(); renderBudget();
 }
 
 /* ───────── state estimate ───────── */
@@ -721,6 +721,8 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 /* ───────── boot ───────── */
 function boot() {
   buildSp(); buildThrowFields(); buildAllocFields(); buildFormulas(); bindPads();
+  const cs = $('#chipSel'); for (const [k, c] of Object.entries(CHIPS)) cs.append(el('option', { value: k, text: c.label }));
+  cs.value = budget.chip; cs.addEventListener('change', () => setChip(cs.value));
   if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}

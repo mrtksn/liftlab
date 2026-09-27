@@ -460,7 +460,7 @@ function identifyServoResponse(wins, dt) {
   return { rate: best.rate, lag: best.lag, gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
 }
 
-function identifyThrow(st, u, f, w, vb, dt, solve, mot) {
+function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   // Batch least squares over a free fall, for a drone that knows nothing about itself (after Blaha,
   // Smeur & Remes, TU Delft 2024). The motors start from zero and the drone is falling, so the
   // accelerometer feels only the rotors plus its own swing around the center of gravity (CoG):
@@ -469,77 +469,148 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot) {
   // B₂ is each rotor spinning up or down: the motor's torque pushes the frame back (their G₂). Without it,
   // pulses from standstill look like a huge yaw effect. This drone doesn't measure prop speed, so it runs a
   // generic brushless model for each motor (speed x as a fraction of full, back-EMF, a current limit, prop
-  // drag; only its time constant τ unknown): u_τ = x² is the thrust. Each motor's τ is found by trying a
-  // few and keeping what explains the rotation best, one motor at a time, so a big slow rotor and small fast
-  // ones can share a frame. mot: per input, its motor's thrust command v, basis factor phi (inputs are
-  // thrust × (1, cos θ, sin θ) products) and motor number m. Call every step while falling; solve = true to fit.
-  // Returns B (6 rows × inputs), B2 (3 rows), r [m], each motor's lag and how much of the force and rotation it explains.
-  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09, 0.13], lpHz = 25, skip = 0.03;
+  // drag; only its time constant τ unknown): u_τ = x² is the thrust.
+  // Built to fit a microcontroller:
+  //   while falling (solve false), it keeps one running fit per candidate τ (all motors the same), a fixed
+  //     cost per step, and logs a compact 250 Hz record;
+  //   solve true: picks the best of those fits at once, so it can catch itself straight away;
+  //   solve 'refine': afterwards, in the background, finds each motor's own τ from the record (one motor at
+  //     a time, keeping what explains the rotation best), spending at most `budget` operations per call.
+  //     A big slow rotor and small fast ones can then share a frame. out.refined is true when finished.
+  // mot: per input, its motor's thrust command v, basis factor phi (inputs are thrust × (1, cos θ, sin θ)
+  // products) and motor number m. Returns B (6 rows × inputs), B2 (3 rows), r [m], each motor's lag and
+  // how much of the force and rotation it explains.
+  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09, 0.13], lpHz = 25, skip = 0.03, logEvery = 0.004;
   const n = u.length, nf = 3 * n + 7, nr = 2 * n + 4;
   const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
-  const k = dt > 0 ? dt / (dt + 1 / (2 * Math.PI * lpHz)) : 0;
   const zeros = (a, b) => b ? Array.from({ length: a }, () => new Array(b).fill(0)) : new Array(a).fill(0);
-  if (!st.S) { st.S = []; st.wl = w.slice(); st.fl = f.slice(); st.t = 0; }
-  if (dt > 0) {                                                            // record this step
-    const wPrev = st.wl;
+  const grp = mot && mot.m ? mot.m : u.map((_, j) => j), groups = [...new Set(grp)];
+  const firstOf = groups.map(g => grp.indexOf(g));
+  const Lof = (a, W) => [0, 1, 2].map(i => [0, 1, 2].map(j =>             // [α]× + [ω]×²
+    [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
+  const gyroOf = W => [W[1] * W[2], W[2] * W[0], W[0] * W[1]];
+  const kOf = h => h / (h + 1 / (2 * Math.PI * lpHz));
+  // One step of the regressors for motor lags tauOf (motor number → τ), updating the filter state z.
+  const stepRegs = (z, v, ph, h, tauOf) => {
+    const k = kOf(h);
+    for (let j = 0; j < n; j++) {
+      const xt = Math.sqrt(Math.max(0, v[j]));
+      const drive = clamp(xt * xt + 4 * xt - 4 * z.x[j], -1, 2) - z.x[j] * z.x[j];   // motor torque − prop drag, per full-thrust torque
+      z.x[j] = Math.max(0, z.x[j] + drive / (5.26 * tauOf[grp[j]]) * h);
+      z.ul[j] += k * (z.x[j] * z.x[j] * ph[j] - z.ul[j]);                  // thrust, through the same filter as the gyro
+      const q = z.sq[j] + k * (z.x[j] * ph[j] - z.sq[j]); z.dq[j] = (q - z.sq[j]) / h; z.sq[j] = q;   // prop acceleration
+    }
+  };
+  const newZ = () => ({ x: zeros(n), ul: zeros(n), sq: zeros(n), dq: zeros(n) });
+  const newM = force => ({ Ar: zeros(nr, nr), br: zeros(3, nr), Af: force ? zeros(nf, nf) : null, bf: force ? zeros(nf) : null });
+  const accumulate = (M, z, fl, a, L, gyro, vbb) => {
+    const phi = [...z.ul, ...z.dq, ...gyro, 1];                            // rotation rows share regressors
+    for (let p = 0; p < nr; p++) { const c = phi[p]; if (!c) continue; const row = M.Ar[p]; for (let q = 0; q < nr; q++) row[q] += c * phi[q]; for (let i = 0; i < 3; i++) M.br[i][p] += c * a[i]; }
+    if (M.Af) for (let i = 0; i < 3; i++) {                                // force rows share r and drag
+      const idx = [], val = [];
+      for (let j = 0; j < n; j++) { idx.push(i * n + j); val.push(z.ul[j]); }
+      for (let j = 0; j < 3; j++) { idx.push(3 * n + j); val.push(L[i][j]); }
+      idx.push(3 * n + 3 + i, 3 * n + 6); val.push(1, -vbb[i]);
+      for (let p = 0; p < idx.length; p++) { M.bf[idx[p]] += val[p] * fl[i]; for (let q = 0; q < idx.length; q++) M.Af[idx[p]][idx[q]] += val[p] * val[q]; }
+    }
+  };
+  const all = tau => Object.fromEntries(groups.map(g => [g, tau]));
+  if (!st.fits && !st.done) {
+    st.fits = taus.map(tau => ({ tau, z: newZ(), M: newM(true) }));
+    st.wl = w.slice(); st.fl = f.slice(); st.t = 0; st.log = []; st.hLog = 0; st.yy = zeros(6); st.ys = zeros(6); st.N = 0;
+  }
+  if (dt > 0 && st.fits) {                                                 // falling: update the running fits
+    const k = kOf(dt), wPrev = st.wl;
     st.wl = st.wl.map((v, i) => v + k * (w[i] - v));
     st.fl = st.fl.map((v, i) => v + k * (f[i] - v));
-    const a = st.wl.map((v, i) => (v - wPrev[i]) / dt), W = st.wl;       // angular acceleration
-    const L = [0, 1, 2].map(i => [0, 1, 2].map(j =>                         // [α]× + [ω]×²
-      [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
+    const a = st.wl.map((v, i) => (v - wPrev[i]) / dt), W = st.wl, L = Lof(a, W), gyro = gyroOf(W);
+    const v = mot ? mot.v : u, ph = mot ? mot.phi : u.map(() => 1);
     st.t += dt;
-    st.S.push({ v: mot ? mot.v.slice() : u.slice(), ph: mot ? mot.phi.slice() : u.map(() => 1), fl: st.fl.slice(), a, L,
-      gyro: [W[1] * W[2], W[2] * W[0], W[0] * W[1]], vb: vb.slice(), dt, k, use: st.t >= skip });
-  }
-  const used = st.S.filter(s => s.use), N = used.length;
-  if (!solve || N < 20) return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
-  const grp = mot && mot.m ? mot.m : u.map((_, j) => j), groups = [...new Set(grp)];
-  // Normal equations for one choice of motor lags (tauOf: motor number → τ); the force rows only when asked.
-  const build = (tauOf, force) => {
-    const x = zeros(n), ul = zeros(n), sq = zeros(n), dq = zeros(n);
-    const M = { Ar: zeros(nr, nr), br: zeros(3, nr), Af: force ? zeros(nf, nf) : null, bf: force ? zeros(nf) : null };
-    for (const s of st.S) {
-      for (let j = 0; j < n; j++) {
-        const xt = Math.sqrt(Math.max(0, s.v[j]));
-        const drive = clamp(xt * xt + 4 * xt - 4 * x[j], -1, 2) - x[j] * x[j];   // motor torque − prop drag, per full-thrust torque
-        x[j] = Math.max(0, x[j] + drive / (5.26 * tauOf[grp[j]]) * s.dt);
-        ul[j] += s.k * (x[j] * x[j] * s.ph[j] - ul[j]);                    // thrust, through the same filter as the gyro
-        const q = sq[j] + s.k * (x[j] * s.ph[j] - sq[j]); dq[j] = (q - sq[j]) / s.dt; sq[j] = q;   // prop acceleration
-      }
-      if (!s.use) continue;
-      const phi = [...ul, ...dq, ...s.gyro, 1];                            // rotation rows share regressors
-      for (let p = 0; p < nr; p++) { const a = phi[p]; if (!a) continue; const row = M.Ar[p]; for (let q = 0; q < nr; q++) row[q] += a * phi[q]; for (let i = 0; i < 3; i++) M.br[i][p] += a * s.a[i]; }
-      if (force) for (let i = 0; i < 3; i++) {                              // force rows share r and drag
-        const idx = [], val = [];
-        for (let j = 0; j < n; j++) { idx.push(i * n + j); val.push(ul[j]); }
-        for (let j = 0; j < 3; j++) { idx.push(3 * n + j); val.push(s.L[i][j]); }
-        idx.push(3 * n + 3 + i, 3 * n + 6); val.push(1, -s.vb[i]);
-        for (let p = 0; p < idx.length; p++) { M.bf[idx[p]] += val[p] * s.fl[i]; for (let q = 0; q < idx.length; q++) M.Af[idx[p]][idx[q]] += val[p] * val[q]; }
-      }
+    for (const F of st.fits) { stepRegs(F.z, v, ph, dt, all(F.tau)); if (st.t >= skip) accumulate(F.M, F.z, st.fl, a, L, gyro, vb); }
+    if (st.t >= skip) { [...st.fl, ...a].forEach((y, i) => { st.yy[i] += y * y; st.ys[i] += y; }); st.N++; }
+    st.hLog += dt;                                                         // the record: motor commands, basis factors, readings
+    if (st.hLog >= logEvery - 1e-9) {
+      st.log.push({ v: firstOf.map(j => v[j]), ph: ph.slice(), fl: st.fl.slice(), a, W: W.slice(), vb: vb.slice(), h: st.hLog, use: st.t >= skip });
+      st.hLog = 0;
     }
-    return M;
-  };
-  const yy = zeros(6), ys = zeros(6);
-  for (const s of used) [...s.fl, ...s.a].forEach((y, i) => { yy[i] += y * y; ys[i] += y; });
+  }
   const ridge = A => A.map((row, i) => row.map((v, j) => v + (i === j ? 1e-9 + 1e-6 * A[i][i] : 0)));
   const sse = (A, b, th, y2) => y2 - 2 * dotn(th, b) + dotn(th, A.map(row => dotn(row, th)));
-  const sst = i => Math.max(1e-9, yy[i] - ys[i] ** 2 / N);
-  const rot = M => { const th = [0, 1, 2].map(i => solveLin(ridge(M.Ar), M.br[i]));
-    return { th, fit: clamp(1 - th.reduce((s, t, i) => s + sse(M.Ar, M.br[i], t, yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1) }; };
-  const all = tau => Object.fromEntries(groups.map(g => [g, tau]));
-  let tauOf = null, bestFit = -1;
-  for (const tau of taus) { const r = rot(build(all(tau), false)); if (r.fit > bestFit) { bestFit = r.fit; tauOf = all(tau); } }   // one lag for all
-  for (let pass = 0; pass < 2 && groups.length > 1; pass++) for (const g of groups) for (const tau of taus) {   // then each motor's own
-    if (tau === tauOf[g]) continue;
-    const trial = { ...tauOf, [g]: tau }, r = rot(build(trial, false));
-    if (r.fit > bestFit + 1e-4) { bestFit = r.fit; tauOf = trial; }
+  const fitsOf = (M, yy, ys, N, force) => {
+    const sst = i => Math.max(1e-9, yy[i] - ys[i] ** 2 / N);
+    const thR = [0, 1, 2].map(i => solveLin(ridge(M.Ar), M.br[i]));
+    const fitR = clamp(1 - thR.reduce((s, t, i) => s + sse(M.Ar, M.br[i], t, yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1);
+    if (!force) return { thR, fitR };
+    const thF = solveLin(ridge(M.Af), M.bf);
+    const fitF = clamp(1 - sse(M.Af, M.bf, thF, yy[0] + yy[1] + yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
+    return { thR, fitR, thF, fitF };
+  };
+  const result = (R, tauOf, extra) => ({
+    B: [0, 1, 2].map(i => R.thF.slice(i * n, i * n + n)).concat(R.thR.map(th => th.slice(0, n))),
+    B2: R.thR.map(th => th.slice(n, 2 * n)), r: R.thF.slice(3 * n, 3 * n + 3), drag: R.thF[3 * n + 6],
+    tau: groups.reduce((s, g) => s + tauOf[g], 0) / groups.length, taus: groups.map(g => tauOf[g]), fitF: R.fitF, fitR: R.fitR, ...extra });
+  if (solve === true) {                                                    // catch: the best single lag, at once
+    if (st.N < 20) return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
+    let best = null;
+    for (const F of st.fits) { const R = fitsOf(F.M, st.yy, st.ys, st.N, true); if (!best || R.fitR > best.score) best = { R, tau: F.tau, score: R.fitR }; }   // the lag that explains the rotation best
+    st.out = result(best.R, all(best.tau), { refined: groups.length < 2 });
+    if (groups.length < 2) st.job = null;
+    else {
+      const pass = groups.flatMap(g => taus.map(tau => ({ g, tau })));
+      st.job = { tauOf: all(best.tau), M: null, base: 0, queue: pass.concat(pass), firstPass: pass.length, total: 2 * pass.length, credit: 0, spent: 0, changed: false };
+    }
+    st.fits = null; st.done = true;                                        // the running fits aren't needed any more
+    return st.out;
   }
-  const M = build(tauOf, true), R = rot(M), thF = solveLin(ridge(M.Af), M.bf);
-  const fitF = clamp(1 - sse(M.Af, M.bf, thF, yy[0] + yy[1] + yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
-  const B = [0, 1, 2].map(i => thF.slice(i * n, i * n + n)).concat(R.th.map(th => th.slice(0, n)));
-  const B2 = R.th.map(th => th.slice(n, 2 * n)), lagList = groups.map(g => tauOf[g]);
-  st.out = { B, B2, r: thF.slice(3 * n, 3 * n + 3), drag: thF[3 * n + 6], tau: lagList.reduce((s, v) => s + v, 0) / lagList.length, taus: lagList, fitF, fitR: R.fit };
-  return st.out;
+  if (solve === 'refine' && st.job) {                                      // background: each motor's own lag, from the record
+    const J = st.job, S = st.log, used = S.filter(s => s.use), N = used.length;
+    const yy = zeros(6), ys = zeros(6); for (const s of used) [...s.fl, ...s.a].forEach((y, i) => { yy[i] += y * y; ys[i] += y; });
+    const vOf = s => grp.map(g => s.v[groups.indexOf(g)]);
+    const build = (tauOf, force) => {                                      // the fit's sums over the whole record
+      const z = newZ(), M = newM(force);
+      for (const s of S) { stepRegs(z, vOf(s), s.ph, s.h, tauOf); if (s.use) accumulate(M, z, s.fl, s.a, Lof(s.a, s.W), gyroOf(s.W), s.vb); }
+      return M;
+    };
+    // A trial changes one motor's lag, so only that motor's rows of the sums change: recompute just those.
+    const trialSums = (base, tauOf, g, tau) => {
+      const C = []; grp.forEach((gg, j) => { if (gg === g) C.push(j, n + j); });
+      const Ar = base.Ar.map(r => r.slice()), br = base.br.map(r => r.slice());
+      for (const p of C) { Ar[p].fill(0); for (let q = 0; q < nr; q++) Ar[q][p] = 0; for (let i = 0; i < 3; i++) br[i][p] = 0; }
+      const z = newZ(), zt = newZ(), trial = { ...tauOf, [g]: tau };
+      for (const s of S) {
+        const v = vOf(s); stepRegs(z, v, s.ph, s.h, tauOf); stepRegs(zt, v, s.ph, s.h, trial);
+        if (!s.use) continue;
+        const phi = [...z.ul, ...z.dq, ...gyroOf(s.W), 1];
+        for (const p of C) phi[p] = p < n ? zt.ul[p] : zt.dq[p - n];
+        for (const p of C) { const c = phi[p]; for (let q = 0; q < nr; q++) { if (C.includes(q) && q < p) continue; const add = c * phi[q]; Ar[p][q] += add; if (q !== p) Ar[q][p] += add; } for (let i = 0; i < 3; i++) br[i][p] += c * s.a[i]; }
+      }
+      return { Ar, br };
+    };
+    const solveCost = 3 * (2 * nr ** 3 / 3 + 4 * nr * nr);
+    const fullCost = S.length * (14 * n + 2 * nr * nr + 6 * nr) + solveCost;
+    const trialCost = g => { const k = grp.filter(x => x === g).length; return S.length * (14 * n + 14 * k + 4 * k * nr + 12 * k) + solveCost; };
+    J.credit += budget || 0;
+    const pay = c => { if (J.credit < c) return false; J.credit -= c; J.spent += c; return true; };
+    if (!J.M && pay(fullCost)) { J.M = build(J.tauOf, false); J.base = fitsOf(J.M, yy, ys, N, false).fitR; }
+    while (J.M && J.queue.length) {
+      if (J.queue.length === J.firstPass && !J.changed) { J.queue.length = 0; break; }   // nothing moved in the first pass: done
+      const { g, tau } = J.queue[0];
+      if (tau === J.tauOf[g]) { J.queue.shift(); continue; }
+      if (!pay(trialCost(g))) break;
+      J.queue.shift();
+      const M = trialSums(J.M, J.tauOf, g, tau), R = fitsOf(M, yy, ys, N, false);
+      if (R.fitR > J.base + 1e-4) { J.base = R.fitR; J.tauOf = { ...J.tauOf, [g]: tau }; J.M = M; J.changed = true; }
+    }
+    const finalCost = S.length * (14 * n + 2 * nr * nr + 6 * (n + 5) ** 2) + 2 * (3 * n + 7) ** 3 / 3 + solveCost;
+    if (J.M && !J.queue.length && pay(finalCost)) {                        // done: the full fit with each motor's lag
+      st.out = result(fitsOf(build(J.tauOf, true), yy, ys, N, true), J.tauOf, { refined: true, improved: J.changed, spent: J.spent });
+      st.job = null; st.log = null;                                        // the record isn't needed any more
+      return st.out;
+    }
+    st.out = { ...st.out, progress: 1 - J.queue.length / J.total, spent: J.spent };
+    return st.out;
+  }
+  return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
 }
 
 // ═════════════ Controller ═════════════
@@ -801,8 +872,8 @@ const LAW_DEFS = [
 
   { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
     math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>B</i><sub>2</sub> d<i>x</i>/d<i>t</i> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
-    doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling and the motor lag, all without any description of the airframe. It pulses near the top of the throw, where the air through the props is calmest. After Blaha, Smeur and Remes (TU Delft, 2024).',
-    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, its basis factor and the motor\'s number']],
+    doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling, the spin-up reaction and the motor lag, all without any description of the airframe. It pulses over the top of the throw, where the air through the props is calmest. Sized for a microcontroller: a fixed cost per step while falling, an instant fit to catch itself on, then each motor\'s own lag worked out in the background. After Blaha, Smeur and Remes (TU Delft, 2024).',
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'false while falling, true to fit at once, \'refine\' for the per-motor lags afterwards'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, its basis factor and the motor\'s number'], ['budget', 'refine only: operations it may spend this call']],
     returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs, rotation from each rotor spinning up; r: IMU offset from the CoG [m]; taus: each motor\'s lag [s], tau: their mean; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
     sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true, { v: [0.5, 0.2], phi: [1, 1], m: [0, 1] }] },
 

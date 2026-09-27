@@ -213,6 +213,11 @@
         <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself.</p>
         <div id="allocFields"></div>
       </section>
+      <section class="sec" id="budgetSec">
+        <h2>Flight computer <small>what the flight code costs</small></h2>
+        <div class="field"><label for="chipSel">Chip</label><select id="chipSel"></select></div>
+        <div id="budgetBody"><p class="hint">Start flying to measure.</p></div>
+      </section>
       <section class="sec">
         <h2>Control headroom <small>beyond hover</small></h2>
         <div class="ehead"><span></span><span>− direction</span><span>+ direction</span></div>
@@ -238,6 +243,7 @@
 <script src="js/math.js"></script>
 <script src="js/laws.js"></script>
 <script src="js/runtime.js"></script>
+<script src="js/budget.js"></script>
 <script src="js/sim.js"></script>
 <script src="js/joints.js"></script>
 <script src="js/multibody.js"></script>
