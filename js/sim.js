@@ -48,6 +48,10 @@ const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1 };   // texture and l
 const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battK: 1, rotors: [], crashed: null, t: 0, steps: 0 };
 const act = new Map();   // id -> { T, Tcmd, th, thCmd }
 const pend = new Map();  // id -> { p, v, Tn }
+// Mixed steering: the servos take up to `share` of the sideways force; `rho` tracks how much of what they
+// were asked for they actually made (low-passed), so the body leans more when they can't keep up.
+const steerMix = { share: 0.5, rho: 1 };
+const mixShare = () => steerMix.share * steerMix.rho;
 const ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0, vRef: [0, 0, 0] };  // vRef: pilot's commanded velocity
 let truth = null, model = null, nb = [0, 0, 1];
 let onCrash = () => {};
@@ -158,6 +162,14 @@ function allocate(w, cm) {
   setAuthority(rows);
   const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
   const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(() => 1), wa, mode, pull));   // held during calibration pulses
+  if (mode === 'mixed') {   // how much of the asked-for sideways force this step's thrusts actually make
+    const dem = Math.hypot(wa[0], wa[1]);
+    if (dem > 0.2) {
+      const gx = rows.reduce((s, r, j) => s + r.col[0] * u[j], 0), gy = rows.reduce((s, r, j) => s + r.col[1] * u[j], 0);
+      const ratio = clamp((gx * wa[0] + gy * wa[1]) / (dem * dem), 0, 1);
+      steerMix.rho += (ratio - steerMix.rho) * Math.min(1, 0.001 / 0.3);   // about 0.3 s to settle
+    } else steerMix.rho += (1 - steerMix.rho) * 0.001 / 2;                 // drift back when not asked
+  }
   ctl.sat = false;
   acts.forEach((c, i) => {
     const st = act.get(c.id);
@@ -197,7 +209,7 @@ function control(dt) {
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);   // vertical has room to trim out an unknown hover throttle
   const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G);
-  const nd = unit(run('thrustAxisTarget', Fd, mode));
+  const nd = unit(run('thrustAxisTarget', Fd, mode, mixShare()));
   let psi = setpoint.yaw * D2R;
   if (thr && thr.phase === 'recover') { const bx = m3v(R, [1, 0, 0]); psi = Math.atan2(bx[1], bx[0]); }   // catching a throw: get upright first, turn to the heading later
   const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(axis, [1, 0, 0])));
@@ -354,7 +366,7 @@ function resetSim() {
 // Hover is feasible when the acceleration hover needs lies inside it. Headroom along each axis is
 // the distance from that point to the zonotope boundary.
 function envelopeCalc() {
-  const k = mode === 'level' ? 6 : 4; const gens = [];
+  const k = mode === 'level' ? 6 : 4; const gens = [];   // mixed can always fall back on leaning, so it needs the 4 axes
   for (const c of actuators()) {
     const h = c.health / 100; if (h <= 0) continue; const st = act.get(c.id);
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };

@@ -252,6 +252,8 @@ function buildAllocFields() {
   const box = $('#allocFields'); box.textContent = '';
   const f = (key, label) => { const n = numField('ap-' + key, { label, min: 0, max: 0.2, step: 0.005, u: '', dp: 3 }, () => allocPrefs[key], v => { allocPrefs[key] = v; save(); }); allocFieldRefs.push(n.refresh); return n.node; };
   box.append(f('allowance', 'Keep margin (allowance)'), f('efficiency', 'Save power (efficiency)'), f('servoMove', 'Servo move cost (uses speed and lag)'));
+  const m = numField('ap-mix', { label: 'Mixed steering: servos\' share of sideways force', min: 0, max: 1, step: 0.05, u: '', dp: 2 }, () => steerMix.share, v => { steerMix.share = v; steerMix.rho = 1; save(); });
+  allocFieldRefs.push(m.refresh); box.append(m.node);
 }
 function updateAllocInfo() {
   let P = 0, tight = null;
@@ -261,13 +263,14 @@ function updateAllocInfo() {
     const m = Math.min(st.u || 0, 1 - (st.u || 0)); if (!tight || m < tight.m) tight = { c, m };
     if (c.type === 'tilt' && c.mode === 'auto') { const ms = (c.range * D2R - Math.abs(st.th)) / (2 * c.range * D2R); if (ms < tight.m) tight = { c, m: ms, servo: true }; }
   }
-  $('#allocSmall').textContent = tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name}${tight.servo ? ' servo' : ''} ${Math.round(tight.m * 100)}%` : '';
+  $('#allocSmall').textContent = (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name}${tight.servo ? ' servo' : ''} ${Math.round(tight.m * 100)}%` : '') +
+    (mode === 'mixed' ? ` · servos take ${Math.round(mixShare() * 100)}% sideways` : '');
 }
 function refreshEnvelope() { try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }
 function renderEnvelope() {
   const r = envRes; if (!r) return;
   const p = $('#verdict'); p.className = 'pill ' + r.verdict; p.querySelector('span').textContent = r.title; $('#verdictWhy').textContent = r.why;
-  $('#envSpace').textContent = r.k === 6 ? '6-axis (stay level)' : '4-axis (tilt body)';
+  $('#envSpace').textContent = r.k === 6 ? '6-axis (stay level)' : mode === 'mixed' ? '4-axis (mixed)' : '4-axis (tilt body)';
   const box = $('#env'); box.textContent = '';
   if (!r.head) { box.append(el('p', { class: 'hint', text: 'No headroom to show until every axis is controllable.' })); return; }
   r.labels.forEach((lab, i) => {
@@ -491,10 +494,11 @@ const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1
   v => { cfg.frame.mass = v; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
 $('#frameMassSlot').replaceWith(frameMassField.node);
 function setMode(m, recalc = true) {
-  mode = m; $('#modeTilt').setAttribute('aria-pressed', String(m === 'tilt')); $('#modeLevel').setAttribute('aria-pressed', String(m === 'level'));
+  mode = m; steerMix.rho = 1;
+  $('#modeTilt').setAttribute('aria-pressed', String(m === 'tilt')); $('#modeMixed').setAttribute('aria-pressed', String(m === 'mixed')); $('#modeLevel').setAttribute('aria-pressed', String(m === 'level'));
   ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
 }
-$('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeLevel').addEventListener('click', () => setMode('level'));
+$('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeMixed').addEventListener('click', () => setMode('mixed')); $('#modeLevel').addEventListener('click', () => setMode('level'));
 $('#runBtn').addEventListener('click', () => {
   if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
   running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run';
@@ -568,7 +572,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 function load() {
@@ -579,12 +583,13 @@ function load() {
     try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
   }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = s.mode === 'level' ? 'level' : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     if (!cfg.comps.some(c => c.type === 'sensor')) cfg.comps.push(...defaultSensors());   // saved before sensors existed
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learn.keep = false;
     if (s.holdPulses === false) learn.holdPulses = false;
     if (s.applyCurve === true) learn.applyCurve = true;
+    if (isFinite(s.mixShare)) steerMix.share = +s.mixShare;
     if (s.allocPrefs) for (const k of ['allowance', 'efficiency', 'servoMove']) if (isFinite(s.allocPrefs[k])) allocPrefs[k] = +s.allocPrefs[k];
     if (s.launch === 'throw') launchMode = 'throw';
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];

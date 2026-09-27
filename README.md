@@ -209,7 +209,11 @@ Edits made in the Formulas tab:
 - Position PID produces a desired force. Attitude uses geometric control on SO(3) with integral action.
 - Gains are in acceleration units and multiplied by the modeled mass and inertia, so they carry over to new geometry.
 - Allocation is two-stage bounded weighted least squares. Stage 1 picks servo angle changes, each capped by what the servo can reach in the planning horizon. Stage 2 solves motor thrusts at the servos' actual angles. Each stage first finds the best achievable move, then chooses among equal ways of making it (see Allocation above).
-- Two steering modes: "Tilt body" (4 controlled axes: climb, roll, pitch, yaw) and "Stay level" (all 6 axes, needs thrust vectoring).
+- Three steering modes:
+  - **Tilt body** (4 controlled axes: climb, roll, pitch, yaw). The body leans to move sideways; servos only help turn.
+  - **Mixed.** Servos make a share of the sideways force (a slider under Allocation, 50% by default), and the body leans for the rest. If the servos can't deliver their share because they're saturated, too slow, or absent, the share drops automatically within about 0.3 s, so the drone leans more instead. With no servos, it flies like Tilt body.
+  - **Stay level** (all 6 axes, needs thrust vectoring). Servos make all the sideways force.
+- In the test manoeuvre, Mixed on the tilt-rotor quad kept the tilt under 17° (Tilt body: 30°) and tracked as well as Stay level, with more motor margin to spare (34% against 22%). On the main-lifter layout it cut the tilt from 29° to 19°.
 
 ## Allocation: limits, margin, power and servo speed
 

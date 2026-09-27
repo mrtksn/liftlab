@@ -40,8 +40,9 @@
     <div class="group">
       <span class="lbl" id="modeLbl">Steering</span>
       <div class="seg" role="group" aria-labelledby="modeLbl">
-        <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
-        <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
+        <button type="button" id="modeTilt" aria-pressed="true" title="Lean the whole body to move sideways; servos only help turn">Tilt body</button>
+        <button type="button" id="modeMixed" aria-pressed="false" title="Servos make part of the sideways force, the body leans for the rest">Mixed</button>
+        <button type="button" id="modeLevel" aria-pressed="false" title="Stay level; servos make all the sideways force">Stay level</button>
       </div>
     </div>
   </header>

@@ -490,10 +490,12 @@ function positionControl(ep, v, ip, m, g) {
   return scl(add(a, [0, 0, g]), m);                      // desired total force, world frame
 }
 
-function thrustAxisTarget(Fd, mode) {
+function thrustAxisTarget(Fd, mode, share) {
+  // share (mixed mode): part of the sideways force the servos make, so the body only leans for the rest
   if (mode === 'level') return [0, 0, 1];                // keep the thrust axis vertical
   const maxTilt = 35 * Math.PI / 180;
-  let n = unit(Fd);                                      // point the thrust axis along the demand
+  const s = mode === 'mixed' ? clamp(share || 0, 0, 1) : 0;
+  let n = unit([Fd[0] * (1 - s), Fd[1] * (1 - s), Fd[2]]);   // point the thrust axis along the part the body makes
   if (Math.acos(clamp(n[2], -1, 1)) > maxTilt) {
     const h = Math.hypot(Fd[0], Fd[1]) || 1;
     n = [Fd[0] / h * Math.sin(maxTilt), Fd[1] / h * Math.sin(maxTilt), Math.cos(maxTilt)];
@@ -515,7 +517,7 @@ function attitudeControl(eR, w, ia, J) {
 
 function forceDemand(Fb, n, mode) {
   // Fb: desired force in the body frame, n: nominal thrust axis
-  if (mode === 'level') return Fb;                       // thrust vectoring handles sideways force
+  if (mode === 'level' || mode === 'mixed') return Fb;   // thrust vectoring handles (its share of) the sideways force
   return scl(n, dot(Fb, n));                             // only the thrust axis can push
 }
 
@@ -531,7 +533,7 @@ function allocation(cols, lo, hi, wd, mode, pull) {
   // cols[j]: what one unit of input j does, as [ax, ay, az, αx, αy, αz] (acceleration units)
   // wd: the 6 accelerations wanted; lo/hi: input limits
   // pull: { q, r } from allocationPreferences — how strongly each input is drawn toward a preferred value
-  const W = mode === 'level' ? [3, 3, 3, 10, 10, 1] : [0.3, 0.3, 3, 10, 10, 1];
+  const W = mode === 'tilt' ? [0.3, 0.3, 3, 10, 10, 1] : [3, 3, 3, 10, 10, 1];   // sideways force only counts when servos are asked for it
   const x = bls(cols, lo, hi, wd, W);                    // 1. the best move the limits allow (bounded weighted least squares)
   if (!pull) return x;
   // 2. Of all the ways to make that same move, the preferred one. The pulls are tiny next to the move, so
@@ -758,10 +760,10 @@ const LAW_DEFS = [
     args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²']], returns: 'desired total force, world [N]',
     shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
-    math: [`tilt body: ${V('n')}<sub>d</sub> = ${V('F')}<sub>d</sub> / ‖${V('F')}<sub>d</sub>‖, &nbsp;at most 35° from vertical`, `stay level: ${V('n')}<sub>d</sub> = ${V('ẑ')}`],
-    doc: 'Where the craft\'s nominal thrust axis should point. The desired attitude is built from this and the target heading.',
-    args: [['Fd', 'desired force, world [N]'], ['mode', '"tilt" or "level"']], returns: 'desired thrust axis, world (normalized afterwards)',
-    shape: 3, sample: () => [[1, 0, 9.81], 'tilt'] },
+    math: [`tilt body: ${V('n')}<sub>d</sub> = ${V('F')}<sub>d</sub> / ‖${V('F')}<sub>d</sub>‖, &nbsp;at most 35° from vertical`, `mixed: ${V('n')}<sub>d</sub> ∝ ((1 − <i>s</i>)<i>F</i><sub>x</sub>, (1 − <i>s</i>)<i>F</i><sub>y</sub>, <i>F</i><sub>z</sub>), &nbsp;<i>s</i> = the servos' share of the sideways force`, `stay level: ${V('n')}<sub>d</sub> = ${V('ẑ')}`],
+    doc: 'Where the craft\'s nominal thrust axis should point. The desired attitude is built from this and the target heading. In mixed steering the body leans only for the part of the sideways force the servos aren\'t making; the simulator lowers s automatically when the servos can\'t deliver their share.',
+    args: [['Fd', 'desired force, world [N]'], ['mode', '"tilt", "mixed" or "level"'], ['share', 'servos\' share of the sideways force (mixed)']], returns: 'desired thrust axis, world (normalized afterwards)',
+    shape: 3, sample: () => [[1, 0, 9.81], 'mixed', 0.5] },
   { key: 'attitudeError', group: 'ctrl', fn: attitudeError, title: 'Attitude error',
     math: [`${V('e')}<sub>R</sub> = ½ (<i>R</i><sub>d</sub><sup>T</sup><i>R</i> − <i>R</i><sup>T</sup><i>R</i><sub>d</sub>)<sup>∨</sup>`],
     doc: 'Geometric attitude error on SO(3). The simulator integrates it for the attitude integral, clamped to ±0.5 rad·s.',
@@ -773,9 +775,9 @@ const LAW_DEFS = [
     args: [['eR', 'attitude error [rad]'], ['w', 'angular velocity, body [rad/s]'], ['ia', '∫ eR dt'], ['J', 'modeled inertia']], returns: 'desired torque, body [N·m]',
     shape: 3, sample: () => [[0.01, 0, 0], [0, 0, 0], [0, 0, 0], [.01, 0, 0, 0, .01, 0, 0, 0, .02]] },
   { key: 'forceDemand', group: 'ctrl', fn: forceDemand, title: 'Body force demand',
-    math: [`tilt body: ${V('f')} = (${V('F')}<sub>b</sub> · ${V('n')}) ${V('n')}`, `stay level: ${V('f')} = ${V('F')}<sub>b</sub>`],
+    math: [`tilt body: ${V('f')} = (${V('F')}<sub>b</sub> · ${V('n')}) ${V('n')}`, `mixed and stay level: ${V('f')} = ${V('F')}<sub>b</sub> &nbsp;(whatever the lean doesn't cover is asked of the servos)`],
     doc: 'Which part of the desired force the actuators are asked to make directly, in the body frame.',
-    args: [['Fb', 'desired force, body [N]'], ['n', 'nominal thrust axis, body'], ['mode', '"tilt" or "level"']], returns: 'force demand, body [N]',
+    args: [['Fb', 'desired force, body [N]'], ['n', 'nominal thrust axis, body'], ['mode', '"tilt", "mixed" or "level"']], returns: 'force demand, body [N]',
     shape: 3, sample: () => [[0.5, 0, 9.81], [0, 0, 1], 'tilt'] },
   { key: 'thrustLinearization', group: 'ctrl', fn: thrustLinearization, title: 'Thrust linearization',
     math: [`<i>u</i> = (−(1 − <i>k̂</i>) + √((1 − <i>k̂</i>)² + 4<i>k̂v</i>)) / 2<i>k̂</i> &nbsp;so that &nbsp;(1 − <i>k̂</i>)<i>u</i> + <i>k̂u</i>² = <i>v</i>`],
@@ -785,7 +787,7 @@ const LAW_DEFS = [
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
     math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub>`, `2. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₁)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
     doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted move as the limits allow; the second keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
-    args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt" or "level"'], ['pull', '{ q, r }: preferences per input']], returns: 'one value per input',
+    args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt", "mixed" or "level"'], ['pull', '{ q, r }: preferences per input']], returns: 'one value per input',
     shape: 'alloc', sample: () => [[[0, 0, 1, 1, 1, 0.1], [0, 0, 1, -1, 1, -0.1], [0, 0, 1, -1, -1, 0.1], [0, 0, 1, 1, -1, -0.1]], [0, 0, 0, 0], [6, 6, 6, 6], [0, 0, 9.81, 0, 0, 0], 'tilt', { q: [0.02, 0.02, 0.02, 0.02], r: [3, 3, 3, 3] }] },
   { key: 'allocationPreferences', group: 'ctrl', fn: allocationPreferences, title: 'Allocation preferences',
     math: [`allowance: <i>q</i> = <i>k</i><sub>a</sub>(0.2 + 0.8<i>a</i>)(0.55 / (<i>m</i> + 0.05))², pulling toward the middle; <i>m</i> = distance to the nearer limit as a share of the range, <i>a</i> = the input's share of the steering`, `efficiency: <i>P</i> ∝ <i>T</i><sup>1.5</sup> → <i>q</i> = 0.375 <i>k</i><sub>e</sub> (<i>P</i><sub>j</sub>/Σ<i>P</i>) / √<i>u</i>, pulling toward less thrust`, `servo moves: <i>q</i> = <i>k</i><sub>s</sub>(span / 2·reach)², pulling toward staying put; reach = speed × (horizon − lag)`],
