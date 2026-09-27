@@ -33,9 +33,13 @@ function rotorWrench(d, r, T, spin, kappa) {
   return { F, tau };
 }
 
-function tiltAxis(theta, e) {
-  // e: horizontal unit vector the rotor leans toward as theta grows
-  return [Math.sin(theta) * e[0], Math.sin(theta) * e[1], Math.cos(theta)];
+function jointRotation(axis, theta) {
+  // Servo joint: rotation by theta about its hinge axis (Rodrigues). Everything attached to the joint turns
+  // with it about the joint's pivot: rotors, masses, sensors, further joints.
+  const [x, y, z] = unit(axis), c = Math.cos(theta), s = Math.sin(theta), C = 1 - c;
+  return [c + x * x * C, x * y * C - z * s, x * z * C + y * s,
+          y * x * C + z * s, c + y * y * C, y * z * C - x * s,
+          z * x * C - y * s, z * y * C + x * s, c + z * z * C];
 }
 
 function motorResponse(T, Tcmd, tmax, tau, dt) {
@@ -309,7 +313,7 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags) {
   //   Δ[f; dω/dt] ≈ B · Δu
   // Both sides are band-passed (0.3–12 Hz), so it learns from changes and steady offsets such as drag
   // or trim can't leak into B.
-  // u: inputs the controller sent (throttle fractions; a tilting rotor counts twice, as u·cosθ and u·sinθ)
+  // u: inputs: thrust fractions, times (1, cos θ, sin θ) for every joint a motor sits on
   // f: accelerometer (specific force) and w: gyro, body frame; r: IMU position from the hub [m]
   // init: starting guess, 6 rows × inputs; memory: how long past data counts [s];
   // lags: each input's motor lag [s], from the actuator tests (35 ms assumed until then).
@@ -604,12 +608,11 @@ const LAW_DEFS = [
     args: [['d', 'rotor axis (unit), body'], ['r', 'rotor position from the CoG, body [m]'], ['T', 'delivered thrust [N]'], ['spin', '+1 CCW, −1 CW'], ['kappa', 'drag torque ratio κ [m]']],
     returns: '{ F: force, body; tau: torque, body }',
     shape: { F: 3, tau: 3 }, sample: () => [[0, 0, 1], [0.2, 0.1, 0], 3, 1, 0.016] },
-  { key: 'tiltAxis', group: 'plant', fn: tiltAxis, title: 'Servo tilt geometry',
-    math: [`${V('d')}(θ) = sin θ ${V('e')} + cos θ ${V('ẑ')}`],
-    doc: 'Direction of a servo-mounted rotor\'s axis at servo angle θ. e is set by the hinge direction.',
-    used: 'Also used by the controller and envelope. Stage 1 of allocation picks servo angles assuming this sin/cos form.',
-    args: [['theta', 'servo angle [rad]'], ['e', 'lean direction, body (unit)']], returns: 'rotor axis, body (unit)',
-    shape: 3, sample: () => [0.2, [0, -1, 0]] },
+  { key: 'jointRotation', group: 'plant', fn: jointRotation, title: 'Servo joint',
+    math: [`<i>R</i>(θ) = cos θ <i>I</i> + sin θ [${V('a')}]<sub>×</sub> + (1 − cos θ) ${V('a')}${V('a')}<sup>T</sup>`, `${V('p')}<sub>now</sub> = ${V('q')} + <i>R</i>(θ)(${V('p')}<sub>rest</sub> − ${V('q')}), &nbsp;applied for each joint above a part, nearest first`],
+    doc: 'A servo joint turns everything attached to it about its hinge axis a through its pivot q: motors, masses, cable attachments, sensors and further joints. Parts store where they are at rest (all angles zero). Positive θ turns by the right-hand rule about a. Because each rotor\'s effect is linear in cos θ and sin θ for every joint above it, the controller can learn it as a few fixed columns (see Effectiveness identification).',
+    args: [['axis', 'hinge axis at rest, body frame'], ['theta', 'joint angle [rad]']], returns: '3×3 rotation, row by row',
+    shape: 'mat3', sample: () => [[1, 0, 0], 0.3] },
   { key: 'motorResponse', group: 'plant', fn: motorResponse, title: 'Motor response',
     math: [`<i>T</i><sub>k+1</sub> = <i>T</i><sub>k</sub> + (sat(<i>T</i><sub>cmd</sub>) − <i>T</i><sub>k</sub>) · Δ<i>t</i> / τ<sub>m</sub>`],
     doc: 'How a motor\'s thrust follows its command. Health scales the thrust afterwards.',
@@ -730,8 +733,8 @@ const LAW_DEFS = [
 
   { key: 'identifyEffectiveness', group: 'learn', fn: identifyEffectiveness, title: 'Effectiveness identification',
     math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')}, &nbsp;both sides band-passed 0.3–12 Hz`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
-    doc: 'Recursive least squares with forgetting (about 4 s of memory). It learns, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. Runs during calibration and, if you leave learning on, all through the flight.',
-    args: [['st', 'identification state'], ['u', 'inputs, as thrust fractions through the learned throttle curve (tilting rotors as u·cosθ, u·sinθ)'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests']],
+    doc: 'Recursive least squares with forgetting (about 4 s of memory). A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on, so its effect at any joint angles is a fixed sum of learned columns (3 for one joint, 9 for two). It learns, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. Runs during calibration and, if you leave learning on, all through the flight.',
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests']],
     returns: '{ B: 6 rows × inputs }', shape: { B: 'rows' },
     sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4, [0.03, 0.03]] },
   { key: 'identifyMotorResponse', group: 'learn', fn: identifyMotorResponse, title: 'Motor response test',
@@ -750,7 +753,7 @@ const LAW_DEFS = [
   { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
     math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
     doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling and the motor lag, all without any description of the airframe. It pulses near the top of the throw, where the air through the props is calmest. After Blaha, Smeur and Remes (TU Delft, 2024).',
-    args: [['st', 'identification state'], ['u', 'inputs sent, throttle fractions (tilting rotors as u·cosθ, u·sinθ)'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result']],
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'true to fit and return the result']],
     returns: '{ B: 6 rows × inputs; r: IMU offset from the CoG [m]; tau: motor lag [s]; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
     sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true] },
 
@@ -803,5 +806,5 @@ const LAW_OVERVIEW = [
 ];
 const LAW_CHAIN = {
   ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization'],
-  plant: ['batteryModel', 'servoResponse', 'servoLinkage', 'throttleCurve', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
+  plant: ['batteryModel', 'servoResponse', 'servoLinkage', 'throttleCurve', 'motorResponse', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

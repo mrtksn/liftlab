@@ -4,8 +4,10 @@
 // identification on flight data. A calibration cycle excites the actuators in stages to learn B quickly;
 // "keep learning" goes on correcting it through the flight.
 //
-// Inputs are throttle fractions 0–1. A fixed motor is one input; a servo-mounted motor is two,
-// a = u·cosθ and b = u·sinθ, so its effect at any servo angle is a·B_a + b·B_b.
+// Inputs are thrust fractions 0–1. A motor on the frame is one input. A motor on servo joints is several:
+// its thrust times each product of (1, cos θ, sin θ) over the joints above it (3 for one joint, 9 for two).
+// Turning a rigid part about a hinge is linear in cos θ and sin θ, so this is exact, and the motor's effect
+// at any joint angles is a fixed sum of learned columns.
 
 const learn = {
   mode: 'config',     // 'config': fly on the airframe description, 'ident': fly on the learned B
@@ -22,42 +24,72 @@ const learn = {
 };
 
 /* ───────── inputs ───────── */
-function inputSig() { return actuators().map(c => c.id + (c.type === 'tilt' ? 't' : 'm')).join(','); }
+// Basis over a motor's joints (nearest first): products of (1, cos θ, sin θ), first joint most significant.
+function basisVals(angles) { let v = [1]; for (const a of angles) { const c = Math.cos(a), s = Math.sin(a); v = v.flatMap(x => [x, x * c, x * s]); } return v; }
+function dBasisVals(angles, m) {   // derivative of the basis with respect to joint m
+  let v = [1];
+  angles.forEach((a, i) => { const f = i === m ? [0, -Math.sin(a), Math.cos(a)] : [1, Math.cos(a), Math.sin(a)]; v = v.flatMap(x => f.map(y => x * y)); });
+  return v;
+}
+// Turns a motor's effect, evaluated at joint angles {0, π/2, π} for each of its k joints, into its basis columns.
+function decompose(evalAt, k) {
+  const n = 3 ** k, A = [0, Math.PI / 2, Math.PI], V = [];
+  for (let idx = 0; idx < n; idx++) {
+    const ang = []; let r = idx; for (let i = k - 1; i >= 0; i--) { ang[i] = A[r % 3]; r = Math.floor(r / 3); }
+    V.push(evalAt(ang));
+  }
+  for (let m = 0; m < k; m++) {   // per joint: v(0) = C0 + C1, v(π/2) = C0 + C2, v(π) = C0 − C1
+    const stride = 3 ** (k - 1 - m);
+    for (let b = 0; b < n; b++) {
+      if (Math.floor(b / stride) % 3 !== 0) continue;
+      const v0 = V[b], v1 = V[b + stride], v2 = V[b + 2 * stride];
+      const c0 = v0.map((x, i) => (x + v2[i]) / 2), c1 = v0.map((x, i) => (x - v2[i]) / 2), c2 = v1.map((x, i) => x - c0[i]);
+      V[b] = c0; V[b + stride] = c1; V[b + 2 * stride] = c2;
+    }
+  }
+  return V;
+}
+function inputSig() { return actuators().map(c => c.id + ':' + chainOf(c).map(j => j.id).join('.')).join(','); }
 function buildIndex() {
   learn.index = new Map(); let j = 0;
-  for (const c of actuators()) { if (c.type === 'tilt') { learn.index.set(c.id, { a: j, b: j + 1 }); j += 2; } else { learn.index.set(c.id, { u: j }); j += 1; } }
+  for (const c of actuators()) { const k = chainOf(c).length, n = 3 ** k; learn.index.set(c.id, { cols: Array.from({ length: n }, (_, i) => j + i), k }); j += n; }
   learn.n = j;
 }
+const seenAngles = c => chainOf(c).map(angleSeen);
 function inputVector() {   // what was sent, in the identification's input space
   const x = new Array(learn.n).fill(0);
   for (const c of actuators()) {
     const st = act.get(c.id), ix = learn.index.get(c.id); if (!st || !ix) continue;
-    const u = st.v || 0, th = thSeen(c);   // thrust fraction the controller believes it asked for
-    if (c.type === 'tilt') { x[ix.a] = u * Math.cos(th); x[ix.b] = u * Math.sin(th); } else x[ix.u] = u;
+    const phi = basisVals(seenAngles(c));
+    ix.cols.forEach((jj, b) => { x[jj] = (st.v || 0) * phi[b]; });   // thrust fraction the controller believes it asked for
   }
   return x;
 }
 
-/* ───────── columns (acceleration per full throttle, body frame) ───────── */
+/* ───────── columns (acceleration per full thrust, body frame) ───────── */
 const cfgToAccel = col => { const f = scl([col[0], col[1], col[2]], 1 / model.m); const a = m3v(model.Jinv, [col[3], col[4], col[5]]); return [...f, ...a]; };
-function describedCols(c) {   // from the airframe description the controller was given
-  const k = c.tmax * hModel(c);
-  if (c.type === 'tilt') return { a: cfgToAccel(scl6(wrenchCol(c.pos, [0, 0, 1], c.spin, c.kappa, model.c), k)), b: cfgToAccel(scl6(wrenchCol(c.pos, hingeE(c), c.spin, c.kappa, model.c), k)) };
-  return { u: cfgToAccel(scl6(wrenchCol(c.pos, actDir(c, 0), c.spin, c.kappa, model.c), k)) };
+function describedAt(c, angles) {   // from the airframe description, with the motor's joints at the given angles
+  const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
+  return cfgToAccel(scl6(wrenchCol(n.p, n.d, c.spin, c.kappa, model.c), c.tmax * hModel(c)));
 }
+const describedCols = c => decompose(a => describedAt(c, a), chainOf(c).length);
 function learnedCols(c) {
   const ix = learn.index.get(c.id); if (!learn.B || !ix) return null;
-  const col = j => learn.B.map(row => row[j]);
-  return c.type === 'tilt' ? { a: col(ix.a), b: col(ix.b) } : { u: col(ix.u) };
+  return ix.cols.map(jj => learn.B.map(row => row[jj]));
 }
 const flyingLearned = () => learn.mode === 'ident' && !!learn.B;
 function frozenCols(c) {   // the learned model as it was when a calibration began: flown on until the calibration decides
   const ix = learn.index.get(c.id); if (!learn.flyB || !ix) return null;
-  const col = j => learn.flyB.map(row => row[j]);
-  return c.type === 'tilt' ? { a: col(ix.a), b: col(ix.b) } : { u: col(ix.u) };
+  return ix.cols.map(jj => learn.flyB.map(row => row[jj]));
 }
 const colsFor = c => (flyingLearned() && ((learn.cal && frozenCols(c)) || learnedCols(c))) || describedCols(c);
-function colAt(c, th) { const k = colsFor(c); return c.type === 'tilt' ? add6(scl6(k.a, Math.cos(th)), scl6(k.b, Math.sin(th))) : k.u; }
+function sumCols(cols, w) { const out = [0, 0, 0, 0, 0, 0]; cols.forEach((col, b) => { if (w[b]) for (let i = 0; i < 6; i++) out[i] += w[b] * col[i]; }); return out; }
+const colAtAngles = (c, angles) => sumCols(colsFor(c), basisVals(angles));
+const colAt = c => colAtAngles(c, seenAngles(c));                 // effect per full thrust at the joint angles believed now
+function dColAt(c, j) {                                            // how that effect changes as joint j turns
+  const m = chainOf(c).indexOf(j); if (m < 0) return [0, 0, 0, 0, 0, 0];
+  return sumCols(colsFor(c), dBasisVals(seenAngles(c), m));
+}
 const add6 = (a, b) => a.map((x, i) => x + b[i]);
 // The model the controller computes forces and torques with. On the learned model it doesn't know
 // its mass or inertia, and works directly in accelerations.
@@ -66,27 +98,28 @@ const ctlModel = () => flyingLearned() ? UNIT : model;
 function ctlAxis() {   // nominal thrust axis the controller believes in
   if (!flyingLearned()) return nb;
   let s = [0, 0, 0];
-  for (const c of actuators()) { const k = colsFor(c); const col = c.type === 'tilt' ? k.a : k.u; s = add(s, col.slice(0, 3)); }
+  for (const c of actuators()) s = add(s, colAtAngles(c, chainOf(c).map(restAngle)).slice(0, 3));
   return nrm(s) > 1e-6 ? unit(s) : nb;
 }
 /* ───────── what the actuator tests learned ───────── */
-// learn.resp: per actuator { tau, curve } for motors, { rate, lag } for servos. Until measured, the
+// learn.resp: per motor { tau, curve }, per servo joint { rate, lag }. Until measured, the
 // controller assumes a straight throttle curve, 35 ms motor lag, the servo's rated speed and no servo lag.
 const believedThrust = (u, k) => (1 - k) * u + k * u * u;
 const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? 0;   // bend the thrust linearization uses
 const motorLagHat = c => (learn.resp.get(c.id) || {}).tau ?? 0.035;
-function servoModelHat(c) { const r = learn.resp.get(c.id) || {}; return { rate: r.rate ?? c.rate * D2R, lag: r.lag ?? 0 }; }
-function inputLags() { const l = new Array(learn.n).fill(0.035); for (const c of actuators()) { const ix = learn.index.get(c.id); if (ix) for (const j of Object.values(ix)) l[j] = motorLagHat(c); } return l; }
+function servoModelHat(j) { const r = learn.resp.get(j.id) || {}; return { rate: r.rate ?? j.rate * D2R, lag: r.lag ?? 0 }; }
+function inputLags() { const l = new Array(learn.n).fill(0.035); for (const c of actuators()) { const ix = learn.index.get(c.id); if (ix) for (const jj of ix.cols) l[jj] = motorLagHat(c); } return l; }
 function priorRows() {   // the description, as 6 rows × inputs: identification starts from here
   const rows = [0, 1, 2, 3, 4, 5].map(() => new Array(learn.n).fill(0));
   for (const c of actuators()) {
     const k = describedCols(c), ix = learn.index.get(c.id);
-    for (const [key, j] of Object.entries(ix)) for (let i = 0; i < 6; i++) rows[i][j] = k[key][i];
+    ix.cols.forEach((jj, b) => { for (let i = 0; i < 6; i++) rows[i][jj] = k[b][i]; });
   }
   return rows;
 }
 function resetLearning(keepResponses = false) {
   if (!keepResponses || learn.sig !== inputSig()) learn.resp = new Map();
+  if (!model) model = massProps('model');
   buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
   learn.cal = null; learn.imuR = null;
 }
@@ -133,7 +166,7 @@ function startCalibration(opts = {}) {
   // After a throw there is no description to fall back on: start from, and compete against, the throw model.
   if (opts.fromThrow && learn.mode === 'ident') { learn.st = {}; learn.prior = learn.B.map(r => r.slice()); learn.priorKind = 'throw'; learn.cal = null; }
   else resetLearning(true);
-  const acts = actuators(), servos = acts.filter(c => c.type === 'tilt' && c.mode === 'auto');
+  const acts = actuators(), servos = steerJoints();
   const seg = [];
   seg.push({ stage: 'Settling', dur: 1, at: () => null });
   // Motor tests: each motor steps up then down (6%, then 15%) while everything else holds still.
@@ -150,8 +183,8 @@ function startCalibration(opts = {}) {
     const exc = new Map(), servo = new Map();
     acts.forEach((c, i) => {
       exc.set(c.id, amp * Math.sin(2 * Math.PI * (f0 + df * i) * t + i * 1.3));
-      if (c.type === 'tilt' && c.mode === 'auto') servo.set(c.id, 0.3 * c.range * D2R * Math.sin(2 * Math.PI * (0.6 + 0.35 * i) * t));
     });
+    servos.forEach((j, i) => servo.set(j.id, 0.3 * j.range * D2R * Math.sin(2 * Math.PI * (0.6 + 0.35 * i) * t)));
     return { exc, servo };
   };
   seg.push({ stage: 'Exciting everything together', dur: 3, at: multisine(2.3, 1.7, 0.04) });
@@ -207,33 +240,52 @@ function finishCalibration() {
 }
 function endCalibration(msg) { learn.cal = null; learn.flyB = null; learn.msg = msg; if (typeof renderLearn === 'function') renderLearn(true); }
 const calExc = c => (learn.cal && learn.cal.now && learn.cal.now.exc && learn.cal.now.exc.get(c.id)) || 0;
-function calServo(c) {   // servo angle the calibration is holding, or null
-  const now = learn.cal && learn.cal.now;
-  if (now && now.step && now.step.id === c.id) {
-    const cal = learn.cal; if (cal.stepBase == null || cal.stepFor !== cal.cur) { cal.stepBase = act.get(c.id).thCmd; cal.stepFor = cal.cur; }
-    return clamp(cal.stepBase + now.step.d, -c.range * D2R, c.range * D2R);
+function calServo(j) {   // servo angle the calibration is holding, or null
+  const now = learn.cal && learn.cal.now, st = jst.get(j.id);
+  if (!st) return null;
+  if (now && now.step && now.step.id === j.id) {
+    const cal = learn.cal; if (cal.stepBase == null || cal.stepFor !== cal.cur) { cal.stepBase = st.thCmd; cal.stepFor = cal.cur; }
+    return clamp(cal.stepBase + now.step.d, -j.range * D2R, j.range * D2R);
   }
-  if (!now || !now.servo || !now.servo.has(c.id)) return null;
+  if (!now || !now.servo || !now.servo.has(j.id)) return null;
   // Sweeps ride on top of what the controller asks for, so it keeps its servo authority (a tricopter's
   // tail servo is its only real yaw control).
-  return clamp(act.get(c.id).thCmd + learn.cal.now.servo.get(c.id), -c.range * D2R, c.range * D2R);
+  return clamp(st.thCmd + now.servo.get(j.id), -j.range * D2R, j.range * D2R);
 }
 function ditherFor(c, t) {   // tiny excitation while learning in flight
   if (!learn.keep || learn.cal || !learn.dither) return 0;
-  const j = learn.index.get(c.id); const i = j ? (j.u ?? j.a) : 0;
+  const ix = learn.index.get(c.id); const i = ix ? ix.cols[0] : 0;
   return learn.dither * Math.sin(2 * Math.PI * (2.7 + 1.9 * i) * t + i);
 }
-// How well each actuator's learned effect matches the truth right now (1 = exact).
+// Each motor's true basis columns, from the real geometry, mass, inertia, health and battery (no airflow).
+function trueAt(c, angles) {
+  const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
+  const col = scl6(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c), c.tmax * c.health / 100 * S.battK);
+  const f = scl([col[0], col[1], col[2]], 1 / truth.m), a = m3v(truth.Jinv, [col[3], col[4], col[5]]);
+  return [...f, ...a];
+}
+function trueB() { const out = new Map(); for (const c of actuators()) out.set(c.id, decompose(a => trueAt(c, a), chainOf(c).length)); return out; }
+// How well each motor's learned effect matches the truth right now (1 = exact). Compared as the effect
+// itself at joint angles across each steering joint's range (both ends and the middle), not column by
+// column: over a ±30° range cos θ barely changes, so how the "1" and "cos θ" columns split is unknowable
+// and doesn't matter.
 function matchScores() {
   const acts = actuators(); if (!acts.length || !learn.B) return [];
-  const tb = trueB(), tc = acts.map(c => tb.get(c.id)), lc = acts.map(c => learnedCols(c));
+  const sj = steerJoints();
+  const samples = c => {   // angle sets to compare at
+    const ch = chainOf(c); let sets = [ch.map(angleTrue)];
+    ch.forEach((j, m) => { if (sj.includes(j)) sets = sets.flatMap(a => [-1, 0, 1].map(k => a.map((x, i) => i === m ? k * j.range * D2R : x))); });
+    return sets;
+  };
+  const tb = trueB();
+  const pairs = acts.map(c => { const T = tb.get(c.id), L = learnedCols(c); return samples(c).map(a => { const phi = basisVals(a); return [sumCols(L, phi), sumCols(T, phi)]; }); });
   // Rows are weighted by their typical size: force rows together, roll/pitch together, yaw on its own.
-  const rowMax = i => { let m = 0; for (const t of tc) for (const col of Object.values(t)) m = Math.max(m, Math.abs(col[i])); return m; };
+  const rowMax = i => { let m = 0; for (const P of pairs) for (const [, t] of P) m = Math.max(m, Math.abs(t[i])); return m; };
   const groups = [[0, 1, 2], [3, 4], [5]], scale = new Array(6);
   for (const g of groups) { const m = Math.max(1e-6, ...g.map(rowMax)); for (const i of g) scale[i] = 1 / m; }
   return acts.map((c, k) => {
     let e = 0, v = 0;
-    for (const key of Object.keys(tc[k])) for (let i = 0; i < 6; i++) { e += ((lc[k][key][i] - tc[k][key][i]) * scale[i]) ** 2; v += (tc[k][key][i] * scale[i]) ** 2; }
+    for (const [l, t] of pairs[k]) for (let i = 0; i < 6; i++) { e += ((l[i] - t[i]) * scale[i]) ** 2; v += (t[i] * scale[i]) ** 2; }
     return { c, match: clamp(1 - Math.sqrt(e / Math.max(v, 1e-9)), 0, 1) };
   });
 }
@@ -244,16 +296,17 @@ const servoHeld = () => !!(learn.cal && learn.cal.now && learn.cal.now.holdServo
 // Records one test window: what was sent to the actuator under test, and the drone's response along
 // that actuator's effect. The fits run when the stage ends and feed the controller straight away.
 function recordTest(s, dt) {
-  const cal = learn.cal, c = s.rec.c, st = act.get(c.id); if (!st || !learn.mf || !learn.mf.f) return;
+  const cal = learn.cal, c = s.rec.c; if (!learn.mf || !learn.mf.f) return;
   if (!cal.win) {
     let col;
-    if (s.rec.kind === 'motor') col = colAt(c, thSeen(c));
-    else { const k = colsFor(c), th = thSeen(c); col = scl6(add6(scl6(k.a, -Math.sin(th)), scl6(k.b, Math.cos(th))), st.v || 0); }
-    cal.win = { c, kind: s.rec.kind, col, u: [], cmd: [], y: [], dt, cmd0: servoTarget(c) };
+    if (s.rec.kind === 'motor') col = colAt(c);
+    else { col = [0, 0, 0, 0, 0, 0]; for (const m of motorsUnder(c)) col = add6(col, scl6(dColAt(m, c), act.get(m.id).v || 0)); }   // what turning this joint does
+    cal.win = { c, kind: s.rec.kind, col, u: [], cmd: [], y: [], dt, cmd0: s.rec.kind === 'servo' ? jointTarget(c) : 0 };
     (cal.tests || (cal.tests = [])).push(cal.win);
   }
   const w = cal.win, y6 = [...learn.mf.f, ...learn.mf.a];
-  w.u.push(st.u); w.cmd.push(servoTarget(c) - w.cmd0); w.y.push(project(w.col, y6));
+  if (w.kind === 'motor') w.u.push(act.get(c.id).u); else w.cmd.push(jointTarget(c) - w.cmd0);
+  w.y.push(project(w.col, y6));
 }
 const slopeAt = (k, u) => (1 - k) + 2 * k * u;
 function fitMotors() {
@@ -276,15 +329,14 @@ function fitMotors() {
 }
 function fitServos() {
   const cal = learn.cal; if (!cal) return;
-  for (const c of actuators()) {
-    if (c.type !== 'tilt') continue;
-    const wins = (cal.tests || []).filter(w => w.c === c && w.kind === 'servo' && !w.bad && w.cmd.length > 50);
+  for (const j of steerJoints()) {
+    const wins = (cal.tests || []).filter(w => w.c === j && w.kind === 'servo' && !w.bad && w.cmd.length > 50);
     if (!wins.length) continue;
     const r = run('identifyServoResponse', wins, wins[0].dt);
-    const old = learn.resp.get(c.id) || {};
-    if (r.fit < 0.4 || !(r.gain > 0.3 && r.gain < 3)) { learn.resp.set(c.id, { ...old, fitS: r.fit }); continue; }
-    learn.resp.set(c.id, { ...old, rate: r.rate, lag: r.lag, fitS: r.fit });
-    const st = act.get(c.id); if (st) st.pst = { h: st.thHat, th: st.thHat };
+    const old = learn.resp.get(j.id) || {};
+    if (r.fit < 0.4 || !(r.gain > 0.3 && r.gain < 3)) { learn.resp.set(j.id, { ...old, fitS: r.fit }); continue; }
+    learn.resp.set(j.id, { ...old, rate: r.rate, lag: r.lag, fitS: r.fit });
+    const st = jst.get(j.id); if (st) st.pst = { h: st.thHat, th: st.thHat };
   }
 }
 // When the throttle curve changes, "one unit of input" changes size: x_new = ratio·x_old. Learned
@@ -292,7 +344,7 @@ function fitServos() {
 // already in true thrust units and stays as it is.
 function rescaleInput(c, ratio) {
   if (!(ratio > 0.2 && ratio < 5) || Math.abs(ratio - 1) < 1e-6) return;
-  const ix = learn.index.get(c.id); if (!ix) return; const js = Object.values(ix), s = 1 / ratio;
+  const ix = learn.index.get(c.id); if (!ix) return; const js = ix.cols, s = 1 / ratio;
   const mats = new Set([learn.B, learn.flyB, learn.st.th, learn.priorKind !== 'desc' ? learn.prior : null].filter(Boolean));   // B and the RLS state can be the same array
   for (const M of mats) for (const row of M) for (const j of js) row[j] *= s;
   const st = learn.st;
@@ -319,12 +371,25 @@ function holdU(u) {
 const throwCfg = { height: 4, spin: 6, amp: 0.5, dwMax: 4, thenCalibrate: true };   // apex altitude [m], tumble rate [rad/s], pulse throttle, rate change allowed per pulse [rad/s]
 let thr = null;
 function throwPlan() {
-  // Every actuator once; servo rotors near one end of their range. Then each servo rotor again near the other end, so both halves
-  // of a tilting rotor (u·cosθ and u·sinθ) are seen. A servo swings across right after its first
-  // pulse, while the others are pulsed, so nobody waits for a servo.
-  const acts = actuators(), plan = [];
-  for (const c of acts) plan.push({ c, servo: c.type === 'tilt' && c.mode === 'auto' ? -0.9 * c.range * D2R : null });
-  for (const c of acts) if (c.type === 'tilt' && c.mode === 'auto') plan.push({ c, servo: 0.9 * c.range * D2R, second: true });
+  // Every motor, pulsed with each steering joint above it at three angles in turn (one end, the middle, the
+  // other end), so its (1, cos θ, sin θ) columns can all be told apart. Passes go motor by motor, so a joint
+  // can swing to its next angle while other motors are being pulsed.
+  const sj = steerJoints(), variants = [];
+  for (const c of actuators()) {
+    const js = chainOf(c).filter(j => sj.includes(j)), v = [];
+    if (!js.length) v.push(new Map());
+    else {
+      v.push(new Map(js.map((j, i) => [j.id, i === 0 ? -0.9 * j.range * D2R : 0])));
+      v.push(new Map(js.map(j => [j.id, 0])));
+      js.forEach((j, i) => {
+        if (i === 0) v.push(new Map(js.map(x => [x.id, x === j ? 0.9 * j.range * D2R : 0])));
+        else v.push(new Map(js.map(x => [x.id, x === j ? -0.9 * j.range * D2R : 0])), new Map(js.map(x => [x.id, x === j ? 0.9 * j.range * D2R : 0])));
+      });
+    }
+    variants.push({ c, v });
+  }
+  const plan = [], most = Math.max(0, ...variants.map(x => x.v.length));
+  for (let k = 0; k < most; k++) for (const { c, v } of variants) if (v[k]) plan.push({ c, angles: v[k] });
   return plan;
 }
 const throwPlanTime = plan => plan.length * 0.1;   // rough length of the pulse sequence [s]
@@ -346,11 +411,11 @@ function throwTick(dt) {
   if (!thr) return false;
   thr.t += dt; thr.zMax = Math.max(thr.zMax, S.p[2]);
   const acts = actuators(), cmd = new Map(acts.map(c => [c.id, 0]));
-  const servo = new Map();
-  if (thr.plan) for (let k = 0; k < thr.plan.length; k++) {   // servo rotors: one end until their first pulse is over, then the other
-    const P = thr.plan[k]; if (P.servo == null || P.second) continue;
-    const firstDone = thr.phase === 'recover' || k < thr.i || (k === thr.i && thr.step === 'rest');
-    servo.set(P.c.id, firstDone ? -P.servo : P.servo);
+  const servo = new Map();   // each steering joint heads for the angle of the next pulse that needs it
+  if (thr.plan) for (const j of steerJoints()) {
+    const from = thr.phase === 'excite' && thr.step === 'rest' ? thr.i + 1 : thr.i;
+    const P = thr.plan.slice(from).find(x => x.angles.has(j.id));
+    servo.set(j.id, P ? P.angles.get(j.id) : 0);
   }
   if (thr.phase === 'hand') { if (thr.t > 0.8) releaseThrow(); }
   else if (thr.phase === 'free' || thr.phase === 'excite') {
@@ -362,9 +427,9 @@ function throwTick(dt) {
     if (thr.phase === 'excite') {
       const P = thr.plan[thr.i], el = thr.t - thr.ts;
       if (P) {
-        if (thr.step === 'move') {   // only waits if the servo isn't at its pulse angle yet
-          const th = P.servo != null ? thSeen(P.c) : 0;
-          if (P.servo == null || Math.abs(th - P.servo) < 2 * D2R || el > 0.15) { thr.step = 'on'; thr.ts = thr.t; thr.w0 = est.fGyro.slice(); }
+        if (thr.step === 'move') {   // only waits if a joint isn't at its pulse angle yet
+          const ready = [...P.angles].every(([id, a]) => Math.abs(angleSeen(compById(id)) - a) < 2 * D2R);
+          if (ready || el > 0.15) { thr.step = 'on'; thr.ts = thr.t; thr.w0 = est.fGyro.slice(); }
         } else if (thr.step === 'on') {
           // pulse until the rotation it causes reaches dwMax (stays well inside the gyro's range), 12–80 ms
           const dw = nrm(sub(est.fGyro, thr.w0));
@@ -381,8 +446,8 @@ function throwTick(dt) {
     for (const c of acts) {
       const st = act.get(c.id); if (!st) continue;
       setThrottle(c, st, cmd.get(c.id));
-      if (c.type === 'tilt') st.thCmd = servo.get(c.id) ?? 0;
     }
+    for (const [id, a] of servo) jst.get(id).thCmd = a;
     return true;
   }
   return false;
@@ -403,7 +468,7 @@ function finishThrow() {
 }
 function trueImuOffset() {   // mean IMU position relative to the true CoG, body frame (for the report only)
   const imus = sensorsOf('imu'); if (!imus.length) return [0, 0, 0];
-  return sub(mean3(imus.map(c => c.pos)), truth.c);
+  return sub(mean3(imus.map(posNow)), truth.c);
 }
 // Called every control step after the controller has taken over: ends the throw once upright and calm.
 function throwRecoverCheck() {

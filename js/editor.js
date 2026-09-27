@@ -11,8 +11,7 @@ let gizmo = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
 const handleVis = [];      // the visible shapes, to highlight the active one
 
-const compById = id => cfg.comps.find(c => c.id === id) || null;
-const rotAxesFor = c => c.type === 'motor' ? [0, 1, 2] : c.type === 'tilt' ? [2]
+const rotAxesFor = c => c.type === 'motor' ? [0, 1, 2] : c.type === 'joint' ? [2]
   : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
 
 function buildGizmo() {
@@ -150,7 +149,7 @@ function dragTo(e) {
       c.tilt = +(Math.acos(clamp(dir[2], -1, 1)) * R2D).toFixed(1);
       if (c.tilt > 0.05) c.az = +(Math.atan2(dir[1], dir[0]) * R2D).toFixed(1);
       edited(c, 'tilt');
-    } else if (c.type === 'tilt') {
+    } else if (c.type === 'joint') {
       let h = d.hinge0 + ang * R2D; h = ((h + 180) % 360 + 360) % 360 - 180; c.hingeAz = +h.toFixed(1);
       edited(c, 'hingeAz');
     } else {
@@ -172,7 +171,7 @@ function showDragReadout(c) {
   let t = `${c.name}: position (${f(c.pos[0])}, ${f(c.pos[1])}, ${f(c.pos[2])}) m`;
   if (edit.drag && edit.drag.h.kind === 'rot') {
     if (c.type === 'motor') t = `${c.name}: axis tilted ${c.tilt.toFixed(1)}° toward ${c.az.toFixed(1)}°`;
-    else if (c.type === 'tilt') t = `${c.name}: hinge direction ${c.hingeAz.toFixed(1)}°`;
+    else if (c.type === 'joint') t = `${c.name}: hinge direction ${c.hingeAz.toFixed(1)}°`;
     else t = `${c.name}: mount roll ${c.mount[0].toFixed(1)}°, pitch ${c.mount[1].toFixed(1)}°, yaw ${c.mount[2].toFixed(1)}°`;
   }
   $('#editMsg').textContent = t;

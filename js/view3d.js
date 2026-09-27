@@ -12,7 +12,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
-let mats = {}, parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let mats = {}, jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5) };
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
@@ -52,18 +52,30 @@ function rod(a, b, r, mat) {
 function disposeGroup(g) { g.traverse(o => { if (o.geometry) o.geometry.dispose(); }); while (g.children.length) g.remove(g.children[0]); }
 
 function rebuildDrone() {
-  disposeGroup(drone); parts = new Map(); pickGroups = new Map();
+  disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map();
   drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
+  // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
+  const js = joints().slice().sort((a, b) => chainOf(a).length - chainOf(b).length);
+  const holder = c => { const j = parentJoint(c); return j ? { g: jointGroups.get(j.id), o: j.pos } : { g: drone, o: [0, 0, 0] }; };
+  const rel = c => { const h = holder(c); return { g: h.g, p: sub(c.pos, h.o) }; };
+  for (const j of js) {
+    const { g, p } = rel(j);
+    const r = rod([0, 0, 0], p, 0.007, mats.frame); if (r) g.add(r);
+    const body = new THREE.Group(); body.position.set(...p);   // the servo case, fixed to what it's mounted on
+    body.add(new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.028, 0.022), mats.servo));
+    const a = jointAxis(j); const hinge = rod(scl(a, -0.024), scl(a, 0.024), 0.004, mats.ink); if (hinge) body.add(hinge);
+    body.userData.compId = j.id; pickGroups.set(j.id, body); g.add(body);
+    const jg = new THREE.Group(); jg.position.set(...p); g.add(jg); jointGroups.set(j.id, jg);   // the output: turns with the joint
+    const horn = rod([0, 0, 0], scl(unit(crs(a, Math.abs(a[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1])), 0.03), 0.005, mats.servoHorn || mats.ink); if (horn) jg.add(horn);
+  }
   for (const c of cfg.comps) {
-    const r = rod([0, 0, 0], c.pos, 0.007, mats.frame); if (r) drone.add(r);
-    if (c.type === 'motor' || c.type === 'tilt') {
-      const mount = new THREE.Group(); mount.position.set(...c.pos); mount.userData.compId = c.id; pickGroups.set(c.id, mount); drone.add(mount);
+    if (c.type === 'joint') continue;
+    const { g, p } = rel(c);
+    const r = rod([0, 0, 0], p, 0.007, mats.frame); if (r) g.add(r);
+    if (c.type === 'motor') {
+      const mount = new THREE.Group(); mount.position.set(...p); mount.userData.compId = c.id; pickGroups.set(c.id, mount); g.add(mount);
       const axis = new THREE.Group(); mount.add(axis);
-      if (c.type === 'tilt') {
-        const sv = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.022), mats.servo); sv.position.z = -0.018; mount.add(sv);
-        const h = hingeAxis(c); const hinge = rod([-h[0] * 0.03, -h[1] * 0.03, -0.018], [h[0] * 0.03, h[1] * 0.03, -0.018], 0.004, mats.ink); if (hinge) mount.add(hinge);
-      }
       axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
       const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
@@ -72,25 +84,25 @@ function rebuildDrone() {
       wake.position.z = 0.02 - 1.5 * pr; wake.visible = false; axis.add(wake);   // the wake column below the disc
       parts.set(c.id, { axis, disc, arrow, wake });
     } else if (c.type === 'mass') {
-      let g;
-      if (c.shape === 'sphere') g = new THREE.SphereGeometry(c.radius, 20, 14);
-      else if (c.shape === 'cylinder') g = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
-      else g = new THREE.BoxGeometry(...c.size);
-      const m = new THREE.Mesh(g, c.known ? mats.mass : mats.massUnknown); m.position.set(...c.pos); m.userData.compId = c.id; pickGroups.set(c.id, m); drone.add(m);
+      let geo;
+      if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
+      else if (c.shape === 'cylinder') geo = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
+      else geo = new THREE.BoxGeometry(...c.size);
+      const m = new THREE.Mesh(geo, c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
     } else if (c.type === 'hang') {
-      const hk = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), mats.payload); hk.position.set(...c.pos); hk.userData.compId = c.id; pickGroups.set(c.id, hk); drone.add(hk);
+      const hk = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), mats.payload); hk.position.set(...p); hk.userData.compId = c.id; pickGroups.set(c.id, hk); g.add(hk);
     } else if (c.type === 'sensor') {
-      const g = new THREE.Group(); g.position.set(...c.pos);
+      const sg = new THREE.Group(); sg.position.set(...p);
       const Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]);
-      g.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(Rm[0], Rm[1], Rm[2], 0, Rm[3], Rm[4], Rm[5], 0, Rm[6], Rm[7], Rm[8], 0, 0, 0, 0, 1));
+      sg.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(Rm[0], Rm[1], Rm[2], 0, Rm[3], Rm[4], Rm[5], 0, Rm[6], Rm[7], Rm[8], 0, 0, 0, 0, 1));
       const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008], flow: [0.02, 0.02, 0.012] }[c.kind];
-      g.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
-      const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) g.add(ax);   // sensor X axis shows the mount
+      sg.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
+      const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) sg.add(ax);   // sensor X axis shows the mount
       if (c.kind === 'flow') {   // rangefinder beam along the boresight
         const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), mats.beam);
-        beam.visible = false; g.add(beam); parts.set(c.id, { beam });
+        beam.visible = false; sg.add(beam); parts.set(c.id, { beam });
       }
-      g.userData.compId = c.id; pickGroups.set(c.id, g); drone.add(g);
+      sg.userData.compId = c.id; pickGroups.set(c.id, sg); g.add(sg);
     }
   }
   buildGhost();
@@ -133,9 +145,12 @@ function updateScene() {
   if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
   else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
   const live = !editMode;
+  for (const j of joints()) {   // each joint's group turns about its hinge (level and at rest while editing)
+    const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? 0 : angleTrue(j));
+  }
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
-    p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c, st.th)));   // follows the tilt law exactly
+    p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c)));   // the motor's own mounting; its joints turn the group above
     const T = st.T * c.health / 100; p.disc.material.opacity = 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
@@ -152,7 +167,7 @@ function updateScene() {
   for (const c of cfg.comps) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;
     v.line.visible = v.ball.visible = live;
-    const aw = add(S.p, m3v(R, sub(c.pos, truth.c))); const pos = v.line.geometry.attributes.position;
+    const aw = add(S.p, m3v(R, sub(posNow(c), truth.c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }

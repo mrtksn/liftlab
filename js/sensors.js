@@ -59,7 +59,7 @@ function vibrationAt(pos) {
   let a = [0, 0, 0], w = [0, 0, 0];
   for (const c of actuators()) {
     const v = vib.get(c.id), st = act.get(c.id); if (!v || !st) continue;
-    const k = (st.T * c.health / 100 / c.tmax) * Math.exp(-nrm(sub(pos, c.pos)) / VIB_REACH) * Math.sin(v.ph);
+    const k = (st.T * c.health / 100 / c.tmax) * Math.exp(-nrm(sub(pos, posNow(c))) / VIB_REACH) * Math.sin(v.ph);
     a = add(a, scl(v.u, VIB_ACC * k)); w = add(w, scl(v.u, VIB_GYRO * k));
   }
   return { a, w };
@@ -68,7 +68,7 @@ function motorFieldAt(pos) {
   let b = [0, 0, 0];
   for (const c of actuators()) {
     const v = vib.get(c.id), st = act.get(c.id); if (!v || !st) continue;
-    const d = nrm(sub(pos, c.pos));
+    const d = nrm(sub(pos, posNow(c)));
     b = add(b, scl(v.um, MAG_INTERF * (st.T / c.tmax) / (1 + (d / MAG_REACH) ** 2)));
   }
   return b;
@@ -77,20 +77,22 @@ function advanceVibration(dt) {
   for (const c of actuators()) { const v = vib.get(c.id), st = act.get(c.id); if (v && st) v.ph += 2 * Math.PI * VIB_FREQ * Math.sqrt(clamp(st.T / c.tmax, 0, 1)) * dt; }
 }
 function measure(c, rt, dt) {
-  const R = qmat(S.q), RT = m3T(R), Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]), RmT = m3T(Rm);
-  const r = sub(c.pos, truth.c);
+  // A sensor on a servo joint moves and turns with it: its pose and mount come from the true joint angles,
+  // and its gyro also feels the joints above it turning.
+  const P = poseOf(c), R = qmat(S.q), RT = m3T(R), Rm = m3m(P.R, eulerR(c.mount[0], c.mount[1], c.mount[2])), RmT = m3T(Rm);
+  const r = sub(P.p, truth.c), wS = add(S.w, chainRate(c));
   if (c.kind === 'imu') {
     const fb = add(m3v(RT, add(S.acc, [0, 0, G])), add(crs(S.wdot, r), crs(S.w, crs(S.w, r))));
-    const vb = vibrationAt(c.pos);
+    const vb = vibrationAt(P.p);
     const p = { gyroNoise: c.gyroNoise * D2R, gyroBias: c.gyroBias * D2R, gyroDrift: c.gyroDrift * D2R, gyroRange: c.gyroRange * D2R, accNoise: c.accNoise, accBias: c.accBias, accRange: c.accRange * G };
-    return run('imuModel', m3v(RmT, S.w), m3v(RmT, fb), { a: m3v(RmT, scl(vb.a, c.vib)), w: m3v(RmT, scl(vb.w, c.vib)) }, p, rt.st, dt);
+    return run('imuModel', m3v(RmT, wS), m3v(RmT, fb), { a: m3v(RmT, scl(vb.a, c.vib)), w: m3v(RmT, scl(vb.w, c.vib)) }, p, rt.st, dt);
   }
-  if (c.kind === 'mag') return run('magModel', m3v(RmT, m3v(RT, MAG_EARTH)), m3v(RmT, scl(motorFieldAt(c.pos), c.interference)), { noise: c.noise, hardIron: c.hardIron }, rt.st);
+  if (c.kind === 'mag') return run('magModel', m3v(RmT, m3v(RT, MAG_EARTH)), m3v(RmT, scl(motorFieldAt(P.p), c.interference)), { noise: c.noise, hardIron: c.hardIron }, rt.st);
   if (c.kind === 'flow') {
     const Rs = m3m(R, Rm), ps = add(S.p, m3v(R, r)), vs = add(S.v, m3v(R, crs(S.w, r)));
     const down = m3v(Rs, [0, 0, -1]);
     const d = down[2] < -0.2 ? ps[2] / -down[2] : Infinity;          // distance to the ground along the boresight
-    const v = m3v(m3T(Rs), vs), w = m3v(RmT, S.w);
+    const v = m3v(m3T(Rs), vs), w = m3v(RmT, wS);
     const f = isFinite(d) && d > 0.01 ? [w[1] - v[0] / d, -w[0] - v[1] / d] : [w[1], -w[0]];
     const q = isFinite(d) ? envr.texture * envr.light * clamp(1.25 - d / 8, 0, 1) : 0;   // image quality: texture, light, height
     const fl = run('flowModel', f, q, { noise: c.noise, scale: c.scale, maxRate: c.maxRate }, rt.st, dt);
@@ -122,8 +124,10 @@ function primeSensors() { // one immediate reading from every sensor, so the est
 // Readings are rotated into the body frame with the mount the controller knows, and position
 // readings are shifted to the frame hub with the sensor position it knows. Several sensors of the
 // same kind are averaged.
-const knownMount = c => c.known ? eulerR(c.mount[0], c.mount[1], c.mount[2]) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
-const knownPos = c => c.known ? c.pos : [0, 0, 0];
+// Where the flight software thinks a sensor is and how it's turned: its described mount, carried by the
+// joints above it at the angles the software believes. An unknown sensor is assumed at the hub, unrotated.
+const knownMount = c => c.known ? m3m(poseOf(c, angleSeen).R, eulerR(c.mount[0], c.mount[1], c.mount[2])) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const knownPos = c => c.known ? poseOf(c, angleSeen).p : [0, 0, 0];
 function mean3(list) { const s = list.reduce((a, b) => add(a, b), [0, 0, 0]); return scl(s, 1 / list.length); }
 
 function senseAndEstimate(dt) {
@@ -132,7 +136,7 @@ function senseAndEstimate(dt) {
   const imus = ready('imu');
   est.haveImu = imus.length > 0;
   if (est.haveImu) {
-    const gyro = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.gyro)));
+    const gyro = mean3(imus.map(c => sub(m3v(knownMount(c), sens.get(c.id).latest.gyro), c.known ? chainRateSeen(c) : [0, 0, 0])));   // minus its joints' own turning
     const accel = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.accel)));
     const mags = ready('mag');
     const mag = mags.length ? mean3(mags.map(c => m3v(knownMount(c), sens.get(c.id).latest))) : null;

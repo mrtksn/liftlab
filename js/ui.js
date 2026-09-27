@@ -15,7 +15,7 @@ function el(tag, attrs = {}, ...kids) {
 let running = true, speed = 1;
 
 /* ───────── components ───────── */
-const TAG = { motor: 'Motor', tilt: 'Servo', mass: 'Mass', hang: 'Cable' };
+const TAG = { motor: 'Motor', joint: 'Servo', mass: 'Mass', hang: 'Cable' };
 const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix', flow: 'Flow' };
 const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
@@ -35,7 +35,9 @@ const FD = {
   mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
   health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
   hingeAz: { label: 'Hinge axis direction', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
-  manual: { label: 'Manual angle', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
+  manual: { label: 'Angle (set by you)', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
+  hingeEl: { label: 'Hinge axis tilt up', path: ['hingeEl'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
+  jmass: { label: 'Servo mass', path: ['mass'], min: 0, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
   range: { label: 'Servo limit ±', path: ['range'], min: 5, max: 90, step: 1, u: '°', dp: 0 },
   rate: { label: 'Servo speed', hmax: 5000,  path: ['rate'], min: 20, max: 1000, step: 10, u: '°/s', dp: 0 },
   lx: { label: 'Size X', path: ['size', 0], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
@@ -81,9 +83,9 @@ function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a,
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
 const openSet = new Set();
 function summary(c) {
-  const p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})`;
+  const on = parentJoint(c), p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})` + (on ? ` · on ${on.name}` : '');
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
-  if (c.type === 'tilt') return `${c.tmax.toFixed(1)} N · ${c.mode === 'auto' ? 'auto ±' + c.range + '°' : 'fixed ' + c.manual + '°'} · ${p}`;
+  if (c.type === 'joint') { const n = descendants(c).length; return `${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'sensor') {
     const u = c.known ? '' : ' · mount unknown';
@@ -145,17 +147,26 @@ function compBody(c) {
   const nid = `f-${c.id}-name`; const ni = el('input', { type: 'text', id: nid, value: c.name, maxlength: '18' });
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
   b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
+  // Attached to: the frame, or any servo joint that isn't this part or below it.
+  const holders = [['', 'Frame']].concat(joints().filter(j => canAttach(c, j)).map(j => [String(j.id), j.name]));
+  const aid = `f-${c.id}-parent`, asel = el('select', { id: aid });
+  for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') === v) o.selected = true; asel.append(o); }
+  asel.addEventListener('change', () => { c.parent = asel.value ? +asel.value : null; if (c.type === 'hang') reseatPend(c); structural(); });
+  b.append(el('div', { class: 'field' }, el('label', { for: aid, text: 'Attached to' }), asel));
   const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
+  if (parentJoint(c) || c.type === 'joint') b.append(el('p', { class: 'hint', text: 'Positions are body axes with every joint at 0°; the joints above a part carry it from there.' }));
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
     b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('p', { class: 'hint', text: 'Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
-  } else if (c.type === 'tilt') {
-    b.append(pos, slider(c, 'hingeAz'), selectF(c, 'mode', 'Servo control', [['auto', 'Allocator decides'], ['manual', 'Fixed by me']], rerender));
-    if (c.mode === 'manual') b.append(slider(c, 'manual'));
-    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'),
-      slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+  } else if (c.type === 'joint') {
+    const carried = descendants(c), steer = motorsUnder(c).length > 0;
+    b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
+    b.append(el('span', { class: 'lbl', text: 'Pivot' }), pos, slider(c, 'hingeAz'), slider(c, 'hingeEl'),
+      selectF(c, 'mode', 'Servo control', [['auto', steer ? 'Allocator steers it' : 'Allocator steers it (needs a motor on it)'], ['manual', 'Set by me']], rerender));
+    if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
+    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
       el('p', { class: 'hint', text: 'Servo speed is the rated speed the controller assumes; the real servo may differ. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'mass') {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
@@ -190,14 +201,22 @@ function compCard(c) {
     open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c));
   });
   const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });
-  del.addEventListener('click', () => { cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural(); });
+  del.addEventListener('click', () => {   // parts on a removed joint move to what the joint was on
+    for (const x of cfg.comps) if (x.parent === c.id) x.parent = c.parent ?? null;
+    cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural();
+  });
   const selected = typeof edit !== 'undefined' && edit.sel === c.id;
   return el('div', { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, el('div', { class: 'comp-top' }, head, del), open ? compBody(c) : null);
 }
 function renderComps() {
-  const L = $('#compList'); L.textContent = ''; for (const c of cfg.comps) L.append(compCard(c));
-  const na = actuators().length, ns = allSensors().length, np = cfg.comps.length - na - ns;
-  $('#compCount').textContent = `${na} actuator${na === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} passive`;
+  const L = $('#compList'); L.textContent = '';
+  const put = (c, depth) => {   // each servo joint is followed by what it carries, indented
+    const card = compCard(c); if (depth) card.style.marginLeft = (depth * 14) + 'px'; L.append(card);
+    for (const k of cfg.comps.filter(x => parentJoint(x) === c)) put(k, depth + 1);
+  };
+  for (const c of cfg.comps.filter(x => !parentJoint(x))) put(c, 0);
+  const na = actuators().length, nj = joints().length, ns = allSensors().length, np = cfg.comps.length - na - nj - ns;
+  $('#compCount').textContent = `${na} motor${na === 1 ? '' : 's'} · ${nj} servo${nj === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} passive`;
 }
 function edited(c, key) {
   if (c.type === 'sensor' && c.kind === 'fix' && FIX_TUNED.includes(key) && c.quality !== 'custom') {
@@ -211,7 +230,8 @@ function structural() { recomputeProps(); cPts = contactPoints(); rebuildDrone()
 function addComp(type) {
   const n = cfg.comps.filter(c => c.type === type).length + 1; let c;
   if (type === 'motor') c = mkMotor('Motor ' + n, 0.3, 0, 0.02);
-  else if (type === 'tilt') c = mkTilt('Servo ' + n, -0.3, 0, 0.02, { hingeAz: 90 });
+  else if (type === 'joint') c = mkJoint('Servo ' + (joints().length + 1), -0.3, 0, 0.02, { hingeAz: 90, mode: 'manual' });
+  else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; }
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
   else {
@@ -230,9 +250,14 @@ function buildActRows() {
   const box = $('#acts'); box.textContent = ''; actRows = new Map();
   const acts = actuators(); if (!acts.length) { box.append(el('p', { class: 'hint', text: 'No actuators attached.' })); return; }
   for (const c of acts) {
-    const fill = el('div', { class: 'fill' }), mk = el('div', { class: 'act' }); const val = el('span', { class: 'av' }); const sv = el('span', { class: 'as' });
-    box.append(el('div', { class: 'arow' }, el('span', { class: 'an', text: c.name, title: c.name }), el('div', { class: 'tbar' }, fill, mk), val, c.type === 'tilt' ? sv : null));
-    actRows.set(c.id, { fill, mk, val, sv });
+    const fill = el('div', { class: 'fill' }), mk = el('div', { class: 'act' }); const val = el('span', { class: 'av' });
+    box.append(el('div', { class: 'arow' }, el('span', { class: 'an', text: c.name, title: c.name }), el('div', { class: 'tbar' }, fill, mk), val));
+    actRows.set(c.id, { fill, mk, val });
+  }
+  for (const j of joints()) {   // servo joints: where the angle sits in its range (middle = 0°)
+    const mk = el('div', { class: 'act' }), cmd = el('div', { class: 'act cmd' }); const val = el('span', { class: 'av' });
+    box.append(el('div', { class: 'arow jrow' }, el('span', { class: 'an', text: j.name, title: j.name }), el('div', { class: 'tbar jbar' }, cmd, mk), val));
+    actRows.set(j.id, { mk, cmd, val, joint: true });
   }
 }
 const fmtSign = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1);
@@ -243,7 +268,13 @@ function updateActs() {
     r.mk.style.left = `calc(${(clamp(Te / c.tmax, 0, 1) * 100).toFixed(1)}% - 1px)`;
     r.val.textContent = `${Math.round(pc * 100)}% · ${Te.toFixed(2)} N`;
     r.val.title = `Allowance: ${Math.round(Math.min(pc, 1 - pc) * 100)}% of the range left before a limit`;
-    if (c.type === 'tilt') { const cmd = c.mode === 'manual' ? c.manual : st.thCmd * R2D; r.sv.textContent = `servo ${fmtSign(st.th * R2D)}° → ${fmtSign(cmd)}°${c.mode === 'manual' ? ' (fixed)' : ''}`; }
+  }
+  for (const j of joints()) {
+    const r = actRows.get(j.id), st = jst.get(j.id); if (!r || !st) continue;
+    const R = j.range || 1, pos = a => `calc(${(clamp(0.5 + a * R2D / (2 * R), 0, 1) * 100).toFixed(1)}% - 1px)`, t = jointTarget(j);
+    r.mk.style.left = pos(st.th); r.cmd.style.left = pos(t);
+    r.val.textContent = `${fmtSign(st.th * R2D)}° → ${fmtSign(t * R2D)}°`;
+    r.val.title = steerJoints().includes(j) ? 'Actual angle → commanded' : 'Actual angle → the angle you set';
   }
 }
 // Allocation preference sliders, and a live readout of rotor power and the tightest allowance.
@@ -261,9 +292,9 @@ function updateAllocInfo() {
     const st = act.get(c.id); if (!st) continue;
     P += Math.pow(Math.max(0, st.Teff ?? st.T), 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
     const m = Math.min(st.u || 0, 1 - (st.u || 0)); if (!tight || m < tight.m) tight = { c, m };
-    if (c.type === 'tilt' && c.mode === 'auto') { const ms = (c.range * D2R - Math.abs(st.th)) / (2 * c.range * D2R); if (ms < tight.m) tight = { c, m: ms, servo: true }; }
   }
-  $('#allocSmall').textContent = (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name}${tight.servo ? ' servo' : ''} ${Math.round(tight.m * 100)}%` : '') +
+  for (const j of steerJoints()) { const st = jst.get(j.id); if (!st) continue; const ms = (j.range * D2R - Math.abs(st.th)) / (2 * j.range * D2R); if (!tight || ms < tight.m) tight = { c: j, m: ms, servo: true }; }
+  $('#allocSmall').textContent = (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name} ${Math.round(tight.m * 100)}%` : '') +
     (mode === 'mixed' ? ` · servos take ${Math.round(mixShare() * 100)}% sideways` : '');
 }
 function refreshEnvelope() { try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }
@@ -399,7 +430,10 @@ function renderResponses() {
   for (const c of acts) {
     const r = learn.resp.get(c.id) || {};
     if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), (c.curve || 0).toFixed(2)); }
-    if (c.type === 'tilt' && r.rate != null) { any = true; row(c.name, 'servo speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(c.rate)}°/s`); row(c.name, 'servo lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((c.lag || 0) * 1000)} ms`); }
+  }
+  for (const j of joints()) {
+    const r = learn.resp.get(j.id) || {};
+    if (r.rate != null) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); }
   }
   if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag.' }));
 }
@@ -594,11 +628,12 @@ function load() {
     if (s.launch === 'throw') launchMode = 'throw';
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
-    for (const c of cfg.comps) if ((c.type === 'motor' || c.type === 'tilt') && !c.prop) withProp(c);
+    cfg.comps = migrateTiltParts(cfg.comps);   // saved before servo joints existed
+    for (const c of cfg.comps) if (c.type === 'motor' && !c.prop) withProp(c);
     for (const c of cfg.comps) {   // saved before the hidden hardware traits existed
-      if ((c.type === 'motor' || c.type === 'tilt') && c.curve == null) c.curve = 0.3;
-      if ((c.type === 'motor' || c.type === 'tilt') && c.fm == null) c.fm = 0.6;
-      if (c.type === 'tilt') { if (c.lag == null) c.lag = 0.02; if (c.offset == null) c.offset = 0; if (c.feedback == null) c.feedback = false; }
+      if (c.type === 'motor' && c.curve == null) c.curve = 0.3;
+      if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
+      if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
     }
     return true;
   }

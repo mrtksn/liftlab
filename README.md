@@ -1,6 +1,6 @@
 # Drone Force Bench
 
-An interactive 3D simulator for a drone frame you can change while it flies. You attach motors, servo-tilted motors, rigid masses and masses on cables, and the controller works out the motor thrusts and servo angles needed to hold it steady. A flight-envelope check tells you whether the current layout can hover at all and how much control headroom is left on each axis.
+An interactive 3D simulator for a drone frame you can change while it flies. You attach motors, servo joints, rigid masses, masses on cables and sensors, anything on anything, and the controller works out the motor thrusts and servo angles needed to hold it steady. A flight-envelope check tells you whether the current layout can hover at all and how much control headroom is left on each axis.
 
 Every physical law and control law is a plain function in `js/laws.js`, and you can read and edit each one live in the **Formulas** tab.
 
@@ -18,7 +18,7 @@ The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't
   - band-passes both sides (0.3–12 Hz), so steady offsets like drag can't leak in;
   - removes the IMU's lever-arm swing.
 
-  A tilting rotor is two inputs, u·cosθ and u·sinθ, so its effect at any servo angle is known.
+  A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on. That's 3 columns for one joint and 9 for two. Turning a rigid part about a hinge is linear in cos θ and sin θ, so this is exact, and its effect at any joint angles is a fixed sum of learned columns.
 
 **Calibrate** (Controller model panel) runs about 12 s of test moves while hovering, or about 25 s with servos:
 1. **Settle.**
@@ -62,7 +62,7 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
 **Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
 
 1. **Climb.** It rides the throw with the motors off.
-2. **Pulse near the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. Servo rotors are pulsed twice, near each end of their range, so both halves of a tilting rotor are seen. It pulses near the top because air rushing through the props while climbing or falling changes their thrust.
+2. **Pulse near the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. A motor on steering joints is pulsed with each of those joints at one end, the middle and the other end, so all its columns can be told apart. It pulses near the top because air rushing through the props while climbing or falling changes their thrust.
 3. **Fit** (`identifyThrow`). In free fall the accelerometer feels no gravity, only the rotors and its own swing around the center of gravity. One least-squares fit on under a second of data gives:
    - the effectiveness matrix;
    - where the IMU sits relative to the balance point;
@@ -94,13 +94,44 @@ The simulated world has effects the controller is never told about:
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
 
+## Servo joints
+
+A **servo joint** is a hinge mounted on the frame or on another joint. Anything can be attached to it by setting the part's **Attached to** field: motors, rigid masses, cable payloads, sensors, and further joints (for an arm). **+ Motor on servo** adds a joint with a motor at the same point, the usual tilt-rotor. The parts list shows each joint followed by what it carries.
+
+- **Positions and mounts** are entered with every joint at 0°, in body axes. The joints above a part carry it from there (`jointRotation`), nearest first.
+- **Control.** A joint carrying a motor can be steered by the allocator. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
+- **Hinge.** Direction (azimuth) plus a tilt up for axes that aren't horizontal.
+- **Servo hardware.** Range, rated speed, and its own mass, plus the hidden traits the controller isn't told: lag, trim error, and whether it reports its angle.
+
+What moving parts do in the physics:
+- **Mass properties.** The CoG and inertia follow the joints every step. The world CoG itself doesn't jump when a part swings (momentum), so the frame shifts the other way.
+- **Reaction torque.** Turning a joint takes torque; the frame feels −I·θ̈ about the hinge, where I is what the joint carries about its axis.
+- **Rotors, cables, contacts.** Rotors, wakes, cable attachments and ground contact points all move with their joints.
+- **Sensors.** A sensor on a joint moves and turns with it, and its gyro also feels the joint turning.
+
+What the controller does with them:
+- **Its own model.** It moves its CoG and inertia with the joint angles it believes (feedback, or its prediction), for the masses it knows about.
+- **Known sensors on joints.** Readings are rotated by the believed joint pose, and a joint-mounted gyro has the believed joint rate taken out.
+- **Allocation.** A steering joint is an input whose effect is what turning it does to every motor it carries.
+
+Tests (quad unless noted):
+
+| Setup | Result |
+|---|---|
+| 0.25 kg "hand" on an 18 cm arm below, swung 0° → 60° → −60° → 0° in flight | Holds; tilt under 8° |
+| Same, with the IMU on the moving arm (mount known) | Holds; attitude estimate within 4.6° |
+| Tilt-rotor quad with one rotor's servo on a second, folding joint (9 learned columns for that rotor) | Calibrates and flies while the fold moves to 15° |
+| Throw start with the arm fitted | Catches itself and calibrates |
+| Hand or IMU unknown to the controller | Flips. A heavy offset load or a misread IMU is more than the integrators can absorb, as on real hardware |
+| All stock presets | Unchanged: the same hover, manoeuvre, calibration, throw and optical-flow results as before |
+
 ## Editing the airframe
 
 - **Type numbers:** every value on the Airframe tab has a box you can type into. Typed values can go beyond the slider's range, for example positions up to ±2 m.
 - **Edit mode:** press **Edit** on the 3D view (or **E**). The simulation pauses and the airframe is drawn level in its own body axes. Hover to see a part's name, click to select it (or click its card), then drag:
   - **arrows** to move along X (red), Y (green) or Z (blue);
   - **squares** to move within a plane;
-  - **rings** to rotate: a motor's thrust axis, a servo's hinge direction, or an IMU's or compass's mount.
+  - **rings** to rotate: a motor's thrust axis, a servo joint's hinge direction, or an IMU's or compass's mount.
 - **Snapping and exiting:** positions snap to 5 mm and angles to 5°; hold **Shift** for 1 mm and 1°. **Esc** deselects, then leaves edit mode. **Done** or **Run** resumes the simulation.
 - **Live feedback:** the airframe check, mass properties and the part's card update as you drag.
 
@@ -162,6 +193,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
+| `js/joints.js` | Servo joints: parts attached to parts, poses from the joint angles (true and believed), servo state |
 | `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |
@@ -173,7 +205,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 ## The formulas
 
-**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `tiltAxis`, `throttleCurve`, `motorResponse`, `servoResponse`, `servoLinkage`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
+**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `jointRotation`, `throttleCurve`, `motorResponse`, `servoResponse`, `servoLinkage`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`, `flowModel`, `rangeModel`.
 
@@ -193,13 +225,13 @@ Edits made in the Formulas tab:
 - are switched off automatically if they throw or return something unusable during flight, and the default takes over;
 - are saved in your browser's local storage. **Copy edited formulas** gives you text to paste back into `js/laws.js`.
 
-`rotorWrench` and `tiltAxis` are shared by the plant, the controller's effectiveness matrix and the envelope check. The controller evaluates `rotorWrench` at T = 1 N, so it assumes the law is linear in T.
+`rotorWrench` and `jointRotation` are shared by the plant, the controller's effectiveness matrix and the envelope check. The controller evaluates `rotorWrench` at T = 1 N, so it assumes the law is linear in T.
 
 ## What it models
 
 - One rigid body with 6 degrees of freedom, integrated at 2 kHz. The controller runs at 1 kHz.
 - **Motor:** thrust along its axis, first-order spin-up lag, drag torque κ·T opposite to its spin, adjustable health.
-- **Motor on servo:** thrust direction rotates about a hinge, with a servo angle limit and a maximum servo speed.
+- **Servo joint:** a hinge with an angle limit, speed, lag and trim error that carries whatever is attached to it, including other joints.
 - **Rigid mass:** box, sphere or vertical cylinder, contributing mass, center-of-gravity shift and inertia.
 - **Mass on cable:** a point mass on a tension-only spring-damper cable that can swing, go slack and touch the ground.
 - Masses and cables can be hidden from the controller ("Controller knows" off), so it must absorb them with integral action.
@@ -247,10 +279,11 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 
 - Sensors have no temperature effects, cross-axis sensitivity or scale-factor error yet.
 - Magnetic interference comes only from motor currents, not from wiring or the battery.
-- A tilting motor's mass stays at its pivot. Gyroscopic torque from spinning props is ignored.
+- Gyroscopic torque from spinning props is ignored. A joint's motion adds its reaction torque and shifts the CoG, but not the full coupled multibody dynamics. An accelerometer on a moving joint doesn't feel the joint's own acceleration.
+- Learning treats the CoG as fixed. When a known mass swings on a joint, the controller's model follows it, but the learned columns stay as they were at calibration, and keep-learning catches up over about 30 s.
 - Airflow uses fast engineering models (momentum theory, Glauert inflow), not CFD. Wakes are straight columns and aren't bent by wind or forward flight.
 - The motor command-to-thrust curve is linear. Real ESCs need thrust linearization, which isn't identified yet.
 - Without servo feedback, identification and allocation use the predicted servo angle, so a servo that stalls or slips under load isn't noticed.
 - The vertical position integral can trim up to 5 m/s², enough to absorb an unknown hover throttle; sideways it stays at 2 m/s².
-- The throw start needs the IMU's mounting angle to be known, and uses the commanded throttle rather than measured motor RPM, which the Delft work uses. Their method also identifies the throttle curve and the spin-up reaction torque; the simulated motors don't have those.
+- In the throw start, a motor on two steering joints only has each joint varied on its own, so the cross terms of its 9 columns come from the hover calibration. The throw start also needs the IMU's mounting angle to be known, and uses the commanded throttle rather than measured motor RPM, which the Delft work uses. Their method also identifies the throttle curve and the spin-up reaction torque; the simulated motors don't have those.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.
