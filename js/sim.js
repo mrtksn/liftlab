@@ -482,18 +482,22 @@ function resetSim() {
 function envelopeCalc() {
   const k = mode === 'level' ? 6 : 4; const gens = [];   // mixed can always fall back on leaning, so it needs the 4 axes
   const sj = steerJoints();
+  const sets = [];   // what each rotor can really make: its thrust (0 to full) along any direction its servos can swing it to
   for (const c of actuators()) {
     const h = c.health / 100; if (h <= 0) continue;
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
     if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)
       gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); })()), lo: 0, hi: c.tmax * h });
+      let grid = [new Map()];   // every combination of its servos' angles, 7 steps across each range (49 at most)
+      for (const j of js) { const R = j.range * D2R, st = js.length > 1 ? 4 : 7; grid = grid.flatMap(g => Array.from({ length: st }, (_, i) => new Map([...g, [j.id, -R + 2 * R * i / (st - 1)]]))); }
+      sets.push(grid.map(g => { const n = rotorNow(c, x => g.has(x.id) ? g.get(x.id) : restAngle(x)); return toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)).map(x => x * c.tmax * h); }));
       for (const j of js) {
         const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); };
         const e = 1e-3, sb = Math.sin(j.range * D2R) * c.tmax * h;
         gens.push({ g: toK(at(e).map((v, i) => (v - at(-e)[i]) / (2 * e))), lo: -sb, hi: sb });
       }
-    } else { const n = rotorNow(c); gens.push({ g: toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)), lo: 0, hi: c.tmax * h }); }
+    } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
   }
   let mp = 0, treq = [0, 0, 0];
   for (const c of cfg.comps) if (c.type === 'hang') { mp += c.mass; treq = add(treq, crs(sub(posNow(c), truth.c), scl(nb, c.mass * G))); }
@@ -510,17 +514,27 @@ function envelopeCalc() {
   }
   let cnt = 1; for (let i = 0; i < k - 1; i++) cnt = cnt * (gens.length - i) / (i + 1);
   if (cnt > 40000) { res.verdict = 'warn'; res.title = 'Too many actuators'; res.why = 'Envelope check skipped: too many actuator combinations.'; res.head = null; return res; }
-  const H = []; const idx = [];
-  (function rec(s, d) {
-    if (d === k - 1) {
-      const rows = idx.map(i => gens[i].g); const nv = new Array(k);
-      for (let i = 0; i < k; i++) { const minor = rows.map(r => r.filter((_, j) => j !== i)); nv[i] = (i % 2 ? -1 : 1) * det(minor); }
-      const nn = Math.hypot(...nv); if (nn > 1e-9) { const n = nv.map(x => x / nn); H.push(n, n.map(x => -x)); } return;
-    }
-    for (let i = s; i < gens.length; i++) { idx[d] = i; rec(i + 1, d + 1); }
-  })(0, 0);
-  const planes = H.map(n => {
-    let h = 0; for (const gg of gens) { const p = n.reduce((s, x, i) => s + x * gg.g[i], 0); h += Math.max(p * gg.lo, p * gg.hi); }
+  // The attainable set is the sum of every rotor's own set, so its faces lie across k−1 of the rotors' edges:
+  // a thrust direction (0 to full), or the step between two directions a servo can swing it to. A swung
+  // rotor's sideways push costs it lift (T cos θ up, T sin θ across), which a straight-line guess would miss.
+  const H = [], normalsFrom = vecs => {
+    const idx = [];
+    (function rec(s, d) {
+      if (d === k - 1) {
+        const rows = idx.map(i => vecs[i]); const nv = new Array(k);
+        for (let i = 0; i < k; i++) { const minor = rows.map(r => r.filter((_, j) => j !== i)); nv[i] = (i % 2 ? -1 : 1) * det(minor); }
+        const nn = Math.hypot(...nv); if (nn > 1e-9) { const n = nv.map(x => x / nn); H.push(n, n.map(x => -x)); } return;
+      }
+      for (let i = s; i < vecs.length; i++) { idx[d] = i; rec(i + 1, d + 1); }
+    })(0, 0);
+  };
+  normalsFrom(gens.map(g => g.g));
+  const edges = [];
+  for (const S of sets) { const sc = Math.max(1e-9, ...S.map(v => Math.hypot(...v))); for (let i = 0; i < S.length; i++) { edges.push(S[i]); for (let j = i + 1; j < S.length; j++) { const e = S[i].map((x, q) => x - S[j][q]); if (Math.hypot(...e) > 1e-3 * sc) edges.push(e); } } }
+  let ce = 1; for (let i = 0; i < k - 1; i++) ce = ce * (edges.length - i) / (i + 1);
+  if (ce <= 60000) normalsFrom(edges);
+  const planes = H.map(n => {   // how far each face sits beyond hover: the sets' reach along n, less hover's
+    let h = 0; for (const S of sets) { let b = 0; for (const v of S) b = Math.max(b, n.reduce((s, x, i) => s + x * v[i], 0)); h += b; }
     return { n, m: h - n.reduce((s, x, i) => s + x * w[i], 0) };
   });
   let minM = Infinity; for (const p of planes) minM = Math.min(minM, p.m);

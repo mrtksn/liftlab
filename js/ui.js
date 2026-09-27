@@ -390,7 +390,13 @@ function updateAllocInfo() {
   $('#allocSmall').textContent = (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name} ${Math.round(tight.m * 100)}%` : '') +
     (mode === 'mixed' ? ` · servos take ${Math.round(mixShare() * 100)}% sideways` : '');
 }
-function refreshEnvelope() { try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }
+// The check can take tens of milliseconds for a layout with several servo rotors, so a burst of edits (a
+// slider or handle drag) runs it once, after the burst settles, instead of on every step.
+let envTimer = null;
+function refreshEnvelope() {
+  clearTimeout(envTimer);
+  envTimer = setTimeout(() => { envTimer = null; try { envRes = envelopeCalc(); } catch (e) { envRes = null; } renderEnvelope(); }, 60);
+}
 function renderEnvelope() {
   const r = envRes; if (!r) return;
   const p = $('#verdict'); p.className = 'pill ' + r.verdict; p.querySelector('span').textContent = r.title; $('#verdictWhy').textContent = r.why;

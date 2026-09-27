@@ -353,7 +353,9 @@ The biggest items are the in-flight learning (its matrix grows with the square o
 
 ## Flight envelope
 
-The attainable set of accelerations is a zonotope built from each actuator's contribution, linearized over servo range. It is compared with what hover requires, including static cable loads, and reported as Flyable / Marginal / Cannot hover / Not controllable, plus per-axis headroom.
+The attainable set of accelerations is the sum of what each rotor can make: anything from zero to full thrust, along any direction its servos can swing it to (sampled across each servo's range). A swung rotor's sideways push costs it lift (T cos θ up, T sin θ across); an earlier straight-line version treated the two as independent and could call a layout flyable that couldn't hold its yaw. The set is compared with what hover requires, including static cable loads, and reported as Flyable / Marginal / Cannot hover / Not controllable, plus per-axis headroom.
+
+**Lift is never traded away completely.** When a torque can't be cancelled (a big rotor off the balance point, a spin reaction nothing can counter), the allocation keeps at least 75% of the lift asked for and lets the attitude take the rest of the shortfall. Before this, the cheapest answer to such a torque was to switch the big rotor off, and the drone dropped as if that rotor made no thrust.
 
 ## Known simplifications
 

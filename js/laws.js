@@ -680,6 +680,15 @@ function allocation(cols, lo, hi, wd, mode, pull) {
   //    as in most flight controllers. Otherwise, when yaw can't be had (a lone rotor, saturated motors), the
   //    cheapest way to cut the yaw error would be to cut the thrust, and the drone would drop.
   let x = bls(cols, lo, hi, wd, W.map((v, k) => k === 5 ? v * 1e-4 : v));
+  //    Lift may give way to roll and pitch, but only so far: when a torque can't be had at all (a big rotor
+  //    off the balance point with nothing able to cancel it), the cheapest fix would be to switch that rotor
+  //    off, and the drone would drop as if it had no thrust. Keep at least LIFT_FLOOR of the lift asked for
+  //    and let the attitude take the rest of the shortfall.
+  const LIFT_FLOOR = 0.75;
+  if (wd[2] > 0 && made(x)[2] < LIFT_FLOOR * wd[2]) {
+    const t = wd.slice(); t[2] = LIFT_FLOOR * wd[2];   // the best attitude with the lift held at the floor (the optimum sits on it)
+    x = bls(cols, lo, hi, t, W.map((v, k) => k === 5 ? v * 1e-4 : k === 2 ? v * 1e3 : v));
+  }
   // 2. Then as much yaw as it can get without giving up any lift, roll or pitch (sideways force, which only
   //    counts where servos can make it, trades with yaw as usual).
   const kept = made(x); kept[0] = wd[0]; kept[1] = wd[1]; kept[5] = wd[5];
@@ -922,7 +931,7 @@ const LAW_DEFS = [
     shape: 'n', sample: () => [0.4, 0.3] },
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
     math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sub>−yaw</sub><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub> &nbsp;(lift and tilt first)`, `2. ${V('u')}₂: as much yaw as it can get while keeping <i>B</i>${V('u')}₁'s lift, roll and pitch`, `3. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₂)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
-    doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted lift and tilt as the limits allow, then yaw gets what is left: when yaw can\'t be had, it gives way rather than the thrust. The last solve keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
+    doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted lift and tilt as the limits allow, but never gives up more than a quarter of the lift for them: a torque nothing can cancel (a big rotor off the balance point) would otherwise be "fixed" by switching that rotor off. Then yaw gets what is left: when yaw can\'t be had, it gives way rather than the thrust. The last solve keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
     args: [['cols', 'columns of B, one 6-vector per input'], ['lo', 'lower limits'], ['hi', 'upper limits'], ['wd', 'wanted [ax, ay, az, αx, αy, αz]'], ['mode', '"tilt", "mixed" or "level"'], ['pull', '{ q, r }: preferences per input']], returns: 'one value per input',
     shape: 'alloc', sample: () => [[[0, 0, 1, 1, 1, 0.1], [0, 0, 1, -1, 1, -0.1], [0, 0, 1, -1, -1, 0.1], [0, 0, 1, 1, -1, -0.1]], [0, 0, 0, 0], [6, 6, 6, 6], [0, 0, 9.81, 0, 0, 0], 'tilt', { q: [0.02, 0.02, 0.02, 0.02], r: [3, 3, 3, 3] }] },
   { key: 'allocationPreferences', group: 'ctrl', fn: allocationPreferences, title: 'Allocation preferences',
