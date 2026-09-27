@@ -89,7 +89,7 @@ function measure(c, rt, dt) {
   }
   if (c.kind === 'mag') return run('magModel', m3v(RmT, m3v(RT, MAG_EARTH)), m3v(RmT, scl(motorFieldAt(P.p), c.interference)), { noise: c.noise, hardIron: c.hardIron }, rt.st);
   if (c.kind === 'flow') {
-    const Rs = m3m(R, Rm), ps = add(S.p, m3v(R, r)), vs = add(S.v, m3v(R, crs(S.w, r)));
+    const Rs = m3m(R, Rm), ps = add(S.p, m3v(R, r)), vs = add(S.v, m3v(R, add(crs(S.w, r), chainVel(c))));
     const down = m3v(Rs, [0, 0, -1]);
     const d = down[2] < -0.2 ? ps[2] / -down[2] : Infinity;          // distance to the ground along the boresight
     const v = m3v(m3T(Rs), vs), w = m3v(RmT, wS);
@@ -99,7 +99,7 @@ function measure(c, rt, dt) {
     return { flow: [fl[0], fl[1]], q: fl[2], range: run('rangeModel', d, { noise: c.rangeNoise, minRange: c.minRange, maxRange: c.maxRange }, rt.st) };
   }
   if (c.kind === 'baro') return run('baroModel', add(S.p, m3v(R, r))[2], { noise: c.noise, drift: c.drift }, rt.st, dt);
-  return run('posFixModel', add(S.p, m3v(R, r)), add(S.v, m3v(R, crs(S.w, r))), { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
+  return run('posFixModel', add(S.p, m3v(R, r)), add(S.v, m3v(R, add(crs(S.w, r), chainVel(c)))), { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
 }
 function sampleSensors(dt) {
   advanceVibration(dt);
@@ -149,7 +149,7 @@ function senseAndEstimate(dt) {
     const fixes = ready('fix').filter(c => !c.dropout);
     const fix = fixes.length ? {
       p: mean3(fixes.map(c => sub(sens.get(c.id).latest.p, m3v(est.R, knownPos(c))))),
-      v: mean3(fixes.map(c => sub(sens.get(c.id).latest.v, m3v(est.R, crs(est.w, knownPos(c)))))),
+      v: mean3(fixes.map(c => sub(sens.get(c.id).latest.v, m3v(est.R, add(crs(est.w, knownPos(c)), c.known ? chainVel(c, true) : [0, 0, 0]))))),
       age: age(fixes),
     } : null;
     // Optical flow: velocity over the ground (shifted to the hub) and height from the rangefinder.
@@ -159,9 +159,10 @@ function senseAndEstimate(dt) {
       const vs = [], hs = [];
       for (const c of flows) {
         const L = sens.get(c.id).latest, Rm = knownMount(c), rk = knownPos(c);
-        const o = run('flowVelocity', L.flow, L.range, m3v(m3T(Rm), est.w), m3m(est.R, Rm));
+        const wj = c.known ? chainRateSeen(c) : [0, 0, 0], vj = c.known ? chainVel(c, true) : [0, 0, 0];   // a camera on a moving joint also sees the joint's motion
+        const o = run('flowVelocity', L.flow, L.range, m3v(m3T(Rm), add(est.w, wj)), m3m(est.R, Rm));
         hs.push(o[2] - m3v(est.R, rk)[2]);
-        if (L.q > 0) vs.push(sub([o[0], o[1], 0], m3v(est.R, crs(est.w, rk))));
+        if (L.q > 0) vs.push(sub([o[0], o[1], 0], m3v(est.R, add(crs(est.w, rk), vj))));
       }
       flow = { v: vs.length ? mean3(vs).slice(0, 2) : null, h: hs.reduce((a, b) => a + b, 0) / hs.length, age: age(flows) };
       est.flowState = vs.length ? 'tracking' : 'range only';

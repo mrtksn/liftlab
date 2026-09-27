@@ -72,6 +72,8 @@ function shapeI(c) {
 }
 // Mass, CoG and inertia with every part where its joints put it: the true angles for the physics, the
 // angles the flight software believes for its model.
+// A thin rod's inertia about its middle: m L²/12 across it, nothing along it.
+function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; return [0, 1, 2].flatMap(i => [0, 1, 2].map(j => k * ((i === j ? 1 : 0) - d[i] * d[j]))); }
 function massProps(which) {
   const ang = which === 'truth' ? angleTrue : angleSeen;
   const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) }];
@@ -80,6 +82,7 @@ function massProps(which) {
     if (c.type === 'motor' || c.type === 'joint') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
     else if (c.type === 'hang') { if (which === 'model' && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
+    else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
   }
   let m = 0, cm = [0, 0, 0]; for (const it of items) { m += it.m; cm = add(cm, scl(it.r, it.m)); } cm = scl(cm, 1 / m);
   const J = [0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -231,6 +234,7 @@ function contactPoints() {   // where the airframe can touch the ground, with pa
   for (const c of cfg.comps) {
     if (c.type === 'motor' || c.type === 'joint') { const p = posNow(c); pts.push([p[0], p[1], p[2] - 0.03]); }
     else if (c.type === 'mass') { const p = posNow(c), hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2; pts.push([p[0], p[1], p[2] - hz]); }
+    else if (c.type === 'link') pts.push(posePoint(c, linkTip(c)).p, posNow(c));
   }
   return pts;
 }
@@ -291,8 +295,10 @@ function dynamics(dt) {
         let Ia = 0;
         for (const c of descendants(j)) {
           if (!(c.mass > 0) || c.type === 'hang') continue;
-          const r = sub(posNow(c), P.p), rp = sub(r, scl(a, dot(r, a)));
-          Ia += c.mass * dot(rp, rp) + (c.type === 'mass' ? dot(a, m3v(shapeI(c), a)) : 0);
+          const at = c.type === 'link' ? posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2))).p : posNow(c);
+          const r = sub(at, P.p), rp = sub(r, scl(a, dot(r, a)));
+          const Iown = c.type === 'mass' ? dot(a, m3v(shapeI(c), a)) : c.type === 'link' ? dot(a, m3v(m3m(m3m(poseOf(c).R, rodI(c)), m3T(poseOf(c).R)), a)) : 0;
+          Ia += c.mass * dot(rp, rp) + Iown;
         }
         react = add(react, scl(a, -Ia * st.acc));
       }

@@ -11,7 +11,7 @@ let gizmo = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
 const handleVis = [];      // the visible shapes, to highlight the active one
 
-const rotAxesFor = c => c.type === 'motor' ? [0, 1, 2] : c.type === 'joint' ? [2]
+const rotAxesFor = c => c.type === 'motor' || c.type === 'joint' || c.type === 'link' ? [0, 1, 2]
   : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
 
 function buildGizmo() {
@@ -121,7 +121,8 @@ const snapTo = (v, s) => Math.round(v / s) * s;
 function startDrag(h, e) {
   const c = compById(edit.sel); if (!c) return false;
   const P0 = gizmo.position.clone(), ray = rayFrom(e), a = new THREE.Vector3(...AXES[h.axis]);
-  const d = { h, c, P0, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null };
+  const d = { h, c, P0, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null,
+    axis0: c.type === 'joint' ? jointAxis(c) : null, dir0: c.type === 'link' ? linkDir(c) : null };
   if (h.kind === 'move') { d.t0 = closestOnAxis(ray, P0, a); if (d.t0 == null) return false; }
   else { d.p0 = onPlane(ray, P0, a); if (!d.p0) return false; }
   edit.drag = d; vpEl.setPointerCapture(e.pointerId); vpEl.style.cursor = 'grabbing';
@@ -149,9 +150,12 @@ function dragTo(e) {
       c.tilt = +(Math.acos(clamp(dir[2], -1, 1)) * R2D).toFixed(1);
       if (c.tilt > 0.05) c.az = +(Math.atan2(dir[1], dir[0]) * R2D).toFixed(1);
       edited(c, 'tilt');
-    } else if (c.type === 'joint') {
-      let h = d.hinge0 + ang * R2D; h = ((h + 180) % 360 + 360) % 360 - 180; c.hingeAz = +h.toFixed(1);
+    } else if (c.type === 'joint') {   // turn the hinge axis itself: horizontal, vertical or anything between
+      setDirAzEl(c, m3v(R, d.axis0), 'hingeAz', 'hingeEl');
       edited(c, 'hingeAz');
+    } else if (c.type === 'link') {    // swing the rod about its base; what's on it swings along
+      setDirAzEl(c, m3v(R, d.dir0), 'az', 'el');
+      edited(c, 'laz');                  // edited() swings the carried parts along
     } else {
       c.mount = eulerFromR(m3m(R, eulerR(...d.mount0))).map(x => +x.toFixed(1));
       edited(c, 'mr');
@@ -171,7 +175,8 @@ function showDragReadout(c) {
   let t = `${c.name}: position (${f(c.pos[0])}, ${f(c.pos[1])}, ${f(c.pos[2])}) m`;
   if (edit.drag && edit.drag.h.kind === 'rot') {
     if (c.type === 'motor') t = `${c.name}: axis tilted ${c.tilt.toFixed(1)}° toward ${c.az.toFixed(1)}°`;
-    else if (c.type === 'joint') t = `${c.name}: hinge direction ${c.hingeAz.toFixed(1)}°`;
+    else if (c.type === 'joint') t = `${c.name}: hinge axis toward ${c.hingeAz.toFixed(1)}°, tilted up ${c.hingeEl.toFixed(1)}°`;
+    else if (c.type === 'link') t = `${c.name}: pointing toward ${c.az.toFixed(1)}°, ${c.el.toFixed(1)}° up`;
     else t = `${c.name}: mount roll ${c.mount[0].toFixed(1)}°, pitch ${c.mount[1].toFixed(1)}°, yaw ${c.mount[2].toFixed(1)}°`;
   }
   $('#editMsg').textContent = t;

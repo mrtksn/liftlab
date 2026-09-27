@@ -94,9 +94,26 @@ The simulated world has effects the controller is never told about:
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
 
-## Servo joints
+## Servo joints and rods
 
-A **servo joint** is a hinge mounted on the frame or on another joint. Anything can be attached to it by setting the part's **Attached to** field: motors, rigid masses, cable payloads, sensors, and further joints (for an arm). **+ Motor on servo** adds a joint with a motor at the same point, the usual tilt-rotor. The parts list shows each joint followed by what it carries.
+A **servo joint** is a hinge mounted on the frame, on a rod or on another joint. A **rod / lever** is a rigid stick with a mass; whatever you attach to it rides at its far end. Anything can be attached to either: motors, rigid masses, cable payloads, sensors, rods and further joints. Chaining them builds an arm: shoulder servo → upper-arm rod → elbow servo → forearm rod → hand and camera. **+ Motor on servo** adds a joint with a motor at the same point, the usual tilt-rotor.
+
+**The parts list is the attachment tree.** The frame is at the top. Each servo or rod shows what it carries, indented beneath it with guide lines, and can be folded away. You attach things by dragging:
+- **Onto a servo or rod:** drag a part by its grip (⠿) onto it to attach it there.
+- **Onto Frame:** to take a part off.
+- **Without dragging:** each card's **Attached to** field does the same.
+
+Placement follows what you drop onto:
+- A part put on a rod goes to the rod's far end.
+- A rod put on a servo starts at the servo's pivot.
+- Moving or turning a servo or rod (typed values, sliders or edit-mode handles) carries everything on it along. Lengthening a rod moves what's at its end.
+
+**Orientation.** A servo's hinge axis can point anywhere:
+- **Presets:** left–right (tips front and back), front–back (tips sideways), or vertical (swivels).
+- **Exact angles:** an azimuth and an upward tilt.
+- **In edit mode:** any of the three rings turns the axis.
+
+A rod points by presets (down, forward, back, left, right, up) or by exact angles, and its rings swing it with everything it carries.
 
 - **Positions and mounts** are entered with every joint at 0°, in body axes. The joints above a part carry it from there (`jointRotation`), nearest first.
 - **Control.** A joint carrying a motor can be steered by the allocator. Any joint can be **Set by me**, a live angle you can change in flight, which is how you'd swing a robot hand. A joint with no motor on it is always set by you.
@@ -107,11 +124,11 @@ What moving parts do in the physics:
 - **Mass properties.** The CoG and inertia follow the joints every step. The world CoG itself doesn't jump when a part swings (momentum), so the frame shifts the other way.
 - **Reaction torque.** Turning a joint takes torque; the frame feels −I·θ̈ about the hinge, where I is what the joint carries about its axis.
 - **Rotors, cables, contacts.** Rotors, wakes, cable attachments and ground contact points all move with their joints.
-- **Sensors.** A sensor on a joint moves and turns with it, and its gyro also feels the joint turning.
+- **Sensors.** A sensor on a joint moves and turns with it. Its gyro also feels the joint turning, and a camera or GPS antenna on it also feels the joint's motion.
 
 What the controller does with them:
 - **Its own model.** It moves its CoG and inertia with the joint angles it believes (feedback, or its prediction), for the masses it knows about.
-- **Known sensors on joints.** Readings are rotated by the believed joint pose, and a joint-mounted gyro has the believed joint rate taken out.
+- **Known sensors on joints.** Readings are rotated by the believed joint pose. A joint-mounted gyro has the believed joint rate taken out, and an optical-flow camera or GPS antenna on a moving arm has the arm's own motion taken out.
 - **Allocation.** A steering joint is an input whose effect is what turning it does to every motor it carries.
 
 Tests (quad unless noted):
@@ -122,6 +139,8 @@ Tests (quad unless noted):
 | Same, with the IMU on the moving arm (mount known) | Holds; attitude estimate within 4.6° |
 | Tilt-rotor quad with one rotor's servo on a second, folding joint (9 learned columns for that rotor) | Calibrates and flies while the fold moves to 15° |
 | Throw start with the arm fitted | Catches itself and calibrates |
+| Shoulder and elbow servos with two rods, a hand and the optical-flow camera at the end, both joints swinging continuously | Holds position, with GPS or indoors on flow alone |
+| Swivel (vertical-axis) servo with a rod forward, hand and IMU at the end, swinging ±80° | Holds; tilt under 8° |
 | Hand or IMU unknown to the controller | Flips. A heavy offset load or a misread IMU is more than the integrators can absorb, as on real hardware |
 | All stock presets | Unchanged: the same hover, manoeuvre, calibration, throw and optical-flow results as before |
 
@@ -193,7 +212,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
-| `js/joints.js` | Servo joints: parts attached to parts, poses from the joint angles (true and believed), servo state |
+| `js/joints.js` | Servo joints and rods: the attachment tree, poses from the joint angles (true and believed), carrying parts along, servo state |
 | `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |

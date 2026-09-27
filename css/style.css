@@ -329,3 +329,16 @@ button.chip{background:transparent;cursor:pointer}
 .resp td:first-child,.resp th:first-child{text-align:left;font-family:"Barlow",sans-serif;font-size:12.5px;color:var(--ink)}
 .jbar{background:linear-gradient(to right,transparent calc(50% - 0.5px),var(--line-strong) calc(50% - 0.5px),var(--line-strong) calc(50% + 0.5px),transparent calc(50% + 0.5px)),var(--track, var(--line))}
 .act.cmd{opacity:.45}
+/* parts tree: what is attached to what */
+.tree-frame{font:600 11px/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:7px 9px;border:1px dashed var(--line-strong);border-radius:7px}
+.kids{display:flex;flex-direction:column;gap:6px;margin:6px 0 0 7px;padding-left:9px;border-left:2px solid var(--line-strong)}
+.kids.root{margin-left:0;padding-left:0;border-left:0}
+.node{display:flex;flex-direction:column;position:relative}
+.kids:not(.root)>.node::before{content:"";position:absolute;left:-9px;top:19px;width:8px;border-top:2px solid var(--line-strong)}
+.grip{display:flex;align-items:center;padding:0 0 0 6px;color:var(--muted);cursor:grab;user-select:none;font-size:13px}
+.comp-top[draggable=true]:active .grip{cursor:grabbing}
+.twisty{border:0;background:transparent;color:var(--ink-2);font:500 11px var(--f-mono,monospace);padding:0 0 0 6px;cursor:pointer;min-width:20px}
+.twisty:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:4px}
+.comp.dragging{opacity:.45}
+.drop-ok{outline:2px dashed var(--accent);outline-offset:2px}
+.tag-link{color:var(--ink-2)}

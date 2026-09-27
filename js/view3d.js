@@ -58,10 +58,11 @@ function rebuildDrone() {
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
   const js = joints().slice().sort((a, b) => chainOf(a).length - chainOf(b).length);
   const holder = c => { const j = parentJoint(c); return j ? { g: jointGroups.get(j.id), o: j.pos } : { g: drone, o: [0, 0, 0] }; };
-  const rel = c => { const h = holder(c); return { g: h.g, p: sub(c.pos, h.o) }; };
+  // A part's connector starts where it hangs from: a rod's tip, a joint's pivot, or the hub.
+  const rel = c => { const h = holder(c), par = parentOf(c); return { g: h.g, p: sub(c.pos, h.o), from: par && par.type === 'link' ? sub(linkTip(par), h.o) : [0, 0, 0] }; };
   for (const j of js) {
-    const { g, p } = rel(j);
-    const r = rod([0, 0, 0], p, 0.007, mats.frame); if (r) g.add(r);
+    const { g, p, from } = rel(j);
+    const r = rod(from, p, 0.007, mats.frame); if (r) g.add(r);
     const body = new THREE.Group(); body.position.set(...p);   // the servo case, fixed to what it's mounted on
     body.add(new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.028, 0.022), mats.servo));
     const a = jointAxis(j); const hinge = rod(scl(a, -0.024), scl(a, 0.024), 0.004, mats.ink); if (hinge) body.add(hinge);
@@ -71,8 +72,15 @@ function rebuildDrone() {
   }
   for (const c of cfg.comps) {
     if (c.type === 'joint') continue;
-    const { g, p } = rel(c);
-    const r = rod([0, 0, 0], p, 0.007, mats.frame); if (r) g.add(r);
+    const { g, p, from } = rel(c);
+    const r = rod(from, p, 0.007, mats.frame); if (r) g.add(r);
+    if (c.type === 'link') {   // the rod itself, base to tip, with a knob at the tip where things attach
+      const lg = new THREE.Group(); lg.userData.compId = c.id; pickGroups.set(c.id, lg); g.add(lg);
+      const tip = add(p, scl(linkDir(c), c.length));
+      const bar = rod(p, tip, 0.006, mats.link || mats.servo); if (bar) lg.add(bar);
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.009, 12, 8), mats.ink); knob.position.set(...tip); lg.add(knob);
+      continue;
+    }
     if (c.type === 'motor') {
       const mount = new THREE.Group(); mount.position.set(...p); mount.userData.compId = c.id; pickGroups.set(c.id, mount); g.add(mount);
       const axis = new THREE.Group(); mount.add(axis);
