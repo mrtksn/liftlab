@@ -5,8 +5,8 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, mass: 0.06, health: 100, healthKnown: true }, o))); }
-function mkTilt(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'tilt', name, pos: [x, y, z], hingeAz: 0, mode: 'auto', manual: 0, range: 40, rate: 240, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, mass: 0.075, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkTilt(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'tilt', name, pos: [x, y, z], hingeAz: 0, mode: 'auto', manual: 0, range: 40, rate: 240, lag: 0.02, offset: 0, feedback: false, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, curve: 0.3, mass: 0.075, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -98,7 +98,7 @@ function syncRuntime() {
   for (const k of [...pend.keys()]) if (!ids.has(k)) pend.delete(k);
   const R = qmat(S.q);
   for (const c of cfg.comps) {
-    if ((c.type === 'motor' || c.type === 'tilt') && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, u: 0, k: 1, th: c.type === 'tilt' && c.mode === 'manual' ? c.manual * D2R : 0, thCmd: 0 });
+    if ((c.type === 'motor' || c.type === 'tilt') && !act.has(c.id)) { const th0 = c.type === 'tilt' && c.mode === 'manual' ? c.manual * D2R : 0; act.set(c.id, { T: 0, Tcmd: 0, u: 0, v: 0, k: 1, th: th0, thR: th0, thCmd: th0, thHat: th0, pst: {} }); }
     if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, sub(c.pos, truth.c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
   }
   syncSensors();
@@ -130,30 +130,44 @@ function allocate(w, cm) {
         const sb = Math.sin(c.range * D2R);
         cols.push(k.a); lo.push(0); hi.push(1); who.push({ c, k: 'a' });
         cols.push(k.b); lo.push(-sb); hi.push(sb); who.push({ c, k: 'b' });
-      } else { cols.push(colAt(c, act.get(c.id).th)); lo.push(0); hi.push(1); who.push({ c, k: 'u' }); }
+      } else { cols.push(colAt(c, thSeen(c))); lo.push(0); hi.push(1); who.push({ c, k: 'u' }); }
     }
     const x = run('allocation', cols, lo, hi, wa, mode);
     for (let i = 0; i < who.length; i++) {
-      if (who[i].k !== 'a') continue;
+      if (who[i].k !== 'a' || servoHeld()) continue;   // servos stay put while a calibration step holds them
       const c = who[i].c, a = x[i], b = x[i + 1];
       if (Math.hypot(a, b) > 0.02) act.get(c.id).thCmd = clamp(Math.atan2(b, a), -c.range * D2R, c.range * D2R);
     }
   }
-  // Stage 2: throttle for every motor at the servos' measured angles.
-  const cols = acts.map(c => colAt(c, act.get(c.id).th));
+  // Stage 2: thrust for every motor at the servos' angles (measured, or predicted without feedback).
+  const cols = acts.map(c => colAt(c, thSeen(c)));
   const u = holdU(run('allocation', cols, acts.map(() => 0), acts.map(() => 1), wa, mode));   // held during calibration pulses
   ctl.sat = false;
   acts.forEach((c, i) => {
     const st = act.get(c.id);
-    st.u = clamp(u[i] + calExc(c) + ditherFor(c, S.t), 0, 1);   // plus calibration or learning excitation
-    st.Tcmd = st.u * c.tmax;                                  // the motor turns throttle into thrust
+    // u[i] is thrust as a fraction of max; the learned throttle curve turns it into the throttle to send
+    st.u = clamp(run('thrustLinearization', u[i], curveHat(c)) + calExc(c) + ditherFor(c, S.t), 0, 1);   // plus calibration or learning excitation
+    setThrottle(c, st, st.u);
     if (u[i] >= 0.995) ctl.sat = true;
   });
 }
 
+// The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
+function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * run('throttleCurve', u, c.curve || 0); }
+function servoTarget(c) { const st = act.get(c.id); return calServo(c) ?? (c.mode === 'manual' ? c.manual * D2R : st.thCmd); }
+// Servo angle the flight software uses: the feedback reading, or its own prediction from what it commanded.
+function thSeen(c) { const st = act.get(c.id); if (c.type !== 'tilt') return 0; return c.feedback || c.mode === 'manual' ? st.th : st.thHat; }
+function updateServoBelief(dt) {
+  for (const c of actuators()) {
+    if (c.type !== 'tilt') continue; const st = act.get(c.id); if (!st) continue;
+    const m = servoModelHat(c);
+    st.thHat = run('servoPredictor', st.pst, servoTarget(c), m.rate, m.lag, dt);
+  }
+}
 function hubState(R) { const hub = sub(S.p, m3v(R, truth.c)); const vh = sub(S.v, m3v(R, crs(S.w, truth.c))); return { hub, vh }; }
 function control(dt) {
   senseAndEstimate(dt);
+  updateServoBelief(dt);
   learnStep(dt);
   if (S.crashed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } return; }
   if (throwTick(dt)) return;             // throw start: open loop until it has identified itself
@@ -165,7 +179,7 @@ function control(dt) {
   const cm = ctlModel(), axis = ctlAxis();
   const RT = m3T(R);
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
-  for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, -2, 2);
+  for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);   // vertical has room to trim out an unknown hover throttle
   const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G);
   const nd = unit(run('thrustAxisTarget', Fd, mode));
   let psi = setpoint.yaw * D2R;
@@ -226,7 +240,7 @@ function rotorLoads(rotors, R, RT, wv, record) {
 // airflow, wakes and battery included). For comparison only: the controller never sees this.
 function trueB() {
   const R = qmat(S.q), RT = m3T(R), wv = windVec(), acts = actuators();
-  const base = acts.map(c => { const st = act.get(c.id); return { c, st, u: st.u || 0, th: st.th }; });
+  const base = acts.map(c => { const st = act.get(c.id); return { c, st, u: st.Tcmd / c.tmax || 0, th: st.th }; });   // u here is thrust as a fraction of max
   const loads = inputs => {
     const rotors = base.map((b, i) => {
       const { u, th } = inputs[i];
@@ -259,7 +273,10 @@ function dynamics(dt) {
   const rotors = acts.map(c => {
     const st = act.get(c.id);
     st.T = run('motorResponse', st.T, st.Tcmd, c.tmax, c.tau, dt);
-    if (c.type === 'tilt') st.th = run('servoResponse', st.th, calServo(c) ?? (c.mode === 'manual' ? c.manual * D2R : st.thCmd), c.range * D2R, c.rate * D2R, dt);
+    if (c.type === 'tilt') {   // the horn moves at the servo's speed, the rotor follows through the linkage
+      st.thR = run('servoResponse', st.thR ?? st.th, servoTarget(c) + (c.offset || 0) * D2R, c.range * D2R, c.rate * D2R, dt);
+      st.th = run('servoLinkage', st.th, st.thR, c.lag || 0, dt);
+    }
     return { c, st, p: c.pos, d: actDir(c, st.th), T: st.T * c.health / 100 * S.battK, R: propR(c) };
   });
   const ld = rotorLoads(rotors, R, RT, wv, true);
@@ -311,7 +328,7 @@ function resetSim() {
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); syncRuntime();
   S.batt = {}; S.battK = 1;
   resetEstimation(); resetLearning();
-  for (let k = 0; k < 4; k++) { control(0); for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; if (c.type === 'tilt') st.th = c.mode === 'manual' ? c.manual * D2R : st.thCmd; } }
+  for (let k = 0; k < 4; k++) { control(0); for (const c of actuators()) { const st = act.get(c.id); st.T = st.Tcmd; if (c.type === 'tilt') { st.th = st.thR = (c.mode === 'manual' ? c.manual * D2R : st.thCmd) + (c.offset || 0) * D2R; st.pst = {}; st.thHat = st.thCmd; } } }
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
   thr = null; if (launchMode === 'throw') startThrow();
 }

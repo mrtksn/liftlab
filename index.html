@@ -197,6 +197,9 @@
         </div>
         <span class="lbl">How close each learned effect is to the truth</span>
         <div class="match" id="matchRows"></div>
+        <span class="lbl">Actuator response (from the tests)</span>
+        <div id="respRows"></div>
+        <label class="check" for="applyCurve" title="The throttle-curve bend is a small effect that the tests only see roughly, so it isn't used unless you turn this on"><input type="checkbox" id="applyCurve"> Linearize thrust with the measured curve (experimental)</label>
       </section>
       <section class="sec">
         <h2>Actuator commands <small>bar = throttle, tick = thrust</small></h2>

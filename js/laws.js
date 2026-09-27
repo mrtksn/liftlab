@@ -43,6 +43,18 @@ function motorResponse(T, Tcmd, tmax, tau, dt) {
   return T + (target - T) * Math.min(1, dt / tau);       // first-order spin-up lag
 }
 
+function throttleCurve(u, bend) {
+  // Throttle (0–1) to thrust as a fraction of max. Props make thrust roughly with RPM², so real motors
+  // bend upward: bend 0 is a straight line, 1 is thrust ∝ throttle². The controller isn't told this.
+  const x = clamp(u, 0, 1);
+  return (1 - bend) * x + bend * x * x;
+}
+
+function servoLinkage(theta, horn, lag, dt) {
+  // The rotor follows the servo horn through the servo's own control loop and linkage: a first-order lag.
+  return lag > 0 ? theta + (horn - theta) * Math.min(1, dt / lag) : horn;
+}
+
 function servoResponse(theta, target, range, rate, dt) {
   const goal = clamp(target, -range, range);             // mechanical limit
   const step = rate * dt;                                // maximum servo speed
@@ -232,6 +244,15 @@ function flowVelocity(flow, range, w, Rs) {
   return [v[0], v[1], range * -down[2]];                                  // [vx, vy, height above ground]
 }
 
+function servoPredictor(st, cmd, rate, lag, dt) {
+  // Where a servo without angle feedback is, predicted from what was commanded: the horn moves at most
+  // rate·dt per step, the rotor follows with a first-order lag. rate and lag come from the actuator tests.
+  if (st.h == null) { st.h = cmd; st.th = cmd; }
+  st.h += clamp(cmd - st.h, -rate * dt, rate * dt);
+  st.th = lag > 0 ? st.th + (st.h - st.th) * Math.min(1, dt / lag) : st.h;
+  return st.th;
+}
+
 function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
   // Complementary filter. Integrates the accelerometer (rotated by the attitude estimate) and pulls the
   // result toward whatever references exist: position fix, optical flow, rangefinder, barometer.
@@ -283,16 +304,17 @@ function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
 
 // ═════════════ Identification (learning what the actuators do) ═════════════
 
-function identifyEffectiveness(st, u, f, w, r, dt, init, memory) {
+function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags) {
   // Recursive least squares. Learns B, what each actuator input does to the drone, from flight data:
   //   Δ[f; dω/dt] ≈ B · Δu
   // Both sides are band-passed (0.3–12 Hz), so it learns from changes and steady offsets such as drag
   // or trim can't leak into B.
   // u: inputs the controller sent (throttle fractions; a tilting rotor counts twice, as u·cosθ and u·sinθ)
   // f: accelerometer (specific force) and w: gyro, body frame; r: IMU position from the hub [m]
-  // init: starting guess, 6 rows × inputs; memory: how long past data counts [s].
+  // init: starting guess, 6 rows × inputs; memory: how long past data counts [s];
+  // lags: each input's motor lag [s], from the actuator tests (35 ms assumed until then).
   // Returns B: 6 rows (ax ay az αx αy αz) × inputs.
-  const tauAct = 0.035, lpHz = 12, hpHz = 0.3, pMax = 2;    // assumed motor lag [s], band [Hz], covariance cap
+  const lpHz = 12, hpHz = 0.3, pMax = 2;                    // band [Hz], covariance cap
   const n = u.length;
   const k = hz => dt / (dt + 1 / (2 * Math.PI * hz));
   if (dt <= 0) return { B: st.th || init };
@@ -302,7 +324,7 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory) {
     st.ua = u.slice(); st.xl = u.slice(); st.xs = u.slice(); st.yl = f.concat([0, 0, 0]); st.ys = st.yl.slice();
     st.wl = w.slice(); st.n = 0;
   }
-  for (let j = 0; j < n; j++) st.ua[j] += (u[j] - st.ua[j]) * Math.min(1, dt / tauAct);   // what the motors are doing now
+  for (let j = 0; j < n; j++) st.ua[j] += (u[j] - st.ua[j]) * Math.min(1, dt / ((lags && lags[j]) || 0.035));   // what the motors are doing now
   const wPrev = st.wl.slice();
   st.wl = st.wl.map((v, i) => v + k(lpHz) * (w[i] - v));
   const alpha = st.wl.map((v, i) => (v - wPrev[i]) / dt);                     // angular acceleration
@@ -324,6 +346,76 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory) {
   for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) { P[a][b] = (P[a][b] - K[a] * Px[b]) / lambda; if (a === b) trace += P[a][a]; }
   if (trace > pMax * n) for (const row of P) for (let b = 0; b < n; b++) row[b] *= pMax * n / trace;   // don't blow up without excitation
   return { B: st.th };
+}
+
+function identifyMotorResponse(wins, dt) {
+  // One motor tested on its own while everything else holds still. Each window starts steady, then the
+  // throttle steps up and down. y is the drone's response along this motor's known effect, in units of
+  // "full thrust" (it's 1 when the motor goes from 0 to 100%). Model:
+  //   y = g · lag_τ( (1−k)u + k u² ) + d·I + e·(lag_τ(u) − u₀)·I + c_w,   I = ∫(lag_τ(u) − u₀) dt
+  //     = g·lag_τ(u) + g·k·lag_τ(u² − u) + d·I + e·(…)·I + c_w
+  // Linear in g, g·k, d and the per-window offsets c_w, so each motor lag τ on the grid is one least-squares
+  // fit; the best τ wins. A step up giving more than the same step down reveals the bend k. The I terms soak
+  // up what the pulse's own motion does: the drone rising or rolling pushes air through the prop, and that
+  // costs more thrust the harder the prop is pushing. Both would otherwise look like a bend.
+  const taus = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.065, 0.08, 0.1], lpHz = 25;
+  const kf = dt / (dt + 1 / (2 * Math.PI * lpHz)), nw = wins.length, np = 4 + nw;
+  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  let sst = 0;
+  for (const w of wins) { const m = w.y.reduce((a, v) => a + v, 0) / Math.max(1, w.y.length); for (const v of w.y) sst += (v - m) ** 2; }
+  let best = null;
+  for (const tau of taus) {
+    const A = Array.from({ length: np }, () => new Array(np).fill(0)), b = new Array(np).fill(0); let yy = 0;
+    wins.forEach((w, wi) => {
+      const u0 = w.u[0]; let m1 = u0, m2 = u0 * u0 - u0, l1 = m1, l2 = m2, I = 0;
+      for (let t = 0; t < w.u.length; t++) {
+        const u = w.u[t], a = Math.min(1, dt / tau);
+        m1 += (u - m1) * a; m2 += (u * u - u - m2) * a; l1 += kf * (m1 - l1); l2 += kf * (m2 - l2); I += (l1 - u0) * dt;
+        const phi = new Array(np).fill(0); phi[0] = l1; phi[1] = l2; phi[2] = I; phi[3] = (l1 - u0) * I; phi[4 + wi] = 1;
+        for (let p = 0; p < np; p++) { b[p] += phi[p] * w.y[t]; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
+        yy += w.y[t] ** 2;
+      }
+    });
+    const th = solveLin(A.map((r, i) => r.map((v, j) => v + (i === j ? 1e-9 : 0))), b);
+    const sse = yy - 2 * dotn(th, b) + dotn(th, A.map(r => dotn(r, th)));
+    if (!best || sse < best.sse) best = { tau, th, sse };
+  }
+  if (!best || Math.abs(best.th[0]) < 1e-6) return { tau: 0, curve: 0, gain: 0, fit: 0 };
+  return { tau: best.tau, curve: clamp(best.th[1] / best.th[0], -0.5, 1.5), gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
+}
+
+function identifyServoResponse(wins, dt) {
+  // One servo stepped on its own while everything else holds still. cmd: commanded angle change from the
+  // start of the window [rad]; y: the drone's response along this servo's effect, which is sin(angle change)
+  // for a rigid tilting rotor. Model: the horn moves at most `rate`, the rotor follows with lag λ,
+  //   y = g · sin(θ) + c_w.
+  // Rate and lag are found on a grid (each pair is a two-number least-squares fit); the best pair wins.
+  const rates = [60, 80, 110, 150, 200, 260, 340, 450, 600, 800].map(d => d * Math.PI / 180);
+  const lags = [0, 0.005, 0.01, 0.015, 0.02, 0.03, 0.045, 0.065, 0.09], lpHz = 25;
+  const kf = dt / (dt + 1 / (2 * Math.PI * lpHz)), nw = wins.length, np = 1 + nw;
+  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  let sst = 0;
+  for (const w of wins) { const m = w.y.reduce((a, v) => a + v, 0) / Math.max(1, w.y.length); for (const v of w.y) sst += (v - m) ** 2; }
+  let best = null;
+  for (const rate of rates) for (const lag of lags) {
+    const A = Array.from({ length: np }, () => new Array(np).fill(0)), b = new Array(np).fill(0); let yy = 0;
+    wins.forEach((w, wi) => {
+      let h = 0, th = 0, l = 0;
+      for (let t = 0; t < w.cmd.length; t++) {
+        h += clamp(w.cmd[t] - h, -rate * dt, rate * dt);
+        th = lag > 0 ? th + (h - th) * Math.min(1, dt / lag) : h;
+        l += kf * (Math.sin(th) - l);
+        const phi = new Array(np).fill(0); phi[0] = l; phi[1 + wi] = 1;
+        for (let p = 0; p < np; p++) { b[p] += phi[p] * w.y[t]; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
+        yy += w.y[t] ** 2;
+      }
+    });
+    const th = solveLin(A.map((r, i) => r.map((v, j) => v + (i === j ? 1e-9 : 0))), b);
+    const sse = yy - 2 * dotn(th, b) + dotn(th, A.map(r => dotn(r, th)));
+    if (!best || sse < best.sse) best = { rate, lag, th, sse };
+  }
+  if (!best) return { rate: 0, lag: 0, gain: 0, fit: 0 };
+  return { rate: best.rate, lag: best.lag, gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
 }
 
 function identifyThrow(st, u, f, w, vb, dt, solve) {
@@ -427,6 +519,14 @@ function forceDemand(Fb, n, mode) {
   return scl(n, dot(Fb, n));                             // only the thrust axis can push
 }
 
+function thrustLinearization(v, bend) {
+  // Inverse of the learned throttle curve: the throttle that gives thrust fraction v, if thrust = (1−b)u + b·u².
+  // Keeps everything above it linear in thrust. bend is 0 until the actuator tests have measured it.
+  if (Math.abs(bend) < 1e-4) return clamp(v, 0, 1);
+  const a = 1 - bend, disc = Math.max(0, a * a + 4 * bend * clamp(v, 0, 1));
+  return clamp((-a + Math.sqrt(disc)) / (2 * bend), 0, 1);
+}
+
 function allocation(cols, lo, hi, wd, mode) {
   // cols[j]: what one unit of input j does, as [ax, ay, az, αx, αy, αz] (acceleration units)
   // wd: the 6 accelerations wanted; lo/hi: input limits
@@ -475,6 +575,16 @@ const LAW_DEFS = [
     doc: 'A rate-limited servo with a mechanical limit. No backlash or load sag yet.',
     args: [['theta', 'current angle [rad]'], ['target', 'commanded angle [rad]'], ['range', 'limit ± [rad]'], ['rate', 'max speed [rad/s]'], ['dt', 'time step [s]']], returns: 'next angle [rad]',
     shape: 'n', sample: () => [0, 0.3, 0.6, 4, 0.0005] },
+  { key: 'servoLinkage', group: 'plant', fn: servoLinkage, title: 'Servo linkage lag',
+    math: [`θ<sub>k+1</sub> = θ<sub>k</sub> + (θ<sub>horn</sub> − θ<sub>k</sub>) · Δ<i>t</i> / λ`],
+    doc: 'The rotor follows the servo horn with a small lag from the servo\'s own control loop and the linkage. The servo\'s trim error (its zero being off by a few degrees) is added to the command before the horn. Neither the lag nor the trim error is told to the controller.',
+    args: [['theta', 'rotor angle [rad]'], ['horn', 'servo horn angle [rad]'], ['lag', 'time constant [s]'], ['dt', 'time step [s]']], returns: 'next rotor angle [rad]',
+    shape: 'n', sample: () => [0, 0.3, 0.02, 0.0005] },
+  { key: 'throttleCurve', group: 'plant', fn: throttleCurve, title: 'Throttle curve',
+    math: [`<i>T</i>/<i>T</i><sub>max</sub> = (1 − <i>b</i>) <i>u</i> + <i>b u</i>²`],
+    doc: 'How throttle turns into thrust. Thrust grows roughly with RPM², so real motors bend upward: the same extra throttle gives more thrust near full power than near idle. The controller isn\'t told the bend; the actuator tests measure it.',
+    args: [['u', 'throttle 0–1'], ['bend', '0 straight, 1 thrust ∝ throttle²']], returns: 'thrust as a fraction of max',
+    shape: 'n', sample: () => [0.5, 0.3] },
   { key: 'bodyDrag', group: 'plant', fn: bodyDrag, title: 'Aerodynamic drag',
     math: [`${V('F')}<sub>d</sub> = <i>c</i><sub>d</sub>(${V('v')}<sub>wind</sub> − ${V('v')})`, `${V('τ')}<sub>d</sub> = −<i>c</i><sub>ω</sub> ${V('ω')}`],
     doc: 'Linear drag on the airframe and a little rotational damping.',
@@ -560,6 +670,12 @@ const LAW_DEFS = [
     args: [['flow', '[fx, fy] reading [rad/s]'], ['range', 'distance to the ground [m]'], ['w', 'gyro, sensor frame [rad/s]'], ['Rs', 'sensor → world rotation']],
     returns: '[vx, vy, height above ground]', shape: 3, sample: () => [[0.05, 0], 1.5, [0, 0, 0], [1, 0, 0, 0, 1, 0, 0, 0, 1]] },
 
+  { key: 'servoPredictor', group: 'est', fn: servoPredictor, title: 'Servo angle predictor',
+    math: [`<i>ĥ</i><sub>k+1</sub> = <i>ĥ</i><sub>k</sub> + sat<sub>±<i>ω̂</i>Δ<i>t</i></sub>(θ<sub>cmd</sub> − <i>ĥ</i><sub>k</sub>), &nbsp;θ̂<sub>k+1</sub> = θ̂<sub>k</sub> + (<i>ĥ</i> − θ̂)Δ<i>t</i>/λ̂`],
+    doc: 'Hobby servos don\'t report their angle. Without feedback, the controller uses this prediction wherever it needs the servo\'s angle: in the allocation and in learning. Until the servo tests run, it assumes the rated speed from the description and no lag.',
+    args: [['st', 'predictor state'], ['cmd', 'commanded angle [rad]'], ['rate', 'speed [rad/s]'], ['lag', 'lag [s]'], ['dt', 'control period [s]']], returns: 'predicted angle [rad]',
+    shape: 'n', sample: () => [{}, 0.3, 5, 0.02, 0.001] },
+
   { key: 'positionEstimator', group: 'est', fn: positionEstimator, title: 'Position estimator',
     math: [`${V('v̂̇')} = <i>R̂</i>${V('f̃')} + ${V('g')} + <i>k</i><sub>V</sub>(${V('p̃')} − ${V('p̂')}) + <i>k</i><sub>fv</sub>(${V('ṽ')} − ${V('v̂')}) + <i>k</i><sub>flow</sub>(${V('v')}<sub>flow</sub> − ${V('v̂')})<sub>xy</sub>`, `altitude: rangefinder near the ground, barometer otherwise; &nbsp;${V('b̂')}<sub>a</sub> learned from velocity errors`, `${V('p̂̇')} = ${V('v̂')} + <i>k</i><sub>P</sub>(${V('p̃')} − ${V('p̂')}), &nbsp;altitude from the barometer when present`, `no fix: ${V('v̂')}<sub>xy</sub> → −(<i>m</i>/<i>c</i><sub>d</sub>) ${V('f̃')}<sub>xy</sub> &nbsp;(drag fusion)`],
     doc: 'Fuses the accelerometer with the position fix, optical flow, rangefinder and barometer. The simulator first shifts each reading to the frame hub using the sensor positions the controller knows, and reports how old it is so a delayed fix is compared with the estimate from when it was measured. Optical flow gives velocity over the ground, so position still drifts slowly without a fix. With neither, it falls back on drag fusion: a multirotor\'s accelerometer feels air drag sideways, which reveals airspeed, so wind and a wrong drag coefficient make it drift.',
@@ -570,9 +686,21 @@ const LAW_DEFS = [
   { key: 'identifyEffectiveness', group: 'learn', fn: identifyEffectiveness, title: 'Effectiveness identification',
     math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')}, &nbsp;both sides band-passed 0.3–12 Hz`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
     doc: 'Recursive least squares with forgetting (about 4 s of memory). It learns, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. Runs during calibration and, if you leave learning on, all through the flight.',
-    args: [['st', 'identification state'], ['u', 'inputs sent, throttle fractions (tilting rotors as u·cosθ, u·sinθ)'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight']],
+    args: [['st', 'identification state'], ['u', 'inputs, as thrust fractions through the learned throttle curve (tilting rotors as u·cosθ, u·sinθ)'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests']],
     returns: '{ B: 6 rows × inputs }', shape: { B: 'rows' },
-    sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4] },
+    sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4, [0.03, 0.03]] },
+  { key: 'identifyMotorResponse', group: 'learn', fn: identifyMotorResponse, title: 'Motor response test',
+    math: [`<i>y</i> = <i>g</i> · lag<sub>τ</sub>((1 − <i>k</i>)<i>u</i> + <i>k u</i>²) + <i>d I</i> + <i>e</i>(lag<sub>τ</sub>(<i>u</i>) − <i>u</i><sub>0</sub>)<i>I</i> + <i>c</i><sub>w</sub>, &nbsp;<i>I</i> = ∫(lag<sub>τ</sub>(<i>u</i>) − <i>u</i><sub>0</sub>)d<i>t</i>`, `least squares for each τ on a grid (10–100 ms); the best fit gives the motor lag τ and the throttle-curve bend <i>k</i>`],
+    doc: 'Runs on the calibration\'s motor pulses. While one motor steps up and down, every other actuator holds still, so the drone\'s response along that motor\'s effect is that motor alone. How slowly it responds gives the lag; a step up giving more than the same step down gives the bend of its throttle curve. The two pulse sizes (6% and 16%) make the bend easier to see, and the I terms take out the air the pulse itself pushes through the prop as the drone moves. The result goes into the thrust linearization and into the effectiveness identification.',
+    args: [['wins', '[{ u: throttle sent, y: response along the motor\'s effect }], one per pulse'], ['dt', 'sample period [s]']],
+    returns: '{ tau: lag [s]; curve: bend k; gain; fit: share explained }', shape: { tau: 1, curve: 1, gain: 1, fit: 1 },
+    sample: () => [[{ u: [0.4, 0.46, 0.46, 0.34, 0.34, 0.4], y: [0, 0.01, 0.04, 0.02, -0.03, -0.01] }], 0.001] },
+  { key: 'identifyServoResponse', group: 'learn', fn: identifyServoResponse, title: 'Servo response test',
+    math: [`horn: <i>h</i><sub>k+1</sub> = <i>h</i><sub>k</sub> + sat<sub>±<i>ω</i>Δ<i>t</i></sub>(θ<sub>cmd</sub> − <i>h</i><sub>k</sub>), &nbsp;rotor: θ̇ = (<i>h</i> − θ)/λ`, `<i>y</i> = <i>g</i> sin θ + <i>c</i><sub>w</sub>, &nbsp;best (<i>ω</i>, λ) on a grid`],
+    doc: 'Runs on the calibration\'s servo steps. One servo swings one way, then the other, while the motors and every other servo hold still. The drone\'s response along that servo\'s effect traces out where the rotor really was, so the fit gives the servo\'s real speed and lag without any angle feedback. A servo\'s trim error needs no separate number: the learned effectiveness is measured against the commanded angle, so it already includes it.',
+    args: [['wins', '[{ cmd: commanded change [rad], y: response along the servo\'s effect }], one per step'], ['dt', 'sample period [s]']],
+    returns: '{ rate [rad/s]; lag [s]; gain; fit }', shape: { rate: 1, lag: 1, gain: 1, fit: 1 },
+    sample: () => [[{ cmd: [0, 0.2, 0.2, 0.2, -0.2, -0.2], y: [0, 0.02, 0.1, 0.19, 0.1, -0.1] }], 0.001] },
 
   { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
     math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
@@ -583,7 +711,7 @@ const LAW_DEFS = [
 
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
-    doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s. m is the mass the controller believes in.',
+    doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',
     args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²']], returns: 'desired total force, world [N]',
     shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
@@ -606,6 +734,11 @@ const LAW_DEFS = [
     doc: 'Which part of the desired force the actuators are asked to make directly, in the body frame.',
     args: [['Fb', 'desired force, body [N]'], ['n', 'nominal thrust axis, body'], ['mode', '"tilt" or "level"']], returns: 'force demand, body [N]',
     shape: 3, sample: () => [[0.5, 0, 9.81], [0, 0, 1], 'tilt'] },
+  { key: 'thrustLinearization', group: 'ctrl', fn: thrustLinearization, title: 'Thrust linearization',
+    math: [`<i>u</i> = (−(1 − <i>k̂</i>) + √((1 − <i>k̂</i>)² + 4<i>k̂v</i>)) / 2<i>k̂</i> &nbsp;so that &nbsp;(1 − <i>k̂</i>)<i>u</i> + <i>k̂u</i>² = <i>v</i>`],
+    doc: 'The allocation works in thrust fractions v; this turns each into the throttle to send, using the bend k̂ the motor tests measured. It makes a motor as predictable near idle as near full power, which matters when a hard correction drives it far from hover.',
+    args: [['v', 'wanted thrust as a fraction of max'], ['bend', 'learned bend k̂ (0 until measured)']], returns: 'throttle 0–1',
+    shape: 'n', sample: () => [0.4, 0.3] },
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
     math: [`${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub>`],
     doc: 'Inputs are throttle fractions from 0 to 1, so B is in acceleration per full throttle; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 includes servo-driven rotors as two virtual inputs each, (T cos θ, T sin θ), and the servo angle is taken from their ratio. Stage 2 solves every motor\'s thrust at the servos\' actual angles.',
@@ -619,6 +752,6 @@ const LAW_OVERVIEW = [
   `<i>J</i>${V('ω̇')} + ${V('ω')} × <i>J</i>${V('ω')} = Σ<sub>i</sub> ${V('τ')}<sub>i</sub> + ${V('τ')}<sub>d</sub> + Σ<sub>j</sub> ${V('r')}<sub>j</sub> × <i>R</i><sup>T</sup><i>T</i><sub>c,j</sub>${V('n')}<sub>j</sub> + …`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'flowVelocity', 'positionEstimator', 'identifyThrow', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation'],
-  plant: ['batteryModel', 'servoResponse', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocation', 'thrustLinearization'],
+  plant: ['batteryModel', 'servoResponse', 'servoLinkage', 'throttleCurve', 'motorResponse', 'tiltAxis', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

@@ -322,3 +322,7 @@ button.chip{background:transparent;cursor:pointer}
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} .poke.full .poke-lbl,.poke.fired{animation:none} .poke.charging{transform:none} }
 
 #preset{max-width:220px}
+.resp{width:100%;border-collapse:collapse;font:12px var(--mono, "JetBrains Mono", monospace);color:var(--ink-2)}
+.resp th{font:600 11px "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:right;padding:2px 0}
+.resp td{padding:2px 0;text-align:right;border-top:1px solid var(--line)}
+.resp td:first-child,.resp th:first-child{text-align:left;font-family:"Barlow",sans-serif;font-size:12.5px;color:var(--ink)}

@@ -12,8 +12,10 @@ const learn = {
   keep: true,         // keep learning during flight
   dither: 0.02,       // small excitation while learning in flight, so there's always something to learn from
   holdPulses: true,   // freeze the other motors while one is pulsed, so the controller's corrections can't blur the data
+  applyCurve: false,  // linearize thrust with the measured throttle-curve bend (off: the estimate is too rough to trust yet)
   memCal: 4, memFlight: 30,   // forgetting time [s]: at least the whole calibration run, then 30 s in flight
-  st: {}, B: null, prior: null, sig: '', index: new Map(), n: 0,
+  st: {}, B: null, prior: null, priorKind: 'desc', sig: '', index: new Map(), n: 0,
+  resp: new Map(),    // actuator responses from the tests (lag, throttle curve, servo speed)
   cal: null,          // running calibration
   fit: null,          // { force, rot } from the last validation
   msg: '',
@@ -30,8 +32,8 @@ function inputVector() {   // what was sent, in the identification's input space
   const x = new Array(learn.n).fill(0);
   for (const c of actuators()) {
     const st = act.get(c.id), ix = learn.index.get(c.id); if (!st || !ix) continue;
-    const u = st.u || 0;
-    if (c.type === 'tilt') { x[ix.a] = u * Math.cos(st.th); x[ix.b] = u * Math.sin(st.th); } else x[ix.u] = u;
+    const u = st.v || 0, th = thSeen(c);   // thrust fraction the controller believes it asked for
+    if (c.type === 'tilt') { x[ix.a] = u * Math.cos(th); x[ix.b] = u * Math.sin(th); } else x[ix.u] = u;
   }
   return x;
 }
@@ -67,6 +69,14 @@ function ctlAxis() {   // nominal thrust axis the controller believes in
   for (const c of actuators()) { const k = colsFor(c); const col = c.type === 'tilt' ? k.a : k.u; s = add(s, col.slice(0, 3)); }
   return nrm(s) > 1e-6 ? unit(s) : nb;
 }
+/* ───────── what the actuator tests learned ───────── */
+// learn.resp: per actuator { tau, curve } for motors, { rate, lag } for servos. Until measured, the
+// controller assumes a straight throttle curve, 35 ms motor lag, the servo's rated speed and no servo lag.
+const believedThrust = (u, k) => (1 - k) * u + k * u * u;
+const curveHat = c => (learn.resp.get(c.id) || {}).applied ?? 0;   // bend the thrust linearization uses
+const motorLagHat = c => (learn.resp.get(c.id) || {}).tau ?? 0.035;
+function servoModelHat(c) { const r = learn.resp.get(c.id) || {}; return { rate: r.rate ?? c.rate * D2R, lag: r.lag ?? 0 }; }
+function inputLags() { const l = new Array(learn.n).fill(0.035); for (const c of actuators()) { const ix = learn.index.get(c.id); if (ix) for (const j of Object.values(ix)) l[j] = motorLagHat(c); } return l; }
 function priorRows() {   // the description, as 6 rows × inputs: identification starts from here
   const rows = [0, 1, 2, 3, 4, 5].map(() => new Array(learn.n).fill(0));
   for (const c of actuators()) {
@@ -75,19 +85,40 @@ function priorRows() {   // the description, as 6 rows × inputs: identification
   }
   return rows;
 }
-function resetLearning() {
-  buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.B = learn.prior.map(r => r.slice());
+function resetLearning(keepResponses = false) {
+  if (!keepResponses || learn.sig !== inputSig()) learn.resp = new Map();
+  buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
   learn.cal = null; learn.imuR = null;
+}
+// Filtered accelerometer (lever-arm swing removed) and angular acceleration, for the actuator tests.
+function measStep(dt) {
+  if (!(dt > 0)) return;
+  const m = learn.mf || (learn.mf = {}), k = dt / (dt + 1 / (2 * Math.PI * 25));
+  const imus = sensorsOf('imu'), r = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
+  if (!m.w) { m.w = est.fGyro.slice(); m.f = est.fAccel.slice(); m.a = [0, 0, 0]; }
+  const wp = m.w; m.w = m.w.map((v, i) => v + k * (est.fGyro[i] - v)); m.a = m.w.map((v, i) => (v - wp[i]) / dt);
+  const fh = sub(sub(est.fAccel, crs(m.a, r)), crs(m.w, crs(m.w, r)));
+  m.f = m.f.map((v, i) => v + k * (fh[i] - v));
+}
+// A measured 6-vector [f; α] projected onto an effect column: each half weighted by its own size.
+function project(col, y6) {
+  let num = 0, den = 0;
+  for (const [a, b] of [[0, 3], [3, 6]]) {
+    let cc = 0, cy = 0; for (let i = a; i < b; i++) { cc += col[i] * col[i]; cy += col[i] * y6[i]; }
+    if (cc > 1e-6) { num += cy / cc; den += 1; }
+  }
+  return den ? num / den : 0;
 }
 
 /* ───────── each control step ───────── */
 function learnStep(dt) {
   if (learn.sig !== inputSig()) { resetLearning(); learn.msg = 'The actuators changed, so learning restarted from the airframe description.'; }
   if (!est.haveImu || !learn.n || S.crashed) { if (learn.cal && S.crashed) endCalibration('Calibration stopped: the drone crashed.'); return; }
+  measStep(dt);
   if (thr && thr.phase !== 'recover') return;   // the throw runs its own identification while falling
   if (learn.keep || learn.cal) {
     const imus = sensorsOf('imu'); const r0 = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
-    const r = run('identifyEffectiveness', learn.st, inputVector(), est.fAccel, est.fGyro, r0, dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight);
+    const r = run('identifyEffectiveness', learn.st, inputVector(), est.fAccel, est.fGyro, r0, dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight, inputLags());
     learn.B = r.B;
   }
   if (learn.cal) calibrationTick(dt);
@@ -100,13 +131,21 @@ function startCalibration(opts = {}) {
   if (S.crashed) return;
   learn.flyB = learn.mode === 'ident' && learn.B ? learn.B.map(r => r.slice()) : null;   // keep flying on this while the test runs
   // After a throw there is no description to fall back on: start from, and compete against, the throw model.
-  if (opts.fromThrow && learn.mode === 'ident') { learn.st = {}; learn.prior = learn.B.map(r => r.slice()); learn.cal = null; }
-  else resetLearning();
+  if (opts.fromThrow && learn.mode === 'ident') { learn.st = {}; learn.prior = learn.B.map(r => r.slice()); learn.priorKind = 'throw'; learn.cal = null; }
+  else resetLearning(true);
   const acts = actuators(), servos = acts.filter(c => c.type === 'tilt' && c.mode === 'auto');
   const seg = [];
   seg.push({ stage: 'Settling', dur: 1, at: () => null });
-  for (let rep = 0; rep < 2; rep++) acts.forEach(c => seg.push({ stage: 'Pulsing each motor', dur: 0.45, at: t => ({ exc: new Map([[c.id, t < 0.12 ? 0.07 : t < 0.24 ? -0.07 : 0]]), hold: learn.holdPulses && t < 0.3 }) }));
-  servos.forEach(c => seg.push({ stage: 'Sweeping servos', dur: 2.5, at: t => ({ servo: new Map([[c.id, 0.4 * c.range * D2R * Math.sin(2 * Math.PI * 0.8 * t)]]) }) }));
+  // Motor tests: each motor steps up then down (6%, then 15%) while everything else holds still.
+  // Each test waits until the drone is calm, so it starts from a steady hover.
+  for (const a of [0.06, 0.16]) acts.forEach(c => seg.push({ stage: 'Testing each motor', dur: 0.6, calm: true, rec: { kind: 'motor', c, until: 0.25 },
+    at: t => ({ exc: new Map([[c.id, t < 0.02 ? 0 : t < 0.09 ? a : t < 0.16 ? -a : 0]]), hold: learn.holdPulses && t < 0.25, holdServos: learn.holdPulses && t < 0.25 }) }));
+  if (seg.length > 1) seg[seg.length - 1].after = fitMotors;
+  // Servo tests: each servo swings one way, then the other, while the motors and other servos hold.
+  servos.forEach(c => { const d = 0.35 * c.range * D2R; seg.push({ stage: 'Testing each servo', dur: 0.8, calm: true, rec: { kind: 'servo', c, until: 0.4 },
+    at: t => ({ step: { id: c.id, d: t < 0.02 ? 0 : t < 0.17 ? d : t < 0.32 ? -d : 0 }, hold: t < 0.4, holdServos: t < 0.4 }) }); });
+  if (servos.length) seg[seg.length - 1].after = fitServos;
+  servos.forEach(c => seg.push({ stage: 'Sweeping servos', dur: 2.5, at: t => ({ servo: new Map([[c.id, 0.3 * c.range * D2R * Math.sin(2 * Math.PI * 0.8 * t)]]) }) }));
   const multisine = (f0, df, amp) => t => {
     const exc = new Map(), servo = new Map();
     acts.forEach((c, i) => {
@@ -124,12 +163,20 @@ function startCalibration(opts = {}) {
 function calibrationTick(dt) {
   const cal = learn.cal;
   const tilt = Math.acos(clamp(dot(m3v(est.R, ctlAxis()), [0, 0, 1]), -1, 1));
-  if (tilt > 0.52 || nrm(est.w) > 4) { cal.now = null; cal.held = true; return; }   // tilted past 30° or spinning: pause the excitation
+  if (tilt > 0.52 || nrm(est.w) > 4) { cal.now = null; cal.held = true; if (cal.win) cal.win.bad = true; return; }   // tilted past 30° or spinning: pause the excitation
   cal.held = false;
   cal.t += dt;
   const s = cal.seg.find(x => cal.t >= x.t0 && cal.t < x.t0 + x.dur);
   if (!s) return finishCalibration();
+  if (cal.cur && cal.cur !== s && cal.cur.after) cal.cur.after();   // a test stage just ended: fit it
+  if (cal.cur !== s) { cal.cur = s; cal.win = null; cal.gate = s.calm ? 0 : null; }
+  if (cal.gate != null) {   // wait (closed loop) until the drone is calm, at most 1.5 s
+    const calm = nrm(est.w) < 0.25 && tilt < 0.14;
+    if (!calm && cal.gate < 1.5) { cal.gate += dt; cal.t -= dt; cal.now = null; cal.stage = s.stage; return; }
+    cal.gate = null;
+  }
   cal.stage = s.stage; cal.now = s.at(cal.t - s.t0) || null;
+  if (s.rec && cal.t - s.t0 < s.rec.until) recordTest(s, dt);
   if (s.validate && learn.st.e && learn.st.x) {   // score the learned model and the description on the same fresh data
     const S_ = cal.sums, x = learn.st.x; S_.n++;
     for (let i = 0; i < 6; i++) {
@@ -161,8 +208,15 @@ function finishCalibration() {
 function endCalibration(msg) { learn.cal = null; learn.flyB = null; learn.msg = msg; if (typeof renderLearn === 'function') renderLearn(true); }
 const calExc = c => (learn.cal && learn.cal.now && learn.cal.now.exc && learn.cal.now.exc.get(c.id)) || 0;
 function calServo(c) {   // servo angle the calibration is holding, or null
-  if (!learn.cal || !learn.cal.now || !learn.cal.now.servo || !learn.cal.now.servo.has(c.id)) return null;
-  return clamp(learn.cal.now.servo.get(c.id), -c.range * D2R, c.range * D2R);
+  const now = learn.cal && learn.cal.now;
+  if (now && now.step && now.step.id === c.id) {
+    const cal = learn.cal; if (cal.stepBase == null || cal.stepFor !== cal.cur) { cal.stepBase = act.get(c.id).thCmd; cal.stepFor = cal.cur; }
+    return clamp(cal.stepBase + now.step.d, -c.range * D2R, c.range * D2R);
+  }
+  if (!now || !now.servo || !now.servo.has(c.id)) return null;
+  // Sweeps ride on top of what the controller asks for, so it keeps its servo authority (a tricopter's
+  // tail servo is its only real yaw control).
+  return clamp(act.get(c.id).thCmd + learn.cal.now.servo.get(c.id), -c.range * D2R, c.range * D2R);
 }
 function ditherFor(c, t) {   // tiny excitation while learning in flight
   if (!learn.keep || learn.cal || !learn.dither) return 0;
@@ -182,6 +236,68 @@ function matchScores() {
     for (const key of Object.keys(tc[k])) for (let i = 0; i < 6; i++) { e += ((lc[k][key][i] - tc[k][key][i]) * scale[i]) ** 2; v += (tc[k][key][i] * scale[i]) ** 2; }
     return { c, match: clamp(1 - Math.sqrt(e / Math.max(v, 1e-9)), 0, 1) };
   });
+}
+
+const servoHeld = () => !!(learn.cal && learn.cal.now && learn.cal.now.holdServos);
+
+/* ───────── actuator tests ───────── */
+// Records one test window: what was sent to the actuator under test, and the drone's response along
+// that actuator's effect. The fits run when the stage ends and feed the controller straight away.
+function recordTest(s, dt) {
+  const cal = learn.cal, c = s.rec.c, st = act.get(c.id); if (!st || !learn.mf || !learn.mf.f) return;
+  if (!cal.win) {
+    let col;
+    if (s.rec.kind === 'motor') col = colAt(c, thSeen(c));
+    else { const k = colsFor(c), th = thSeen(c); col = scl6(add6(scl6(k.a, -Math.sin(th)), scl6(k.b, Math.cos(th))), st.v || 0); }
+    cal.win = { c, kind: s.rec.kind, col, u: [], cmd: [], y: [], dt, cmd0: servoTarget(c) };
+    (cal.tests || (cal.tests = [])).push(cal.win);
+  }
+  const w = cal.win, y6 = [...learn.mf.f, ...learn.mf.a];
+  w.u.push(st.u); w.cmd.push(servoTarget(c) - w.cmd0); w.y.push(project(w.col, y6));
+}
+const slopeAt = (k, u) => (1 - k) + 2 * k * u;
+function fitMotors() {
+  const cal = learn.cal; if (!cal || !learn.holdPulses) return;
+  for (const c of actuators()) {
+    const wins = (cal.tests || []).filter(w => w.c === c && w.kind === 'motor' && !w.bad && w.u.length > 50);
+    if (!wins.length) continue;
+    const r = run('identifyMotorResponse', wins, wins[0].dt);
+    const old = learn.resp.get(c.id) || {};
+    if (r.fit < 0.5 || !(r.gain > 0.3 && r.gain < 3)) { learn.resp.set(c.id, { ...old, fitM: r.fit }); continue; }   // poor fit, or a response nothing like the model's
+    const u0 = wins.reduce((a, w) => a + w.u[0], 0) / wins.length;
+    const next = { ...old, tau: r.tau, curve: r.curve, fitM: r.fit, u0 };
+    if (learn.applyCurve) {   // props only bend upward, so a negative estimate is noise
+      const k = clamp(r.curve, 0, 1);
+      rescaleInput(c, slopeAt(k, u0) / slopeAt(curveHat(c), u0));   // same thrust, new units: rescale what was learned
+      next.applied = k;
+    }
+    learn.resp.set(c.id, next);
+  }
+}
+function fitServos() {
+  const cal = learn.cal; if (!cal) return;
+  for (const c of actuators()) {
+    if (c.type !== 'tilt') continue;
+    const wins = (cal.tests || []).filter(w => w.c === c && w.kind === 'servo' && !w.bad && w.cmd.length > 50);
+    if (!wins.length) continue;
+    const r = run('identifyServoResponse', wins, wins[0].dt);
+    const old = learn.resp.get(c.id) || {};
+    if (r.fit < 0.4 || !(r.gain > 0.3 && r.gain < 3)) { learn.resp.set(c.id, { ...old, fitS: r.fit }); continue; }
+    learn.resp.set(c.id, { ...old, rate: r.rate, lag: r.lag, fitS: r.fit });
+    const st = act.get(c.id); if (st) st.pst = { h: st.thHat, th: st.thHat };
+  }
+}
+// When the throttle curve changes, "one unit of input" changes size: x_new = ratio·x_old. Learned
+// columns shrink by the same ratio so the model predicts the same thrust. The airframe description is
+// already in true thrust units and stays as it is.
+function rescaleInput(c, ratio) {
+  if (!(ratio > 0.2 && ratio < 5) || Math.abs(ratio - 1) < 1e-6) return;
+  const ix = learn.index.get(c.id); if (!ix) return; const js = Object.values(ix), s = 1 / ratio;
+  const mats = new Set([learn.B, learn.flyB, learn.st.th, learn.priorKind !== 'desc' ? learn.prior : null].filter(Boolean));   // B and the RLS state can be the same array
+  for (const M of mats) for (const row of M) for (const j of js) row[j] *= s;
+  const st = learn.st;
+  if (st.P) for (let a = 0; a < st.P.length; a++) for (let b = 0; b < st.P.length; b++) st.P[a][b] *= (js.includes(a) ? s : 1) * (js.includes(b) ? s : 1);
+  for (const key of ['ua', 'xl', 'xs']) if (st[key]) for (const j of js) st[key][j] *= ratio;
 }
 
 /* ───────── hold during calibration pulses ───────── */
@@ -247,7 +363,7 @@ function throwTick(dt) {
       const P = thr.plan[thr.i], el = thr.t - thr.ts;
       if (P) {
         if (thr.step === 'move') {   // only waits if the servo isn't at its pulse angle yet
-          const th = P.servo != null ? act.get(P.c.id).th : 0;
+          const th = P.servo != null ? thSeen(P.c) : 0;
           if (P.servo == null || Math.abs(th - P.servo) < 2 * D2R || el > 0.15) { thr.step = 'on'; thr.ts = thr.t; thr.w0 = est.fGyro.slice(); }
         } else if (thr.step === 'on') {
           // pulse until the rotation it causes reaches dwMax (stays well inside the gyro's range), 12–80 ms
@@ -264,7 +380,7 @@ function throwTick(dt) {
   if (thr && thr.phase !== 'recover') {
     for (const c of acts) {
       const st = act.get(c.id); if (!st) continue;
-      st.u = cmd.get(c.id); st.Tcmd = st.u * c.tmax;
+      setThrottle(c, st, cmd.get(c.id));
       if (c.type === 'tilt') st.thCmd = servo.get(c.id) ?? 0;
     }
     return true;
@@ -292,9 +408,10 @@ function trueImuOffset() {   // mean IMU position relative to the true CoG, body
 // Called every control step after the controller has taken over: ends the throw once upright and calm.
 function throwRecoverCheck() {
   if (!thr || thr.phase !== 'recover') return;
-  const up = dot(m3v(qmat(S.q), ctlAxis()), [0, 0, 1]);
+  const up = dot(m3v(est.R, ctlAxis()), [0, 0, 1]);   // judged on the drone's own estimate
   thr.zMin = Math.min(thr.zMin ?? S.p[2], S.p[2]);
-  if (up > 0.9 && nrm(S.w) < 1.5 && Math.abs(S.v[2]) < 1) {
+  thr.calmT = up > 0.9 && nrm(est.w) < 1.5 && Math.abs(est.v[2]) < 1 ? (thr.calmT || 0) + 2 * PDT : 0;   // upright and calm for half a second
+  if (thr.calmT > 0.5) {
     const caught = `${thr.msg} Caught itself ${thr.t.toFixed(1)} s after release (thrown to ${thr.zMax.toFixed(1)} m, lowest point on the way down ${thr.zMin.toFixed(1)} m).`;
     const learned = learn.mode === 'ident';
     thr = null;

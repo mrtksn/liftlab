@@ -27,7 +27,10 @@ const FD = {
   prop: { label: 'Prop radius', path: ['prop'], min: 0.03, max: 0.25, hmax: 0.6, step: 0.005, u: 'm', dp: 3 },
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
   kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
-  tau: { label: 'Spin-up time constant', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
+  curve: { label: 'Throttle curve bend · hidden', path: ['curve'], min: 0, max: 1, step: 0.05, u: '', dp: 2 },
+  slag: { label: 'Servo lag · hidden', path: ['lag'], min: 0, max: 0.15, step: 0.005, u: 'ms', dp: 0, k: 1000 },
+  offset: { label: 'Servo trim error · hidden', path: ['offset'], min: -10, max: 10, step: 0.5, u: '°', dp: 1 },
+  tau: { label: 'Spin-up time constant · hidden', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
   health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
   hingeAz: { label: 'Hinge axis direction', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
@@ -145,11 +148,14 @@ function compBody(c) {
   const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      el('p', { class: 'hint', text: 'Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'tilt') {
     b.append(pos, slider(c, 'hingeAz'), selectF(c, 'mode', 'Servo control', [['auto', 'Allocator decides'], ['manual', 'Fixed by me']], rerender));
     if (c.mode === 'manual') b.append(slider(c, 'manual'));
-    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'));
+    b.append(slider(c, 'range'), slider(c, 'rate'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'),
+      slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), slider(c, 'tau'), slider(c, 'curve'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      el('p', { class: 'hint', text: 'Servo speed is the rated speed the controller assumes; the real servo may differ. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'mass') {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
     if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
@@ -333,6 +339,7 @@ $('#calBtn').addEventListener('click', () => {
 });
 $('#holdPulses').addEventListener('change', e => { learn.holdPulses = e.target.checked; save(); });
 $('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; save(); });
+$('#applyCurve').addEventListener('change', e => { learn.applyCurve = e.target.checked; save(); });
 function setLaunch(m, go = true) {
   launchMode = m;
   $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));
@@ -361,13 +368,26 @@ function throwStageText() {
   return 'Catching itself on what it learned';
 }
 let matchT = 0, matchCache = [];
+function renderResponses() {
+  const box = $('#respRows'); if (!box) return; box.textContent = '';
+  const acts = actuators(); let any = false;
+  const tbl = el('table', { class: 'resp' });
+  tbl.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'learned' }), el('th', { text: 'true' })));
+  const row = (name, what, l, t) => tbl.append(el('tr', {}, el('td', { text: `${name} ${what}` }), el('td', { text: l }), el('td', { text: t })));
+  for (const c of acts) {
+    const r = learn.resp.get(c.id) || {};
+    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), (c.curve || 0).toFixed(2)); }
+    if (c.type === 'tilt' && r.rate != null) { any = true; row(c.name, 'servo speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(c.rate)}°/s`); row(c.name, 'servo lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((c.lag || 0) * 1000)} ms`); }
+  }
+  if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag.' }));
+}
 function renderLearn(force) {
   $('#useDesc').setAttribute('aria-pressed', String(learn.mode === 'config')); $('#useLearned').setAttribute('aria-pressed', String(learn.mode === 'ident'));
   $('#keepLearn').checked = learn.keep;
   const cal = learn.cal;
   $('#calBtn').textContent = cal ? 'Stop' : learn.fit ? 'Calibrate again' : 'Calibrate';
   $('#calBtn').disabled = !!S.crashed || !actuators().length || throwBusy();
-  $('#holdPulses').checked = learn.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate;
+  $('#holdPulses').checked = learn.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate; $('#applyCurve').checked = learn.applyCurve;
   $('#throwHint').textContent = throwHintText();
   $('#calProg').hidden = !cal && !thr;
   if (thr && !cal) {
@@ -384,6 +404,7 @@ function renderLearn(force) {
     const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad';
     box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, el('i', { class: cls, style: `width:${pc}%` })), el('span', { class: 'mv', text: pc + '%' })));
   }
+  renderResponses();
 }
 
 /* ───────── traces ───────── */
@@ -528,7 +549,7 @@ const LS = 'drone-force-bench-v1';
 function save() {
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 function load() {
@@ -544,10 +565,15 @@ function load() {
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learn.keep = false;
     if (s.holdPulses === false) learn.holdPulses = false;
+    if (s.applyCurve === true) learn.applyCurve = true;
     if (s.launch === 'throw') launchMode = 'throw';
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     for (const c of cfg.comps) if ((c.type === 'motor' || c.type === 'tilt') && !c.prop) withProp(c);
+    for (const c of cfg.comps) {   // saved before the hidden hardware traits existed
+      if ((c.type === 'motor' || c.type === 'tilt') && c.curve == null) c.curve = 0.3;
+      if (c.type === 'tilt') { if (c.lag == null) c.lag = 0.02; if (c.offset == null) c.offset = 0; if (c.feedback == null) c.feedback = false; }
+    }
     return true;
   }
   return false;

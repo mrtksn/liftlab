@@ -20,18 +20,40 @@ The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't
 
   A tilting rotor is two inputs, u·cosθ and u·sinθ, so its effect at any servo angle is known.
 
-**Calibrate** (Controller model panel) runs about 10–20 s of small test moves while hovering:
-1. Settle.
-2. Pulse each motor in turn, twice. While one motor is pulsed, the others keep the throttle they had when the pulse began (**Freeze other motors during pulses**). Otherwise the controller answers every pulse with the other motors, and inputs that always move together can't be told apart.
-3. Sweep each servo.
-4. Excite everything together.
-5. Validate on a fresh signal.
+**Calibrate** (Controller model panel) runs about 12 s of test moves while hovering, or about 25 s with servos:
+1. **Settle.**
+2. **Test each motor on its own.** It steps up then down, by 6% and then by 16%, while every other motor and servo keeps what it had (**Freeze other motors during pulses**). Each test waits until the drone is calm first. Freezing matters because otherwise the controller answers every pulse with the other motors, and inputs that always move together can't be told apart.
+3. **Test each servo on its own.** It swings one way, then the other, by 35% of its range, while the motors and every other servo hold still.
+4. **Sweep each servo.** The sweep rides on top of what the controller asks for, so it keeps its servo authority; a tricopter's tail servo is its only real yaw control.
+5. **Excite everything together.**
+6. **Validate** on a fresh signal.
 
 It then scores the learned model and the description on the same validation data, and switches to the learned model only if it predicts better. On the stock presets the description is already near-perfect and is kept. With hidden masses, weak motors or unknown parts, the learned model wins and the drone flies noticeably better.
 
 **Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
 
 While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
+
+### Actuator response
+
+The single-actuator tests learn how each actuator responds over time, not just how strong it is. The results appear under **Actuator response** next to the true values.
+
+| Learned | From | Used for |
+|---|---|---|
+| Motor lag | `identifyMotorResponse`: which spin-up time best explains the response to a step | The effectiveness identification, which used to assume 35 ms for every motor |
+| Servo speed and lag | `identifyServoResponse`: the speed limit and lag that best explain how the drone's response traces the servo's real angle, with no angle feedback needed | `servoPredictor`, the servo angle the controller uses when a servo has no feedback |
+| Throttle-curve bend | `identifyMotorResponse`: whether a step up gives more than the same step down | `thrustLinearization`, only if you turn on **Linearize thrust with the measured curve** |
+
+In the tests on the stock presets:
+- **Motor lag:** comes out within 5 ms on every multirotor. The main-lifter's big rotor is usually within 5 ms too, but its fit is poor.
+- **Servo speed and lag:** within about 15% on the tricopter and the tilt-rotor quad. On the main-lifter layout the small steering rotors barely move the drone, and most of its servo tests are rejected as too poor to trust.
+- **Throttle-curve bend:** the tests see it only roughly, typically 0.0–0.3 when the truth is 0.3. It's a small second-order effect, and the air a pulse pushes through the prop and the battery sagging under load produce effects of the same size. With airflow and battery sag switched off, it comes out within 0.07. So it's shown but not used unless you ask. On real hardware this is usually measured on a thrust stand, or over the wide throttle range of a throw.
+
+The hardware has traits the controller is never told, marked **hidden** on the part cards, so there's something to learn:
+- **Throttle curve bend** (0.3 by default): thrust grows faster than throttle.
+- **Servo lag** (20 ms) and **servo trim error** (0°).
+- **Servo feedback** (off by default, like hobby servos). Without it, the controller never sees servo angles and relies on its prediction.
+
 
 The panel shows how close each actuator's learned effect is to the truth. The truth comes from linearizing the real simulated physics (airflow and battery included) by nudging each input.
 
@@ -136,7 +158,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 31 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 37 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
@@ -151,17 +173,17 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 ## The formulas
 
-**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `tiltAxis`, `motorResponse`, `servoResponse`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
+**Physics (the plant):** `rigidBody`, `gravity`, `rotorWrench`, `tiltAxis`, `throttleCurve`, `motorResponse`, `servoResponse`, `servoLinkage`, `bodyDrag`, `cableTension`, `payloadDrag`, `groundContact`.
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`, `flowModel`, `rangeModel`.
 
 **Airflow and battery (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `batteryModel`.
 
-**Estimation:** `attitudeEstimator`, `flowVelocity`, `positionEstimator`.
+**Estimation:** `attitudeEstimator`, `flowVelocity`, `servoPredictor`, `positionEstimator`.
 
-**Identification:** `identifyThrow`, `identifyEffectiveness`.
+**Identification:** `identifyThrow`, `identifyMotorResponse`, `identifyServoResponse`, `identifyEffectiveness`.
 
-**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`.
+**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocation`, `thrustLinearization`.
 
 The simulator only calls these by name through `run(key, …)`. To change a default, edit the function in `js/laws.js`.
 
@@ -200,6 +222,7 @@ The attainable set of accelerations is a zonotope built from each actuator's con
 - A tilting motor's mass stays at its pivot. Gyroscopic torque from spinning props is ignored.
 - Airflow uses fast engineering models (momentum theory, Glauert inflow), not CFD. Wakes are straight columns and aren't bent by wind or forward flight.
 - The motor command-to-thrust curve is linear. Real ESCs need thrust linearization, which isn't identified yet.
-- Servo angles are assumed measurable (servo feedback) for identification.
+- Without servo feedback, identification and allocation use the predicted servo angle, so a servo that stalls or slips under load isn't noticed.
+- The vertical position integral can trim up to 5 m/s², enough to absorb an unknown hover throttle; sideways it stays at 2 m/s².
 - The throw start needs the IMU's mounting angle to be known, and uses the commanded throttle rather than measured motor RPM, which the Delft work uses. Their method also identifies the throttle curve and the spin-up reaction torque; the simulated motors don't have those.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.
