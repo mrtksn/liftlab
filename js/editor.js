@@ -7,7 +7,7 @@
 
 let editMode = false, editWasRunning = true;
 const edit = { hover: null, sel: null, drag: null, down: null };
-const raycaster = new THREE.Raycaster();
+const raycaster = new THREE.Raycaster(); raycaster.params.Line.threshold = 0.004; raycaster.params.Points.threshold = 0.004;
 const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]], AXIS_NAME = ['X', 'Y', 'Z'];
 let gizmo = null, travelG = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
@@ -58,7 +58,7 @@ function buildGizmo() {
     travelG.add(g); handleVis.push({ kind: 'travel', axis: -1, meshes: [dot, ring], base: 1 });
   }
   scene.add(travelG);
-  if (!hoverBox) { hoverBox = new THREE.BoxHelper(undefined, 0xffffff); hoverBox.visible = false; scene.add(hoverBox); selBox = new THREE.BoxHelper(undefined, 0xffffff); selBox.visible = false; scene.add(selBox); }
+  if (!hoverBox) { hoverBox = new THREE.Box3Helper(new THREE.Box3(), 0xffffff); hoverBox.visible = false; scene.add(hoverBox); selBox = new THREE.Box3Helper(new THREE.Box3(), 0xffffff); selBox.visible = false; scene.add(selBox); }
   hoverBox.material.color = colorOf('--ink-2'); selBox.material.color = colorOf('--accent');
   hoverBox.material.depthTest = false; selBox.material.depthTest = false; hoverBox.renderOrder = selBox.renderOrder = 19;
 }
@@ -170,15 +170,28 @@ function pickHandle(e) {
   rayFrom(e);
   const live = handleMeshes.filter(h => { let o = h; while (o) { if (!o.visible) return false; o = o.parent; } return true; });
   const hits = raycaster.intersectObjects(live, false);
-  const hit = hits.find(h => h.object.userData.kind === 'plane') || hits[0];   // the small squares win over what's behind them
+  const hit = hits.find(h => h.object.userData.kind === 'travel') || hits.find(h => h.object.userData.kind === 'plane') || hits[0];   // small targets (a fan's end dots, the squares) win over what's behind them
   return hit ? hit.object.userData : null;
+}
+// What a pixel shows: the nearest solid, visible surface of the airframe. Lines (arrows, arcs, paths),
+// hidden shapes (a rotor's wake column) and overlays (a servo's fan) don't count, so only what's under the
+// pointer is picked; the frame itself hides what's behind it.
+function solidVisible(o) {
+  if (!o.isMesh || !o.material || o.material.opacity === 0 || o.material.colorWrite === false) return false;
+  for (let p = o; p; p = p.parent) { if (!p.visible || p.userData.noPick) return false; }
+  return true;
 }
 function pickComp(e) {
   rayFrom(e);
-  const hits = raycaster.intersectObjects([...pickGroups.values()], true);
-  for (const h of hits) { let o = h.object; while (o && o.userData.compId == null) o = o.parent; if (o) return o.userData.compId; }
+  for (const h of raycaster.intersectObject(drone, true)) {
+    if (!solidVisible(h.object)) continue;
+    let o = h.object; while (o && o.userData.compId == null && o !== drone) o = o.parent;
+    return o && o.userData.compId != null ? o.userData.compId : null;
+  }
   return null;
 }
+// The box round a part: just its visible solid shapes (not its hidden wake or arrow).
+const boxOf = (g, box) => { box.makeEmpty(); g.updateWorldMatrix(true, true); g.traverse(o => { if (solidVisible(o)) box.expandByObject(o); }); return box; };
 
 /* ───────── dragging ───────── */
 function closestOnAxis(ray, P0, a) {  // parameter t of the point on line P0 + t·a closest to the ray
@@ -270,7 +283,7 @@ function editPointerMove(e, orbiting) {
   vpEl.style.cursor = id != null ? 'pointer' : '';
   if (id != null) {
     const c = compById(id), tip = $('#pickTip'), r = $('.view').getBoundingClientRect();
-    tip.textContent = `${c.name} · ${tagOf(c)}`; tip.hidden = false;
+    tip.textContent = `${c.name} · ${tagOf(c)}` + (c.type === 'motor' ? ` · ${c.push ? 'pushes' : 'pulls'} · ${c.spin > 0 ? 'CCW' : 'CW'}` : ''); tip.hidden = false;
     tip.style.left = (e.clientX - r.left + 14) + 'px'; tip.style.top = (e.clientY - r.top + 12) + 'px';
   }
   return false;
@@ -288,13 +301,13 @@ function updateEditView() {
   if (!editMode) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);
-  selBox.visible = !!g; if (g) selBox.setFromObject(g);
+  selBox.visible = !!g; if (g) boxOf(g, selBox.box);
   const hg = edit.hover != null && edit.hover !== edit.sel ? pickGroups.get(edit.hover) : null;
-  hoverBox.visible = !!hg; if (hg) hoverBox.setFromObject(hg);
+  hoverBox.visible = !!hg; if (hg) boxOf(hg, hoverBox.box);
   gizmo.visible = !!c;
   travelG.visible = !!c && c.type === 'joint' && descendants(c).length > 0;
   if (travelG.visible) {   // on the fan's two ends
-    const sw = servoSweep(c), v = crs(sw.a, sw.rest), R = c.range * D2R, k = camera.position.distanceTo(gizmo.position) * 0.16 * 0.045;
+    const sw = servoSweep(c), v = crs(sw.a, sw.rest), R = c.range * D2R, k = viewDist(gizmo.position) * 0.16 * 0.045;
     for (const g of travelG.children) {
       const p = add(c.pos, add(scl(sw.rest, sw.radius * Math.cos(R)), scl(v, sw.radius * Math.sin(R) * g.userData.side)));
       g.position.copy(drone.localToWorld(new THREE.Vector3(...p))); g.scale.setScalar(k);
@@ -307,7 +320,7 @@ function updateEditView() {
   }
   if (c) {
     gizmo.position.copy(drone.localToWorld(new THREE.Vector3(...c.pos)));
-    gizmo.scale.setScalar(camera.position.distanceTo(gizmo.position) * 0.16);
+    gizmo.scale.setScalar(viewDist(gizmo.position) * 0.16);
     const rots = rotAxesFor(c);
     gizmo.children.forEach(ch => {
       if (ch.userData.group === 'rot') ch.visible = rots.includes(ch.userData.axis);

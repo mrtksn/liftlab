@@ -7,13 +7,44 @@ const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); vpEl.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 200); camera.up.set(0, 0, 1);
+// Two cameras on the same orbit: perspective, and orthographic (no foreshortening, for lining parts up). The
+// orthographic view is sized to frame what the perspective one shows at the orbit's centre.
+const perspCam = new THREE.PerspectiveCamera(42, 1, 0.02, 200); perspCam.up.set(0, 0, 1);
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -60, 260); orthoCam.up.set(0, 0, 1);
+let camera = perspCam;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
 let mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
-const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5) };
+const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), anim: null };
+const EL_MAX = Math.PI / 2 - 0.002;
+// How far away something looks, for sizing handles to the screen (the orbit distance, in orthographic).
+const viewDist = p => camera.isOrthographicCamera ? cam.dist : camera.position.distanceTo(p);
+function setProjection(kind) {
+  const next = kind === 'ortho' ? orthoCam : perspCam; if (next === camera) return;
+  camera = next; syncViewUi();
+}
+// Named views, relative to the drone: its heading while flying, body axes while editing (the same thing).
+const VIEWS = {
+  front: { az: 0, el: 0, label: 'Front' }, back: { az: Math.PI, el: 0, label: 'Back' },
+  left: { az: Math.PI / 2, el: 0, label: 'Left' }, right: { az: -Math.PI / 2, el: 0, label: 'Right' },
+  top: { az: Math.PI, el: EL_MAX, label: 'Top' }, bottom: { az: Math.PI, el: -EL_MAX, label: 'Bottom' },
+  iso: { az: -Math.PI / 4, el: Math.atan(1 / Math.SQRT2), label: 'Iso' },
+};
+function droneYaw() { if (editMode) return 0; const R = qmat(S.q); return Math.atan2(R[3], R[0]); }
+function snapView(name) {   // glide to a named view over a quarter second
+  const v = VIEWS[name]; if (!v) return;
+  const az1 = v.az + droneYaw(); let d = az1 - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
+  cam.anim = { az0: cam.az, el0: cam.el, daz: d, el1: v.el, t0: performance.now(), dur: 280 };
+  if (view.chase) { view.chase = false; const b = document.getElementById('tChase'); if (b) b.setAttribute('aria-pressed', 'false'); }
+}
+function stepCamAnim() {
+  const a = cam.anim; if (!a) return;
+  const u = clamp((performance.now() - a.t0) / a.dur, 0, 1), k = u * u * (3 - 2 * u);
+  cam.az = a.az0 + a.daz * k; cam.el = a.el0 + (a.el1 - a.el0) * k;
+  if (u >= 1) cam.anim = null;
+}
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
 
@@ -78,7 +109,7 @@ function buildRangeVis(j, p) {
     line: new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.5 }),
     dash: new THREE.LineDashedMaterial({ color: col, dashSize: 0.012, gapSize: 0.008, transparent: true, opacity: 0.6 }),
   };
-  const g = new THREE.Group(); g.position.set(...p); g.visible = false;
+  const g = new THREE.Group(); g.position.set(...p); g.visible = false; g.userData.noPick = true;
   const fan = [], edge = [];
   for (let i = 0; i <= N; i++) edge.push(at(radius, -R + 2 * R * i / N));
   for (let i = 0; i < N; i++) fan.push(new THREE.Vector3(), edge[i], edge[i + 1]);
@@ -119,7 +150,7 @@ function rebuildDrone() {
   const rel = c => { const h = holder(c), par = parentOf(c); return { g: h.g, p: sub(c.pos, h.o), from: par && par.type === 'link' ? sub(linkTip(par), h.o) : [0, 0, 0] }; };
   for (const j of js) {
     const { g, p, from } = rel(j);
-    const r = rod(from, p, 0.007, mats.frame); if (r) g.add(r);
+    const r = rod(from, p, 0.007, mats.frame); if (r) { r.userData.compId = j.id; g.add(r); }   // clicking the arm a part hangs on picks the part
     // The servo case, fixed to what it's mounted on: its output shaft on the hinge axis, the case behind it
     // (away from the load). The horn on the output points at the load and turns with it.
     const a = jointAxis(j), rest = servoSweep(j).rest, basis = new THREE.Matrix4().makeBasis(new THREE.Vector3(...rest), new THREE.Vector3(...crs(a, rest)), new THREE.Vector3(...a));
@@ -130,12 +161,12 @@ function rebuildDrone() {
     const jg = new THREE.Group(); jg.position.set(...p); g.add(jg); jointGroups.set(j.id, jg);   // the output: turns with the joint
     const rv = buildRangeVis(j, p); g.add(rv.g); rangeVis.set(j.id, rv);
     const horn = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.008, 0.003), mats.ink); horn.position.set(0.012, 0, 0.004);
-    const hg = new THREE.Group(); hg.quaternion.setFromRotationMatrix(basis); hg.add(horn); jg.add(hg);
+    const hg = new THREE.Group(); hg.quaternion.setFromRotationMatrix(basis); hg.add(horn); horn.userData.compId = j.id; jg.add(hg);
   }
   for (const c of cfg.comps) {
     if (c.type === 'joint') continue;
     const { g, p, from } = rel(c);
-    const r = rod(from, p, 0.007, mats.frame); if (r) g.add(r);
+    const r = rod(from, p, 0.007, mats.frame); if (r) { r.userData.compId = c.id; g.add(r); }   // clicking the arm a part hangs on picks the part
     if (c.type === 'link') {   // the rod itself, base to tip, with a knob at the tip where things attach
       const lg = new THREE.Group(); lg.userData.compId = c.id; pickGroups.set(c.id, lg); g.add(lg);
       const tip = add(p, scl(linkDir(c), c.length));
@@ -149,14 +180,14 @@ function rebuildDrone() {
       axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
       const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
-      axis.add(spinMarks(pr, c.spin));
+      const sm = spinMarks(pr, c.spin); sm.userData.noPick = true; axis.add(sm);
       // The group's Z runs along the shaft to the prop. A puller's thrust points that way, a pusher's back past the motor.
       const arrow = c.push ? new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, -0.017), 0.1, colorOf('--accent'), 0.03, 0.018)
         : new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.02), 0.1, colorOf('--accent'), 0.03, 0.018);
-      axis.add(arrow);
+      arrow.userData.noPick = true; axis.add(arrow);
       const wake = new THREE.Mesh(new THREE.CylinderGeometry(0.71 * pr, pr, 3 * pr, 24, 1, true).rotateX(Math.PI / 2), mats.wake.clone());
       wake.position.z = 0.02 - 1.5 * pr; if (c.push) { wake.scale.z = -1; wake.position.z = 0.02 + 1.5 * pr; }   // the wake: behind the disc, past the motor for a puller, away from it for a pusher
-      wake.visible = false; axis.add(wake);
+      wake.visible = false; wake.userData.noPick = true; axis.add(wake);
       parts.set(c.id, { axis, disc, arrow, wake });
     } else if (c.type === 'mass') {
       let geo;
@@ -237,9 +268,12 @@ function updateScene() {
     const T = st.T * c.health / 100, shown = pj && isUnder(c, pj); p.disc.material.opacity = shown ? 0.45 : 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
-    else if (shown || (editMode && edit.sel === c.id)) { p.arrow.visible = true; p.arrow.setLength(0.16, 0.035, 0.022); }   // editing: which way the thrust points
-    const over = editMode && edit.sel === c.id;   // drawn over the motor, so a pusher's arrow back through it shows
-    for (const o of [p.arrow.line, p.arrow.cone]) { o.material.depthTest = !over; o.renderOrder = over ? 21 : 0; }   // where its thrust points as the servo swings
+    else if (editMode) {   // editing: every motor shows which way its thrust points (pull or push); the selected one boldly
+      const big = shown || edit.sel === c.id; p.arrow.visible = true;
+      if (big) p.arrow.setLength(0.16, 0.035, 0.022); else p.arrow.setLength(0.075, 0.022, 0.014);
+    }
+    const over = editMode && edit.sel === c.id, faint = editMode && !over && !shown;   // the selected one drawn over the motor, so a pusher's shows
+    for (const o of [p.arrow.line, p.arrow.cone]) { o.material.depthTest = !over; o.renderOrder = over ? 21 : 0; o.material.transparent = true; o.material.opacity = faint ? 0.55 : 1; }   // where its thrust points as the servo swings
   }
   for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
     const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
@@ -271,10 +305,15 @@ function updateScene() {
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.az += d * 0.06;
   }
+  stepCamAnim();
   const ce = Math.cos(cam.el);
+  if (camera.isOrthographicCamera) {   // frame what the perspective camera shows at the orbit's centre
+    const h = cam.dist * Math.tan(perspCam.fov * D2R / 2), w = h * perspCam.aspect;
+    if (orthoCam.top !== h || orthoCam.right !== w) { orthoCam.left = -w; orthoCam.right = w; orthoCam.top = h; orthoCam.bottom = -h; orthoCam.updateProjectionMatrix(); }
+  }
   camera.position.set(cam.target.x + cam.dist * ce * Math.cos(cam.az), cam.target.y + cam.dist * ce * Math.sin(cam.az), cam.target.z + cam.dist * Math.sin(cam.el));
   camera.lookAt(cam.target);
-  updateEditView();
+  updateEditView(); drawTriad();
 }
 
 // Orbit and zoom: drag to rotate, wheel or pinch to zoom.
@@ -283,12 +322,64 @@ vpEl.addEventListener('pointerdown', e => { if (editPointerDown(e)) return; vpEl
 vpEl.addEventListener('pointermove', e => {
   if (editPointerMove(e, ptrs.size > 0 && edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) >= 5)) return;
   if (!ptrs.has(e.pointerId)) return; const p = ptrs.get(e.pointerId);
-  if (ptrs.size === 1) { cam.az -= (e.clientX - p.x) * 0.008; cam.el = clamp(cam.el + (e.clientY - p.y) * 0.006, -0.2, 1.45); }
+  if (ptrs.size === 1) { cam.anim = null; cam.az -= (e.clientX - p.x) * 0.008; cam.el = clamp(cam.el + (e.clientY - p.y) * 0.006, -EL_MAX, EL_MAX); }
   p.x = e.clientX; p.y = e.clientY;
   if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0 > 0) cam.dist = clamp(cam.dist * pinch0 / d, 0.6, 20); pinch0 = d; }
 });
 const endPtr = e => { const handled = e.type === 'pointerup' && editPointerUp(e); ptrs.delete(e.pointerId); pinch0 = 0; return handled; };
 vpEl.addEventListener('pointerleave', () => { if (!edit.drag) setHover(null); });
 vpEl.addEventListener('pointerup', endPtr); vpEl.addEventListener('pointercancel', endPtr);
-vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, 20); }, { passive: false });
-new ResizeObserver(() => { const w = vpEl.clientWidth, h = vpEl.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }).observe(vpEl);
+vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.anim = null; cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, 20); }, { passive: false });
+new ResizeObserver(() => { const w = vpEl.clientWidth, h = vpEl.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); perspCam.aspect = w / h; perspCam.updateProjectionMatrix(); orthoCam.top = NaN; }).observe(vpEl);
+
+/* ───────── the view box: orientation triad, projection and named views ───────── */
+// The triad shows the drone's axes as the camera sees them (X forward, Y left, Z up). Click an axis end to
+// look from that side; keys: numpad 1 / 3 / 7 front, right, top (with Ctrl: back, left, bottom), 0 iso,
+// 5 or O perspective/orthographic, V steps through top, front, right and iso.
+const triad = { cv: document.getElementById('triad'), ends: [], hover: -1 };
+const TRIAD_ENDS = [['x', 1, 'front'], ['x', -1, 'back'], ['y', 1, 'left'], ['y', -1, 'right'], ['z', 1, 'top'], ['z', -1, 'bottom']];
+function drawTriad() {
+  const cv = triad.cv; if (!cv) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = cv.clientWidth, H = cv.clientHeight; if (!W) return;
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const yaw = droneYaw(), cy = Math.cos(yaw), sy = Math.sin(yaw), ax = { x: [cy, sy, 0], y: [-sy, cy, 0], z: [0, 0, 1] };
+  const e = camera.matrixWorld.elements, right = [e[0], e[1], e[2]], up = [e[4], e[5], e[6]], back = [e[8], e[9], e[10]];
+  const cx = W / 2, cyy = H / 2, R = Math.min(W, H) / 2 - 11, col = { x: tok('--ax-x'), y: tok('--ax-y'), z: tok('--ax-z') };
+  triad.ends = TRIAD_ENDS.map(([k, sg, name], i) => { const d = ax[k].map(v => v * sg); return { i, k, sg, name, x: cx + R * dot(d, right), y: cyy - R * dot(d, up), z: dot(d, back) }; });
+  for (const t of [...triad.ends].sort((a, b) => a.z - b.z)) {   // far ends first
+    const hot = triad.hover === t.i, c = col[t.k];
+    if (t.sg > 0) { g.strokeStyle = c; g.lineWidth = 2; g.beginPath(); g.moveTo(cx, cyy); g.lineTo(t.x, t.y); g.stroke(); }
+    g.beginPath(); g.arc(t.x, t.y, hot ? 8.5 : 7, 0, Math.PI * 2);
+    if (t.sg > 0) { g.fillStyle = c; g.fill(); g.fillStyle = tok('--panel'); g.font = '600 9px ' + tok('--f-mono'); g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t.k.toUpperCase(), t.x, t.y + 0.5); }
+    else { g.fillStyle = tok('--panel'); g.fill(); g.strokeStyle = c; g.lineWidth = hot ? 2 : 1.3; g.stroke(); }
+  }
+}
+function triadHit(ev) {
+  const r = triad.cv.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  let best = -1, bd = 11;
+  for (const t of [...triad.ends].sort((a, b) => b.z - a.z)) { const d = Math.hypot(t.x - x, t.y - y); if (d < bd) { bd = d; best = t.i; } }
+  return best;
+}
+if (triad.cv) {
+  triad.cv.addEventListener('pointermove', e => { triad.hover = triadHit(e); triad.cv.style.cursor = triad.hover >= 0 ? 'pointer' : ''; const t = TRIAD_ENDS[triad.hover]; triad.cv.title = t ? `Look from the ${VIEWS[t[2]].label.toLowerCase()}` : 'Click an axis to look from that side'; });
+  triad.cv.addEventListener('pointerleave', () => { triad.hover = -1; });
+  triad.cv.addEventListener('click', e => { const i = triadHit(e); if (i >= 0) snapView(TRIAD_ENDS[i][2]); });
+}
+function syncViewUi() {
+  const o = camera.isOrthographicCamera;
+  const a = document.getElementById('projPersp'), b = document.getElementById('projOrtho');
+  if (a) { a.setAttribute('aria-pressed', String(!o)); b.setAttribute('aria-pressed', String(o)); }
+}
+document.getElementById('projPersp')?.addEventListener('click', () => setProjection('persp'));
+document.getElementById('projOrtho')?.addEventListener('click', () => setProjection('ortho'));
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => snapView(b.dataset.view)));
+const V_CYCLE = ['top', 'front', 'right', 'iso']; let vCycle = -1;
+window.addEventListener('keydown', e => {
+  if (e.metaKey || e.altKey || typingIn(e.target)) return;
+  const ctl = e.ctrlKey, map = { Numpad1: ctl ? 'back' : 'front', Numpad3: ctl ? 'left' : 'right', Numpad7: ctl ? 'bottom' : 'top', Numpad0: 'iso' };
+  if (map[e.code]) { snapView(map[e.code]); e.preventDefault(); return; }
+  if (ctl) return;
+  if (e.code === 'Numpad5' || e.code === 'KeyO') { setProjection(camera.isOrthographicCamera ? 'persp' : 'ortho'); e.preventDefault(); }
+  else if (e.code === 'KeyV' && !e.repeat) { vCycle = (vCycle + 1) % V_CYCLE.length; snapView(V_CYCLE[vCycle]); e.preventDefault(); }
+});

@@ -183,9 +183,20 @@ A design is the airframe alone: frame mass, every part and the steering mode. Fl
 - **Edit mode:** press **Edit** on the 3D view (or **E**). The simulation pauses and the airframe is drawn level in its own body axes. Hover to see a part's name, click to select it (or click its card), then drag:
   - **arrows** to move along X (red), Y (green) or Z (blue);
   - **squares** to move within a plane;
-  - **rings** to rotate: a motor's thrust axis, a servo joint's hinge direction, or an IMU's or compass's mount.
+  - **rings** to rotate: a motor's shaft, a servo (with everything on it), a rod (with everything on it), or an IMU's or compass's mount.
+- **What you can pick:** only the solid part under the pointer (arrows, arcs, fans and hidden shapes don't count, and the frame hides what's behind it). Clicking the arm a part hangs on picks that part. The hover label for a motor says whether it pulls or pushes and which way it spins, and in edit mode every motor shows a small thrust arrow (the selected one's is bold and drawn on top), so pushers stand out.
 - **Snapping and exiting:** positions snap to 5 mm and angles to 5°; hold **Shift** for 1 mm and 1°. **Esc** deselects, then leaves edit mode. **Done** or **Run** resumes the simulation.
 - **Live feedback:** the airframe check, mass properties and the part's card update as you drag.
+
+## Views
+
+The box under the view buttons (top right of the 3D view) sets how you look at the drone, in flight and while editing:
+- **Orientation triad:** the drone's X (forward), Y (left) and Z (up) as the camera sees them. Click an axis end to look from that side: the filled ends are front, left and top, the hollow ones back, right and bottom.
+- **Persp / Ortho:** perspective, or orthographic (no foreshortening, so parts line up and lengths compare directly). Zoom works the same in both.
+- **Top, Front, Side, Iso** buttons. The camera glides there in a quarter second.
+- **Keys:** numpad 1, 3, 7 for front, right, top (with Ctrl: back, left, bottom), numpad 0 for iso, **O** or numpad 5 for perspective/orthographic, and **V** steps through top, front, right and iso on a keyboard without a numpad.
+
+Named views are relative to the drone: in flight "front" means facing its nose wherever it's heading (and turns Chase off); while editing, body axes. Selecting a part while editing centres the view on it. You can orbit all the way over the top and underneath.
 
 ## Sensors and estimation
 
