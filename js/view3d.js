@@ -35,6 +35,8 @@ function buildMaterials() {
     wake: new THREE.MeshBasicMaterial({ color: colorOf('--wind'), transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
     sensor: new THREE.MeshStandardMaterial({ color: colorOf('--sensor'), roughness: 0.5 }),
     sensorAxis: new THREE.MeshBasicMaterial({ color: colorOf('--sensor') }),
+    spin: new THREE.LineBasicMaterial({ color: colorOf('--ink-2'), transparent: true, opacity: 0.4 }),
+    spinHead: new THREE.MeshBasicMaterial({ color: colorOf('--ink-2'), transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false }),
     ghost: new THREE.LineDashedMaterial({ color: colorOf('--sensor'), dashSize: 0.02, gapSize: 0.015, transparent: true, opacity: 0.9 }),
   };
 }
@@ -92,6 +94,20 @@ function buildRangeVis(j, p) {
   }
   return { g, m };
 }
+// Which way a prop turns, seen facing the prop: two faint arcs on the disc, each with a small arrowhead.
+function spinMarks(pr, spin) {
+  const g = new THREE.Group(), r = 0.72 * pr, span = 1.6, N = 20, h = Math.min(0.012, 0.18 * pr);
+  g.position.z = 0.0205; g.scale.x = spin >= 0 ? 1 : -1;   // mirrored for clockwise
+  for (const a0 of [0, Math.PI]) {
+    const pts = Array.from({ length: N + 1 }, (_, i) => { const a = a0 + span * i / N; return new THREE.Vector3(r * Math.cos(a), r * Math.sin(a), 0); });
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mats.spin));
+    const a = a0 + span, t = [-Math.sin(a), Math.cos(a)], n = [Math.cos(a), Math.sin(a)], tip = [r * n[0] + h * t[0], r * n[1] + h * t[1]];
+    const head = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(tip[0], tip[1], 0),
+      new THREE.Vector3(r * n[0] + 0.5 * h * n[0], r * n[1] + 0.5 * h * n[1], 0), new THREE.Vector3(r * n[0] - 0.5 * h * n[0], r * n[1] - 0.5 * h * n[1], 0)]);
+    g.add(new THREE.Mesh(head, mats.spinHead));
+  }
+  return g;
+}
 function rebuildDrone() {
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
   drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
@@ -133,6 +149,7 @@ function rebuildDrone() {
       axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
       const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
+      axis.add(spinMarks(pr, c.spin));
       // The group's Z runs along the shaft to the prop. A puller's thrust points that way, a pusher's back past the motor.
       const arrow = c.push ? new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, -0.017), 0.1, colorOf('--accent'), 0.03, 0.018)
         : new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.02), 0.1, colorOf('--accent'), 0.03, 0.018);
