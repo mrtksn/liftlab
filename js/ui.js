@@ -39,6 +39,7 @@ const FD = {
   hingeEl: { label: 'Hinge axis tilt up', path: ['hingeEl'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
   laz: { label: 'Points toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   lel: { label: 'Points up or down (−90° straight down)', path: ['el'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
+  lroll: { label: 'Rolled about its length', path: ['roll'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   llen: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, hmax: 3, step: 0.005, u: 'm', dp: 3 },
   jmass: { label: 'Servo mass', path: ['mass'], min: 0, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
   range: { label: 'Servo limit ±', path: ['range'], min: 5, max: 90, step: 1, u: '°', dp: 0 },
@@ -211,7 +212,7 @@ function compBody(c) {
   } else if (c.type === 'link') {
     const carried = descendants(c);
     b.append(el('p', { class: 'hint', text: carried.length ? 'At its far end: ' + carried.map(x => x.name).join(', ') + '.' : 'A stick or lever. Attach parts to it (drag them onto it in the list) and they ride at its far end.' }),
-      el('span', { class: 'lbl', text: 'Base' }), pos, presetSel(ROD_PRESETS, 'az', 'el', 'Points'), slider(c, 'laz'), slider(c, 'lel'), slider(c, 'llen'), slider(c, 'mass'),
+      el('span', { class: 'lbl', text: 'Base' }), pos, presetSel(ROD_PRESETS, 'az', 'el', 'Points'), slider(c, 'laz'), slider(c, 'lel'), slider(c, 'lroll'), slider(c, 'llen'), slider(c, 'mass'),
       checkF(c, 'known', 'Controller knows this rod\'s mass'));
   } else if (c.type === 'mass') {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
@@ -305,14 +306,14 @@ function edited(c, key) {
 }
 // Last seen place of every servo and rod, so editing one carries what's on it along.
 const holderSnap = new WeakMap();
-function snapHolder(c) { if (isHolder(c)) holderSnap.set(c, { pos: c.pos.slice(), dir: c.type === 'link' ? linkDir(c) : null, len: c.length }); }
+function snapHolder(c) { if (isHolder(c)) holderSnap.set(c, { pos: c.pos.slice(), dir: c.type === 'link' ? linkDir(c) : null, F: c.type === 'link' ? rodFrameOf(c) : null, len: c.length }); }
 function carryAlong(c) {
   const s0 = holderSnap.get(c); if (!s0) { snapHolder(c); return; }
   const d = sub(c.pos, s0.pos);
   if (nrm(d) > 1e-9) shiftSubtree(c, d);
   if (c.type === 'link') {
     const dir = linkDir(c);
-    if (nrm(sub(dir, s0.dir)) > 1e-9) rotateSubtree(c, m3m(rodFrame(dir), m3T(rodFrame(s0.dir))), c.pos);   // what's on it keeps its place and angle relative to the rod
+    const F = rodFrameOf(c); if (F.some((v, i) => Math.abs(v - s0.F[i]) > 1e-9)) rotateSubtree(c, m3m(F, m3T(s0.F)), c.pos);   // what's on it keeps its place and angle relative to the rod
     if (Math.abs(c.length - s0.len) > 1e-9) shiftSubtree(c, scl(dir, c.length - s0.len));
   }
   snapHolder(c); for (const k of descendants(c)) snapHolder(k);
@@ -720,6 +721,7 @@ function migrateComps(comps) {
   for (const c of comps) {   // saved before the hidden hardware traits existed
     if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
     if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
+    if (c.type === 'link' && c.roll == null) c.roll = 0;
     if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
     if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
     if (c.type === 'sensor' && c.kind === 'mag' && c.softIron == null) c.softIron = 0.03;

@@ -1,8 +1,9 @@
 'use strict';
 // Edit mode. The simulation pauses and the airframe is drawn level in its own body axes. Hover to
 // highlight a part, click to select it, then drag the handles: arrows move along one axis, squares
-// move within a plane, rings rotate. A selected servo shows what it carries swinging through its travel, with
-// a ring round it to drag the swing direction. Positions snap to 5 mm and angles to 5°; Shift for 1 mm / 1°.
+// move within a plane, rings rotate. Moving or turning a part carries everything attached to it; what it's
+// attached to stays put. A selected servo shows what it carries swinging through its travel. Positions snap
+// to 5 mm and angles to 5°; hold Shift for 1 mm / 1°.
 
 let editMode = false, editWasRunning = true;
 const edit = { hover: null, sel: null, drag: null, down: null };
@@ -12,7 +13,7 @@ let gizmo = null, travelG = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
 const handleVis = [];      // the visible shapes, to highlight the active one
 
-const rotAxesFor = c => c.type === 'motor' || c.type === 'link' ? [0, 1, 2]   // a servo turns by its swing ring instead
+const rotAxesFor = c => c.type === 'motor' || c.type === 'link' || c.type === 'joint' ? [0, 1, 2]
   : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
 
 function buildGizmo() {
@@ -45,16 +46,6 @@ function buildGizmo() {
     const g = new THREE.Group(); g.userData = { group: 'rot', axis: i }; g.add(ring, h);
     if (i === 0) g.rotation.y = Math.PI / 2; else if (i === 1) g.rotation.x = Math.PI / 2;   // torus lies in XY (normal Z)
     gizmo.add(g); handleVis.push({ kind: 'rot', axis: i, meshes: [ring], base: 0.9 });
-  }
-  {   // a servo's swing ring: round what it carries (local Z), with grips where the load swings to (local ±X)
-    const acol = colorOf('--swing');
-    const ring = vis(new THREE.TorusGeometry(0.46, 0.009, 6, 72), acol, 0.6);
-    const bar = vis(new THREE.CylinderGeometry(0.008, 0.008, 0.92, 8).rotateZ(Math.PI / 2), acol, 0.35);
-    const grips = [1, -1].map(k => { const m = vis(new THREE.ConeGeometry(0.05, 0.13, 16).rotateZ(-k * Math.PI / 2).translate(k * 0.5, 0, 0), acol, 1); return m; });
-    const g = new THREE.Group(); g.userData = { group: 'swing' };
-    g.add(ring, bar, ...grips, hit(new THREE.TorusGeometry(0.46, 0.06, 6, 48), { kind: 'swing', axis: -1 }));
-    for (const k of [1, -1]) { const h = hit(new THREE.SphereGeometry(0.1, 10, 8), { kind: 'swing', axis: -1 }); h.position.x = k * 0.5; g.add(h); }
-    gizmo.add(g); handleVis.push({ kind: 'swing', axis: -1, meshes: [ring, ...grips], base: 0.7 });
   }
   scene.add(gizmo);
   if (travelG) { scene.remove(travelG); travelG.traverse(o => o.geometry && o.geometry.dispose()); }
@@ -108,7 +99,7 @@ function updateEditMsg() {
     const kids = descendants(c);
     m.textContent = '';
     m.append(el('strong', { text: c.name }), ` on ${mountName(c)}`,
-      el('span', { class: 'sub', text: kids.length ? ` · carries ${kids.map(k => k.name).join(', ')}. Drag the ring's arrows to swing it another way, the dots at the fan's ends to change how far.`
+      el('span', { class: 'sub', text: kids.length ? ` · carries ${kids.map(k => k.name).join(', ')}. The rings turn it with everything on it; the dots at the fan's ends change how far it swings.`
         : ' · carries nothing yet. Set a part\'s "Attached to" to it, or drag the part onto it in the list.' }));
     return;
   }
@@ -207,9 +198,8 @@ function startDrag(h, e) {
   const d = { h, c, P0, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null,
     axis0: c.type === 'joint' ? jointAxis(c) : null, dir0: c.type === 'link' ? linkDir(c) : null };
   if (h.kind === 'travel') { const sw = servoSweep(c); d.n = new THREE.Vector3(...sw.a); d.rest = sw.rest; d.v = crs(sw.a, sw.rest); swingPrev.play = false; }
-  else if (h.kind === 'swing') { d.n = new THREE.Vector3(...carriedDir(c)); d.p0 = onPlane(ray, P0, d.n) || onPlane(ray, P0, d.n.clone().negate()); if (!d.p0) return false; d.sw0 = swingOf(c).swing; }
   else if (h.kind === 'move') { d.t0 = closestOnAxis(ray, P0, a); if (d.t0 == null) return false; }
-  else { d.p0 = onPlane(ray, P0, a); if (!d.p0) return false; }
+  else { d.p0 = onPlane(ray, P0, a); if (!d.p0) return false; d.snap = poseSnap(c); }
   if (typeof undo !== 'undefined') undo.lastKey = null;   // a drag is its own undo step
   edit.drag = d; vpEl.setPointerCapture(e.pointerId); vpEl.style.cursor = 'grabbing';
   highlightHandle(h); return true;
@@ -222,12 +212,6 @@ function dragTo(e) {
     const v = [p.x - d.P0.x, p.y - d.P0.y, p.z - d.P0.z], th = Math.atan2(dot(v, d.v), dot(v, d.rest)) * R2D;
     c.range = clamp(snapTo(Math.abs(th), fine ? 1 : 5), 5, 90); swingPrev.th = Math.sign(th || 1) * c.range * D2R;
     edited(c, 'range');
-  } else if (d.h.kind === 'swing') {   // turn the swing direction round what the servo carries
-    const p = onPlane(ray, d.P0, d.n) || onPlane(ray, d.P0, d.n.clone().negate()); if (!p) return;
-    const v0 = d.p0.clone().sub(d.P0), v1 = p.clone().sub(d.P0);
-    const turn = Math.atan2(new THREE.Vector3().crossVectors(v0, v1).dot(d.n), v0.dot(v1)) * R2D;
-    let sw = snapTo(d.sw0 + turn, fine ? 1 : 5); sw = ((sw + 540) % 360) - 180;
-    setSwing(c, sw); edited(c, 'swing');
   } else if (d.h.kind === 'move') {
     const t = closestOnAxis(ray, d.P0, a); if (t == null) return;
     c.pos[d.h.axis] = +clamp(snapTo(d.pos0[d.h.axis] + t - d.t0, step), -2, 2).toFixed(4);
@@ -241,22 +225,10 @@ function dragTo(e) {
     const v0 = d.p0.clone().sub(d.P0), v1 = p.clone().sub(d.P0);
     const ang = snapTo(Math.atan2(new THREE.Vector3().crossVectors(v0, v1).dot(a), v0.dot(v1)), astep);
     const R = axisAngleR(AXES[d.h.axis], ang);
-    if (c.type === 'motor') {
-      const t = d.tilt0 * D2R, z = d.az0 * D2R;
-      const dir = m3v(R, [Math.sin(t) * Math.cos(z), Math.sin(t) * Math.sin(z), Math.cos(t)]);
-      c.tilt = +(Math.acos(clamp(dir[2], -1, 1)) * R2D).toFixed(1);
-      if (c.tilt > 0.05) c.az = +(Math.atan2(dir[1], dir[0]) * R2D).toFixed(1);
-      edited(c, 'tilt');
-    } else if (c.type === 'joint') {   // turn the hinge axis itself: horizontal, vertical or anything between
-      setDirAzEl(c, m3v(R, d.axis0), 'hingeAz', 'hingeEl');
-      edited(c, 'hingeAz');
-    } else if (c.type === 'link') {    // swing the rod about its base; what's on it swings along
-      setDirAzEl(c, m3v(R, d.dir0), 'az', 'el');
-      edited(c, 'laz');                  // edited() swings the carried parts along
-    } else {
-      c.mount = eulerFromR(m3m(R, eulerR(...d.mount0))).map(x => +x.toFixed(1));
-      edited(c, 'mr');
-    }
+    // The whole turn from where the drag began: put the part and its load back, then turn them together.
+    poseRestore(d.snap); for (const [x] of d.snap) snapHolder(x);
+    turnPart(c, R);
+    edited(c, { motor: 'tilt', joint: 'hingeAz', link: 'laz', sensor: 'mr' }[c.type]);
   }
   refreshCard(c); showDragReadout(c);
 }
@@ -271,10 +243,9 @@ function showDragReadout(c) {
   const f = x => x.toFixed(3);
   let t = `${c.name}: position (${f(c.pos[0])}, ${f(c.pos[1])}, ${f(c.pos[2])}) m`;
   if (edit.drag && edit.drag.h.kind === 'travel') t = `${c.name}: travels ±${c.range}° either side of 0°. Shift for 1° steps.`;
-  else if (edit.drag && edit.drag.h.kind === 'swing') { const p = swingPreset(c), w = swingOf(c); t = `${c.name}: swings ${p ? p.label.toLowerCase() : 'at ' + w.swing.toFixed(0) + '°'} (${w.swing.toFixed(0)}° from ${swingRefName(c)}). Shift for 1° steps.`; }
   else if (edit.drag && edit.drag.h.kind === 'rot') {
     if (c.type === 'motor') t = `${c.name}: axis tilted ${c.tilt.toFixed(1)}° toward ${c.az.toFixed(1)}°`;
-    else if (c.type === 'joint') t = `${c.name}: hinge axis toward ${c.hingeAz.toFixed(1)}°, tilted up ${c.hingeEl.toFixed(1)}°`;
+    else if (c.type === 'joint') { const p = swingPreset(c); t = `${c.name}: turned with ${descendants(c).length ? 'everything on it' : 'nothing on it yet'}; swings ${p ? p.label.toLowerCase() : 'at ' + swingOf(c).swing.toFixed(0) + '°'} (hinge ${c.hingeAz.toFixed(0)}°, ${c.hingeEl.toFixed(0)}° up). Shift for 1° steps.`; }
     else if (c.type === 'link') t = `${c.name}: pointing toward ${c.az.toFixed(1)}°, ${c.el.toFixed(1)}° up`;
     else t = `${c.name}: mount roll ${c.mount[0].toFixed(1)}°, pitch ${c.mount[1].toFixed(1)}°, yaw ${c.mount[2].toFixed(1)}°`;
   }
@@ -340,13 +311,6 @@ function updateEditView() {
     const rots = rotAxesFor(c);
     gizmo.children.forEach(ch => {
       if (ch.userData.group === 'rot') ch.visible = rots.includes(ch.userData.axis);
-      else if (ch.userData.group === 'move') ch.scale.setScalar(c.type === 'joint' ? 0.55 : 1);   // a servo: small move arrows, so its swing shows
-      else if (ch.userData.group === 'plane') ch.visible = c.type !== 'joint';
-      else if (ch.userData.group === 'swing') {   // local X: where the load swings to, local Z: the way it sticks out
-        ch.visible = c.type === 'joint' && descendants(c).length > 0; if (!ch.visible) return;
-        const n = carriedDir(c), sx = swingOf(c).s, y = crs(n, sx);
-        ch.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...sx), new THREE.Vector3(...y), new THREE.Vector3(...n)));
-      }
     });
   }
 }

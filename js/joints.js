@@ -21,7 +21,7 @@ function mkServoMotor(name, x, y, z, jo = {}, mo = {}) {
 
 // A rod: from its base (pos) along a direction (azimuth, elevation) for `length`. Its far end is the tip.
 function mkLink(name, x, y, z, o = {}) {
-  return base(Object.assign({ type: 'link', name, pos: [x, y, z], az: 0, el: -90, length: 0.15, mass: 0.02, known: true }, o));
+  return base(Object.assign({ type: 'link', name, pos: [x, y, z], az: 0, el: -90, roll: 0, length: 0.15, mass: 0.02, known: true }, o));
 }
 function linkDir(l) { const a = l.az * D2R, e = l.el * D2R; return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)]; }
 const linkTip = l => add(l.pos, scl(linkDir(l), l.length));
@@ -44,14 +44,23 @@ function jointAxis(j) {   // hinge axis at rest, body frame
 // The axes of the surface a part is mounted on, in body axes at rest (columns: its X, Y, Z). On the frame,
 // or on a servo's output (which sits at 0° at rest), they're the body axes. On a rod: X runs along the rod,
 // Z is as close to up as the rod allows (forward, for a rod pointing straight up or down), Y completes them.
-function rodFrame(x) {
+// A rod can also be rolled about its own length (roll, degrees), which turns what's on it round the rod.
+function rodFrame(x, roll = 0) {
   const up = Math.abs(x[2]) > 0.95 ? [1, 0, 0] : [0, 0, 1];
-  const z = unit(sub(up, scl(x, dot(up, x)))), y = crs(z, x);
+  let z = unit(sub(up, scl(x, dot(up, x)))), y = crs(z, x);
+  if (roll) { const r = roll * D2R, c = Math.cos(r), s = Math.sin(r); [y, z] = [add(scl(y, c), scl(z, s)), sub(scl(z, c), scl(y, s))]; }
   return [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]];
+}
+const rodFrameOf = l => rodFrame(linkDir(l), l.roll || 0);
+function setRodFrame(l, F) {   // point and roll a rod so its frame is F (as near as the stored angles allow)
+  setDirAzEl(l, [F[0], F[3], F[6]], 'az', 'el');
+  const B = rodFrame(linkDir(l), 0), fz = [F[2], F[5], F[8]];
+  l.roll = +(Math.atan2(-dot(fz, [B[1], B[4], B[7]]), dot(fz, [B[2], B[5], B[8]])) * R2D).toFixed(1);
+  if (Math.abs(l.roll) < 0.05) l.roll = 0;
 }
 function mountFrame(c) {
   const p = parentOf(c);
-  return p && p.type === 'link' ? rodFrame(linkDir(p)) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  return p && p.type === 'link' ? rodFrameOf(p) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
 }
 const mountName = c => { const p = parentOf(c); return p && p.type === 'link' ? p.name : p ? p.name + '\'s output' : 'the frame'; };
 // A servo's hinge axis as a heading and tilt relative to what it's mounted on (degrees), and back.
@@ -185,9 +194,22 @@ function rotateSubtree(a, R, pivot) {
     if (c.type === 'motor') { const d = m3v(R, actDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
     else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
     else if (c.type === 'joint') setDirAzEl(c, m3v(R, jointAxis(c)), 'hingeAz', 'hingeEl');
-    else if (c.type === 'link') setDirAzEl(c, m3v(R, linkDir(c)), 'az', 'el');
+    else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
   }
 }
+// Turn a part by R about its own pivot, carrying everything attached to it (what it's on stays put).
+// Motors and sensors turn in place; a servo's hinge turns and its load swings round the pivot; a rod
+// turns about its base (edited() then swings its load, from the rod's old and new frames).
+function turnPart(c, R) {
+  if (c.type === 'joint') { setDirAzEl(c, m3v(R, jointAxis(c)), 'hingeAz', 'hingeEl'); rotateSubtree(c, R, c.pos); }
+  else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
+  else if (c.type === 'motor') { const d = m3v(R, actDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
+  else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
+}
+// What a part and everything on it look like now, to put back (a drag applies its whole turn from the start).
+const POSE_KEYS = ['pos', 'tilt', 'az', 'el', 'roll', 'hingeAz', 'hingeEl', 'mount'];
+const poseSnap = c => [c, ...descendants(c)].map(x => [x, Object.fromEntries(POSE_KEYS.filter(k => k in x).map(k => [k, Array.isArray(x[k]) ? x[k].slice() : x[k]]))]);
+const poseRestore = snap => { for (const [x, v] of snap) for (const k in v) x[k] = Array.isArray(v[k]) ? v[k].slice() : v[k]; };
 function setDirAzEl(c, d, kAz, kEl) {
   const u = unit(d); c[kEl] = +(Math.asin(clamp(u[2], -1, 1)) * R2D).toFixed(1);
   if (Math.hypot(u[0], u[1]) > 1e-4) c[kAz] = +(Math.atan2(u[1], u[0]) * R2D).toFixed(1);
