@@ -59,7 +59,7 @@ function vibrationAt(pos) {
   let a = [0, 0, 0], w = [0, 0, 0];
   for (const c of actuators()) {
     const v = vib.get(c.id), st = act.get(c.id); if (!v || !st) continue;
-    const k = (st.T * c.health / 100 / c.tmax) * Math.exp(-nrm(sub(pos, posNow(c))) / VIB_REACH) * Math.sin(v.ph);
+    const k = (st.T * motorEff(c) / c.tmax) * Math.exp(-nrm(sub(pos, posNow(c))) / VIB_REACH) * Math.sin(v.ph);
     a = add(a, scl(v.u, VIB_ACC * k)); w = add(w, scl(v.u, VIB_GYRO * k));
   }
   return { a, w };

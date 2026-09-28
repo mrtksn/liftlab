@@ -228,6 +228,80 @@ The **State estimate** panel shows estimate-minus-truth errors and warns about m
 
 Sensor noise comes from a seeded generator, so every reset replays the same noise.
 
+## Heat, failures and the supervisor
+
+Every motor, servo and the battery has a temperature and a health, and each can fail. A **supervisor** watches them the way a Raspberry Pi next to the ESP32 would, and rewrites the flight controller's settings when something goes wrong. The flight controller itself doesn't change: it keeps running the same allocation, just on an edited table.
+
+### Heat (`thermalModel`)
+
+Each part is one lump of heat: C dT/dt = P − G (T − T_air). The air temperature is a slider on the Airframe tab.
+
+| Part | Heat in (P) | Holds (C) and loses (G) | What heat does |
+|---|---|---|---|
+| Motor | i² R: its copper loss, with R rising 0.39%/K; its back-EMF constant falls 0.12%/K, so a hot motor needs more current for the same thrust | C from the motor's mass. G is set so full load settles 25% past the limit with Cooling = 1, and grows with speed (its own prop cools it) | Past its limit it loses thrust for good, faster the hotter it is. 35 K past the limit it fails the way you set: stops, or loses the thrust percentage you gave it |
+| Battery | I² R_int, with R_int higher when cold and when worn | From the pack's mass (38 g per Ah per cell) | Past its limit it wears (less capacity, more resistance). 25 K past it, it loses a cell or cuts out |
+
+Motor cards have **Temperature limit**, **Cooling**, **Overheating damages it** and **When it fails**. The battery has its own section on the Airframe tab: cells, capacity, internal resistance, limit, sensors and failure mode.
+
+### Breaking things
+
+The Health panel (right column) lists every part with its true temperature and state, what the drone's sensors say about it, and what the supervisor has done. Each row has a **Break…** menu that fails the part mid-flight:
+
+- **Motor:** stop it, or lose its set percentage of thrust.
+- **Servo:** jam it where it is, or make it go limp (friction only, no torque).
+- **Battery:** lose a cell, or cut out.
+
+**Repair all** undoes every failure and the supervisor's changes without resetting the flight.
+
+### What the drone can sense
+
+The health sensors run on their own random stream, so switching them on doesn't change the flight's other noise.
+
+| Sensor | Where it's set | Rate, delay, noise |
+|---|---|---|
+| Motor temperature sensor | Motor card, off by default | 10 Hz, 1.5 s thermal lag, ±0.3 °C |
+| ESC telemetry (rpm and current) | Motor card, on by default | 50 Hz |
+| Battery voltage and current | Battery section | 50 Hz |
+| Battery temperature | Battery section | 2 Hz, 5 s lag |
+
+With no temperature sensor but with ESC current, the supervisor runs the same heat model itself to estimate the motor's temperature. With neither, a motor's heat can't be seen until it fails.
+
+With a voltage sensor, the flight controller corrects its throttle for sag (`voltageCompensation`: u_sent = u · V_ref / V), so thrust per command, and so the table, stays true as the pack drains.
+
+### The supervisor (Formulas: Supervisor group)
+
+It runs at 10 Hz and talks to the flight controller over a link that is 40 ms late each way. It reads the health sensors and a 50 Hz data stream from the controller: for each motor its column × thrust, for each steering servo how its column changes with angle, and the measured force and rotation. It runs three formulas in a chain:
+
+1. **`actuatorHealth`** compares what the table predicts with what the IMU measures. From how the error changes, it fits one explanation per part: "motor *i* makes only η of its thrust" or "servo *j* is δ away from where it's told". Each fit gets a confidence from how much of the error it explains and how much that part has been moving. It doesn't judge until it has about 3 s of flying, and it ignores the ground, the first 1.5 s and throws.
+2. **`faultDecision`** turns that into settings:
+   - **Failed motor** (ESC rpm under 30% of what the command should give for 0.2 s, or η < 0.25 with high confidence for 0.5 s): removed from the table.
+   - **Weakened motor** (η < 0.88 for 1.5 s): its column in the table, learned or described, is scaled by η.
+   - **Hot motor:** its throttle is capped, from 100% at 20 K under its limit to 55% at the limit, so the others take the load before it's damaged.
+   - **Stuck servo** (δ confidently above 3°, or its feedback disagrees by 5°, for 0.5 s): taken out of the steering and held at the angle the supervisor believes it's really at, so the motors on it are modelled where they really point.
+3. **`flightPolicy`** decides how to fly on what's left, from the lift margin the remaining motors give, whether roll, pitch and yaw can still be held, the battery and the temperatures:
+
+| Mode | When | Limits |
+|---|---|---|
+| Careful | a motor over 85% of its limit, a hot battery, margin < 1.6× | slower, less lean |
+| Return home | a motor or a battery cell failed, margin < 1.35×, battery < 20% or < 3.3 V per cell | flies home at 1.5 m/s, then lands |
+| Land | roll or pitch lost for 1 s, margin < 1.08×, battery < 8%, overheating | straight down, motors stop on the ground |
+
+It only steps up, never back down. A sudden voltage drop of about a cell's worth is read as a lost cell: the supervisor counts one cell fewer when it works out the charge, and heads home.
+
+### What it can and can't save (supervisor on vs off)
+
+| Failure | Supervisor on | Supervisor off |
+|---|---|---|
+| Hex, one motor stops | Spotted in 0.4 s from ESC telemetry (0.7 s from the IMU alone), lands | Crashes |
+| Quad, one motor stops | Crashes | Crashes |
+| Quad or hex, a motor loses 50% | Table scaled, flies on | Flies, less precisely |
+| Battery loses a cell | Goes home and lands | Keeps flying on a weaker pack |
+| Battery cuts out | Falls | Falls |
+| Tilt-rotor quad, a servo jams | Spotted, taken out of the steering, flies on | Flies, fighting the stuck servo |
+| Overheating motor (with a sensor or ESC current) | Caps it, flies carefully, goes home before damage | Burns out |
+
+A quad that loses a motor needs a controller that lets the body spin and flies on three (as in the Delft and ETH work); that isn't modelled.
+
 ## Flying it
 
 The pads on the 3D view and the keyboard steer the drone. They move the target the controller holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls.
@@ -252,7 +326,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 36 functions for the physics, airflow, sensors, estimators, identification and controller, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 41 functions for the physics, airflow, sensors, estimators, identification, controller and supervisor, plus the text shown for each in the Formulas tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/budget.js` | Flight computer budget: counts what the flight code costs per control step and keeps in memory, for an ESP32 |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
@@ -260,6 +334,8 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/multibody.js` | Articulated-body dynamics: the frame and every servo joint solved together (recursive Newton–Euler) |
 | `js/joints.js` | Servo joints and rods: the attachment tree, poses from the joint angles (true and believed), carrying parts along, servo state |
 | `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
+| `js/health.js` | Heat, failures and health sensors for every part; the flight controller's settings the supervisor can change; the supervisor itself |
+| `js/health-ui.js` | The Battery section and the Health panel |
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
@@ -275,13 +351,15 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`, `flowModel`, `rangeModel`.
 
-**Airflow and battery (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `batteryModel`.
+**Airflow, battery and heat (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `batteryModel`, `thermalModel`.
 
 **Estimation:** `attitudeEstimator`, `flowVelocity`, `servoPredictor`, `positionEstimator`.
 
 **Identification:** `identifyThrow`, `identifyMotorResponse`, `identifyServoResponse`, `identifyEffectiveness`.
 
-**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocationPreferences`, `allocation`, `thrustLinearization`.
+**Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocationPreferences`, `allocation`, `thrustLinearization`, `voltageCompensation`.
+
+**Supervisor:** `actuatorHealth`, `faultDecision`, `flightPolicy`.
 
 The simulator only calls these by name through `run(key, …)`. To change a default, edit the function in `js/laws.js`.
 
@@ -378,7 +456,9 @@ The attainable set of accelerations is the sum of what each rotor can make: anyt
 - Structure is rigid: frames, rods and servo horns don't flex, and gears have no backlash.
 - The controller's effectiveness model is static. The rotors' gyroscopic torque and the spin-up reaction are real in the physics; the learning measures the spin-up reaction (B₂) so it doesn't corrupt the rest, but the controller doesn't yet use it to cancel those twists, as the Delft INDI controller does. On the main-lifter layout the big rotor's gyroscopic torque is large, and its calibration explains only about 70% of the rotation.
 - Learning treats the CoG as fixed. When a known mass swings on a joint, the controller's model follows it, but the learned columns stay as they were at calibration, and keep-learning catches up over about 30 s.
-- Without servo feedback, identification and allocation use the predicted servo angle, so a servo that stalls or sags under load isn't noticed.
+- Without servo feedback, identification and allocation use the predicted servo angle. The supervisor catches a servo that jams or goes limp from the IMU, but not one that only sags a little under load.
+- Each part is one lump of heat: a motor's windings and its case aren't separate, and the battery's cells heat evenly.
+- The supervisor tests one failure at a time. Two at once (a motor and a cell together, say) can be misread, and a limp servo that swings freely can sometimes get another servo blamed.
 - The vertical position integral can trim up to 5 m/s², enough to absorb an unknown hover throttle; sideways it stays at 2 m/s².
 - In the throw start, a motor on two steering joints only has each joint varied on its own, so the cross terms of its 9 columns come from the hover calibration. The throw start also needs the IMU's mounting angle to be known. It uses the commanded throttle and a generic motor model rather than measured motor RPM, which the Delft work uses; the simulated motors have the same structure as that model, so real motors will fit it less exactly.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab.

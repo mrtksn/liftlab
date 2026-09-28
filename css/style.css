@@ -413,3 +413,21 @@ button.chip{background:transparent;cursor:pointer}
   .edit-bar.servo #editMsg .sub,.edit-bar.servo .st-note{display:none}
   .st-row{grid-template-columns:70px 1fr}
 }
+/* health panel */
+.h-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.h-top .btn{margin-left:auto;padding:3px 10px;font-size:12.5px}
+.h-top .pill{font-size:12.5px;padding:2px 8px}
+.h-list{display:flex;flex-direction:column;gap:7px;margin-top:4px}
+.h-row{display:grid;grid-template-columns:minmax(40px,auto) minmax(28px,1fr) 44px auto auto;align-items:center;column-gap:8px;row-gap:1px;font-size:12.5px}
+.h-name{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.h-bar{height:6px;border-radius:3px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;min-width:40px}
+.h-bar i{display:block;height:100%;width:0}
+.h-temp{font-family:var(--f-mono);font-size:11.5px;color:var(--ink-2);text-align:right}
+.h-state{font-size:12px;color:var(--muted);white-space:nowrap}
+.h-state.warn{color:var(--warn)} .h-state.bad{color:var(--bad);font-weight:600}
+.h-sub{grid-column:1/-1;font-size:11.5px;color:var(--muted);line-height:1.35}
+select.break{font-size:12px;padding:1px 2px;max-width:78px}
+.h-log{margin:4px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--ink-2)}
+.h-log b{font-family:var(--f-mono);font-weight:500;font-size:11px;color:var(--muted);margin-right:4px}
+.h-log li.bad{color:var(--bad)} .h-log li.warn{color:var(--warn)} .h-log li.good{color:var(--good)} .h-log li.muted{color:var(--muted)}
+.hud-sup{color:var(--bad);font-weight:600}

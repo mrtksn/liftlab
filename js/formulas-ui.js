@@ -92,7 +92,7 @@ function buildFormulas() {
     });
     return el('div', { class: 'chain-wrap' }, el('span', { class: 'lbl', text: label }), row);
   };
-  intro.append(chain('Each control step (1 kHz)', LAW_CHAIN.ctrl), chain('Each physics step (2 kHz), sensors at their own rates', LAW_CHAIN.plant));
+  intro.append(chain('Each control step (1 kHz)', LAW_CHAIN.ctrl), chain('Each physics step (2 kHz), sensors at their own rates', LAW_CHAIN.plant), chain('Supervisor (10 Hz, over a link)', LAW_CHAIN.super));
   const copyBtn = el('button', { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
   const revertAll = el('button', { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
   const copyOut = el('textarea', { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
@@ -116,7 +116,8 @@ function buildFormulas() {
     ['sensor', 'Sensors', 'What the hardware reports. Each model turns the true quantity at the sensor into a reading with noise, bias, drift and limits. Each sensor keeps its own state between samples.'],
     ['est', 'Estimation', 'What the flight software believes. These turn the sensor readings into the attitude, rate, position and velocity the controller flies on.'],
     ['learn', 'Identification', 'What the flight software learns about its own airframe from flight data, so it doesn\'t need prop, mass or inertia figures.'],
-    ['ctrl', 'Controller', 'What the flight software decides. It works from the estimate, and only knows the modeled mass, inertia and actuator health.']];
+    ['ctrl', 'Controller', 'What the flight software decides. It works from the estimate, and only knows the modeled mass, inertia and actuator health.'],
+    ['super', 'Supervisor (companion computer)', 'A separate, slower computer (like a Raspberry Pi) that watches the flight controller and the health sensors over a link, and changes the controller\'s settings when a part fails, weakens or overheats.']];
   for (const [g, title, blurb] of groups) {
     const sec = el('section', { class: 'sec' }, el('h2', { text: title }), el('p', { class: 'hint', text: blurb }));
     const list = el('div', { class: 'laws' });

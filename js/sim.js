@@ -5,7 +5,7 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, push: false, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, push: false, tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -55,7 +55,7 @@ let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
 const flyMode = () => learn.holdServos ? 'tilt' : mode;
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
-const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1 };   // texture and light matter to optical flow
+const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1, ambient: 25 };   // texture and light matter to optical flow
 
 /* ───────── state ───────── */
 // p, v: the frame's centre (the hub) in the world; q, w: its attitude and body rates. Joints carry their own angles (jst).
@@ -71,7 +71,9 @@ let truth = null, model = null, nb = [0, 0, 1];
 let onCrash = () => {};
 
 const actuators = () => cfg.comps.filter(c => c.type === 'motor');   // thrust inputs; servo joints are in joints.js
-const hModel = c => c.healthKnown ? c.health / 100 : 1;
+// Thrust share the flight software believes a motor gives: its known health, and what the supervisor has told
+// it (0 once a motor is taken out, the effectiveness it measured otherwise).
+const hModel = c => (c.healthKnown ? c.health / 100 : 1) * (typeof fcAct === 'function' ? (fcAct(c).on ? fcAct(c).eff : 0) : 1);
 // A motor is mounted along its shaft (tilt, az: the way the shaft points, toward the prop). A puller's thrust
 // points along the shaft, toward the prop (a tractor); a pusher's prop is pitched the other way, so its thrust
 // points back along the shaft, toward the motor, and it blows air away past the prop. Spin is the prop's
@@ -162,14 +164,14 @@ function allocate(w, cm) {
   // w: wanted [force; torque] in the controller's model units. Columns are acceleration per full thrust.
   const wa = (() => { const f = scl([w[0], w[1], w[2]], 1 / cm.m); const a = m3v(cm.Jinv, [w[3], w[4], w[5]]); return [...f, ...a]; })();
   const acts = actuators();
-  const thrustIn = c => { const st = act.get(c.id); return { col: colAt(c), lo: 0, hi: 1, inp: { kind: 'thrust', x: st.v || 0, lo: 0, hi: 1, power: powerFull(c) } }; };
+  const thrustIn = c => { const st = act.get(c.id), hi = fcHi(c); return { col: colAt(c), lo: 0, hi, inp: { kind: 'thrust', x: st.v || 0, lo: 0, hi: Math.max(hi, 1e-3), power: powerFull(c) } }; };   // a removed motor's limit is 0; a hot one's is capped
   // Stage 1: servo joints. Each steering joint adds a small angle change δ as an input. Its effect is what
   // turning it does to every motor it carries, Σ thrust × d(column)/dθ, and δ is bounded by how far the
   // servo can get within the planning horizon.
   // After a throw cut short, the servos' effect is only partly known: hold them in the middle until caught.
   const holdMid = !!learn.holdServos;
   if (holdMid) for (const j of steerJoints()) jst.get(j.id).thCmd = 0;
-  const sj = holdMid ? [] : steerJoints();
+  const sj = holdMid ? [] : steerJoints().filter(fcJointOk);   // a servo the supervisor has found stuck is left out
   if (sj.length) {
     const rows = acts.map(thrustIn), who = acts.map(() => null);
     for (const j of sj) {
@@ -192,7 +194,7 @@ function allocate(w, cm) {
   const rows = acts.map(thrustIn);
   setAuthority(rows);
   const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
-  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(() => 1), wa, flyMode(), pull));   // held during calibration pulses
+  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(r => r.hi), wa, flyMode(), pull));   // held during calibration pulses
   if (flyMode() === 'mixed') {   // how much of the asked-for sideways force this step's thrusts actually make
     const dem = Math.hypot(wa[0], wa[1]);
     if (dem > 0.2) {
@@ -205,14 +207,14 @@ function allocate(w, cm) {
   acts.forEach((c, i) => {
     const st = act.get(c.id);
     // u[i] is thrust as a fraction of max; the learned throttle curve turns it into the throttle to send
-    st.u = clamp(run('thrustLinearization', u[i], curveHat(c)) + calExc(c) + ditherFor(c, S.t), 0, 1);   // plus calibration or learning excitation
-    setThrottle(c, st, st.u);
+    const want = fcOn(c) ? clamp(run('thrustLinearization', u[i], curveHat(c)) + calExc(c) + ditherFor(c, S.t), 0, fcHi(c)) : 0;   // plus calibration or learning excitation
+    const [sent, eq] = fcThrottle(c, want); setThrottle(c, st, eq, sent);   // corrected for the battery's voltage when it's measured
     if (u[i] >= 0.995) ctl.sat = true;
   });
 }
 
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
-function setThrottle(c, st, u) { st.u = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(u, 0, 1) : steadyX(u, S.battV) ** 2); }
+function setThrottle(c, st, u, sent = u) { st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(sent, 0, 1) : steadyX(sent, S.battV) ** 2); }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
 function updateServoBelief(dt) {
   for (const j of joints()) {
@@ -231,7 +233,7 @@ function controlStep(dt) {
   senseAndEstimate(dt);
   updateServoBelief(dt);
   learnStep(dt);
-  if (S.crashed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } return; }
+  if (S.crashed || !fc.armed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; a.v = 0; } return; }   // crashed, or landed and disarmed
   if (throwTick(dt)) return;             // throw start: open loop until it has identified itself
   throwRecoverCheck();
   // The flight software sees only the estimate, unless you hand it the ground truth.
@@ -242,8 +244,8 @@ function controlStep(dt) {
   const RT = m3T(R);
   const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
   for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);   // vertical has room to trim out an unknown hover throttle
-  const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G);
-  const nd = unit(run('thrustAxisTarget', Fd, flyMode(), mixShare()));
+  const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G, fc.lim);
+  const nd = unit(run('thrustAxisTarget', Fd, flyMode(), mixShare(), fc.lim.lean));
   let psi = setpoint.yaw * D2R;
   if (thr && thr.phase === 'recover') { const bx = m3v(R, [1, 0, 0]); psi = Math.atan2(bx[1], bx[0]); }   // catching a throw: get upright first, turn to the heading later
   const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(axis, [1, 0, 0])));
@@ -363,10 +365,12 @@ function dynamics(dt) {
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
   let Ibatt = 0.5;   // avionics
   const rotors = acts.map(c => {
-    const st = act.get(c.id), mp = motorParams(c);
-    const md = rotorStep(c, st, mp, S.battV, dt);
+    const st = act.get(c.id), mp = heatParams(c, motorParams(c)), dead = hsOf(c).dead;   // the motor as it is at its temperature
+    const md = dead ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
+    if (dead) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
     Ibatt += st.esc * md.i;
+    heatMotor(c, st, md, mp, dt);
     const b = MB.of.get(c.id) || 0;
     let d = m3v(K.Rb[b], actDir(c));
     if (isCollective(c)) {   // helicopter blades flap: the disc follows the mast a moment behind (world axes), instead of the whole airframe acting as a gyroscope
@@ -374,11 +378,12 @@ function dynamics(dt) {
       st.disc = st.disc ? unit(add(st.disc, scl(sub(mast, st.disc), Math.min(1, dt / tf)))) : mast;
       d = m3v(RT, st.disc);
     }
-    return { c, st, b, p: posed(b, c.pos), d, T: md.T * c.health / 100, R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
+    return { c, st, b, p: posed(b, c.pos), d, T: md.T * motorEff(c), R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
   });
-  S.battV = run('batteryModel', S.batt, Math.max(0, Ibatt), dt);
+  S.battV = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
   S.battK = steadyX(1, S.battV) ** 2;
   S.battI = Ibatt;
+  heatBattery(Math.max(0, Ibatt), dt);
 
   // Rotors in the air: inflow, wake interaction, ground effect, then the loads on whatever carries them.
   rotorAir(rotors, K, R, RT, wv);
@@ -424,6 +429,7 @@ function dynamics(dt) {
     while (st.dq.length > 1 && st.dq[1][0] <= S.t - (j.lag || 0) + 1e-9) st.dq.shift();
     st.thR = st.dq[0][1] + off;
     let t = run('servoTorque', st.thR - st.th, st.rate || 0, { stall: j.torque ?? 0.8, speed: Math.max(1, j.rate) * D2R, band: 3 * D2R });
+    t = servoFault(j, st, t);   // jammed or limp
     const x = st.th - off, over = Math.abs(x) - (Rg + 5 * D2R);
     if (over > 0) t += -Math.sign(x) * 50 * over - 0.5 * (st.rate || 0);
     tauJ[i] = t; st.tq = t;
@@ -449,16 +455,17 @@ function dynamics(dt) {
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
 }
-function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); if (S.steps % 40 === 0) pushHist(); }
+function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
 
 function resetSim() {
   thr = null;
+  resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
   buildBodies();
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   S.p = [setpoint.x, setpoint.y, setpoint.z]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
-  S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0); S.battK = steadyX(1, S.battV) ** 2;
+  S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   resetEstimation(); resetLearning(); budgetReset();
   for (let k = 0; k < 4; k++) {   // settle into hover: motors at their steady speed, servos where they're told
@@ -472,7 +479,7 @@ function resetSim() {
       } else { st.Omega = steadyX(st.u, S.battV) * mp.Om; st.T = mp.kT * st.Omega ** 2; st.i = mp.kQ * st.Omega ** 2 / mp.Ke; st.esc = st.u; }
       I += st.esc * st.i;
     }
-    S.battV = run('batteryModel', S.batt, I, 0); S.battK = steadyX(1, S.battV) ** 2;
+    S.battV = run('batteryModel', S.batt, I, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
     for (const j of joints()) { const st = jst.get(j.id), t = jointTarget(j); st.th = st.thR = t + (j.offset || 0) * D2R; st.pst = {}; st.thHat = t; st.rate = 0; st.acc = 0; st.dq = []; }
   }
   truth = massProps('truth'); model = massProps('model'); cPts = contactPoints();
@@ -490,7 +497,7 @@ function envelopeCalc() {
   const sj = steerJoints();
   const sets = [];   // what each rotor can really make: its thrust (0 to full) along any direction its servos can swing it to
   for (const c of actuators()) {
-    const h = c.health / 100; if (h <= 0) continue;
+    const h = motorEff(c); if (h <= 0) continue;   // what it really delivers: health, damage, or nothing if it has failed
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
     if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)

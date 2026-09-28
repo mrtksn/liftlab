@@ -81,7 +81,8 @@ function describedAt(c, angles) {   // from the airframe description, with the m
   return cfgToAccel(scl6(wrenchCol(n.p, n.d, spinOf(c), c.kappa, model.c), c.tmax * hModel(c)));
 }
 // Cached per model: the description only changes when the believed mass properties do (a new `model`).
-const descCache = new WeakMap();
+let descCache = new WeakMap();
+const invalidateDesc = () => { descCache = new WeakMap(); };   // the modeled health changed (the supervisor's settings)
 function describedCols(c) {
   let m = descCache.get(model); if (!m) { m = new Map(); descCache.set(model, m); }
   let cols = m.get(c.id); if (!cols) { cols = decompose(a => describedAt(c, a), chainOf(c).length); m.set(c.id, cols); }
@@ -112,7 +113,7 @@ const ctlModel = () => flyingLearned() ? UNIT : model;
 function ctlAxis() {   // nominal thrust axis the controller believes in
   if (!flyingLearned()) return nb;
   let s = [0, 0, 0];
-  for (const c of actuators()) {   // the lifting rotors' force (a sideways tail rotor doesn't say which way is up)
+  for (const c of actuators().filter(fcOn)) {   // the lifting rotors' force (a sideways tail rotor doesn't say which way is up); not a removed one
     const f = colAtAngles(c, chainOf(c).map(restAngle)).slice(0, 3), n = nrm(f);
     if (n > 1e-9) s = add(s, scl(f, Math.max(0, f[2] / n)));
   }
@@ -281,7 +282,7 @@ function ditherFor(c, t) {   // tiny excitation while learning in flight
 // Each motor's true basis columns, from the real geometry, mass, inertia, health and battery (no airflow).
 function trueAt(c, angles) {
   const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
-  const col = scl6(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c), c.tmax * c.health / 100 * S.battK);
+  const col = scl6(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c), c.tmax * motorEff(c) * S.battK);
   const f = scl([col[0], col[1], col[2]], 1 / truth.m), a = m3v(truth.Jinv, [col[3], col[4], col[5]]);
   return [...f, ...a];
 }

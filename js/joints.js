@@ -10,7 +10,7 @@
 
 function mkJoint(name, x, y, z, o = {}) {
   return base(Object.assign({ type: 'joint', name, pos: [x, y, z], hingeAz: 0, hingeEl: 0, mode: 'auto', manual: 0,
-    range: 40, rate: 240, lag: 0.02, torque: 0.8, offset: 0, feedback: false, mass: 0.015 }, o));
+    range: 40, rate: 240, lag: 0.02, torque: 0.8, offset: 0, feedback: false, mass: 0.015, failMode: 'jam' }, o));
 }
 // A motor on its own servo joint, both at the same point, the way a tilt-rotor is usually built.
 function mkServoMotor(name, x, y, z, jo = {}, mo = {}) {
@@ -140,6 +140,7 @@ const restAngle = j => j.mode === 'manual' ? j.manual * D2R : 0;
 const angleTrue = j => { const s = jst.get(j.id); return s ? s.th : restAngle(j); };
 function angleSeen(j) {   // what the flight software uses
   const s = jst.get(j.id); if (!s) return restAngle(j);
+  const fixed = typeof fc !== 'undefined' && fc.jAng.get(j.id); if (fixed != null) return fixed;   // the supervisor found it stuck and says where
   return j.feedback ? s.th : s.thHat;
 }
 const angleZero = () => 0;

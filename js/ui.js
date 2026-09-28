@@ -34,6 +34,9 @@ const FD = {
   tau: { label: 'Spin-up time constant · hidden', hmin: 0.001, hmax: 1,  path: ['tau'], min: 0.01, max: 0.2, step: 0.005, u: 'ms', dp: 0, k: 1000 },
   mass: { label: 'Mass', hmax: 50,  path: ['mass'], min: 0.01, max: 2, step: 0.01, u: 'kg', dp: 2 },
   health: { label: 'Health (thrust delivered)', path: ['health'], min: 0, max: 100, step: 1, u: '%', dp: 0 },
+  tmaxC: { label: 'Temperature limit', path: ['tmaxC'], min: 60, max: 180, step: 5, u: '°C', dp: 0 },
+  cool: { label: 'Cooling (1 = typical)', path: ['cool'], min: 0.2, max: 2, step: 0.05, u: '×', dp: 2 },
+  failLoss: { label: 'Thrust it loses when it fails', path: ['failLoss'], min: 10, max: 90, step: 5, u: '%', dp: 0 },
   hingeAz: { label: 'Hinge axis heading', path: ['hingeAz'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   manual: { label: 'Angle (set by you)', path: ['manual'], min: -90, max: 90, step: 1, u: '°', dp: 0 },
   hingeEl: { label: 'Hinge axis tilt up', path: ['hingeEl'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
@@ -199,6 +202,12 @@ function compBody(c) {
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
     b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      el('span', { class: 'lbl', text: 'Heat, sensing and failure' }),
+      checkF(c, 'tsens', 'Temperature sensor on the motor'), checkF(c, 'telem', 'ESC telemetry (reports rpm and current)'),
+      slider(c, 'tmaxC'), slider(c, 'cool'), checkF(c, 'failHeat', 'Overheating damages it'),
+      selectF(c, 'failMode', 'When it fails', [['stop', 'It stops'], ['loss', 'It loses thrust']], rerender));
+    if (c.failMode === 'loss') b.append(slider(c, 'failLoss'));
+    b.append(el('p', { class: 'hint', text: 'It heats from the current in its windings and cools faster with the prop spinning. Past its limit its magnet weakens for good; 35 °C past it, it fails the way you set here. You can also break it from the Health panel while flying. The sensors are what the supervisor has to go on: without a temperature sensor it estimates the heat from the ESC\'s current, and without either it can\'t see it.' }),
       el('p', { class: 'hint', text: 'The shaft points from the motor to the prop. A puller\'s thrust points along it, toward the prop; a pusher\'s prop is pitched the other way, so its thrust points back toward the motor and it blows air away past the prop. The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
@@ -209,6 +218,7 @@ function compBody(c) {
     if (c.mode === 'manual' || !steer) b.append(slider(c, 'manual'));
     b.append(slider(c, 'range'), slider(c, 'rate'), el('span', { class: 'lbl', text: 'Servo hardware' }),
       slider(c, 'storque'), slider(c, 'slag'), slider(c, 'offset'), checkF(c, 'feedback', 'Servo reports its angle (feedback)'), slider(c, 'jmass'),
+      selectF(c, 'failMode', 'When it fails', [['jam', 'It jams where it is'], ['limp', 'It goes limp']]),
       el('p', { class: 'hint', text: 'Speed is no-load; under load it runs slower, and a heavy load or thrust on an arm can hold it off its target (stall torque). Hidden values are traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'link') {
     const carried = descendants(c);
@@ -420,7 +430,7 @@ function renderEnvelope() {
 }
 function renderMass() {
   const mp = cfg.comps.filter(c => c.type === 'hang').reduce((s, c) => s + c.mass, 0);
-  const tw = actuators().reduce((s, c) => s + c.tmax * c.health / 100, 0) / ((truth.m + mp) * G);
+  const tw = actuators().reduce((s, c) => s + c.tmax * motorEff(c), 0) / ((truth.m + mp) * G);
   const cm = truth.c.map(x => (x * 1000).toFixed(0)).join(', '); const dc = nrm(sub(truth.c, model.c)) * 1000;
   const rows = [['Rigid mass', truth.m.toFixed(3) + ' kg'], ['On cables', mp.toFixed(3) + ' kg'], ['Thrust / weight', tw.toFixed(2)], ['True CoG from hub', `(${cm}) mm`],
     ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller mass error', ((model.m - truth.m - mp) * 1000).toFixed(0) + ' g'],
@@ -613,7 +623,7 @@ function buildSp() {
   const b = $('#spFields'); b.textContent = '';
   b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
     spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
-    spSlider('texture', 'Ground texture (0 water, 1 gravel)', 0, 1, 0.05, '', envr), spSlider('light', 'Light (0 dark, 1 daylight)', 0, 1, 0.05, '', envr));
+    spSlider('texture', 'Ground texture (0 water, 1 gravel)', 0, 1, 0.05, '', envr), spSlider('light', 'Light (0 dark, 1 daylight)', 0, 1, 0.05, '', envr), spSlider('ambient', 'Air temperature', -10, 45, 1, '°C', envr));
 }
 
 /* ───────── header ───────── */
@@ -623,7 +633,7 @@ presetSel.addEventListener('change', () => {   // layouts and your saved designs
   if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) openDesign(d); }
   else loadPreset(v.slice(2));
 });
-function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad(); }
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad(); }
 function afterLoad() {
   frameMassField.refresh();
   truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
@@ -722,7 +732,8 @@ function migrateComps(comps) {
   for (const c of comps) {   // saved before the hidden hardware traits existed
     if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
     if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
-    if (c.type === 'motor') c.push = !!c.push;
+    if (c.type === 'motor') { c.push = !!c.push; for (const [k, v] of Object.entries({ tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50 })) if (c[k] == null) c[k] = v; }
+    if (c.type === 'joint' && !c.failMode) c.failMode = 'jam';
     if (c.type === 'link' && c.roll == null) c.roll = 0;
     if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
     if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
@@ -752,6 +763,7 @@ function load() {
     if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
+    cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
     if (s.designCur || s.designName) bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean };
     return true;
   }
@@ -777,8 +789,8 @@ function boot() {
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
-    envT += dt; if (envT > 0.25) { envT = 0; refreshEnvelope(); }
-    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); }
+    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); }
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

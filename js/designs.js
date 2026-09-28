@@ -11,7 +11,7 @@
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
 const undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
-const designOf = () => ({ frame: cfg.frame.mass, comps: cfg.comps, mode });
+const designOf = () => ({ frame: cfg.frame.mass, comps: cfg.comps, mode, battery: cfg.battery });
 const designSnap = () => JSON.stringify(designOf());
 
 // Called from save() after every change. Records a step when the design itself changed.
@@ -33,7 +33,8 @@ function restoreSnap(s) {
   const d = JSON.parse(s);
   undo.restoring = true;
   try {
-    cfg.frame.mass = d.frame; cfg.comps = d.comps; uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
+    cfg.frame.mass = d.frame; cfg.comps = d.comps; cfg.battery = { ...defaultBattery(), ...(d.battery || {}) }; uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
+    if (typeof renderBattery === 'function') renderBattery();
     setMode(d.mode, false); frameMassField.refresh(); structural();
     if (typeof edit !== 'undefined' && edit.sel != null) selectComp(compById(edit.sel) ? edit.sel : null);
   } finally { undo.restoring = false; }
@@ -111,6 +112,7 @@ async function saveDesign() {
 function applyDesign(d) {
   cfg.frame.mass = +d.frame || 0.45;
   cfg.comps = migrateComps(JSON.parse(JSON.stringify(d.comps)));
+  cfg.battery = { ...defaultBattery(), ...(d.battery || {}) };
   uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
   setMode(['level', 'mixed'].includes(d.mode) ? d.mode : 'tilt', false); openSet.clear();
   if (typeof edit !== 'undefined' && edit.sel != null) selectComp(null);

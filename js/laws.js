@@ -97,13 +97,21 @@ function servoTorque(err, rate, p) {
   return p.stall * (clamp(err / p.band, -1, 1) - rate / p.speed);
 }
 
-function batteryModel(st, current, dt) {
-  // A 4-cell LiPo: open-circuit voltage falls as it drains, and the pack sags under current through its
-  // internal resistance. current: total draw [A] (negative when braking motors push charge back).
-  const cells = 4, capacity = 1.3 * 3600, rInt = 0.06;               // [C], [Ω]
+function batteryModel(st, current, dt, p) {
+  // A LiPo: open-circuit voltage falls as it drains, and the pack sags under current through its internal
+  // resistance. current: total draw [A] (negative when braking motors push charge back).
+  // p: { cells still working, capacity [C] after wear, rInt [Ω] at its temperature, cut: pack disconnected }
+  const cells = p ? p.cells : 4, capacity = p ? p.capacity : 1.3 * 3600, rInt = p ? p.rInt : 0.06;
   if (st.soc === undefined) st.soc = 1;
-  st.soc = clamp(st.soc - current * dt / capacity, 0, 1);
-  return cells * (3.5 + 0.7 * st.soc) - rInt * current;             // terminal voltage [V]
+  if (p && p.cut) return 0;
+  st.soc = clamp(st.soc - current * dt / Math.max(1, capacity), 0, 1);
+  return Math.max(0, cells * (3.5 + 0.7 * st.soc) - rInt * current);   // terminal voltage [V]
+}
+
+function thermalModel(T, P, G, C, Tamb, dt) {
+  // A part that heats up and cools down: heat capacity C [J/K], heated by P [W], losing G·(T − Tamb) to the
+  // air (G [W/K] grows with airflow). Motors: P = i²R in the windings. Battery: P = I²R inside the pack.
+  return T + dt * (P - G * (T - Tamb)) / C;
 }
 
 function wakeVelocity(point, rotors) {
@@ -621,20 +629,22 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
 
 // ═════════════ Controller ═════════════
 
-function positionControl(ep, v, ip, m, g) {
+function positionControl(ep, v, ip, m, g, lim) {
   // ep: position error, v: velocity error (hub velocity − commanded velocity), ip: integral of ep; world frame
+  // lim: { accel } the most horizontal acceleration to ask for [m/s²] (the supervisor lowers it to fly gently)
   const kp = 4, kd = 3.6, ki = 1.0;                      // acceleration units, so they fit any mass
   const a = [0, 1, 2].map(i => kp * ep[i] - kd * v[i] + ki * ip[i]);
-  const ah = Math.hypot(a[0], a[1]);
-  if (ah > 6) { a[0] *= 6 / ah; a[1] *= 6 / ah; }        // limit the horizontal demand
+  const ah = Math.hypot(a[0], a[1]), amax = lim && lim.accel > 0 ? lim.accel : 6;
+  if (ah > amax) { a[0] *= amax / ah; a[1] *= amax / ah; }   // limit the horizontal demand
   a[2] = clamp(a[2], -6, 8);
   return scl(add(a, [0, 0, g]), m);                      // desired total force, world frame
 }
 
-function thrustAxisTarget(Fd, mode, share) {
+function thrustAxisTarget(Fd, mode, share, leanMax) {
   // share (mixed mode): part of the sideways force the servos make, so the body only leans for the rest
+  // leanMax: the most the body may lean [°] (35 unless the supervisor lowers it)
   if (mode === 'level') return [0, 0, 1];                // keep the thrust axis vertical
-  const maxTilt = 35 * Math.PI / 180;
+  const maxTilt = (leanMax > 0 ? leanMax : 35) * Math.PI / 180;
   const s = mode === 'mixed' ? clamp(share || 0, 0, 1) : 0;
   let n = unit([Fd[0] * (1 - s), Fd[1] * (1 - s), Fd[2]]);   // point the thrust axis along the part the body makes
   if (Math.acos(clamp(n[2], -1, 1)) > maxTilt) {
@@ -697,6 +707,135 @@ function allocation(cols, lo, hi, wd, mode, pull) {
   // 3. Of all the ways to make that same move, the preferred one. The pulls are tiny next to the move, so
   //    they only decide where there is a real choice: a hexacopter's spare motors, a servo vs. a motor.
   return bls(cols, lo, hi, made(x), W, { q: pull.q, r: pull.r, rel: 1e-5 });
+}
+
+function voltageCompensation(u, vMeas, vRef) {
+  // A motor's speed, and so its thrust, follows the voltage the ESC puts across it: throttle × pack voltage.
+  // Scaling the throttle by vRef / vMeas gives the same thrust from a sagging or draining pack as from one at
+  // vRef, so the controller's tables stay true through the flight.
+  return clamp(u * vRef / Math.max(1, vMeas), 0, 1);
+}
+
+// ═════════════ Supervisor (the companion computer) ═════════════
+
+function actuatorHealth(st, batch, dt, memory) {
+  // What isn't doing what the flight controller's table says, from its data stream. Each sample:
+  // phi[i] = motor i's column × its thrust (a 6-vector: what the table says it's doing); psi[k] = how the
+  // drone would move if steering servo k were a little further round than the controller believes (its
+  // rotors' column derivatives × their thrust); y = the drone's measured [acceleration; angular acceleration].
+  // The gap r = y − Σ phi_i is steady while the table holds (small modelling errors, which a slow average
+  // learns). When a motor loses a share κ of its effect the gap moves by −κ·phi_i; when a servo is really δ
+  // further round than believed, by δ·psi_k; either way whatever the controller does about it, because it
+  // still counts on its table. Each motor and each servo is tried as the one explanation for the change:
+  //   κ_i = ⟨Δr, −phi_i⟩ / ‖phi_i‖²,  η_i = 1 − κ_i          δ_k = ⟨Δr, psi_k⟩ / ‖psi_k‖²
+  // and only the best explanation is reported, with conf = how much of the change it explains × how
+  // clearly the change stands out from the ordinary noise. memory: how long the normal gap is averaged [s].
+  const n = batch.length ? batch[0].phi.length : (st.eta ? st.eta.length : 0), ns = batch.length && batch[0].psi ? batch[0].psi.length : (st.del ? st.del.length : 0);
+  const init = (n, ns) => Object.assign(st, { eta: new Array(n).fill(1), conf: new Array(n).fill(0), del: new Array(ns).fill(0), sconf: new Array(ns).fill(0), lag: null, lagS: null, base: null, E: 0, N: 1e-2, pp: null, rp: null, sp: null, sr: null, k: 0 });
+  if (!st.eta || st.eta.length !== n || st.del.length !== ns) init(n, ns);
+  const w = [1, 1, 1, 0.05, 0.05, 1];                       // rows: rotation is ~20× force per unit, yaw ~1×
+  const kl = Math.min(1, 0.02 / 0.035), kf = 0.02 / 0.25, ks = 0.02 / memory;
+  const proj = (vs, d, rp, pp, sign) => vs.forEach((p, i) => { let dp = 0, q2 = 0; for (let j = 0; j < 6; j++) { const q = w[j] * p[j]; dp += d[j] * q; q2 += q * q; } rp[i] += kf * (sign * dp - rp[i]); pp[i] += kf * (q2 - pp[i]); });
+  for (const s of batch) {
+    const psi = s.psi || [];
+    if (s.phi.length !== st.eta.length || psi.length !== st.del.length) init(s.phi.length, psi.length);   // the parts changed: start over
+    st.lag = st.lag ? st.lag.map((r, i) => r.map((v, j) => v + kl * (s.phi[i][j] - v))) : s.phi.map(r => r.slice());   // the motors' spin-up delay
+    st.lagS = st.lagS ? st.lagS.map((r, i) => r.map((v, j) => v + kl * (psi[i][j] - v))) : psi.map(r => r.slice());
+    const r = s.y.map((v, j) => w[j] * (v - st.lag.reduce((a, p) => a + p[j], 0)));
+    if (!st.base) { st.base = r.slice(); st.pp = st.lag.map(() => 0); st.rp = st.lag.map(() => 0); st.sp = psi.map(() => 0); st.sr = psi.map(() => 0); continue; }
+    const d = r.map((v, j) => v - st.base[j]);                     // the change in the gap
+    st.E += kf * (d.reduce((a, v) => a + v * v, 0) - st.E);
+    proj(st.lag, d, st.rp, st.pp, -1); proj(st.lagS, d, st.sr, st.sp, 1);
+    // Learn the normal gap and the noise: quickly for the first 3 s, then only while nothing stands out (and
+    // very slowly even then, so a lasting change that isn't a fault is eventually taken as the new normal).
+    st.k++;
+    const warm = st.k < 150, quiet = warm || st.E < 4 * st.N, kb = warm ? 0.05 : quiet ? ks : ks * 0.05;
+    st.base = st.base.map((v, j) => v + kb * (r[j] - v));
+    if (quiet) st.N += (warm ? 0.05 : ks) * (Math.max(st.E, 1e-6) - st.N);
+  }
+  if (!st.pp) return { eta: st.eta.slice(), conf: st.conf.slice(), del: st.del.slice(), sconf: st.sconf.slice() };
+  const coef = (rp, pp) => rp.map((x, i) => pp[i] > 1e-6 ? x / pp[i] : 0);
+  const fitOf = (c, pp) => c.map((k, i) => st.E > 1e-9 ? clamp(k * k * pp[i] / st.E, 0, 1) : 0);
+  const kap = coef(st.rp, st.pp), dl = coef(st.sr, st.sp), fm = fitOf(kap, st.pp), fs = fitOf(dl, st.sp);
+  const stand = st.k < 150 ? 0 : st.E / (st.E + 4 * st.N);
+  const bm = fm.reduce((b, f, i) => f > fm[b] ? i : b, 0), bs = fs.length ? fs.reduce((b, f, i) => f > fs[b] ? i : b, 0) : -1;
+  const servoWins = bs >= 0 && fs[bs] > (fm[bm] || 0);
+  st.eta = kap.map((k, i) => !servoWins && i === bm ? clamp(1 - k, -0.5, 1.5) : 1);
+  st.conf = fm.map((f, i) => !servoWins && i === bm ? f * stand : 0);
+  st.del = dl.map((x, i) => servoWins && i === bs ? clamp(x, -1.5, 1.5) : 0);
+  st.sconf = fs.map((f, i) => servoWins && i === bs ? f * stand : 0);
+  return { eta: st.eta.slice(), conf: st.conf.slice(), del: st.del.slice(), sconf: st.sconf.slice() };
+}
+
+function faultDecision(obs, prev, dt) {
+  // What to do about each motor and servo, from what the supervisor sees. Motors: { id, name, on, eff (its
+  // table scale now), cmd (thrust asked, 0–1), temp (°C, from a sensor or estimated from ESC current; null
+  // if unknown), tmax, rpmRatio (ESC rpm ÷ what the command should give; null without telemetry), eta, conf }.
+  // Servos (kind 'servo'): { id, name, angle (what the controller believes) [rad], delta, conf }. eta, delta
+  // and conf come from actuatorHealth. prev: this function's result last time (timers live in it).
+  // Returns { acts: { [id]: { state, on, eff, cap, why } }, joints: { [id]: { state, on, angle, why } }, t }.
+  const t = prev.t || {}, acts = {}, joints = {};
+  for (const o of obs.filter(o => o.kind === 'servo')) {
+    // A servo that isn't where the controller believes: leave it out of the steering and tell the controller
+    // where it really is (kept up to date while it stays out, since a limp one keeps moving).
+    const k = t['s' + o.id] || (t['s' + o.id] = { off: 0 }), p = (prev.joints || {})[o.id];
+    const fb = o.fbErr != null && Math.abs(o.fbErr) > 0.09;          // with feedback: it reports it isn't following its command
+    k.off = fb || (o.conf > 0.6 && Math.abs(o.delta) > 0.05) ? k.off + dt : 0;
+    if (p || k.off > 0.5) joints[o.id] = { state: 'stuck', on: false, angle: o.fbErr != null ? o.angle : o.angle + (o.conf > 0.4 ? o.delta : 0),
+      why: p ? p.why : fb ? 'it reports it isn\'t following its commands' : `it isn't where it was told to go (${Math.round(o.delta * 180 / Math.PI)}° off)` };
+  }
+  for (const o of obs.filter(o => o.kind !== 'servo')) {
+    const k = t[o.id] || (t[o.id] = { dead: 0, weak: 0 }), p = (prev.acts || {})[o.id] || {};
+    let on = o.on, eff = o.eff, state = 'ok', why = '';
+    // Failed: the ESC says it isn't spinning, or it has stopped doing anything while being asked to.
+    const noSpin = o.rpmRatio != null && o.rpmRatio < 0.3, noEffect = o.conf > 0.7 && o.eta < 0.25;
+    k.dead = o.cmd > 0.15 && (noSpin || noEffect) ? k.dead + dt : 0;
+    if (!on || k.dead >= (noSpin ? 0.2 : 0.5)) {
+      on = false; state = 'failed';
+      why = !o.on && p.why ? p.why : noSpin ? 'the ESC reports it has stopped' : 'it no longer moves the drone';
+    } else {
+      // Degraded: its effect has settled well away from what the table says. Rescale the table to match.
+      const off = o.conf > 0.3 && o.eta < 0.88;   // parts wear, they don't get stronger
+      k.weak = off ? k.weak + dt : 0;
+      if (k.weak > 1.5) { eff = clamp(o.eff * o.eta, 0.15, 1.3); k.weak = 0; why = `it delivers ${Math.round(o.eta * 100)}% of what its table says`; }
+      if (eff < 0.97) state = 'degraded';
+    }
+    // Hot: ease it off before it's damaged. Full throttle up to 20 °C below its limit, 55% at the limit.
+    let cap = 1;
+    if (o.temp != null && on) {
+      cap = clamp(1 - 0.45 * (o.temp - (o.tmax - 20)) / 20, 0.55, 1);
+      if (cap < 0.999) { if (state === 'ok') state = 'hot'; why = why || `running at ${Math.round(o.temp)} °C (limit ${o.tmax})`; }
+    }
+    acts[o.id] = { state, on, eff, cap, why: why || p.why || '' };
+  }
+  return { acts, joints, t };
+}
+
+function flightPolicy(sum, prev) {
+  // How to fly on what's left. sum: { margin: the most lift the working motors can make ÷ weight, cellLost: a battery cell failed, rpOk / yawOk:
+  // whether roll and pitch / yaw can still be held at hover (dt: time since last call), anyFailed, hot: hottest motor as a share of its
+  // limit (null if nothing is measured), soc: battery charge 0–1, vCell: V per cell, battT, battMax (°C) }.
+  // Returns { mode: 'normal' | 'caution' | 'return' | 'land', lim: { speed [m/s] | null, lean [°], accel [m/s²] }, why }.
+  // It never steps back down on its own: once it's heading home, it stays heading home.
+  const rank = { normal: 0, caution: 1, return: 2, land: 3 };
+  let mode = 'normal', why = '';
+  const up = (m, w) => { if (rank[m] > rank[mode]) { mode = m; why = w; } };
+  if (sum.hot != null && sum.hot > 0.85) up('caution', 'a motor is running hot');
+  if (sum.battT != null && sum.battT > sum.battMax - 8) up('caution', 'the battery is hot');
+  if (sum.margin < 1.6) up('caution', `lift margin ${sum.margin.toFixed(2)}×`);
+  if (sum.anyFailed) up('return', 'a motor has failed');
+  if (sum.margin < 1.35) up('return', `lift margin only ${sum.margin.toFixed(2)}×`);
+  if (sum.cellLost) up('return', 'a battery cell has failed');
+  if (sum.soc != null && sum.soc < 0.2) up('return', 'battery below 20%');
+  if (sum.vCell != null && sum.vCell < 3.3) up('return', 'battery voltage low');
+  const rpBad = sum.rpOk ? 0 : ((prev && prev.rpBad) || 0) + (sum.dt || 0.1);   // lost for a whole second, not one bad reading
+  if (rpBad > 1) up('land', 'roll and pitch can no longer be held');
+  if (sum.margin < 1.08) up('land', 'not enough lift to stay up');
+  if (sum.soc != null && sum.soc < 0.08) up('land', 'battery nearly empty');
+  if (sum.battT != null && sum.battT > sum.battMax + 5) up('land', 'battery overheating');
+  if (prev && rank[prev.mode] > rank[mode]) { mode = prev.mode; why = prev.why; }
+  const lim = { normal: { speed: null, lean: 35, accel: 6 }, caution: { speed: 2, lean: 20, accel: 3 }, return: { speed: 1.5, lean: 15, accel: 2 }, land: { speed: 0.5, lean: 10, accel: 1.5 } }[mode];
+  return { mode, lim, why, rpBad };
 }
 
 function allocationPreferences(inputs, prefs) {
@@ -812,9 +951,13 @@ const LAW_DEFS = [
     doc: 'Rotor wash hitting the hub, rigid masses and cable payloads pushes them along the wake.',
     args: [['w', 'wake air velocity at the part [m/s]'], ['area', 'frontal area of the part [m²]']], returns: 'force [N]', shape: 3, sample: () => [[0, 0, -5], 0.01] },
   { key: 'batteryModel', group: 'plant', fn: batteryModel, title: 'Battery',
-    math: [`<i>V</i> = 4 (3.5 + 0.7·SoC) − <i>R</i><sub>int</sub> <i>I</i>, &nbsp;SoĊ = −<i>I</i> / capacity`],
-    doc: 'A 4-cell, 1.3 Ah LiPo. It drains with the current all the motors draw and sags under load, so the same throttle gives less thrust as the flight goes on and during hard manoeuvres. Reset restores a full pack.',
-    args: [['st', 'battery state (soc)'], ['current', 'total draw [A]'], ['dt', 'time step [s]']], returns: 'terminal voltage [V]', shape: 'n', sample: () => [{}, 12, 0.0005] },
+    math: [`<i>V</i> = <i>n</i><sub>cells</sub> (3.5 + 0.7·SoC) − <i>R</i><sub>int</sub>(<i>T</i>) <i>I</i>, &nbsp;d(SoC)/d<i>t</i> = −<i>I</i> / capacity`],
+    doc: 'A LiPo, sized by the Battery settings (4 cells, 1.3 Ah and 60 mΩ by default). It drains with the current all the motors draw and sags under load, so the same throttle gives less thrust as the flight goes on and during hard manoeuvres, unless the flight controller measures the voltage and corrects for it. A warm pack sags less (its resistance falls about 1.5% per °C), overheating costs it capacity and adds resistance for good, and a failed cell takes 3.5–4.2 V away. Reset restores a fresh pack.',
+    args: [['st', 'battery state (soc)'], ['current', 'total draw [A]'], ['dt', 'time step [s]'], ['p', '{ cells, capacity [C], rInt [Ω], cut }']], returns: 'terminal voltage [V]', shape: 'n', sample: () => [{}, 12, 0.0005, { cells: 4, capacity: 4680, rInt: 0.06, cut: false }] },
+  { key: 'thermalModel', group: 'plant', fn: thermalModel, title: 'Heating and cooling',
+    math: [`<i>C</i> d<i>T</i>/d<i>t</i> = <i>P</i> − <i>G</i> (<i>T</i> − <i>T</i><sub>air</sub>)`, `motor: <i>P</i> = <i>i</i>²<i>R</i>(<i>T</i>), &nbsp;<i>G</i> = <i>G</i><sub>full</sub>(0.3 + 0.7 Ω/Ω<sub>max</sub>), &nbsp;<i>R</i> +0.39%/K, magnet −0.12%/K`, `battery: <i>P</i> = <i>I</i>²<i>R</i><sub>int</sub>`],
+    doc: 'Each motor and the battery warm up from the current through their resistance and cool into the air. A motor cools best with its prop at full speed. Its cooling is sized so that full throttle held without a break would settle 25% above its limit, so full throttle is for bursts; the card\'s Cooling setting scales it. A hot motor has more winding resistance and a weaker magnet, so it wastes more and pulls less. Past its limit its magnet weakens for good (0.06% of its thrust per second per degree over), and 35 °C past it, it fails the way its card says. The battery loses capacity past its limit and fails 25 °C past it.',
+    args: [['T', 'temperature now [°C]'], ['P', 'heat made [W]'], ['G', 'cooling [W/K]'], ['C', 'heat capacity [J/K]'], ['Tamb', 'air temperature [°C]'], ['dt', 'time step [s]']], returns: 'temperature after dt [°C]', shape: 'n', sample: () => [40, 10, 0.2, 30, 25, 0.0005] },
   { key: 'imuModel', group: 'sensor', fn: imuModel, title: 'IMU (gyro + accelerometer)',
     math: [`${V('ω̃')} = sat(${V('ω')}<sub>s</sub> + ${V('ω')}<sub>vib</sub> + ${V('b')}<sub>g</sub> + ${V('n')}<sub>g</sub>), &nbsp;${V('ḃ')}<sub>g</sub> = random walk`, `${V('f̃')} = sat(<i>S</i><sub>a</sub>${V('f')} + ${V('a')}<sub>vib</sub> + ${V('b')}<sub>a</sub> + ${V('n')}<sub>a</sub>), &nbsp;${V('f')} = the acceleration of the body the IMU is on, at the IMU, minus gravity`, `<i>S</i> = scale errors on the diagonal, small axis misalignments off it`],
     doc: 'r is the IMU\'s offset from the center of gravity, so an off-center accelerometer also feels rotation. Vibration is a sum of sinusoids at each motor\'s rotation frequency, stronger near busy motors; a slow IMU rate aliases it into low frequencies.',
@@ -902,13 +1045,13 @@ const LAW_DEFS = [
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',
-    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²']], returns: 'desired total force, world [N]',
-    shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81] },
+    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²'], ['lim', '{ accel }: most horizontal acceleration [m/s²], from the supervisor']], returns: 'desired total force, world [N]',
+    shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81, { accel: 6 }] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
     math: [`tilt body: ${V('n')}<sub>d</sub> = ${V('F')}<sub>d</sub> / ‖${V('F')}<sub>d</sub>‖, &nbsp;at most 35° from vertical`, `mixed: ${V('n')}<sub>d</sub> ∝ ((1 − <i>s</i>)<i>F</i><sub>x</sub>, (1 − <i>s</i>)<i>F</i><sub>y</sub>, <i>F</i><sub>z</sub>), &nbsp;<i>s</i> = the servos' share of the sideways force`, `stay level: ${V('n')}<sub>d</sub> = ${V('ẑ')}`],
     doc: 'Where the craft\'s nominal thrust axis should point. The desired attitude is built from this and the target heading. In mixed steering the body leans only for the part of the sideways force the servos aren\'t making; the simulator lowers s automatically when the servos can\'t deliver their share.',
-    args: [['Fd', 'desired force, world [N]'], ['mode', '"tilt", "mixed" or "level"'], ['share', 'servos\' share of the sideways force (mixed)']], returns: 'desired thrust axis, world (normalized afterwards)',
-    shape: 3, sample: () => [[1, 0, 9.81], 'mixed', 0.5] },
+    args: [['Fd', 'desired force, world [N]'], ['mode', '"tilt", "mixed" or "level"'], ['share', 'servos\' share of the sideways force (mixed)'], ['leanMax', 'most the body may lean [°], from the supervisor']], returns: 'desired thrust axis, world (normalized afterwards)',
+    shape: 3, sample: () => [[1, 0, 9.81], 'mixed', 0.5, 35] },
   { key: 'attitudeError', group: 'ctrl', fn: attitudeError, title: 'Attitude error',
     math: [`${V('e')}<sub>R</sub> = ½ (<i>R</i><sub>d</sub><sup>T</sup><i>R</i> − <i>R</i><sup>T</sup><i>R</i><sub>d</sub>)<sup>∨</sup>`],
     doc: 'Geometric attitude error on SO(3). The simulator integrates it for the attitude integral, clamped to ±0.5 rad·s.',
@@ -929,6 +1072,10 @@ const LAW_DEFS = [
     doc: 'The allocation works in thrust fractions v; this turns each into the throttle to send, using the bend k̂ the motor tests measured. It makes a motor as predictable near idle as near full power, which matters when a hard correction drives it far from hover.',
     args: [['v', 'wanted thrust as a fraction of max'], ['bend', 'learned bend k̂ (0 until measured)']], returns: 'throttle 0–1',
     shape: 'n', sample: () => [0.4, 0.3] },
+  { key: 'voltageCompensation', group: 'ctrl', fn: voltageCompensation, title: 'Battery voltage correction',
+    math: [`<i>u</i><sub>sent</sub> = <i>u</i> · <i>V</i><sub>ref</sub> / <i>V</i><sub>measured</sub>`],
+    doc: 'Runs when the battery voltage sensor is fitted. A motor\'s speed follows throttle × pack voltage, so this keeps the thrust for a given command the same as the pack drains or sags under a hard manoeuvre, and the controller\'s tables (described or learned) stay true. V_ref is the voltage the motors are rated at (16 V).',
+    args: [['u', 'throttle the controller wants'], ['vMeas', 'measured pack voltage [V]'], ['vRef', 'reference voltage [V]']], returns: 'throttle sent to the ESC', shape: 'n', sample: () => [0.5, 14.8, 16] },
   { key: 'allocation', group: 'ctrl', fn: allocation, title: 'Control allocation',
     math: [`1. ${V('u')}₁ = argmin ‖<i>W</i><sub>−yaw</sub><sup>½</sup>(<i>B</i>${V('u')} − ${V('w')}<sub>d</sub>)‖² &nbsp;subject to &nbsp;${V('u')}<sub>min</sub> ≤ ${V('u')} ≤ ${V('u')}<sub>max</sub> &nbsp;(lift and tilt first)`, `2. ${V('u')}₂: as much yaw as it can get while keeping <i>B</i>${V('u')}₁'s lift, roll and pitch`, `3. ${V('u')}* = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − <i>B</i>${V('u')}₂)‖² + 10<sup>−5</sup><i>ē</i> Σ<sub>j</sub> <i>q</i><sub>j</sub>((<i>u</i><sub>j</sub> − <i>r</i><sub>j</sub>)/span<sub>j</sub>)², same limits`],
     doc: 'Inputs are thrust fractions from 0 to 1, so B is in acceleration per full thrust; it comes either from the airframe description or from identification. Called twice per control step. Stage 1 decides the servos: each servo rotor contributes its thrust and a small angle change δ, bounded by how far the servo can really get in the next moment (its learned speed and lag). Stage 2 solves every motor\'s thrust at the servos\' actual angles, so the motors cover whatever a moving servo hasn\'t reached yet. The first solve gets as close to the wanted lift and tilt as the limits allow, but never gives up more than a quarter of the lift for them: a torque nothing can cancel (a big rotor off the balance point) would otherwise be "fixed" by switching that rotor off. Then yaw gets what is left: when yaw can\'t be had, it gives way rather than the thrust. The last solve keeps that move and, wherever there is more than one way to make it, picks by the q, r pulls from allocationPreferences. ē is the typical effect of one input.',
@@ -939,6 +1086,21 @@ const LAW_DEFS = [
     doc: 'The tie-breakers the allocation uses when the same move can be made in more than one way. Allowance keeps every device away from its limits, so there is room to react to the next surprise; near a limit it dominates, for example easing off a nearly maxed motor and tilting a servo to make up the difference. Efficiency prefers the move that costs the least rotor power. Servo moves cost more for a slow or laggy servo, so fast corrections go to the motors and the servos take the steady part. The weights are the three sliders under Allocation; the servo speed and lag come from the actuator tests.',
     args: [['inputs', '[{ kind, x, lo, hi, power | th, range, reach }] one per input'], ['prefs', '{ allowance, efficiency, servoMove }']], returns: '{ q, r } one pull per input',
     shape: 'pull', sample: () => [[{ kind: 'thrust', x: 0.5, lo: 0, hi: 1, power: 100, authority: 1 }, { kind: 'thrust', x: 0.95, lo: 0, hi: 1, power: 100, authority: 0.5 }, { kind: 'servo', x: 0, lo: -0.2, hi: 0.2, th: 0.3, range: 0.6, reach: 0.2, authority: 0.8 }], { allowance: 0.02, efficiency: 0.02, servoMove: 0.01 }] },
+  { key: 'actuatorHealth', group: 'super', fn: actuatorHealth, title: 'Actuator health check',
+    math: [`gap ${V('r')} = ${V('y')} − Σ<sub>i</sub> ${V('φ')}<sub>i</sub>, &nbsp;${V('φ')}<sub>i</sub> = <i>B</i><sub>i</sub> <i>v</i><sub>i</sub> (motor <i>i</i>'s column × its thrust); &nbsp;Δ${V('r')} = ${V('r')} − its normal value`, `motor <i>i</i> alone: κ<sub>i</sub> = ⟨Δ${V('r')}, −${V('φ')}<sub>i</sub>⟩ / ‖${V('φ')}<sub>i</sub>‖², &nbsp;η<sub>i</sub> = 1 − κ<sub>i</sub> &nbsp;(1: as its table says, 0.6: 40% weaker, ≈ 0: not working)`],
+    doc: 'Runs on the supervisor at 10 Hz on the flight controller\'s data stream (50 Hz, 40 ms late over the link). The controller\'s table says what each motor is doing; the IMU says what the drone does. The gap between them stays put while the table holds (a slow average learns it, with the ordinary noise). When a motor weakens, the gap moves by the part of it that went missing, even while the controller fights it, because the table still counts on that motor. Each motor is tried as the single explanation; the best fit gives which motor and how much it lost. conf is that fit times how clearly the change stands out.',
+    args: [['st', 'its own state'], ['batch', '[{ phi: one 6-vector per motor, psi: one per steering servo, y: measured [a; α] }] samples since last time'], ['dt', 'time since last call [s]'], ['memory', 'how long past data counts [s]']], returns: '{ eta, conf }: one per motor; { del, sconf }: one per servo',
+    shape: { eta: 'n', conf: 'n', del: 'n', sconf: 'n' }, sample: () => [{}, [{ phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], y: [0, 0, 10, 0, 200, 0] }, { phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], y: [0, 0, 7, -80, 120, -4] }], 0.1, 8] },
+  { key: 'faultDecision', group: 'super', fn: faultDecision, title: 'Fault decisions',
+    math: [`failed: ESC rpm &lt; 30% of what the command should give for 0.2 s, or η &lt; 0.25 (conf &gt; 0.7) for 0.5 s while it's asked for thrust → removed (its limit set to 0)`, `degraded: η &lt; 0.88 held for 1.5 s (conf &gt; 0.3) → its column in the table × η`, `servo stuck: |δ| &gt; 3° (conf &gt; 0.6) for 0.5 s → left out of the steering, the controller told its real angle`, `hot: ceiling = 1 − 0.45 (<i>T</i> − (<i>T</i><sub>max</sub> − 20)) / 20, &nbsp;between 55% and 100%`],
+    doc: 'Turns what the supervisor sees into settings for the flight controller. A failed motor is taken out of the allocation, a degraded one has its column in the table (learned or described) scaled to what it really does, a stuck servo is taken out of the steering and the controller is told where it really is (so its rotor\'s column is right again), and a hot one is capped so the others take more of the load before it\'s damaged. Temperatures come from a sensor, or, if the ESC reports current, from the same heating model run on the supervisor; without either, heat can\'t be seen.',
+    args: [['obs', '[{ id, name, on, eff, cmd, temp, tmax, rpmRatio, eta, conf }] one per motor'], ['prev', 'its result last time'], ['dt', 'time since last call [s]']], returns: '{ acts: { id: { state, on, eff, cap, why } }, t }',
+    shape: 'obj', sample: () => [[{ id: 1, name: 'M1', on: true, eff: 1, cmd: 0.4, temp: 70, tmax: 120, rpmRatio: 1, eta: 0.98, conf: 0.8 }], {}, 0.1] },
+  { key: 'flightPolicy', group: 'super', fn: flightPolicy, title: 'Flight policy',
+    math: [`land: roll/pitch lost, lift margin &lt; 1.08×, battery &lt; 8% or overheating`, `return home and land: a motor or a battery cell failed, margin &lt; 1.35×, battery &lt; 20% or &lt; 3.3 V/cell under load`, `careful: a motor above 85% of its limit, a hot battery, or margin &lt; 1.6×`],
+    doc: 'How the drone should fly on what\'s left. Each mode comes with limits the flight controller flies within: top speed, how far the body may lean and how hard it may accelerate sideways. Returning flies home at 1.5 m/s and lands; landing comes straight down and stops the motors on the ground. It only ever steps up: once it has decided to go home, it goes home.',
+    args: [['sum', '{ margin, rpOk, yawOk, anyFailed, cellLost, hot, soc, vCell, battT, battMax }'], ['prev', 'its result last time']], returns: '{ mode, lim: { speed, lean, accel }, why }',
+    shape: 'obj', sample: () => [{ margin: 2, rpOk: true, yawOk: true, anyFailed: false, hot: 0.5, soc: 0.8, vCell: 3.9, battT: 35, battMax: 60 }, { mode: 'normal' }] },
 ];
 
 // Wrench sum and control chain shown at the top of the Formulas tab.
@@ -947,6 +1109,7 @@ const LAW_OVERVIEW = [
   `${V('q')} = frame position and attitude + every servo joint angle; each body obeys ${V('f')} = <i>I</i>${V('a')} + ${V('v')} ×* <i>I</i>${V('v')}`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization'],
-  plant: ['batteryModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
+  super: ['actuatorHealth', 'faultDecision', 'flightPolicy'],
+  plant: ['batteryModel', 'thermalModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

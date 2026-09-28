@@ -48,7 +48,9 @@ function stepCamAnim() {
 const Z = new THREE.Vector3(0, 0, 1);
 const colorOf = n => new THREE.Color(tok(n));
 
+const heatCol = {};
 function buildMaterials() {
+  heatCol.warn = colorOf('--warn'); heatCol.bad = colorOf('--bad'); heatCol.swing = colorOf('--swing');
   mats = {
     frame: new THREE.MeshStandardMaterial({ color: colorOf('--frame'), roughness: 0.6, metalness: 0.2 }),
     motor: new THREE.MeshStandardMaterial({ color: colorOf('--frame'), roughness: 0.4, metalness: 0.5 }),
@@ -177,7 +179,7 @@ function rebuildDrone() {
     if (c.type === 'motor') {
       const mount = new THREE.Group(); mount.position.set(...p); mount.userData.compId = c.id; pickGroups.set(c.id, mount); g.add(mount);
       const axis = new THREE.Group(); mount.add(axis);
-      axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor.clone()); axis.add(body);   // its own material: it glows as it heats
       const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
       const sm = spinMarks(pr, c.spin); sm.userData.noPick = true; axis.add(sm);
@@ -188,7 +190,7 @@ function rebuildDrone() {
       const wake = new THREE.Mesh(new THREE.CylinderGeometry(0.71 * pr, pr, 3 * pr, 24, 1, true).rotateX(Math.PI / 2), mats.wake.clone());
       wake.position.z = 0.02 - 1.5 * pr; if (c.push) { wake.scale.z = -1; wake.position.z = 0.02 + 1.5 * pr; }   // the wake: behind the disc, past the motor for a puller, away from it for a pusher
       wake.visible = false; wake.userData.noPick = true; axis.add(wake);
-      parts.set(c.id, { axis, disc, arrow, wake });
+      parts.set(c.id, { axis, disc, arrow, wake, body, spin: sm });
     } else if (c.type === 'mass') {
       let geo;
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
@@ -255,6 +257,7 @@ function updateScene() {
     const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? previewAngle(j) : angleTrue(j));   // editing: at rest, or the preview
     const rv = rangeVis.get(j.id); if (!rv) continue;
     rv.g.visible = editMode || (view.forces && motorsUnder(j).length > 0);   // flying: a faint fan behind a servo that steers a rotor
+    { const s = hs.get(j.id), broke = s && (s.limp || s.jam != null); for (const k of ['fan', 'line', 'dash']) rv.m[k].color.copy(broke ? heatCol.bad : heatCol.swing); if (broke && !editMode) rv.g.visible = true; }   // a jammed or limp servo shows red
     if (!editMode) { rv.m.fan.opacity = 0.08; rv.m.line.opacity = 0.3; rv.m.dash.opacity = 0; }
     else {   // brighter for the servo you're working on, or one carrying it
       const sel = compById(edit.sel), on = edit.sel === j.id || edit.hover === j.id || (sel && isUnder(sel, j));
@@ -265,7 +268,13 @@ function updateScene() {
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
     p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...mountDir(c)));   // the motor's own mounting; its joints turn the group above
-    const T = st.T * c.health / 100, shown = pj && isUnder(c, pj); p.disc.material.opacity = shown ? 0.45 : 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
+    const T = st.T * motorEff(c), shown = pj && isUnder(c, pj); p.disc.material.opacity = shown ? 0.45 : 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
+    {   // heat: the motor warms toward amber from 30 °C below its limit, red past it; a stopped one's disc turns red
+      const s = hs.get(c.id), lim = c.tmaxC ?? 120, f = s ? clamp((s.T - (lim - 30)) / 30, 0, 1.4) : 0;
+      p.body.material.color.copy(mats.motor.color); if (f > 0) p.body.material.color.lerp(f < 1 ? heatCol.warn : heatCol.bad, Math.min(1, f) * 0.85);
+      p.disc.material.color.copy(s && (s.dead || s.loss > 0.004) ? heatCol.bad : mats.prop.color);
+      if (s && s.dead) p.disc.material.opacity = 0.18;
+    }
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
     else if (editMode) {   // editing: every motor shows which way its thrust points (pull or push); the selected one boldly

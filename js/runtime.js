@@ -21,8 +21,10 @@ function shapeOk(out, shape, args) {
   if (shape === 'vec6') return Array.isArray(out) && out.length === 6 && out.every(isNum);
   if (shape === 'mat3') return Array.isArray(out) && out.length === 9 && out.every(isNum);
   if (shape === 'pull') return !!out && ['q', 'r'].every(k => Array.isArray(out[k]) && out[k].length === args[0].length && out[k].every(isNum));
+  if (shape === 'obj') return !!out && typeof out === 'object';
   if (!out || typeof out !== 'object') return false;
   for (const [k, n] of Object.entries(shape)) {
+    if (n === 'n') { if (!(Array.isArray(out[k]) && out[k].every(isNum))) return false; continue; }
     if (n === 1) { if (!isNum(out[k])) return false; continue; }
     if (n === 'rows') { if (!(Array.isArray(out[k]) && out[k].length === 6 && out[k].every(r => Array.isArray(r) && r.length === args[1].length && r.every(isNum)))) return false; continue; }
     if (!(Array.isArray(out[k]) && out[k].length === n && out[k].every(isNum))) return false;
@@ -36,7 +38,8 @@ function shapeText(shape) {
   if (shape === 'vec6') return 'an array of 6 finite numbers [angular; linear]';
   if (shape === 'mat3') return 'an array of 9 finite numbers (a 3×3 matrix, row by row)';
   if (shape === 'pull') return '{ q, r }: two arrays with one finite number per input';
-  return '{ ' + Object.entries(shape).map(([k, n]) => k + (n === 1 ? ': number' : n === 'rows' ? ': 6 rows, one number per input' : n === 4 ? ': [w, x, y, z]' : ': [x, y, z]')).join(', ') + ' }';
+  if (shape === 'obj') return 'an object';
+  return '{ ' + Object.entries(shape).map(([k, n]) => k + (n === 1 ? ': number' : n === 'n' ? ': [numbers]' : n === 'rows' ? ': 6 rows, one number per input' : n === 4 ? ': [w, x, y, z]' : ': [x, y, z]')).join(', ') + ' }';
 }
 function describe(v) {
   if (v === undefined) return 'undefined';
