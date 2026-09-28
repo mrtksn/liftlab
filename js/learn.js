@@ -78,7 +78,7 @@ function inputVector() {   // what was sent, in the identification's input space
 const cfgToAccel = col => { const f = scl([col[0], col[1], col[2]], 1 / model.m); const a = m3v(model.Jinv, [col[3], col[4], col[5]]); return [...f, ...a]; };
 function describedAt(c, angles) {   // from the airframe description, with the motor's joints at the given angles
   const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
-  return cfgToAccel(scl6(wrenchCol(n.p, n.d, c.spin, c.kappa, model.c), c.tmax * hModel(c)));
+  return cfgToAccel(scl6(wrenchCol(n.p, n.d, spinOf(c), c.kappa, model.c), c.tmax * hModel(c)));
 }
 // Cached per model: the description only changes when the believed mass properties do (a new `model`).
 const descCache = new WeakMap();
@@ -281,7 +281,7 @@ function ditherFor(c, t) {   // tiny excitation while learning in flight
 // Each motor's true basis columns, from the real geometry, mass, inertia, health and battery (no airflow).
 function trueAt(c, angles) {
   const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
-  const col = scl6(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c), c.tmax * c.health / 100 * S.battK);
+  const col = scl6(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c), c.tmax * c.health / 100 * S.battK);
   const f = scl([col[0], col[1], col[2]], 1 / truth.m), a = m3v(truth.Jinv, [col[3], col[4], col[5]]);
   return [...f, ...a];
 }

@@ -5,7 +5,7 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, push: false, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -72,7 +72,13 @@ let onCrash = () => {};
 
 const actuators = () => cfg.comps.filter(c => c.type === 'motor');   // thrust inputs; servo joints are in joints.js
 const hModel = c => c.healthKnown ? c.health / 100 : 1;
-function actDir(c) { const t = c.tilt * D2R, a = c.az * D2R; return [Math.sin(t) * Math.cos(a), Math.sin(t) * Math.sin(a), Math.cos(t)]; }   // thrust axis at rest
+// A motor is mounted along its shaft (tilt, az: the way the shaft points, toward the prop). A puller's thrust
+// points along the shaft, toward the prop (a tractor); a pusher's prop is pitched the other way, so its thrust
+// points back along the shaft, toward the motor, and it blows air away past the prop. Spin is the prop's
+// turning seen looking down the shaft at the prop, so a pusher's spin about its thrust axis is the reverse.
+function mountDir(c) { const t = c.tilt * D2R, a = c.az * D2R; return [Math.sin(t) * Math.cos(a), Math.sin(t) * Math.sin(a), Math.cos(t)]; }
+function actDir(c) { const m = mountDir(c); return c.push ? [-m[0], -m[1], -m[2]] : m; }   // thrust axis at rest
+const spinOf = c => c.push ? -c.spin : c.spin;   // spin about the thrust axis, the way rotorWrench takes it
 function rotorNow(c, ang = angleTrue) { const P = poseOf(c, ang); return { p: P.p, d: m3v(P.R, actDir(c)) }; }   // where a rotor is and points
 function wrenchCol(pos, d, spin, kappa, cog) { const w = run('rotorWrench', d, sub(pos, cog), 1, spin, kappa); return [w.F[0], w.F[1], w.F[2], w.tau[0], w.tau[1], w.tau[2]]; }
 const scl6 = (c, s) => c.map(x => x * s);
@@ -378,9 +384,9 @@ function dynamics(dt) {
   rotorAir(rotors, K, R, RT, wv);
   for (const ro of rotors) {
     const Tw = Math.max(ro.ae.T, 1e-6);
-    const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, ro.c.spin, ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
+    const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, spinOf(ro.c), ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
     push(ro.b, add(rw.F, ro.ae.H), ro.p);
-    const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, ro.c.spin * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
+    const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, spinOf(ro.c) * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
   }
   S.rotors = rotors;
@@ -488,16 +494,16 @@ function envelopeCalc() {
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
     if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)
-      gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); })()), lo: 0, hi: c.tmax * h });
+      gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c); })()), lo: 0, hi: c.tmax * h });
       let grid = [new Map()];   // every combination of its servos' angles, 7 steps across each range (49 at most)
       for (const j of js) { const R = j.range * D2R, st = js.length > 1 ? 4 : 7; grid = grid.flatMap(g => Array.from({ length: st }, (_, i) => new Map([...g, [j.id, -R + 2 * R * i / (st - 1)]]))); }
-      sets.push(grid.map(g => { const n = rotorNow(c, x => g.has(x.id) ? g.get(x.id) : restAngle(x)); return toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)).map(x => x * c.tmax * h); }));
+      sets.push(grid.map(g => { const n = rotorNow(c, x => g.has(x.id) ? g.get(x.id) : restAngle(x)); return toK(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c)).map(x => x * c.tmax * h); }));
       for (const j of js) {
-        const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c); };
+        const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c); };
         const e = 1e-3, sb = Math.sin(j.range * D2R) * c.tmax * h;
         gens.push({ g: toK(at(e).map((v, i) => (v - at(-e)[i]) / (2 * e))), lo: -sb, hi: sb });
       }
-    } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, c.spin, c.kappa, truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
+    } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
   }
   let mp = 0, treq = [0, 0, 0];
   for (const c of cfg.comps) if (c.type === 'hang') { mp += c.mass; treq = add(treq, crs(sub(posNow(c), truth.c), scl(nb, c.mass * G))); }

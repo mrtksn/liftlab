@@ -81,7 +81,7 @@ function setHingeRel(j, az, el) {
 function carriedDir(j) {
   let s = [0, 0, 0];
   for (const c of descendants(j)) for (const q of c.type === 'link' ? [c.pos, linkTip(c)] : [c.pos]) { const r = sub(q, j.pos); if (nrm(r) > 0.008) s = add(s, unit(r)); }
-  if (nrm(s) < 1e-3) { const m = descendants(j).find(c => c.type === 'motor'); if (m) s = actDir(m); }
+  if (nrm(s) < 1e-3) { const m = descendants(j).find(c => c.type === 'motor'); if (m) s = mountDir(m); }
   if (nrm(s) < 1e-3) { const M = mountFrame(j); s = [M[2], M[5], M[8]]; }
   return unit(s);
 }
@@ -191,7 +191,7 @@ function shiftSubtree(a, d) { for (const c of descendants(a)) c.pos = c.pos.map(
 function rotateSubtree(a, R, pivot) {
   for (const c of descendants(a)) {
     c.pos = add(pivot, m3v(R, sub(c.pos, pivot))).map(v => +v.toFixed(4));
-    if (c.type === 'motor') { const d = m3v(R, actDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
+    if (c.type === 'motor') { const d = m3v(R, mountDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
     else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
     else if (c.type === 'joint') setDirAzEl(c, m3v(R, jointAxis(c)), 'hingeAz', 'hingeEl');
     else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
@@ -203,7 +203,7 @@ function rotateSubtree(a, R, pivot) {
 function turnPart(c, R) {
   if (c.type === 'joint') { setDirAzEl(c, m3v(R, jointAxis(c)), 'hingeAz', 'hingeEl'); rotateSubtree(c, R, c.pos); }
   else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
-  else if (c.type === 'motor') { const d = m3v(R, actDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
+  else if (c.type === 'motor') { const d = m3v(R, mountDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
   else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
 }
 // What a part and everything on it look like now, to put back (a drag applies its whole turn from the start).

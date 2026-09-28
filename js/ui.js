@@ -22,7 +22,7 @@ const FD = {
   x: { label: 'X', path: ['pos', 0], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   y: { label: 'Y', path: ['pos', 1], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   z: { label: 'Z', path: ['pos', 2], hmin: -2, hmax: 2,  min: -0.3, max: 0.3, step: 0.005, u: 'm', dp: 3 },
-  tilt: { label: 'Axis tilt from vertical', hmax: 180,  path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
+  tilt: { label: 'Shaft tilt from vertical', hmax: 180,  path: ['tilt'], min: 0, max: 90, step: 1, u: '°', dp: 0 },
   az: { label: 'Tilt toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   prop: { label: 'Prop radius', path: ['prop'], min: 0.03, max: 0.25, hmax: 0.6, step: 0.005, u: 'm', dp: 3 },
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
@@ -98,7 +98,7 @@ function linkPointing(l) { const k = presetOf(ROD_PRESETS, l.az, l.el); return k
 function summary(c) {
   const on = parentOf(c), p = `(${c.pos[0].toFixed(2)}, ${c.pos[1].toFixed(2)}, ${c.pos[2].toFixed(2)})` + (on ? ` · on ${on.name}` : '');
   if (c.type === 'link') { const n = descendants(c).length; return `${Math.round(c.length * 100)} cm · ${linkPointing(c)} · carries ${n}${on ? ' · on ' + on.name : ''}`; }
-  if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
+  if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.push ? 'pusher · ' : ''}${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'sensor') {
@@ -166,7 +166,7 @@ function refreshCard(c) {
 function selectF(c, key, label, opts, onchg) {
   const id = `f-${c.id}-${key}`; const s = el('select', { id });
   for (const [v, t] of opts) { const o = el('option', { value: v, text: t }); if (String(c[key]) === String(v)) o.selected = true; s.append(o); }
-  s.addEventListener('change', () => { const v = s.value; c[key] = isNaN(+v) ? v : +v; edited(c, key); if (onchg) onchg(); });
+  s.addEventListener('change', () => { const v = s.value; c[key] = v === 'true' ? true : v === 'false' ? false : isNaN(+v) ? v : +v; edited(c, key); if (onchg) onchg(); });
   return el('div', { class: 'field' }, el('label', { for: id, text: label }), s);
 }
 function checkF(c, key, label) {
@@ -194,11 +194,12 @@ function compBody(c) {
     sel.addEventListener('change', () => { const p = list.find(x => x[0] === sel.value); if (p[2] == null) return; c[kAz] = p[2]; c[kEl] = p[3]; edited(c, kAz); rerender(); });
     return el('div', { class: 'field' }, el('label', { for: id, text: label }), sel);
   };
-  const spinSel = () => selectF(c, 'spin', 'Spin direction', [[1, 'CCW (from above)'], [-1, 'CW (from above)']]);
+  const spinSel = () => selectF(c, 'spin', 'Spin, facing the prop', [[1, 'CCW'], [-1, 'CW']]);
+  const pushSel = () => selectF(c, 'push', 'Prop', [['false', 'Pulls (tractor)'], ['true', 'Pushes (pusher)']], rerender);
   const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
-      el('p', { class: 'hint', text: 'The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+      el('p', { class: 'hint', text: 'The shaft points from the motor to the prop. A puller\'s thrust points along it, toward the prop; a pusher\'s prop is pitched the other way, so its thrust points back toward the motor and it blows air away past the prop. The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'joint') {
     const carried = descendants(c), steer = motorsUnder(c).length > 0;
     b.append(el('p', { class: 'hint', text: carried.length ? 'Carries: ' + carried.map(x => x.name).join(', ') + '.' : 'Nothing is attached yet. Set a part\'s "Attached to" to this servo.' }));
@@ -721,6 +722,7 @@ function migrateComps(comps) {
   for (const c of comps) {   // saved before the hidden hardware traits existed
     if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
     if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
+    if (c.type === 'motor') c.push = !!c.push;
     if (c.type === 'link' && c.roll == null) c.roll = 0;
     if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
     if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }

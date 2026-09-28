@@ -133,9 +133,13 @@ function rebuildDrone() {
       axis.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
       const pr = propR(c);
       const disc = new THREE.Mesh(new THREE.CircleGeometry(pr, 32), mats.prop.clone()); disc.position.z = 0.02; axis.add(disc);
-      const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.02), 0.1, colorOf('--accent'), 0.03, 0.018); axis.add(arrow);
+      // The group's Z runs along the shaft to the prop. A puller's thrust points that way, a pusher's back past the motor.
+      const arrow = c.push ? new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, -0.017), 0.1, colorOf('--accent'), 0.03, 0.018)
+        : new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 0.02), 0.1, colorOf('--accent'), 0.03, 0.018);
+      axis.add(arrow);
       const wake = new THREE.Mesh(new THREE.CylinderGeometry(0.71 * pr, pr, 3 * pr, 24, 1, true).rotateX(Math.PI / 2), mats.wake.clone());
-      wake.position.z = 0.02 - 1.5 * pr; wake.visible = false; axis.add(wake);   // the wake column below the disc
+      wake.position.z = 0.02 - 1.5 * pr; if (c.push) { wake.scale.z = -1; wake.position.z = 0.02 + 1.5 * pr; }   // the wake: behind the disc, past the motor for a puller, away from it for a pusher
+      wake.visible = false; axis.add(wake);
       parts.set(c.id, { axis, disc, arrow, wake });
     } else if (c.type === 'mass') {
       let geo;
@@ -212,11 +216,13 @@ function updateScene() {
   const pj = previewing();
   for (const c of actuators()) {
     const p = parts.get(c.id); if (!p) continue; const st = act.get(c.id);
-    p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...actDir(c)));   // the motor's own mounting; its joints turn the group above
+    p.axis.quaternion.setFromUnitVectors(Z, tmpV.set(...mountDir(c)));   // the motor's own mounting; its joints turn the group above
     const T = st.T * c.health / 100, shown = pj && isUnder(c, pj); p.disc.material.opacity = shown ? 0.45 : 0.12 + 0.4 * clamp(T / c.tmax, 0, 1);
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
-    else if (shown) { p.arrow.visible = true; p.arrow.setLength(0.16, 0.035, 0.022); }   // where its thrust points as the servo swings
+    else if (shown || (editMode && edit.sel === c.id)) { p.arrow.visible = true; p.arrow.setLength(0.16, 0.035, 0.022); }   // editing: which way the thrust points
+    const over = editMode && edit.sel === c.id;   // drawn over the motor, so a pusher's arrow back through it shows
+    for (const o of [p.arrow.line, p.arrow.cone]) { o.material.depthTest = !over; o.renderOrder = over ? 21 : 0; }   // where its thrust points as the servo swings
   }
   for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
     const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
