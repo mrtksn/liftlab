@@ -1,0 +1,4 @@
+# A 1 kHz FreeRTOS tick, so the flight task can run every tick.
+CONFIG_FREERTOS_HZ=1000
+# Program slots can live in PSRAM on boards that have it (see main.c, RN_SLOTS_IN_PSRAM).
+CONFIG_SPIRAM_ALLOW_BSS_EXT_MEM=y

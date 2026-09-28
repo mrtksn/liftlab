@@ -393,7 +393,11 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags, mot) {
   st.y = y; st.x = x;
   st.th = st.th.map((row, i) => row.map((v, j) => v + K[j] * st.e[i]));
   let trace = 0;
-  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) { P[a][b] = (P[a][b] - K[a] * Px[b]) / lambda; if (a === b) trace += P[a][a]; }
+  for (let a = 0; a < n; a++) {
+    const row = P[a], ka = K[a];
+    for (let b = 0; b < n; b++) row[b] = (row[b] - ka * Px[b]) / lambda;
+    trace += row[a];
+  }
   if (trace > pMax * n) for (const row of P) for (let b = 0; b < n; b++) row[b] *= pMax * n / trace;   // don't blow up without excitation
   return out();
 }

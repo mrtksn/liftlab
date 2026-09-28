@@ -66,10 +66,12 @@ function budgetEnd(dt) {
   if (steady > budget.flightMax) { budget.flightMax = steady; budget.flightMaxKeys = { ...budget.keys }; }
 }
 // Called from run() for every formula call while a control step is being counted.
-function budgetCall(key, args, fn) {
+// On the step runner, the cost is what the runner measured: its steps plus its kernels' arithmetic.
+function budgetCall(key, args, fn, viaRunner) {
   const model = FLIGHT_COST[key], n0 = OPS.n;
   let out;
-  if (model) { OPS.on = false; try { out = fn(); } finally { OPS.on = true; } OPS.n += model(...args); }
+  if (viaRunner) { OPS.on = false; try { out = fn(); } finally { OPS.on = true; } if (out !== undefined) OPS.n += RN.lastWork; }
+  else if (model) { OPS.on = false; try { out = fn(); } finally { OPS.on = true; } OPS.n += model(...args); }
   else out = fn();
   const spent = OPS.n - n0;
   if (isOneOff(key, args)) {

@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+// Builds a program image for the drone from the flight formulas: the defaults in js/laws.js, with any edits.
+// It carries self-tests (real inputs recorded in simulated flights, with the outputs this program gives) that the
+// drone runs when it loads it.
+//   node tools/export_program.js --out flight.rnp [--edit attitudeControl=my_attitude.js …] [--c runner/rn_builtin.c]
+// --c also writes the image as C, to compile into the firmware as its built-in program.
+// The simulator's Formulas tab makes the same file ("Download program for the drone"), with your edits.
+'use strict';
+const fs = require('fs'), path = require('path');
+const { defaultSources, golden } = require('./lib');
+const args = process.argv.slice(2), opt = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
+const srcs = defaultSources();
+args.forEach((a, i) => { if (a === '--edit') { const [k, f] = args[i + 1].split('='); if (!(k in srcs)) throw new Error('no flight formula ' + k); srcs[k] = fs.readFileSync(f, 'utf8'); } });
+const P = rnCompileAll(srcs, RN_SIGS);
+for (const [k, e] of Object.entries(P.errors)) { console.error(`${k}: ${e}`); process.exit(1); }
+rnVerify(P);
+// Two self-tests per formula, from the smallest recorded calls (the image goes over a serial link).
+const G = golden(), samples = [];
+for (const [key, ss] of Object.entries(G)) samples.push(...ss.map(s => ({ key, args: s.args, n: JSON.stringify(s.args).length })).sort((a, b) => a.n - b.n).slice(0, 2));
+const img = rnImage(P, { tests: rnMakeTests(P, samples) });
+const out = opt('--out') || 'flight.rnp';
+fs.writeFileSync(out, img);
+console.log(`${out}: ${img.length} bytes, ${Object.keys(P.fns).length} formulas, arena ${P.arenaSize * 4} bytes, ${P.code.length * 4} bytes of steps`);
+const c = opt('--c');
+if (c) {
+  const words = [], dv = new DataView(img.buffer, img.byteOffset, img.length);
+  for (let i = 0; i < img.length; i += 4) words.push('0x' + dv.getUint32(i, true).toString(16).padStart(8, '0') + 'u');
+  const lines = []; for (let i = 0; i < words.length; i += 8) lines.push('  ' + words.slice(i, i + 8).join(', ') + ',');
+  fs.writeFileSync(c, `/* The built-in flight program: the default flight formulas, compiled by tools/export_program.js. Generated; do not edit. */
+#include <stdint.h>
+/* 32-bit words, so the image is aligned and its steps can run straight from flash (rn_load with code = NULL).
+ * Stored little-endian, as the ESP32 is. */
+const uint32_t rn_builtin_words[] = {
+${lines.join('\n')}
+};
+const uint8_t *const rn_builtin_img = (const uint8_t *)rn_builtin_words;
+const uint32_t rn_builtin_len = ${img.length}u;
+`);
+  console.log(`${c}: the same image as C`);
+}

@@ -789,7 +789,7 @@ function boot() {
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
-    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); }
+    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (typeof renderRunner === 'function' && !$('#paneForm').hidden) renderRunner(); }
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }

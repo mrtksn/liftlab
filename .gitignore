@@ -1,2 +1,4 @@
 .DS_Store
 node_modules/
+runner/runner.wasm
+__pycache__/
