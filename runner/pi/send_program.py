@@ -4,6 +4,7 @@ over a serial port and print what it reports.
 
     python3 send_program.py flight-formulas.rnp /dev/serial0 [--baud 921600]
     python3 send_program.py --status /dev/serial0
+    python3 send_program.py flight.rnp /dev/serial0 --watch 8     (keep listening 8 s after it swaps in)
 
 The image is what the simulator's "Download program for the drone" gives (or tools/export_program.js). The
 drone checks it (every step's addresses, its self-tests, its formulas' inputs), flies it in the background for a
@@ -40,6 +41,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('image', nargs='?'); ap.add_argument('port'); ap.add_argument('--baud', type=int, default=921600)
     ap.add_argument('--status', action='store_true'); ap.add_argument('--wait', type=float, default=5.0)
+    ap.add_argument('--watch', type=float, default=0.2, help='seconds to keep listening after the drone answers')
     a = ap.parse_args()
     import serial
     s = serial.Serial(a.port, a.baud, timeout=0.1)
@@ -52,6 +54,6 @@ def main():
     while time.time() < end:
         for ftype, payload in r.feed(s.read(4096)):
             print(('report: ' if ftype == REPORT else '') + payload.decode('utf-8', 'replace'))
-            if ftype == REPORT or payload.startswith((b'swapped', b'rejected')): end = min(end, time.time() + 0.2)
+            if ftype == REPORT or payload.startswith((b'swapped', b'rejected')): end = time.time() + a.watch
 
 if __name__ == '__main__': main()
