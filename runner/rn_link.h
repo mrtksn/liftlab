@@ -14,6 +14,14 @@
 #include <stdint.h>
 
 enum { RN_LINK_PROGRAM = 1, RN_LINK_STATUS = 2, RN_LINK_EVENT = 0x81, RN_LINK_REPORT = 0x82 };
+/* The flight firmware's (fc/esp32) frames:
+ *   Pi → drone:  RN_LINK_CMD       the pilot's command: 7 little-endian floats (arm, roll, pitch, yaw, throttle,
+ *                                  test motor or −1, test throttle); send it steadily (50 Hz): the drone goes to its
+ *                                  failsafe when they stop for 0.5 s
+ *                RN_LINK_AIRFRAME  an airframe file from the simulator (.dfa); kept in flash (disarmed only)
+ *                RN_LINK_SETTING   one line of text: "key=value", "show", "save", "reboot", "gyro"
+ *   drone → Pi:  RN_LINK_TELEM     36 little-endian floats, 20 times a second (see fc/esp32/main/flight.c) */
+enum { RN_LINK_CMD = 3, RN_LINK_AIRFRAME = 4, RN_LINK_SETTING = 5, RN_LINK_TELEM = 0x83 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

@@ -74,6 +74,21 @@
         </div>
         <p class="hint" id="designWhere"></p>
       </section>
+      <section class="sec" id="fcSec">
+        <h2>Flight controller <small id="filState"></small></h2>
+        <p class="hint">The ESP32 flight code flies on this airframe file. Fly the firmware runs that same C code here, in angle mode: the pilot keys lean and turn the drone and make it climb or sink. With a barometer it holds its height when you let go; it doesn't hold its position.</p>
+        <div class="design-row">
+          <button class="btn" id="fcExport" type="button" title="Save the airframe the flight controller flies on (.dfa), for the Pi to send to the drone">Export for the flight controller</button>
+        </div>
+        <div class="design-row">
+          <button class="btn primary" id="filToggle" type="button">Fly the firmware</button>
+        </div>
+        <div class="design-row">
+          <button class="btn" id="filArm" type="button" disabled>Arm</button>
+          <button class="btn" id="filUp" type="button" disabled>Take off</button>
+        </div>
+        <p class="note" id="filNote" role="status" hidden></p>
+      </section>
       <section class="sec">
         <h2>Attach</h2>
         <div class="addrow">
@@ -313,6 +328,9 @@
 <script src="js/health-ui.js"></script>
 <script src="js/designs.js"></script>
 <script src="js/editor.js"></script>
+<script src="js/fc-export.js"></script>
+<script src="js/fc-wasm.js"></script>
+<script src="js/fc-fil.js"></script>
 <script>boot();</script>
 </body>
 </html>

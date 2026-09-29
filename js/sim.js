@@ -232,6 +232,7 @@ function control(dt) { budgetBegin(); try { controlStep(dt); } finally { budgetE
 function controlStep(dt) {
   senseAndEstimate(dt);
   updateServoBelief(dt);
+  if (typeof FIL !== 'undefined' && FIL.on) { filStep(dt); return; }   // the drone's own flight code flies it (js/fc-fil.js)
   learnStep(dt);
   if (S.crashed || !fc.armed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; a.v = 0; } return; }   // crashed, or landed and disarmed
   if (throwTick(dt)) return;             // throw start: open loop until it has identified itself
@@ -458,7 +459,7 @@ function dynamics(dt) {
 function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
 
 function resetSim() {
-  thr = null;
+  thr = null; if (typeof filStop === 'function') filStop();
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
   buildBodies();
   // start with the nominal thrust axis pointing up at the target heading

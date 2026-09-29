@@ -7,3 +7,7 @@ runner/bench/build/
 runner/bench/sdkconfig
 runner/bench/sdkconfig.old
 .venv/
+runner/fc/fc.wasm
+runner/fc/esp32/build/
+runner/fc/esp32/sdkconfig
+runner/fc/esp32/sdkconfig.old
