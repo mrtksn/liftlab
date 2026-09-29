@@ -277,11 +277,12 @@ function rnSetWant(on) {
   if (RN.want) rnRebuild(); else rnCancelStage();
   rnRender();
 }
-// The program as the companion computer would send it to the drone, with self-tests from this flight.
+// The program as the companion computer would send it to the drone, with self-tests from this flight (the
+// small ones, so it fits a board's receive buffer: under 48 KB).
 function rnDownload() {
   if (!RN.P) return;
   const samples = []; for (const k of Object.keys(RN.samples)) for (const s of RN.samples[k]) samples.push(s);
-  const img = rnImage(RN.P, { tests: rnMakeTests(RN.P, samples) }), blob = new Blob([img], { type: 'application/octet-stream' });
+  const img = rnImage(RN.P, { tests: rnMakeTests(RN.P, samples, 600) }), blob = new Blob([img], { type: 'application/octet-stream' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flight-formulas.rnp';
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }

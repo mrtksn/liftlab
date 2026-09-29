@@ -49,6 +49,7 @@ typedef struct {
   float selftest_tol;
   int last_event; char last_fn[RN_NAME];
   int pending;                      /* a slot prepared on the link core, started by the next rn_host_tick */
+  volatile int to_builtin;          /* two slots: the flight loop hands over to the built-in program */
   volatile int in_call;             /* a formula call is running (rn_host_prepare waits for it before reusing a slot) */
   void (*event)(void *ctx, int code, const char *what);   /* optional: tells the firmware what happened */
   void *event_ctx;
@@ -66,7 +67,9 @@ enum {
 };
 
 /* Set up the slots (the caller gives the memory: each slot needs an arena, a code buffer and an instance pool)
- * and load the built-in program, which must pass its own self-tests. */
+ * and load the built-in program, which must pass its own self-tests. The built-in program's code buffer may be
+ * NULL (its steps run from the image, in flash). Where RAM is short, arenas[2] may be NULL: two slots. Then a new
+ * program loads while the built-in one flies, and there is no older loaded program to fall back to. */
 int rn_host_init(rn_host *H, const uint8_t *builtin, uint32_t len,
                  float *arenas[3], uint32_t arena_cap, int32_t *codes[3], uint32_t code_cap, float *pools[3], uint32_t pool_cap);
 /* How many instances a formula needs (before staging; the built-in program's slot is sized at once). */

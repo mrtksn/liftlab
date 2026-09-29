@@ -85,6 +85,17 @@ int main(int argc, char **argv) {
   e = rn_host_stage(&H, sg, ls); CHECK(e == RN_E_SIGNATURE, "a formula with different inputs: %s", e == RN_E_SIGNATURE ? "rejected (signature)" : rn_error_text(e));
   step_calls(&H, 100, &errors); CHECK(H.act == edit_slot && errors == before, "still flying the good edit");
 
+  printf("6. two slots (a board short of RAM): a new program loads while the built-in one flies\n");
+  { rn_host H2; memset(&H2, 0, sizeof H2); H2.event = on_event;
+    float *ar2[3] = { ar[0], ar[1], NULL };
+    e = rn_host_init(&H2, b, lb, ar2, ACAP, codes, CCAP, pools, PCAP); if (!e) e = rn_host_instances(&H2, "servoPredictor", 4);
+    CHECK(!e, "set up with two slots");
+    int sw0 = events[RN_EV_SWAPPED], fb0 = events[RN_EV_FELL_BACK];
+    e = rn_host_stage(&H2, ed, le); step_calls(&H2, 1400, &errors); CHECK(!e && H2.act == 1 && events[RN_EV_SWAPPED] == sw0 + 1, "an edit swapped in");
+    e = rn_host_stage(&H2, ed, le); CHECK(!e && H2.cand == 1, "another program: the built-in one flies while it loads");
+    step_calls(&H2, 1400, &errors); CHECK(H2.act == 1 && events[RN_EV_SWAPPED] == sw0 + 2, "and it swapped in");
+    e = rn_host_stage(&H2, tr, lt); step_calls(&H2, 4400, &errors); CHECK(!e && H2.act == 0 && events[RN_EV_FELL_BACK] == fb0 + 1, "a program that traps falls back to the built-in one");
+  }
   printf("%s (%d failures)\n", fails ? "FAILED" : "all passed", fails);
   return fails != 0;
 }

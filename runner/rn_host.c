@@ -74,7 +74,7 @@ int rn_host_init(rn_host *H, const uint8_t *builtin, uint32_t len,
                  float *arenas[3], uint32_t arena_cap, int32_t *codes[3], uint32_t code_cap, float *pools[3], uint32_t pool_cap) {
   void (*ev)(void *, int, const char *) = H->event, (*lk)(void *, int) = H->lock; void *ctx = H->event_ctx, *lctx = H->lock_ctx;
   memset(H, 0, sizeof *H); H->event = ev; H->event_ctx = ctx; H->lock = lk; H->lock_ctx = lctx;
-  for (int s = 0; s < 3; s++) { rn_slot *S = &H->slot[s]; S->arena = arenas[s]; S->code = codes[s]; S->arena_cap = arena_cap; S->code_cap = code_cap; S->pool = pools[s]; S->pool_cap = pool_cap; }
+  for (int s = 0; s < 3; s++) { rn_slot *S = &H->slot[s]; S->arena = arenas[s];   /* arenas[2] may be NULL: two slots */ S->code = codes[s]; S->arena_cap = arena_cap; S->code_cap = code_cap; S->pool = pools[s]; S->pool_cap = pool_cap; }
   H->act = 0; H->cand = -1; H->prev = -1; H->shadow_s = 1.0f; H->blend_s = 0.3f; H->selftest_tol = 1e-2f;
   rn_slot *B = &H->slot[0];
   int e = rn_load(&B->P, builtin, len, B->arena, arena_cap, B->code, code_cap); if (e) return e;
@@ -96,11 +96,25 @@ int rn_host_instances(rn_host *H, const char *fn, int n) {
 
 static void lock(rn_host *H, int on) { if (H->lock) H->lock(H->lock_ctx, on); }
 
+/* With two slots (no memory for a third), a loaded program that is flying hands over to the built-in one while the
+ * next program loads into its slot. With a lock (two cores) the flight loop's rn_host_tick() does the handover. */
+static void to_builtin(rn_host *H) {
+  int from = H->act; if (from == 0) return;
+  transfer(H, 0, from);
+  lock(H, 1); H->act = 0; H->prev = -1; H->to_builtin = 0; lock(H, 0);
+}
 int rn_host_prepare(rn_host *H, const uint8_t *img, uint32_t len) {
   lock(H, 1);                                                    /* take a slot out of use */
   if (H->cand >= 0) { H->slot[H->cand].loaded = 0; H->cand = -1; H->phase = RN_PH_FLYING; }   /* a newer one replaces it */
   H->pending = 0;
-  int s = H->act == 1 ? 2 : 1;
+  int two = !H->slot[2].arena;
+  lock(H, 0);
+  if (two && H->act == 1) {
+    if (H->lock) { H->to_builtin = 1; while (H->act != 0) { } }   /* the flight loop hands over at its next tick */
+    else to_builtin(H);
+  }
+  lock(H, 1);
+  int s = two ? 1 : H->act == 1 ? 2 : 1;
   if (H->prev == s) H->prev = -1;
   rn_slot *S = &H->slot[s]; S->loaded = 0;
   lock(H, 0);
@@ -129,6 +143,7 @@ int rn_host_stage(rn_host *H, const uint8_t *img, uint32_t len) {
 }
 
 void rn_host_tick(rn_host *H, float dt) {
+  if (H->to_builtin) to_builtin(H);
   if (H->pending) start_pending(H);
   if (H->cand < 0 || H->phase == RN_PH_FLYING) return;
   H->t += dt;
@@ -140,7 +155,7 @@ void rn_host_tick(rn_host *H, float dt) {
 }
 
 /* One call on one slot: the instance's memory in, inputs in, run, result out, memory back. */
-static float swap_buf[4096];
+static float swap_buf[512];
 static int run_on(rn_host *H, int s, int fn, int inst, const float *in, float *out) {
   rn_slot *S = &H->slot[s]; int j = fmap[s][fn]; if (j < 0) return RN_T_NO_FN;
   const rn_fn *f = &S->P.fn[j];
@@ -164,7 +179,7 @@ static int run_on(rn_host *H, int s, int fn, int inst, const float *in, float *o
   return e;
 }
 
-static float shadow_out[1024];
+static float shadow_out[512];
 static int call_(rn_host *H, int fn, int inst, const float *in, float *out);
 int rn_host_call(rn_host *H, int fn, int inst, const float *in, float *out) {
   lock(H, 1); H->in_call = 1; lock(H, 0);

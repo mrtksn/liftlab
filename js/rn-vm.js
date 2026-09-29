@@ -252,7 +252,8 @@ function rnImage(P, opts = {}) {
 // Self-tests for a program: each sample { key, args } (the formula's arguments as the simulator passes them,
 // memory objects included, and for ring fields the ring's contents under the field's name) is run on this
 // program with the JavaScript runner, which gives the expected outputs.
-function rnMakeTests(P, samples) {
+// maxFloats: leave out tests bigger than this (a program sent over a serial link to a small board).
+function rnMakeTests(P, samples, maxFloats = Infinity) {
   const A = rnArena(P), tests = [];
   const snap = (a, n) => Array.from(A.subarray(a, a + n));
   for (const s of samples) {
@@ -270,6 +271,7 @@ function rnMakeTests(P, samples) {
     try { rnRun(P, A, s.key); } catch (e) { continue; }
     const outs = [[f.ret.addr, snap(f.ret.addr, tsize(f.ret.t))]];
     for (const st of f.state) { outs.push([st.flag, snap(st.flag, 1)]); if (st.t) outs.push([st.addr, snap(st.addr, tsize(st.t))]); }
+    if (ins.concat(outs).reduce((n, r) => n + 2 + r[1].length, 0) > maxFloats) continue;
     tests.push({ key: s.key, ins, outs });
   }
   return tests;
