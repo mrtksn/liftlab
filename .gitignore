@@ -6,3 +6,4 @@ firmware/
 runner/bench/build/
 runner/bench/sdkconfig
 runner/bench/sdkconfig.old
+.venv/
