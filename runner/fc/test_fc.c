@@ -84,14 +84,14 @@ static void euler(const body *B, double *roll, double *pitch, double *yaw) {
 }
 
 /* ── a flight: 1 kHz control, 50 Hz commands (as from the Pi) ── */
-static body B; static fc_out O; static fc_cmd C; static int link_up = 1, have_gyro = 1, baro = 1;
+static body B; static fc_out O; static fc_cmd C; static int link_up = 1, have_gyro = 1, baro = 1; static float vbatt_in = 0;
 static double tcmd; static int trace = 0;
 static void fly(double seconds) {
   for (int n = 0; n < (int)(seconds * 1000 + 0.5); n++) {
     if (link_up && (tcmd -= 0.001) <= 0) { tcmd += 0.02; fc_command(&F, &C); }
-    fc_imu m; imu_of(&B, &m, have_gyro, baro);
+    fc_imu m; imu_of(&B, &m, have_gyro, baro && n % 40 == 0);   /* the barometer reads at 25 Hz */
     rn_host_tick(&H, 0.001f);
-    fc_step(&F, &m, 0.001f, 0, &O);
+    fc_step(&F, &m, 0.001f, vbatt_in, &O);
     plant_step(&B, &F.A, &O, 0.001);
     if (trace == 2 && n % 200 == 0) { double r, p, y; euler(&B, &r, &p, &y); printf("    t=%.1f true r=%.1f p=%.1f | est r=%.1f p=%.1f | vx=%.2f |f|=%.3f\n", B.t, r, p, atan2(F.R[7], F.R[8]) * 57.3, -asin(F.R[6]) * 57.3, B.v[0], sqrt(acc_b[0]*acc_b[0]+acc_b[1]*acc_b[1]+acc_b[2]*acc_b[2])/9.81); }
     if (trace == 1 && n % 100 == 0) printf("    t=%.1f z=%.2f vz=%.2f | est vz=%.2f alt=%.2f az_f=%.2f trim=%.2f thr=%.2f hold=%d u=%.3f\n", B.t, B.p[2], B.v[2], F.vz_e, F.alt_e - 100, F.az_f, F.iAz, C.throttle, F.holding, O.motor[0]);
@@ -107,7 +107,7 @@ static void start(const uint8_t *blob, uint32_t len) {
   if (fc_init(&F, &H)) { printf("fc_init: %s\n", F.why); exit(1); }
   if (fc_airframe_load(&F, blob, len)) { printf("airframe: %s\n", F.why); exit(1); }
   memset(&B, 0, sizeof B); B.q[0] = 1;
-  memset(&C, 0, sizeof C); C.test_motor = -1; link_up = 1; have_gyro = 1; baro = 1; tcmd = 0;
+  memset(&C, 0, sizeof C); C.test_motor = -1; link_up = 1; have_gyro = 1; baro = 1; tcmd = 0; vbatt_in = 0;
 }
 static float max_motor(void) { float m = 0; for (int i = 0; i < F.A.n_motors; i++) if (O.motor[i] > m) m = O.motor[i]; return m; }
 
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
   start(quad, lq); fly(1); C.arm = 1; fly(0.2);
   C.throttle = 0.9f; fly(2); C.throttle = 0.5f; fly(3);
   double h0 = B.p[2]; fly(3);
-  CHECK(h0 > 1.5 && fabs(B.p[2] - h0) < 0.15 && fabs(B.v[2]) < 0.1, "takes off and holds its height: %.2f m then %.2f m", h0, B.p[2]);
+  CHECK(h0 > 1.5 && fabs(B.p[2] - h0) < 0.25 && fabs(B.v[2]) < 0.1, "takes off and holds its height: %.2f m then %.2f m", h0, B.p[2]);
   CHECK(tilt_deg(&B) < 1, "level in hover (%.2f°)", tilt_deg(&B));
   C.throttle = 0.95f; fly(2.5); CHECK(B.v[2] > 1.5 && B.v[2] < 2.1, "throttle 0.95 → climbs at 2 m/s (a little less against drag): %.2f", B.v[2]);
   C.throttle = 0.2f; fly(2.5); CHECK(B.v[2] < -0.8 && B.v[2] > -1.3, "throttle 0.2 → sinks at 1.1 m/s: %.2f", B.v[2]);
@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
     fly(0.2); CHECK(F.state == FC_FAILSAFE, "0.6 s: %s", F.why);
     fly(2.5); CHECK(B.v[2] < -0.8 && B.v[2] > -1.2 && tilt_deg(&B) < 2, "descends level at ~1 m/s: %.2f m/s, %.1f°", B.v[2], tilt_deg(&B));
     double tl = B.t; while (F.state == FC_FAILSAFE && B.t - tl < 30) fly(0.1);
-    CHECK(F.state == FC_DISARMED && B.p[2] == 0 && max_motor() == 0 && strstr(F.why, "landed"), "lands from %.1f m and disarms: %s", z0, F.why); }
+    CHECK(F.state == FC_DISARMED && B.p[2] < 0.01 && max_motor() == 0 && strstr(F.why, "landed"), "lands from %.1f m and disarms: %s", z0, F.why); }
   { link_up = 1; C.arm = 0; C.pitch = 0; C.throttle = 0; fly(0.2); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(2); C.throttle = 0.5f; fly(1);
     link_up = 0; fly(1); link_up = 1; fly(0.1); CHECK(F.state == FC_ARMED, "commands back during the failsafe: the pilot has it again (%s)", F.why); }
 
@@ -180,7 +180,7 @@ int main(int argc, char **argv) {
   CHECK(fabs(B.v[2] - v1) < 0.3 && B.v[2] > 0.5, "throttle 0.5 keeps the vertical speed (drag slows it a little): %.2f → %.2f m/s", v1, B.v[2]);
   C.throttle = 0.3f; fly(2); C.throttle = 0.5f; fly(1);
   { double z0 = B.p[2]; link_up = 0; double tl = B.t; while (F.state != FC_DISARMED && B.t - tl < 40) fly(0.1);
-    CHECK(F.state == FC_DISARMED && B.p[2] == 0, "comes down from %.1f m and disarms in %.1f s: %s", z0, B.t - tl, F.why); }
+    CHECK(F.state == FC_DISARMED && B.p[2] < 0.01, "comes down from %.1f m and disarms in %.1f s: %s", z0, B.t - tl, F.why); }
 
   printf("crash and sensor loss\n");
   start(quad, lq); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(0.5);
@@ -194,8 +194,11 @@ int main(int argc, char **argv) {
   printf("motor test\n");
   start(quad, lq); fly(1); C.test_motor = 2; C.test_throttle = 0.9f; fly(0.5);
   CHECK(F.state == FC_TESTING && O.motor[2] == 0.3f && O.motor[0] == 0 && O.motor[1] == 0 && O.motor[3] == 0, "one motor, capped at 0.3: %s", F.why);
-  link_up = 0; fly(3.2); CHECK(F.state == FC_DISARMED && max_motor() == 0, "stops %d s after the last command", (int)FC_TEST_S);
-  link_up = 1; C.test_motor = -1; C.arm = 1; fly(0.2); C.test_motor = 1; fly(0.2);
+  link_up = 0; fly(0.6); CHECK(F.state == FC_DISARMED && max_motor() == 0, "stops 0.5 s after the commands stop");
+  link_up = 1; fly(0.2); CHECK(F.state == FC_DISARMED, "the same test command again doesn't restart it (test off first)");
+  C.test_motor = -1; fly(0.1); C.test_motor = 0; fly(2.5); CHECK(F.state == FC_TESTING, "switched off and on: motor 1 runs");
+  fly(0.6); CHECK(F.state == FC_DISARMED && max_motor() == 0, "stops %d s after it started, though test commands keep coming", (int)FC_TEST_S);
+  C.test_motor = -1; C.arm = 1; fly(0.2); C.test_motor = 1; fly(0.2);
   CHECK(F.state == FC_ARMED && O.motor[1] == FC_IDLE, "not while armed");
 
   printf("tilt-rotor quad (stays level, servos steer)\n");
@@ -210,6 +213,59 @@ int main(int argc, char **argv) {
   start(tri, lr); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(2); C.throttle = 0.5f; fly(2);
   { double r, p, y0, y1; euler(&B, &r, &p, &y0); CHECK(tilt_deg(&B) < 1.5, "hovers level (%.1f°)", tilt_deg(&B));
     C.yaw = -0.5f; fly(1); C.yaw = 0; fly(1.5); euler(&B, &r, &p, &y1); CHECK(fabs((y1 - y0) + 57.3) < 5, "yaw right 57°: %.1f°", y1 - y0); }
+
+  printf("from the review\n");
+  /* failsafe while sinking fast: slowing to the descent speed mustn't look like a landing */
+  start(quad, lq); fly(1); C.arm = 1; fly(0.2); C.throttle = 1; fly(4); C.throttle = 0.06f; fly(3);
+  { double z0 = B.p[2], v0 = B.v[2]; link_up = 0; double lowest_live = 1e9;
+    fly(0.6); while (F.state == FC_FAILSAFE && B.t < 90) { fly(0.05); if (max_motor() > 0 && B.p[2] < lowest_live) lowest_live = B.p[2]; }
+    CHECK(F.state == FC_DISARMED && B.p[2] < 0.01 && lowest_live < 0.3, "sinking %.1f m/s at %.1f m when the link drops: slows, lands, then disarms (motors ran down to %.2f m)", v0, z0, lowest_live); }
+  /* link lost at idle on the ground: disarm, don't spool up for a descent */
+  start(quad, lq); fly(1); C.arm = 1; fly(0.2); link_up = 0; fly(0.7);
+  CHECK(F.state == FC_DISARMED && max_motor() == 0, "link lost at idle: %s", F.why);
+  /* no re-arming by itself */
+  link_up = 1; fly(0.2); CHECK(F.state == FC_DISARMED, "the arm switch still on after that: stays disarmed (%s)", F.why);
+  C.arm = 0; fly(0.1); C.arm = 1; fly(0.1); CHECK(F.state == FC_ARMED, "switch off, then on: arms");
+  /* arming at throttle 0.05 (one step up) is refused: armed means idle */
+  C.arm = 0; fly(0.1); C.throttle = 0.05f; C.arm = 1; fly(0.1); CHECK(F.state == FC_DISARMED, "throttle 0.05: %s", F.why);
+  /* a motor failing during the failsafe descent: crash cut-off */
+  start(quad, lq); fly(1); C.arm = 1; fly(0.2); C.throttle = 1; fly(3); C.throttle = 0.5f; fly(1); link_up = 0; fly(1.5);
+  B.dead = 1; fly(1.5); CHECK(F.state == FC_CRASHED && max_motor() == 0, "motor fails in the failsafe: %s", F.why);
+  /* a command with NaN is ignored; out-of-range values are clamped */
+  start(quad, lq); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(1);
+  C.pitch = NAN; fly(0.3); C.pitch = 0; CHECK(F.state == FC_ARMED && F.cmd.pitch == 0 && tilt_deg(&B) < 2, "NaN pitch: ignored (%.1f°)", tilt_deg(&B));
+  C.pitch = NAN; fly(0.7); C.pitch = 0; CHECK(F.state == FC_FAILSAFE, "NaN commands only, for 0.7 s: that's no commands (%s)", F.why);
+  fly(0.3); C.roll = 7; fly(1); { double r, p, y; euler(&B, &r, &p, &y); CHECK(F.state == FC_ARMED && fabs(r - 35) < 5, "roll 7 is taken as 1: %.1f°", r); } C.roll = 0; fly(1);
+  /* a formula result that isn't finite in flight: hold, then stop */
+  { float keep = F.A.Jinv[0]; F.A.Jinv[0] = NAN; fly(0.03); CHECK(F.state == FC_ARMED && max_motor() > 0.3f, "formulas failing for 30 ms: last outputs held");
+    fly(0.05); CHECK(F.state == FC_CRASHED && max_motor() == 0, "for 80 ms: %s", F.why); F.A.Jinv[0] = keep; }
+  /* battery: a reading that doesn't fit the pack isn't used, and arming wants a plausible one when the wire is set */
+  start(quad, lq); F.batt_wired = 1; vbatt_in = 1.3f; fly(1); C.arm = 1; fly(0.1);
+  CHECK(F.state == FC_DISARMED, "sense wire loose (1.3 V): %s", F.why);
+  F.batt_wired = 0; C.arm = 0; fly(0.1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(2); C.throttle = 0.5f; fly(4);
+  CHECK(F.state == FC_ARMED && max_motor() < 0.8f && fabs(B.v[2]) < 0.2, "flying with 1.3 V read: no ×12 on the throttles (%.2f)", max_motor());
+  /* hours of uptime: the timeouts still work */
+  start(quad, lq); F.t = 400000; fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(1);
+  link_up = 0; fly(0.6); CHECK(F.state == FC_FAILSAFE, "after 111 h: the command timeout still works (%s)", F.why);
+
+  printf("failsafe with an accelerometer bias that appears in flight\n");
+  { const float biases[] = { -0.5f, -0.3f, 0.3f, 0.5f, -0.3f, -0.1f, 0.1f, 0.3f }; const int baros[] = { 1, 1, 1, 1, 0, 0, 0, 0 };
+    for (int k = 0; k < 8; k++) {
+      start(quad, lq); baro = baros[k]; fly(1); C.arm = 1; fly(0.2);
+      if (baro) { C.throttle = 0.8f; fly(3); C.throttle = 0.5f; fly(1); }
+      else { C.throttle = 0.7f; fly(2); C.throttle = 0.5f; fly(3); C.throttle = 0.3f; fly(2); C.throttle = 0.5f; fly(1); }   /* up, then level off */
+      B.acc_bias[2] = biases[k]; fly(10);                     /* it appears, and the pilot flies on for 10 s */
+      double z0 = B.p[2], zmax = z0, t0 = B.t; link_up = 0;
+      double vmin = 0; while (F.state != FC_DISARMED && F.state != FC_CRASHED && B.t - t0 < 90) { fly(0.1); if (B.p[2] > zmax) zmax = B.p[2]; if (B.v[2] < vmin && B.t - t0 > 3) vmin = B.v[2]; }
+      CHECK(F.state == FC_DISARMED && B.p[2] < 0.01 && zmax < z0 + (baro ? 1.5 : 6) && vmin > (baro ? -1.5 : -3), "%s barometer, bias %+.1f m/s²: from %.1f m (highest %.1f m, fastest descent %.1f m/s), down and disarmed in %.0f s: %s",
+            baro ? "with a" : "no", biases[k], z0, zmax, -vmin, B.t - t0, F.why);
+    } }
+
+  /* no barometer, link lost while climbing fast: it must turn round, not keep climbing on the trim that held up against drag */
+  start(quad, lq); baro = 0; fly(1); C.arm = 1; fly(0.2); C.throttle = 0.6f; fly(1); C.throttle = 0.5f; fly(2); C.throttle = 0.8f; fly(2); C.throttle = 0.5f; fly(3);
+  { double z0 = B.p[2], v0 = B.v[2], zmax = z0, t0 = B.t; link_up = 0;
+    while (F.state == FC_ARMED || F.state == FC_FAILSAFE) { fly(0.1); if (B.p[2] > zmax) zmax = B.p[2]; if (B.t - t0 > 150) break; }
+    CHECK(F.state == FC_DISARMED && B.p[2] < 0.01 && zmax < z0 + 25, "no barometer, link lost climbing at %.1f m/s from %.0f m: highest %.0f m, down and disarmed in %.0f s (%s)", v0, z0, zmax, B.t - t0, F.why); }
 
   printf("gyro bias\n");
   start(quad, lq); B.gyro_bias[0] = 0.02; B.gyro_bias[2] = -0.02; B.acc_bias[2] = 0.15; fly(3); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(10);

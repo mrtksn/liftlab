@@ -8,7 +8,7 @@
     python3 fly.py PORT set motors=25,26,27,14 servos=16,17   change the wiring (then: save, reboot)
     python3 fly.py PORT save | reboot | show
     python3 fly.py PORT test 1 0.1                 spin motor 1 at 10% for 2 s (PROPS OFF)
-    python3 fly.py PORT fly [--gamepad]            fly: keyboard (tethered bench tests) or a gamepad
+    python3 fly.py PORT fly [--gamepad] [--program f.rnp]   fly: keyboard (tethered bench tests) or a gamepad
 
 PORT: /dev/ttyUSB0 on the Pi, /dev/cu.usbserial-0001 on a Mac. 115200 baud unless --baud.
 
@@ -17,9 +17,13 @@ cable comes out or the computer hangs, the drone goes to its failsafe after 0.5 
 1 m/s and switches off when it lands. Keys (the sticks spring back to the middle when you let go):
     i / k   lean forward / back          j / l   lean left / right        u / o   turn left / right
     w / s   throttle up / down (stays)   h       throttle to the middle (hover, or hold height with a barometer)
+    x       throttle to 0 (disarmed only: before arming)
     Enter   arm (throttle at 0)          space   DISARM: motors off at once          q   disarm and quit
-A keyboard is only good for tethered tests. Gamepad (pip install pygame): left stick throttle (up/down) and turn,
-right stick lean; A arms, B disarms. Needs pyserial (pip install pyserial).
+    P       send the program given with --program (it reloads in flight)
+While armed, s stops at 0.06 (the lowest that still steers); after landing, disarm with space. A keyboard is only good for tethered
+tests. Gamepad (pip install pygame): left stick throttle (up/down) and turn, right stick lean; A arms, B disarms.
+After arming the throttle stays at 0 until you first push the stick up; in flight, full down is the fastest
+descent (0.06), never idle; B to disarm after landing. Needs pyserial (pip install pyserial).
 """
 import argparse, os, select, struct, sys, threading, time, zlib
 
@@ -38,7 +42,14 @@ class Link:
     """Frames and plain text (the boot log) from the serial port."""
     def __init__(self, port, baud):
         import serial
-        self.s = serial.Serial(port, baud, timeout=0.02); self.buf = b''; self.lock = threading.Lock()
+        # Opened without toggling DTR/RTS (on most ESP32 boards that resets the chip) and exclusively (a second
+        # fly.py on the same port would mix its bytes into these).
+        # Opened exclusively (a second fly.py on the same port would mix its bytes into these). DTR and RTS are left
+        # as the port opens them: toggling one before the other pulls the ESP32's reset on most boards.
+        kw = {}
+        if sys.platform != 'win32': kw['exclusive'] = True
+        self.s = serial.Serial(port, baud, timeout=0.02, **kw)
+        self.buf = b''; self.lock = threading.Lock(); self.last_event = None
     def send(self, data):
         with self.lock: self.s.write(data)
     def read(self):
@@ -50,7 +61,10 @@ class Link:
                 cut = len(self.buf) - (1 if self.buf.endswith(b'D') else 0) if i < 0 else i
                 self.text += self.buf[:cut]; self.buf = self.buf[cut:]
                 *lines, self.text = self.text.split(b'\n')
-                out += [('text', l.decode('utf-8', 'replace').rstrip()) for l in lines if l.strip()]
+                for l in lines:
+                    t = l.decode('utf-8', 'replace').rstrip()
+                    if t.strip() and t != self.last_event: out.append(('text', t))   # the firmware prints its events too
+                    if t == self.last_event: self.last_event = None
                 if i < 0: return out
                 continue
             if len(self.buf) < 7: return out
@@ -60,6 +74,7 @@ class Link:
             body, crc = self.buf[2:7 + n], struct.unpack('<I', self.buf[7 + n:11 + n])[0]
             if zlib.crc32(body) & 0xFFFFFFFF != crc: self.text += b'DF'; self.buf = self.buf[2:]; continue
             self.buf = self.buf[11 + n:]; out.append((ftype, body[5:]))
+            if ftype == EVENT: self.last_event = body[5:].decode('utf-8', 'replace').rstrip()
         return out
 
 def telem(payload):
@@ -102,15 +117,16 @@ class Sender(threading.Thread):
     def run(self):
         nxt = time.time()
         while self.run_:
-            self.L.send(cmd_frame(**self.c)); nxt += 0.02; time.sleep(max(0, nxt - time.time()))
+            self.L.send(cmd_frame(**self.c)); nxt = max(nxt + 0.02, time.time())   # after a long write (a program), don't burst
+            time.sleep(max(0, nxt - time.time()))
     def stop(self):
         self.c.update(arm=0, throttle=0.0, test_motor=-1)
         for _ in range(5): self.L.send(cmd_frame(**self.c)); time.sleep(0.02)
         self.run_ = False
 
-def fly(L, gamepad):
+def fly(L, gamepad, program=None):
     S = Sender(L); S.start(); c = S.c
-    pad = None
+    pad = None; pad_live = False
     if gamepad:
         import pygame
         pygame.init(); pygame.joystick.init()
@@ -125,25 +141,38 @@ def fly(L, gamepad):
             now = time.time()
             while select.select([sys.stdin], [], [], 0)[0]:
                 k = sys.stdin.read(1)
-                if k == ' ': c.update(arm=0, throttle=0.0); print('\nDISARM')
+                if not k: return                        # the terminal went away: disarm and stop
+                if k == ' ': c.update(arm=0, throttle=0.0); pad_live = False; print('\nDISARM')
                 elif k == 'q': return
                 elif k in '\r\n':
-                    if c['throttle'] > 0.05: print('\nthrottle to 0 first (s)')
+                    if c['throttle'] > 0: print('\nthrottle to 0 first (x)')
                     else: c['arm'] = 1; print('\narming')
-                elif k == 'w': c['throttle'] = min(1.0, round(c['throttle'] + 0.05, 2))
-                elif k == 's': c['throttle'] = max(0.0, round(c['throttle'] - 0.05, 2))
+                elif k == 'w': c['throttle'] = min(1.0, round(max(c['throttle'], 0.01) + 0.05, 2))
+                elif k == 's': c['throttle'] = max(0.06 if c['arm'] and c['throttle'] > 0 else 0.0, round(c['throttle'] - 0.05, 2))
+                elif k == 'x':                          # to 0 for arming; in flight that would be idle (a drop): not then
+                    if c['arm']: print('\nx works while disarmed; after landing, disarm with space')
+                    else: c['throttle'] = 0.0
                 elif k == 'h': c['throttle'] = 0.5
+                elif k == 'P':
+                    if not program: print('\nstart fly.py with --program FILE.rnp to send one')
+                    else:
+                        img = open(program, 'rb').read()
+                        print(f'\nsending {program} ({len(img)} bytes, about {len(img) * 10 / L.s.baudrate:.1f} s; the drone keeps the last command meanwhile)')
+                        L.send(frame(PROGRAM, img))
                 elif k in 'ikjluo': held[k] = now
             if pad:
                 import pygame
                 pygame.event.pump()
                 ax = lambda i: pad.get_axis(i) if pad.get_numaxes() > i else 0.0
                 dz = lambda v: 0.0 if abs(v) < 0.08 else v
-                c['throttle'] = max(0.0, min(1.0, 0.5 - 0.5 * dz(ax(1)))) if c['arm'] else 0.0
+                stick = max(0.0, min(1.0, 0.5 - 0.5 * dz(ax(1))))
+                if not c['arm']: pad_live = False
+                elif stick > 0.55: pad_live = True       # the first push up after arming starts it
+                c['throttle'] = max(0.06, stick) if pad_live else 0.0
                 c['yaw'] = -dz(ax(0)); c['roll'] = dz(ax(3)); c['pitch'] = -dz(ax(4))
                 if pad.get_numbuttons() > 1:
-                    if pad.get_button(1): c.update(arm=0, throttle=0.0)
-                    elif pad.get_button(0) and not c['arm']: c['arm'] = 1
+                    if pad.get_button(1): c.update(arm=0, throttle=0.0); pad_live = False
+                    elif pad.get_button(0) and not c['arm']: c['arm'] = 1; pad_live = False
             else:   # a key counts as held while the terminal repeats it
                 on = lambda k: now - held.get(k, 0) < 0.6
                 c['pitch'] = 0.5 * (on('i') - on('k')); c['roll'] = 0.5 * (on('l') - on('j')); c['yaw'] = 0.5 * (on('u') - on('o'))
@@ -161,7 +190,8 @@ def fly(L, gamepad):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument('port'); ap.add_argument('what', nargs='+'); ap.add_argument('--baud', type=int, default=115200)
-    ap.add_argument('--gamepad', action='store_true'); ap.add_argument('--yes', action='store_true', help="don't ask about props for a motor test")
+    ap.add_argument('--gamepad', action='store_true'); ap.add_argument('--program', help='fly: a program to send with P')
+    ap.add_argument('--yes', action='store_true', help="don't ask about props for a motor test")
     a = ap.parse_args()
     L = Link(a.port, a.baud); w = a.what
     if w[0] == 'watch':
@@ -192,11 +222,12 @@ def main():
     elif w[0] == 'test':
         m, thr = int(w[1]), float(w[2]); secs = min(3.0, float(w[3])) if len(w) > 3 else 2.0
         if not a.yes and input(f'Spin motor {m} at {thr:.0%} for {secs:.1f} s. Props off? [y/N] ').strip().lower() != 'y': return
+        for _ in range(3): L.send(cmd_frame()); time.sleep(0.02)   # test off first: a new test needs that
         S = Sender(L); S.c.update(test_motor=m - 1, test_throttle=thr); S.start()
         try: listen(L, secs)
         finally: S.stop()
         listen(L, 0.3)
-    elif w[0] == 'fly': fly(L, a.gamepad)
+    elif w[0] == 'fly': fly(L, a.gamepad, a.program)
     else: ap.error('unknown: ' + w[0])
 
 if __name__ == '__main__': main()

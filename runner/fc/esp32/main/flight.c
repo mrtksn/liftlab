@@ -52,7 +52,7 @@ static fc_state F;
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static void host_lock(void *c, int on) { if (on) portENTER_CRITICAL(&mux); else portEXIT_CRITICAL(&mux); }
 static TaskHandle_t flight_h;
-static int outputs_ok, outputs_err;   /* the airframe's motors and servos are all wired / the PWM didn't start */
+static int outputs_ok; static char outputs_why[64] = "outputs not wired";   /* every motor and servo of the airframe has a working output */
 
 /* ── events: from either core to the link task ── */
 #define NEV 16
@@ -63,13 +63,19 @@ static void post(const char *s) {
   uint32_t i = ev_w % NEV; size_t n = strlen(s); if (n > 79) n = 79; memcpy(ev_text[i], s, n); ev_text[i][n] = 0; ev_w++;
   portEXIT_CRITICAL(&ev_mux);
 }
+static int take_event(char *out) {   /* the oldest event, copied under the lock; 0 if none */
+  int got = 0; portENTER_CRITICAL(&ev_mux);
+  if (ev_w - ev_r > NEV) ev_r = ev_w - NEV;                  /* overrun: skip what was overwritten */
+  if (ev_r != ev_w) { memcpy(out, ev_text[ev_r % NEV], 80); ev_r++; got = 1; }
+  portEXIT_CRITICAL(&ev_mux); return got;
+}
 static const char *EVN[] = { "", "program loaded, flying in the background", "program rejected", "program swapped in", "program fell back to the previous one", "the built-in program failed" };
 static void host_event(void *ctx, int code, const char *what) {
   char s[80]; snprintf(s, sizeof s, "%s%s%s", EVN[code], what ? ": " : "", what ? what : ""); post(s);
 }
 
 /* ── sensor task → control loop ── */
-static volatile fc_imu imu_now; static volatile float baro_alt; static volatile int baro_new, imu_ok_count;
+static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static float baro_alt; static int baro_new;   /* under imu_mux */
 static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1;
@@ -89,16 +95,18 @@ static void sensor_task(void *arg) {
   for (;;) {
     vTaskDelayUntil(&last, period);
     fc_imu m; memset(&m, 0, sizeof m);
-    int ok = hw_imu_read(&m) == 0;
-    if (!ok) memset(&m, 0, sizeof m);
-    if ((tb += period) >= 40) { tb = 0; float a; if (hw_baro_read(&a)) { baro_alt = a; baro_new = 1; } }
-    portENTER_CRITICAL(&imu_mux); memcpy((void *)&imu_now, &m, sizeof m); if (ok) imu_ok_count++; portEXIT_CRITICAL(&imu_mux);
+    int64_t us = esp_timer_get_time();
+    if (hw_imu_read(&m)) memset(&m, 0, sizeof m);          /* a failed read: no gyro this sample */
+    float a; int nb = 0; if ((tb += period) >= 40) { tb = 0; nb = hw_baro_read(&a); }
+    portENTER_CRITICAL(&imu_mux);
+    imu_now = m; imu_us = us; imu_seq++; if (nb) { baro_alt = a; baro_new = 1; }
+    portEXIT_CRITICAL(&imu_mux);
     xTaskNotifyGive(flight_h);
   }
 }
 
 /* ── link task → control loop: the newest command, an airframe to load ── */
-static fc_cmd cmd_box; static volatile int cmd_new;
+static fc_cmd cmd_box; static volatile int cmd_new, keep_new;
 static uint8_t af_box[AIRFRAME_CAP]; static volatile uint32_t af_len; static volatile int af_new, af_result;
 static volatile float vbatt;
 
@@ -106,27 +114,34 @@ static volatile float vbatt;
 static volatile int64_t loop_us, loop_max; static volatile int loop_late;
 static fc_out OUT;
 static void flight_task(void *arg) {
-  const float dt = 1.0f / HW.rate_hz;
-  int last_state = -1; char last_why[64] = "";
+  const float dt0 = 1.0f / HW.rate_hz;
+  int last_state = -1; char last_why[64] = ""; uint32_t last_seq = 0; int64_t last_us = esp_timer_get_time();
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));      /* the sensor task wakes us with a fresh sample */
     int64_t t0 = esp_timer_get_time();
-    fc_imu m;
-    portENTER_CRITICAL(&imu_mux); memcpy(&m, (const void *)&imu_now, sizeof m); portEXIT_CRITICAL(&imu_mux);
-    if (SENS.baro) { m.have_baro = 1; m.baro_alt = baro_alt; } else m.have_baro = 0;
+    fc_imu m; int64_t us; uint32_t seq; int nb;
+    portENTER_CRITICAL(&imu_mux); m = imu_now; us = imu_us; seq = imu_seq; nb = baro_new; baro_new = 0; m.baro_alt = baro_alt; portEXIT_CRITICAL(&imu_mux);
+    if (seq == last_seq) { m.have_gyro = 0; us = t0; }  /* no new sample: none this step (5 ms of these in flight stops it) */
+    m.have_baro = nb;                                  /* only a new barometer reading counts */
+    /* the time since the last step, as measured (a late step integrates the time that really passed) */
+    float dt = (float)(us - last_us) * 1e-6f; last_us = us; last_seq = seq;
+    dt = dt < 0.5f * dt0 ? 0.5f * dt0 : dt > 3 * dt0 ? 3 * dt0 : dt;
+    if (keep_new) { keep_new = 0; fc_keepalive(&F); }
     if (cmd_new) { fc_cmd c; portENTER_CRITICAL(&mux); c = cmd_box; cmd_new = 0; portEXIT_CRITICAL(&mux);
       int refuse = !outputs_ok && (c.arm || c.test_motor >= 0);
       if (refuse) { c.arm = 0; c.test_motor = -1; }
       fc_command(&F, &c);
-      if (refuse) snprintf(F.why, sizeof F.why, "won't arm: %s", !F.have_airframe ? "no airframe loaded" : "outputs not wired for this airframe"); }
+      if (refuse) { const char *w = !F.have_airframe ? "no airframe loaded" : outputs_why; int k = snprintf(F.why, sizeof F.why, "won't arm: ");
+        for (int q = 0; w[q] && k < (int)sizeof F.why - 1; q++) F.why[k++] = w[q];
+        F.why[k] = 0; } }
     if (af_new) {                                     /* a new airframe: only while disarmed */
       if (F.state != FC_DISARMED) { af_result = -2; }
       else {
         fc_state G = F; int e = fc_airframe_load(&G, af_box, af_len);
         if (!e) {
-          int wm = 0, ws = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) wm += HW.motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ws += HW.servo_pin[j] >= 0;
-          if (G.A.n_motors > wm || G.A.n_joints > ws) { snprintf(F.why, sizeof F.why, "airframe has %d motors, %d servos; %d and %d wired", G.A.n_motors, G.A.n_joints, wm, ws); e = -3; }
-          else { F.A = G.A; F.have_airframe = 1; memcpy(F.th_cmd, G.th_cmd, sizeof F.th_cmd); memcpy(F.th_hat, G.th_hat, sizeof F.th_hat); strcpy(F.why, G.why); outputs_ok = !outputs_err; }
+          char why[64];
+          if (!hw_outputs_ok(G.A.n_motors, G.A.n_joints, why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
+          else { F.A = G.A; F.have_airframe = 1; memcpy(F.th_cmd, G.th_cmd, sizeof F.th_cmd); memcpy(F.th_hat, G.th_hat, sizeof F.th_hat); strcpy(F.why, G.why); outputs_ok = 1; }
         } else strcpy(F.why, G.why);
         af_result = e;
       }
@@ -139,8 +154,8 @@ static void flight_task(void *arg) {
       char s[80]; snprintf(s, sizeof s, "%s: %s", fc_state_name(F.state), F.why); post(s);
       last_state = F.state; strcpy(last_why, F.why);
     }
-    int64_t us = esp_timer_get_time() - t0;
-    loop_us = us; if (us > loop_max) loop_max = us; if (us > 1000000 / HW.rate_hz) loop_late++;
+    int64_t took = esp_timer_get_time() - t0;
+    loop_us = took; if (took > loop_max) loop_max = took; if (took > 1000000 / HW.rate_hz) loop_late++;
   }
 }
 
@@ -150,7 +165,7 @@ static void link_send(uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[IMG_CAP > 512 ? 512 : IMG_CAP]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
 }
-static void say(const char *text) { printf("%s\n", text); link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); }
+static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
 static void report(const char *text) { link_send(RN_LINK_REPORT, text, (uint32_t)strlen(text)); }
 static void telemetry(void) {
   float t[36] = { 0 }; const float *R = F.R;
@@ -181,25 +196,39 @@ static void setting(const char *line) {
   if (hw_set(&HW_next, line, err, sizeof err)) { report(err); return; }
   snprintf(s, sizeof s, "set %s (save, then reboot, to use it)", line); report(s);
 }
+/* The longest payload each frame type may have: a damaged header can't swallow the frames after it. */
+static uint32_t frame_limit(uint8_t type) {
+  switch (type) { case RN_LINK_CMD: return 28; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
+    case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP; }
+  return 0;
+}
 static void link_task(void *arg) {
-  static rn_link L; rn_link_init(&L, img_buf, IMG_CAP);
+  static rn_link L; rn_link_init(&L, img_buf, IMG_CAP); L.limit = frame_limit;
   static uint8_t rx[256];
-  int64_t next_t = 0, next_b = 0, telem_us = HW.telem_hz ? 1000000 / HW.telem_hz : 0, last_rx = 0, keep = 0;
+  int64_t next_t = 0, next_b = 0, telem_us = HW.telem_hz ? 1000000 / HW.telem_hz : 0, last_rx = 0, keep = 0, frame_t0 = 0;
+  int prev_state = 0;
   for (;;) {
-    while (ev_r != ev_w) { say(ev_text[ev_r % NEV]); ev_r++; }
+    { char ev[80]; while (take_event(ev)) say(ev); }
     int n = uart_read_bytes(LINK, rx, sizeof rx, pdMS_TO_TICKS(5));
     int64_t now = esp_timer_get_time();
     if (n > 0) last_rx = now;
-    /* A program takes seconds to arrive (40 KB at 115200 baud), and no commands can come meanwhile: hold the last
-     * one while its bytes keep flowing (a link that stops mid-frame still ends in the failsafe). */
-    if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 100000 && now - keep > 100000) {
-      keep = now; portENTER_CRITICAL(&mux); cmd_new = 1; portEXIT_CRITICAL(&mux);
+    /* a frame whose bytes stopped coming is dropped, so the next frame isn't taken as its payload */
+    if (L.state != 0 && now - last_rx > 50000) { rn_link_reset(&L); prev_state = 0; say("dropped a frame that stopped halfway"); }
+    /* a frame running well past the time its length takes at this speed is damaged (commands swallowed as payload) */
+    if (L.state == 3 && now - frame_t0 > (int64_t)L.len * 10 * 1000000 / 115200 + 1000000) { rn_link_reset(&L); prev_state = 0; say("dropped a frame that ran over its time"); }
+    /* A program takes seconds to arrive (40 KB at 115200 baud), and no commands can come meanwhile: keep flying on
+     * the last one while its bytes keep flowing, for as long as a frame that size takes at this speed. A link that
+     * stops, or a frame that runs over, still ends in the failsafe; and this never takes it out of the failsafe. */
+    if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 50000 && now - frame_t0 < (int64_t)L.len * 10 * 1000000 / 115200 + 500000 && now - keep > 100000) {
+      keep = now; keep_new = 1;
     }
     for (int i = 0; i < n; i++) {
       int type = rn_link_feed(&L, rx[i]);
+      if (L.state != 0 && prev_state == 0) frame_t0 = esp_timer_get_time();
+      prev_state = L.state;
       if (type == RN_LINK_CMD && L.len == 28) {
         float v[7]; memcpy(v, L.buf, 28);
-        fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] < -0.5f ? -1 : (int)(v[5] + 0.5f), v[6] };
+        fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6] };
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_PROGRAM) {
         char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)L.len); say(s);
@@ -207,7 +236,6 @@ static void link_task(void *arg) {
         int e = rn_host_prepare(&H, img_buf, L.len);
         if (!e) { snprintf(s, sizeof s, "checked and self-tested in %lld ms", (long long)((esp_timer_get_time() - t0) / 1000)); say(s); }
       } else if (type == RN_LINK_AIRFRAME) {
-        if (L.len > AIRFRAME_CAP) { say("airframe: too big"); continue; }
         memcpy(af_box, L.buf, L.len); af_len = L.len; af_result = 1; af_new = 1;
         while (af_new) vTaskDelay(1);
         if (af_result == -2) say("airframe: disarm first");
@@ -232,7 +260,7 @@ void app_main(void) {
   if (nvs_flash_init() != ESP_OK) { nvs_flash_erase(); nvs_flash_init(); }
   hw_load(&HW); HW_next = HW;
   char log[200];
-  int oe = outputs_err = hw_outputs_init(&HW, 0, 0, log, sizeof log);
+  int oe = hw_outputs_init(&HW, log, sizeof log);
   printf("\n\nDrone Force Bench flight controller\n%s\n", log);
   if (oe) printf("OUTPUTS DIDN'T START: motors stay off\n");
 
@@ -261,14 +289,15 @@ void app_main(void) {
   printf("flight program: %s (%s)\n", rn_error_text(e), a2 ? "two slots for programs from the Pi" : a1 ? "one slot for programs from the Pi" : "built-in only");
   if (e) { printf("THE FLIGHT PROGRAM DIDN'T LOAD: motors stay off\n"); return; }
   if (fc_init(&F, &H)) { printf("flight code: %s\n", F.why); return; }
+  F.vref = HW.vref; F.batt_wired = HW.batt_pin >= 0;
 
   /* The airframe from flash. */
   uint32_t afl = 0;   /* read into the program receive buffer, which isn't in use yet */
   if (img_buf && !hw_airframe_load(img_buf, AIRFRAME_CAP, &afl) && !fc_airframe_load(&F, img_buf, afl)) {
-    char l2[200]; int re = hw_outputs_init(&HW, F.A.n_motors, F.A.n_joints, l2, sizeof l2);
-    outputs_ok = !oe && !re;
-    printf("%s\n%s\n", F.why, re ? l2 : "outputs wired for it");
+    outputs_ok = hw_outputs_ok(F.A.n_motors, F.A.n_joints, outputs_why, sizeof outputs_why);
+    printf("%s\n%s\n", F.why, outputs_ok ? "every motor and servo has an output" : outputs_why);
   } else printf("no airframe yet: send one from the simulator (fly.py airframe FILE.dfa)\n");
+  if (!img_buf) { printf("no memory for the link: this build can't run here\n"); return; }
   printf("control loop %d Hz on core 1; telemetry %d Hz; free heap %u bytes\n\n", HW.rate_hz, HW.telem_hz, (unsigned)esp_get_free_heap_size());
 
   uart_driver_install(LINK, 4096, 4096, 0, NULL, 0);

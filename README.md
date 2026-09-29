@@ -480,11 +480,15 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 ### Safety
 
 - **At power-on** every ESC gets its minimum pulse.
-- **Arming** needs all of these: an airframe loaded, every motor and servo it has wired, a gyro, a settled attitude, less than 15° of tilt and the throttle stick at the bottom.
-- **Disarmed**, the motors get the minimum pulse. The motor test spins one motor, at most at 30%, and only while commands keep coming (3 s at most after the last one).
-- **Failsafe:** 0.5 s without a command while flying starts it. The drone levels and descends at about 1 m/s. It disarms when the accelerometer feels the ground stop it, or after 30 s.
-  - Without a barometer the descent speed comes from the accelerometer alone. It drifts, so treat it as rough.
-- **Cut-offs:** tilting past 75° (a crash) or losing IMU data for 0.2 s while flying switches the motors off.
+- **Arming** needs all of these: the arm switch seen off since the last disarm (so nothing re-arms by itself), an airframe loaded, a working output for each of its motors and servos, a gyro, a settled attitude, less than 15° of tilt, the throttle stick at the bottom, and, when a battery sense wire is set, a reading that fits the pack.
+- **Disarmed**, the motors get the minimum pulse. The motor test spins one motor, at most at 30%, for 3 s from when it starts (it stops sooner if commands stop); another test needs the test switched off first.
+- **Commands** are clamped to their ranges; one with a number that isn't finite is ignored.
+- **Link lost:** 0.5 s without a command. At idle (throttle at the bottom, most likely on the ground) it disarms. Otherwise it goes to the failsafe and levels:
+  - **With a barometer** it descends at 1 m/s and disarms once it asks to sink but its height stays put for 1.5 s (landed). The barometer also measures the accelerometer's bias in flight (a few hundredths of a g from vibration or temperature is normal), so the speed it flies on is right.
+  - **Without one** the speed can only be guessed from the accelerometer, which drifts. So it always asks for a little downward acceleration (0.2–0.6 m/s²) on the thrust it learned hovers, and drag sets the descent speed: in the tests 0.7–2 m/s. It can't climb on a biased guess. It disarms after the bump of touching down, and in any case after 120 s (about 80 m of descent): **for anything above that height, fit a barometer.**
+- **Cut-offs:** tilting past 75° (a crash, also during the failsafe) or losing IMU data for 0.2 s while flying switches the motors off. So does a flight formula failing, or giving a number that isn't finite, for 50 ms even after the program slots fell back to the built-in program; a single bad step holds the last outputs.
+- **The battery reading** is used for voltage compensation only when it fits the pack (0.6–1.35 × `vref`), so a loose sense wire can't multiply the throttles.
+- **The link** checks each frame's length against its type and drops a frame whose bytes stop coming for 50 ms, so a damaged header can't swallow the commands after it.
 
 ### Hardware
 
@@ -497,13 +501,14 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 **ESCs**
 - Standard PWM ESCs, 1000–2000 µs at 400 Hz.
-- Default pins: motors 1–8 on GPIO 25, 26, 27, 14, 32, 33, 4, 13.
+- Default pins: motors 1–8 on GPIO 25, 26, 27, 14, 32, 33, 4, 13. Motors 9–12 can go on free pins too; they share the servos' 8 channels.
+- Only GPIO 4, 13, 14, 16–19, 21–23, 25–27, 32 and 33 are accepted for outputs. The boot-strapping pins (0, 2, 5, 12, 15) are refused: something wired there can stop the ESP32 booting, and some toggle during boot. A pin can't be used twice, and the longest ESC pulse must fit its period.
 
 **Servos**
 - 50 Hz, 1500 µs ±500 µs for ±45°, adjustable per servo.
 - Default pins: servos on GPIO 16, 17, 18, 19, 23.
 
-**Battery (optional):** a resistor divider to an ADC1 pin (32–39), set with `battery=34,11`. The voltage compensation assumes the simulator's 16 V (4S) reference.
+**Battery (optional):** a resistor divider to an ADC1 pin (32–39), set with `battery=34,11`. `vref` is the pack voltage the airframe's thrust is for: 16 V (4S) as in the simulator; set `vref=12` for a 3S pack.
 
 **Wiring settings:** the wiring is kept in flash. Change it with `fly.py PORT set …`, then `save` and `reboot`.
 
@@ -527,7 +532,8 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 | `python3 fly.py PORT program formulas.rnp` | Send edited formulas; they reload in flight as before |
 
 - **Commands** go out 50 times a second while `fly.py` runs. If it stops, the drone goes to its failsafe.
-- **While a program is arriving** (a few seconds at 115200 baud), the firmware holds the last command.
+- **While a program is arriving** (a few seconds at 115200 baud), the firmware keeps flying on the last command, only as long as a frame that size takes and never out of a failsafe. In `fly`, start with `--program FILE.rnp` and press P to send it; don't run a second `fly.py` on the same port (it opens the port exclusively, and without the DTR/RTS toggle that resets most ESP32 boards).
+- **Gamepad:** after arming, the throttle stays at 0 until you first push the stick up; in flight, full down is the fastest descent, never idle. On the keyboard, `s` stops at 0.06 while armed and `x` goes to idle.
 - **Flashing** the merged image at offset 0 erases the saved airframe and wiring. Send them again afterwards.
 
 ### Checks
@@ -537,7 +543,7 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
   - every arming refusal;
   - take-off, height hold, climb and sink;
   - lean and turn tracking;
-  - the failsafe landing, with and without a barometer;
+  - the failsafe landing, with and without a barometer, including an accelerometer bias of ±0.1–0.5 m/s² that appears in flight and a link lost while climbing fast;
   - motor failure → crash cut-off, and IMU loss;
   - motor-test limits;
   - servo steering;

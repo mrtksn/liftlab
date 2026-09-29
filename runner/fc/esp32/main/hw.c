@@ -28,7 +28,7 @@ void hw_defaults(hw_config *c) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
   c->sda = 21; c->scl = 22;
   c->batt_pin = -1; c->batt_divider = 11.0f;
-  c->rate_hz = 1000; c->telem_hz = 20;
+  c->rate_hz = 1000; c->telem_hz = 20; c->vref = 16.0f;
 }
 int hw_load(hw_config *c) {
   hw_defaults(c);
@@ -58,8 +58,35 @@ static int parse_list(const char *s, float *v, int max) {
   while (*s && n < max) { v[n] = strtof(s, &end); if (end == s) return -1; n++; s = end; while (*s == ',' || *s == ' ') s++; }
   return n;
 }
-static int pin_ok(int p) { return p == -1 || (p >= 0 && p <= 33 && p != 6 && p != 7 && p != 8 && p != 9 && p != 10 && p != 11 && p != 1 && p != 3); }
+/* GPIOs an ESP32 (WROOM) can drive an output on: not the flash pins (6–11), not UART0 (1, 3), not input-only (34–39),
+ * and not the boot-strapping pins (0, 2, 5, 12, 15): something wired there can stop it booting, and some of them
+ * toggle during boot, which an ESC could take as a pulse. */
+static int pin_ok(int p) {
+  static const int8_t ok[] = { 4, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33 };
+  if (p == -1) return 1;
+  for (unsigned i = 0; i < sizeof ok; i++) if (ok[i] == p) return 1;
+  return 0;
+}
+/* The wiring as a whole: no pin used twice, the ESC's longest pulse fits its period. */
+static int hw_check(const hw_config *c, char *err, int errn) {
+  int used[40] = { 0 };
+  #define USE(p, what) do { int p_ = (p); if (p_ >= 0 && p_ < 40) { if (used[p_]) { snprintf(err, errn, "GPIO %d is used twice (%s)", p_, what); return -1; } used[p_] = 1; } } while (0)
+  for (int i = 0; i < FC_MAX_MOTORS; i++) USE(c->motor_pin[i], "motor");
+  for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
+  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery");
+  #undef USE
+  int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
+  if (nm > 8 && nm - 8 + ns > 8) { snprintf(err, errn, "%d motors and %d servos: at most 16 outputs, motors 9–12 share the servos' 8", nm, ns); return -1; }
+  if (c->esc_max_us > 1000000 / c->esc_hz - 100) { snprintf(err, errn, "at %d Hz an ESC pulse can be at most %d µs: lower esc_hz or esc_us", c->esc_hz, 1000000 / c->esc_hz - 100); return -1; }
+  return 0;
+}
+static int hw_set1(hw_config *c, const char *line, char *err, int errn);
 int hw_set(hw_config *c, const char *line, char *err, int errn) {
+  hw_config t = *c;
+  if (hw_set1(&t, line, err, errn) || hw_check(&t, err, errn)) return -1;
+  *c = t; return 0;
+}
+static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   char key[24]; const char *eq = strchr(line, '='); float v[FC_MAX_MOTORS]; int n;
   if (!eq || eq - line >= (int)sizeof key) { snprintf(err, errn, "expected key=value"); return -1; }
   memcpy(key, line, (size_t)(eq - line)); key[eq - line] = 0;
@@ -68,7 +95,7 @@ int hw_set(hw_config *c, const char *line, char *err, int errn) {
   if (!strcmp(key, "motors") || !strcmp(key, "servos")) {
     int m = !strcmp(key, "motors"), max = m ? FC_MAX_MOTORS : FC_MAX_JOINTS; int8_t *pins = m ? c->motor_pin : c->servo_pin;
     if (n > max) { snprintf(err, errn, "at most %d %s", max, key); return -1; }
-    for (int i = 0; i < n; i++) if (!pin_ok((int)v[i])) { snprintf(err, errn, "GPIO %d can't drive an output (flash, UART0 or input only)", (int)v[i]); return -1; }
+    for (int i = 0; i < n; i++) if (v[i] < 0 || !pin_ok((int)v[i])) { snprintf(err, errn, "GPIO %d can't drive an output here (use 4, 13, 14, 16–19, 21–23, 25–27, 32, 33)", (int)v[i]); return -1; }
     for (int i = 0; i < max; i++) pins[i] = i < n ? (int8_t)v[i] : -1;
   } else if (!strcmp(key, "esc_hz")) {
     if (n != 1 || v[0] < 50 || v[0] > 490) { snprintf(err, errn, "esc_hz: 50 to 490 for standard PWM ESCs"); return -1; }
@@ -90,6 +117,9 @@ int hw_set(hw_config *c, const char *line, char *err, int errn) {
   } else if (!strcmp(key, "rate")) {
     if (n != 1 || (v[0] != 250 && v[0] != 500 && v[0] != 1000)) { snprintf(err, errn, "rate: 250, 500 or 1000 Hz"); return -1; }
     c->rate_hz = (int16_t)v[0];
+  } else if (!strcmp(key, "vref")) {
+    if (n != 1 || v[0] < 3 || v[0] > 60) { snprintf(err, errn, "vref: the pack voltage the airframe's thrust is for, e.g. 16 for 4S"); return -1; }
+    c->vref = v[0];
   } else if (!strcmp(key, "telemetry")) {
     if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
     c->telem_hz = (int16_t)v[0];
@@ -101,8 +131,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
   for (int i = 0; i < FC_MAX_MOTORS && c->motor_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->motor_pin[i]);
   k += snprintf(out + k, n - k, " servos=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_pin[i]);
-  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f rate=%d telemetry=%d servo_center=",
-                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, c->rate_hz, c->telem_hz);
+  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d servo_center=",
+                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, (double)c->vref, c->rate_hz, c->telem_hz);
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_center_us[i]);
   k += snprintf(out + k, n - k, " servo_us_per_rad=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%.0f", i ? "," : "", (double)c->servo_us_per_rad[i]);
@@ -137,11 +167,17 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
     const char *nm = who == 0x68 ? "MPU-6050" : who == 0x70 ? "MPU-6500" : who == 0x71 ? "MPU-9250" : who == 0x73 ? "MPU-9255" : who == 0x72 ? "MPU-6052" : NULL;
     if (!nm) { k += snprintf(log + k, logn - k, "0x%02x answers with id 0x%02x, not a known IMU; ", a, who); continue; }
     wr(d, 0x6B, 0x80); vTaskDelay(pdMS_TO_TICKS(100));       /* reset */
-    wr(d, 0x6B, 0x01);                                        /* clock from the gyro's PLL */
-    wr(d, 0x1A, 0x02);                                        /* low-pass ~98 Hz gyro, ~94 Hz accelerometer */
-    wr(d, 0x19, 0x00);                                        /* 1 kHz */
-    wr(d, 0x1B, 0x18);                                        /* ±2000 °/s */
-    wr(d, 0x1C, 0x10);                                        /* ±8 g */
+    /* clock from the gyro's PLL; low-pass ~98 Hz (gyro; the MPU-6050's accelerometer too); 1 kHz; ±2000 °/s; ±8 g;
+     * the MPU-6500/9250's accelerometer low-pass (its own register) ~99 Hz. Each is read back: a setting that didn't
+     * take would scale every reading wrong. */
+    static const uint8_t set[][2] = { { 0x6B, 0x01 }, { 0x1A, 0x02 }, { 0x19, 0x00 }, { 0x1B, 0x18 }, { 0x1C, 0x10 }, { 0x1D, 0x02 } };
+    int bad = 0;
+    for (unsigned q = 0; q < sizeof set / sizeof set[0]; q++) {
+      if (set[q][0] == 0x1D && who == 0x68) continue;
+      uint8_t back = 0xFF; wr(d, set[q][0], set[q][1]);
+      if (rd(d, set[q][0], &back, 1) || (back & (set[q][0] == 0x1B || set[q][0] == 0x1C ? 0x18 : 0xFF)) != set[q][1]) bad = 1;
+    }
+    if (bad) { k += snprintf(log + k, logn - k, "%s at 0x%02x didn't take its settings; ", nm, a); continue; }
     imu_dev = d; imu_kind = 1; s->imu = 1; snprintf(s->imu_name, sizeof s->imu_name, "%s at 0x%02x", nm, a);
   }
   for (uint8_t a = 0x18; a <= 0x19 && !imu_kind; a++) {
@@ -150,6 +186,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
     if (!d || rd(d, 0x0F, &who, 1) || who != 0x33) continue;
     wr(d, 0x20, 0x97);                                        /* 1.344 kHz, x y z on */
     wr(d, 0x23, 0x28);                                        /* ±8 g, high resolution */
+    uint8_t r1 = 0, r4 = 0; if (rd(d, 0x20, &r1, 1) || rd(d, 0x23, &r4, 1) || r1 != 0x97 || (r4 & 0x38) != 0x28) { k += snprintf(log + k, logn - k, "LIS3DH didn't take its settings; "); continue; }
     imu_dev = d; imu_kind = 2; s->imu = 2; snprintf(s->imu_name, sizeof s->imu_name, "LIS3DH at 0x%02x (no gyro)", a);
   }
   if (!imu_kind) k += snprintf(log + k, logn - k, "no IMU found on I2C (SDA %d, SCL %d); ", c->sda, c->scl);
@@ -215,46 +252,61 @@ int hw_baro_read(float *alt) {
 }
 
 /* ───────── outputs ───────── */
-static int n_esc, n_srv; static int8_t esc_ch[FC_MAX_MOTORS], srv_ch[FC_MAX_JOINTS];
-static hw_config oc;
+/* ESCs 1–8 on the high-speed channels (timer 0 at esc_hz), servos on the low-speed ones (timer 1 at 50 Hz), and
+ * ESCs 9–12, if any, on the low-speed channels left (timer 2 at esc_hz). */
+static int8_t esc_ch[FC_MAX_MOTORS], esc_mode[FC_MAX_MOTORS], srv_ch[FC_MAX_JOINTS];
+static hw_config oc; static int outputs_up;
 static uint32_t esc_duty(float us) { return (uint32_t)(us * oc.esc_hz * 16384.0f / 1e6f); }
 static uint32_t srv_duty(float us) { return (uint32_t)(us * 50 * 16384.0f / 1e6f); }
-int hw_outputs_init(const hw_config *c, int n_motors, int n_servos, char *log, int logn) {
-  oc = *c; n_esc = n_srv = 0;
+int hw_outputs_init(const hw_config *c, char *log, int logn) {
+  oc = *c; int n_hs = 0, n_ls = 0, n_esc = 0, n_srv = 0;
+  memset(esc_ch, -1, sizeof esc_ch); memset(srv_ch, -1, sizeof srv_ch);
   ledc_timer_config_t te = { .speed_mode = LEDC_HIGH_SPEED_MODE, .duty_resolution = LEDC_TIMER_14_BIT, .timer_num = LEDC_TIMER_0, .freq_hz = (uint32_t)c->esc_hz, .clk_cfg = LEDC_AUTO_CLK };
   ledc_timer_config_t ts = { .speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_14_BIT, .timer_num = LEDC_TIMER_1, .freq_hz = 50, .clk_cfg = LEDC_AUTO_CLK };
-  if (ledc_timer_config(&te) != ESP_OK || ledc_timer_config(&ts) != ESP_OK) { snprintf(log, logn, "PWM timers didn't start"); return -1; }
-  /* ESCs on the 8 high-speed channels (their own timer), servos on the low-speed ones */
+  ledc_timer_config_t tl = { .speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_14_BIT, .timer_num = LEDC_TIMER_2, .freq_hz = (uint32_t)c->esc_hz, .clk_cfg = LEDC_AUTO_CLK };
+  if (ledc_timer_config(&te) != ESP_OK || ledc_timer_config(&ts) != ESP_OK || ledc_timer_config(&tl) != ESP_OK) { snprintf(log, logn, "PWM timers didn't start"); return -1; }
   for (int i = 0; i < FC_MAX_MOTORS; i++) {
-    esc_ch[i] = -1; if (c->motor_pin[i] < 0 || n_esc >= 8) continue;
-    ledc_channel_config_t ch = { .gpio_num = c->motor_pin[i], .speed_mode = LEDC_HIGH_SPEED_MODE, .channel = (ledc_channel_t)n_esc, .timer_sel = LEDC_TIMER_0, .duty = esc_duty(c->esc_min_us) };
-    if (ledc_channel_config(&ch) == ESP_OK) esc_ch[i] = (int8_t)n_esc++;
+    if (c->motor_pin[i] < 0) continue;
+    int hs = n_hs < 8, ch = hs ? n_hs : n_ls; if (!hs && n_ls >= 8) break;
+    ledc_channel_config_t cc = { .gpio_num = c->motor_pin[i], .speed_mode = hs ? LEDC_HIGH_SPEED_MODE : LEDC_LOW_SPEED_MODE, .channel = (ledc_channel_t)ch,
+                                 .timer_sel = hs ? LEDC_TIMER_0 : LEDC_TIMER_2, .duty = esc_duty(c->esc_min_us) };
+    if (ledc_channel_config(&cc) != ESP_OK) continue;
+    esc_ch[i] = (int8_t)ch; esc_mode[i] = (int8_t)(hs ? LEDC_HIGH_SPEED_MODE : LEDC_LOW_SPEED_MODE); n_esc++;
+    if (hs) n_hs++; else n_ls++;
   }
   for (int j = 0; j < FC_MAX_JOINTS; j++) {
-    srv_ch[j] = -1; if (c->servo_pin[j] < 0 || n_srv >= 8) continue;
-    ledc_channel_config_t ch = { .gpio_num = c->servo_pin[j], .speed_mode = LEDC_LOW_SPEED_MODE, .channel = (ledc_channel_t)n_srv, .timer_sel = LEDC_TIMER_1, .duty = srv_duty(c->servo_center_us[j]) };
-    if (ledc_channel_config(&ch) == ESP_OK) srv_ch[j] = (int8_t)n_srv++;
+    if (c->servo_pin[j] < 0 || n_ls >= 8) continue;
+    ledc_channel_config_t cc = { .gpio_num = c->servo_pin[j], .speed_mode = LEDC_LOW_SPEED_MODE, .channel = (ledc_channel_t)n_ls, .timer_sel = LEDC_TIMER_1, .duty = srv_duty(c->servo_center_us[j]) };
+    if (ledc_channel_config(&cc) == ESP_OK) { srv_ch[j] = (int8_t)n_ls++; n_srv++; }
   }
-  int k = snprintf(log, logn, "%d ESC outputs at %d Hz (%d–%d µs), %d servo outputs at 50 Hz", n_esc, c->esc_hz, c->esc_min_us, c->esc_max_us, n_srv);
-  if (n_motors > n_esc || n_servos > n_srv) { snprintf(log + k, logn - k, "; the airframe needs %d motors and %d servos: wire more (motors=…, servos=…)", n_motors, n_servos); return -1; }
+  outputs_up = 1;
+  snprintf(log, logn, "%d ESC outputs at %d Hz (%d–%d µs), %d servo outputs at 50 Hz", n_esc, c->esc_hz, c->esc_min_us, c->esc_max_us, n_srv);
   return 0;
 }
+/* Every motor and servo of an airframe has a working output (motor i on motor_pin[i], servo j on servo_pin[j]). */
+int hw_outputs_ok(int n_motors, int n_servos, char *why, int whyn) {
+  if (!outputs_up) { snprintf(why, whyn, "the PWM outputs didn't start"); return 0; }
+  for (int i = 0; i < n_motors; i++) if (esc_ch[i] < 0) { snprintf(why, whyn, "motor %d has no output (motors=… in the wiring)", i + 1); return 0; }
+  for (int j = 0; j < n_servos; j++) if (srv_ch[j] < 0) { snprintf(why, whyn, "servo %d has no output (servos=… in the wiring)", j + 1); return 0; }
+  return 1;
+}
 void hw_outputs_set(const fc_out *o, int n_motors, int n_servos) {
-  for (int i = 0; i < n_motors; i++) if (esc_ch[i] >= 0) {
-    float t = o->motor[i]; t = t < 0 ? 0 : t > 1 ? 1 : t;
-    ledc_set_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)esc_ch[i], esc_duty(oc.esc_min_us + t * (oc.esc_max_us - oc.esc_min_us)));
-    ledc_update_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)esc_ch[i]);
+  for (int i = 0; i < n_motors && i < FC_MAX_MOTORS; i++) if (esc_ch[i] >= 0) {
+    float t = o->motor[i]; t = t > 0 ? (t < 1 ? t : 1) : 0;          /* NaN → 0 */
+    ledc_set_duty((ledc_mode_t)esc_mode[i], (ledc_channel_t)esc_ch[i], esc_duty(oc.esc_min_us + t * (oc.esc_max_us - oc.esc_min_us)));
+    ledc_update_duty((ledc_mode_t)esc_mode[i], (ledc_channel_t)esc_ch[i]);
   }
-  for (int j = 0; j < n_servos; j++) if (srv_ch[j] >= 0) {
-    float us = oc.servo_center_us[j] + o->servo[j] * oc.servo_us_per_rad[j]; us = us < 500 ? 500 : us > 2500 ? 2500 : us;
+  for (int j = 0; j < n_servos && j < FC_MAX_JOINTS; j++) if (srv_ch[j] >= 0) {
+    float us = oc.servo_center_us[j] + o->servo[j] * oc.servo_us_per_rad[j];
+    if (!(us == us)) us = oc.servo_center_us[j]; else us = us < 500 ? 500 : us > 2500 ? 2500 : us;   /* NaN → centre */
     ledc_set_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)srv_ch[j], srv_duty(us));
     ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)srv_ch[j]);
   }
 }
 void hw_outputs_safe(void) {
   for (int i = 0; i < FC_MAX_MOTORS; i++) if (esc_ch[i] >= 0) {
-    ledc_set_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)esc_ch[i], esc_duty(oc.esc_min_us));
-    ledc_update_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)esc_ch[i]);
+    ledc_set_duty((ledc_mode_t)esc_mode[i], (ledc_channel_t)esc_ch[i], esc_duty(oc.esc_min_us));
+    ledc_update_duty((ledc_mode_t)esc_mode[i], (ledc_channel_t)esc_ch[i]);
   }
 }
 

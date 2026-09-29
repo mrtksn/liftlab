@@ -41,7 +41,7 @@ async function filStart() {
   FIL.why = filCstr(w.why_ptr());
   if (e) throw new Error(FIL.why || 'setup failed (' + e + ')');
   Object.assign(FIL.cmd, { arm: 0, roll: 0, pitch: 0, yaw: 0, throttle: 0, testMotor: -1, testThrottle: 0 });
-  FIL.on = true; FIL.tCmd = 0; FIL.linkDown = false; FIL.thr = 0; FIL.n = 0; FIL.err = '';
+  FIL.on = true; FIL.baroTs = null; FIL.tCmd = 0; FIL.linkDown = false; FIL.thr = 0; FIL.n = 0; FIL.err = '';
   filRender();
   return FIL.why;
 }
@@ -72,9 +72,11 @@ function filStep(dt) {
     w.command();
   }
   const imu = est.haveImu;
+  // the barometer: only a new reading counts (it reads at its own rate), as on the drone
   const baro = FIL.noBaro ? null : sensorsOf('baro').map(c => sens.get(c.id)).find(rt => rt && rt.latest != null);
+  const fresh = !!baro && baro.ts !== FIL.baroTs; if (fresh) FIL.baroTs = baro.ts;
   io.set([...(imu ? est.fGyro : [0, 0, 0]), ...(imu ? est.fAccel : [0, 0, 0]), imu ? 1 : 0, dt, fc.vComp && hread.b.V > 1 ? hread.b.V : 0,
-    baro ? baro.latest : 0, baro ? 1 : 0], 0);
+    baro ? baro.latest : 0, fresh ? 1 : 0], 0);
   w.tick();
   actuators().forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed ? 0 : io[11 + i]; setThrottle(c, st, u, u); } });
   const steer = new Set(steerJoints());

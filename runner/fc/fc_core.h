@@ -21,13 +21,16 @@
  * Safety:
  *   - it arms only when asked, with the airframe loaded, a gyro, the drone level (< 15°), the throttle stick
  *     low and the formulas loaded;
- *   - no command for FC_CMD_TIMEOUT s while armed: failsafe. It levels and descends at about 1 m/s, and
- *     disarms when the accelerometer feels the ground stop it (or after FC_FAILSAFE_S s). Without a barometer
- *     the descent speed comes from the accelerometer alone and is rough (it may even hover or climb slowly);
+ *   - no command for FC_CMD_TIMEOUT s while armed: at idle it disarms; otherwise failsafe. It levels and descends
+ *     at about 1 m/s. With a barometer it disarms once it asks to sink but the height stays put for 1.5 s (landed);
+ *     the barometer also measures the accelerometer's bias, so the speed is right. Without one it always asks for a
+ *     little downward acceleration on the thrust it learned hovers (drag sets the speed), disarms after the bump of
+ *     touching down, and in any case after 120 s;
  *   - IMU data missing for 0.2 s while flying: motors off (there is nothing to fly on);
- *   - tilted past FC_CRASH_DEG while armed: disarms (crashed);
+ *   - tilted past FC_CRASH_DEG while flying (failsafe included), or the formulas failing: motors off (crashed);
+ *   - arming needs the arm switch seen off first, so nothing re-arms by itself after a disarm;
  *   - disarmed, the motors get throttle 0 (the ESC's minimum pulse); a motor test spins one motor at a set
- *     throttle only while disarmed, for FC_TEST_S s at most.
+ *     throttle (at most 0.3) only while disarmed, for FC_TEST_S s from when it starts.
  */
 #ifndef FC_CORE_H
 #define FC_CORE_H
@@ -39,7 +42,6 @@
 #define FC_MAX_CHAIN 2          /* joints a motor may ride on */
 #define FC_MAX_BASIS 9          /* 3^FC_MAX_CHAIN */
 #define FC_CMD_TIMEOUT 0.5f
-#define FC_FAILSAFE_S 30.0f
 #define FC_CRASH_DEG 75.0f
 #define FC_TEST_S 3.0f
 #define FC_IDLE 0.06f           /* throttle while armed with the stick at the bottom */
@@ -85,12 +87,20 @@ typedef struct {
   fc_airframe A; int have_airframe;
   rn_host *H; int f_att, f_srv, f_ta, f_err, f_ctl, f_fd, f_pref, f_alloc, f_lin, f_vc; int sizes_ok;
   int state; char why[64];
-  float t, cmd_t;                        /* time, when the last command came */
+  double t, cmd_t;                       /* time since start, when the last command came [s] (double: exact for years) */
   fc_cmd cmd;
   float q[4], R[9], w[3]; int att_ok; float att_t;
-  float yaw_sp, iAtt[3], fs_t, test_t;
-  float az_f, az_bias, iAz, vz_i;                       /* measured vertical acceleration (filtered), thrust trim [m/s²], vertical speed [m/s] */
-  float fs_vz, fs_vmin, imu_gap;         /* failsafe: vertical speed change since it began, its lowest; time without IMU data */
+  float yaw_sp, iAtt[3];
+  double fs_t, test_t;                   /* when the failsafe or the motor test began */
+  float fs_land_t, err_t, fs_vz, fs_alt_ref;   /* how long it has looked landed; how long formulas have failed; failsafe speed, height */
+  double fs_alt_t, fs_bump_t, calm_t;   /* failsafe landing: when the height last moved; the touchdown bump; last calm hover */
+  float iAz_calm;                        /* the thrust trim while hovering calmly */
+  int arm_released, test_released;       /* the arm switch / motor test seen off since the last arming / test */
+  int batt_wired;                        /* a battery sense wire is configured: arming needs a plausible reading */
+  fc_out last_out;
+  float az_f, az_bias, az_b, iAz, vz_i;  /* measured vertical acceleration (filtered), its bias on the ground and (from the
+                                          * barometer) in flight, thrust trim [m/s²], vertical speed from it alone [m/s] */
+  float imu_gap;                         /* time without IMU data */
   float alt_e, vz_e, alt_hold, baro_gap; int have_alt, holding;   /* barometer: height, vertical speed, height held */
   float rho;                             /* mixed steering: how much of what the servos were asked for they made */
   float th_cmd[FC_MAX_JOINTS], th_hat[FC_MAX_JOINTS];
@@ -105,9 +115,15 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len);
 /* Set up: the host runs the formulas. Checks every formula takes what this code passes (the signatures), and
  * gives servoPredictor a memory per joint. Call after rn_host_init, before any program is staged. */
 int fc_init(fc_state *F, rn_host *H);
-/* A command from the pilot (the Pi link now, a radio receiver later). now: time [s]. */
+/* A command from the pilot (the Pi link now, a radio receiver later). Values are clamped; one that isn't finite is
+ * ignored. Arming needs the arm switch seen off since the last disarm. */
 void fc_command(fc_state *F, const fc_cmd *c);
-/* One control step: IMU sample in (dt since the last), outputs out. vbatt: battery volts, 0 if not measured. */
+/* The link is alive but can't pass commands for a moment (a program arriving): keep flying on the last command.
+ * Only while armed: it never takes the drone out of its failsafe. */
+void fc_keepalive(fc_state *F);
+/* One control step: IMU sample in (dt since the last), outputs out. vbatt: battery volts, 0 if not measured; it is
+ * used only when it fits the pack (0.6–1.35 × vref). If a formula fails while flying, the last outputs are held for
+ * 50 ms, then the motors stop (crashed). */
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *out);
 const char *fc_state_name(int s);
 

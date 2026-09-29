@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "fc_core.h"
 
-#define HW_VERSION 1
+#define HW_VERSION 2
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -16,12 +16,14 @@ typedef struct {
   int8_t sda, scl;
   int8_t batt_pin; float batt_divider;             /* ADC pin (−1: none) and the divider's ratio (pack V / pin V) */
   int16_t rate_hz, telem_hz;                       /* control loop, telemetry */
+  float vref;                                      /* the pack voltage the airframe's thrust is for (16: 4S) */
 } hw_config;
 
 void hw_defaults(hw_config *c);
 int hw_load(hw_config *c);                         /* from flash; defaults if none. 0 ok */
 int hw_save(const hw_config *c);
-/* Apply one "key=value" setting (see flight.c's help). Returns 0, or −1 with why in err. */
+/* Apply one "key=value" setting (see flight.c's help); the wiring as a whole is checked too (no pin used twice).
+ * Returns 0, or −1 with why in err (then nothing changed). */
 int hw_set(hw_config *c, const char *line, char *err, int errn);
 void hw_describe(const hw_config *c, char *out, int n);
 
@@ -43,7 +45,8 @@ int hw_baro_read(float *alt);
 void hw_gyro_calibrate(const float bias[3]);
 
 /* outputs: throttles 0–1 (and exactly the ESC's minimum pulse when disarmed), servo angles in rad */
-int hw_outputs_init(const hw_config *c, int n_motors, int n_servos, char *log, int logn);
+int hw_outputs_init(const hw_config *c, char *log, int logn);
+int hw_outputs_ok(int n_motors, int n_servos, char *why, int whyn);   /* 1 if each of them has a working output */
 void hw_outputs_set(const fc_out *o, int n_motors, int n_servos);
 void hw_outputs_safe(void);   /* every ESC at its minimum pulse */
 

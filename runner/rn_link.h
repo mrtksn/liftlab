@@ -26,11 +26,14 @@ enum { RN_LINK_CMD = 3, RN_LINK_AIRFRAME = 4, RN_LINK_SETTING = 5, RN_LINK_TELEM
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */
   int state; uint8_t hdr[5]; uint32_t got, len; uint8_t type;
+  uint32_t (*limit)(uint8_t type);  /* optional: the longest payload each type may have (0: not accepted) */
 } rn_link;
 
 void rn_link_init(rn_link *L, uint8_t *buf, uint32_t cap);
+/* Forget a frame in progress (call when its bytes stopped coming: the next frame then isn't taken as its payload). */
+void rn_link_reset(rn_link *L);
 /* Feed one received byte. Returns the frame's type when a whole frame with a good CRC has arrived (the payload is
- * in L->buf, L->len bytes), −1 when a frame was dropped (bad CRC or too long for the buffer), 0 otherwise. */
+ * in L->buf, L->len bytes), −1 when a frame was dropped (bad CRC, too long for the buffer, or over its type's limit), 0 otherwise. */
 int rn_link_feed(rn_link *L, uint8_t byte);
 /* Build a frame into out. Returns its length, or 0 if it doesn't fit. */
 uint32_t rn_link_frame(uint8_t *out, uint32_t cap, uint8_t type, const uint8_t *payload, uint32_t len);

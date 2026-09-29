@@ -2,7 +2,8 @@
 #include "rn_link.h"
 #include "rn.h"
 
-void rn_link_init(rn_link *L, uint8_t *buf, uint32_t cap) { L->buf = buf; L->cap = cap; L->state = 0; L->got = 0; L->len = 0; L->type = 0; }
+void rn_link_init(rn_link *L, uint8_t *buf, uint32_t cap) { L->buf = buf; L->cap = cap; L->state = 0; L->got = 0; L->len = 0; L->type = 0; L->limit = 0; }
+void rn_link_reset(rn_link *L) { L->state = 0; L->got = 0; }
 
 static uint32_t crc_update(uint32_t c, const uint8_t *p, uint32_t n) {
   for (uint32_t i = 0; i < n; i++) { c ^= p[i]; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); }
@@ -19,7 +20,7 @@ int rn_link_feed(rn_link *L, uint8_t b) {
       if (L->got < 5) return 0;
       L->type = L->hdr[0]; L->len = (uint32_t)L->hdr[1] | (uint32_t)L->hdr[2] << 8 | (uint32_t)L->hdr[3] << 16 | (uint32_t)L->hdr[4] << 24;
       L->got = 0;
-      if (L->len > L->cap) { L->state = 0; return -1; }
+      if (L->len > L->cap || (L->limit && L->len > L->limit(L->type))) { L->state = 0; return -1; }
       L->state = L->len ? 3 : 4; return 0;
     case 3:
       L->buf[L->got++] = b;
