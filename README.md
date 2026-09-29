@@ -32,6 +32,8 @@ It then scores the learned model and the description on the same validation data
 
 **Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
 
+The learning runs at 200 Hz, as it does on the drone, where it has the ESP32's second core to itself. Between its updates the 1 kHz control steps average what it learns from (the inputs, accelerometer, gyro and motor commands), which is its anti-aliasing filter.
+
 While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
 
 ### Actuator response
@@ -429,13 +431,16 @@ Nothing that flies changes before step 4. The Formulas tab shows where an edit i
 
 ### Cost
 
-The flight-budget panel counts the runner's steps (about 6 operations each) plus its built-in math. On the ESP32 at 1 kHz, hovering:
+**Measured on an ESP32-D0WDQ6** (ESP32-WROOM-32, 240 MHz, no PSRAM) with the bench firmware (`runner/bench`), which runs the default program's formulas on their self-test inputs:
 
-| Quad | Hex | Tricopter | Tilt-rotor quad | Main lifter + 4 steering | Helicopter |
-|---|---|---|---|---|---|
-| 19% of a core | 26% | 29% | 59% | 67% | 48% |
+| | Where | Time | Load |
+|---|---|---|---|
+| Flight loop: every formula once per step (4 servo predictors), except the learning | core 1, 1 kHz | 447–456 µs per step, longest ~550 µs | 45% |
+| In-flight learning | core 0, 200 Hz | ~850 µs per update once it is learning | 17% |
 
-That's about twice hand-written C (see the Flight computer budget below). The in-flight learning is the biggest item, and can move to the second core if needed.
+Per call: the learning 390–850 µs, the allocation 88 µs, the position estimator 73 µs, allocation preferences 64 µs, the attitude estimator 53 µs, the rest under 25 µs each. The steps and the step loop run from IRAM and the step dispatch is a jump table; from flash, with ESP-IDF's default compare-chain switch, the same loop took 2.6 ms. A simple step costs about 90 cycles, roughly 10× hand-written C, so the flight-budget panel (which assumes about 6 operations, ~25 cycles, per step) is optimistic: real ESP32 time is about 4× its figure. The learning has its own working space in the program (`ownPool` in `js/rn-sigs.js`), so it can run on the other core at the same time.
+
+Memory on that board: the built-in program's arena (65 KB) and one slot for programs sent over the link (arena 65 KB, steps in IRAM, 40 KB receive buffer) fit, with 54 KB left; a third slot doesn't, so the board runs in two-slot mode. Over USB at 115200 baud, a 40 KB program arrives in about 4 s and is checked and self-tested in 33 ms.
 
 ### Checks
 
@@ -536,5 +541,5 @@ The attainable set of accelerations is the sum of what each rotor can make: anyt
 - In the throw start, a motor on two steering joints only has each joint varied on its own, so the cross terms of its 9 columns come from the hover calibration. The throw start also needs the IMU's mounting angle to be known. It uses the commanded throttle and a generic motor model rather than measured motor RPM, which the Delft work uses; the simulated motors have the same structure as that model, so real motors will fit it less exactly.
 - Edited formulas run in the page itself, so an infinite loop in one will freeze the tab. (On the step runner, a formula's step limit stops it.)
 - The step runner covers the flight formulas, not the code around them. The order of the calls, the calibration cycle, the sensor wiring and the motor outputs are the simulator's JavaScript (`js/sensors.js`, `js/sim.js`, `js/learn.js`), and on the drone they're still firmware to write; `runner/esp32/main/main.c` shows where they go. The one-off fits (`identifyThrow`, `identifyMotorResponse`, `identifyServoResponse`) and the supervisor aren't compiled yet.
-- The ESP32 build hasn't been compiled or flown here: the runner's C is compiled and tested on a PC and as WebAssembly, and the ESP32's cost is estimated, not measured.
+- The runner has run on an ESP32 bench (its self-tests, timings, and loading, rejecting and falling back from programs sent over USB), not in a drone yet.
 - In 32-bit floats the allocation can pick a different split between motors where several are equally good; the forces and torques it makes match.

@@ -141,7 +141,7 @@ function priorRows() {   // the description, as 6 rows × inputs: identification
 function resetLearning(keepResponses = false) {
   if (!keepResponses || learn.sig !== inputSig()) learn.resp = new Map();
   if (!model) model = massProps('model');
-  buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
+  buildIndex(); learn.sig = inputSig(); learn.st = {}; learn.acc = { n: 0 }; learn.prior = priorRows(); learn.priorKind = 'desc'; learn.B = learn.prior.map(r => r.slice());
   learn.cal = null; learn.imuR = null; learn.holdServos = false; learn.refine = null;
 }
 // Filtered accelerometer (lever-arm swing removed) and angular acceleration, for the actuator tests.
@@ -165,16 +165,29 @@ function project(col, y6) {
 }
 
 /* ───────── each control step ───────── */
+const LEARN_HZ = 200;   // in-flight learning rate: the drone runs it on its second core at this rate
 function learnStep(dt) {
   if (learn.sig !== inputSig()) { resetLearning(); learn.msg = 'The actuators changed, so learning restarted from the airframe description.'; }
   if (!est.haveImu || !learn.n || S.crashed) { if (learn.cal && S.crashed) endCalibration('Calibration stopped: the drone crashed.'); return; }
   measStep(dt);
   refineThrowStep(dt);
   if (thr && thr.phase !== 'recover') return;   // the throw runs its own identification while falling
+  learn.updated = false;
   if (learn.keep || learn.cal) {
-    const imus = sensorsOf('imu'); const r0 = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
-    const r = run('identifyEffectiveness', learn.st, inputVector(), est.fAccel, est.fGyro, r0, dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight, inputLags(), motorInputs());
-    learn.B = r.B;
+    // The learning runs at LEARN_HZ, as on the drone, where it has the other core to itself. Between updates the
+    // control steps average what it learns from (inputs, accelerometer, gyro, motor commands): that is its
+    // anti-aliasing filter, and the same averaging the drone's flight loop does.
+    const acc = learn.acc || (learn.acc = { n: 0 });
+    const u = inputVector(), mot = motorInputs();
+    const add = (k, v) => { if (!acc[k] || acc[k].length !== v.length) acc[k] = new Array(v.length).fill(0); v.forEach((x, i) => { acc[k][i] += x; }); };
+    add('u', u); add('f', est.fAccel); add('w', est.fGyro); add('mv', mot.v); acc.n++; acc.dt = (acc.dt || 0) + dt;
+    if (acc.n >= Math.max(1, Math.round(1 / (LEARN_HZ * dt)))) {
+      const mean = v => v.map(x => x / acc.n);
+      const imus = sensorsOf('imu'); const r0 = learn.imuR || (imus.length ? mean3(imus.map(knownPos)) : [0, 0, 0]);
+      const r = run('identifyEffectiveness', learn.st, mean(acc.u), mean(acc.f), mean(acc.w), r0, acc.dt, learn.prior, learn.cal ? Math.max(learn.memCal, learn.cal.total) : learn.memFlight, inputLags(), { ...mot, v: mean(acc.mv) });
+      learn.B = r.B; learn.updated = true;
+      learn.acc = { n: 0 };
+    }
   }
   if (learn.cal) calibrationTick(dt);
 }
@@ -232,7 +245,7 @@ function calibrationTick(dt) {
   }
   cal.stage = s.stage; cal.now = s.at(cal.t - s.t0) || null;
   if (s.rec && cal.t - s.t0 < s.rec.until) recordTest(s, dt);
-  if (s.validate && learn.st.e && learn.st.x) {   // score the learned model and the description on the same fresh data
+  if (s.validate && learn.updated && learn.st.e && learn.st.x) {   // score the learned model and the description on the same fresh data
     const S_ = cal.sums, x = learn.st.x; S_.n++;
     for (let i = 0; i < 6; i++) {
       const yd = learn.prior[i].reduce((a, v, j) => a + v * x[j], 0);
