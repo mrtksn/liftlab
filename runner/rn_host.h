@@ -42,8 +42,8 @@ enum { RN_PH_FLYING = 0, RN_PH_SHADOW, RN_PH_BLEND };
 
 typedef struct {
   rn_slot slot[3];                  /* 0: built-in, 1 and 2: loaded programs */
-  int act, cand, prev;              /* slot indices, −1 when none */
-  int phase; float t, shadow_s, blend_s;
+  volatile int act, cand, prev;     /* slot indices, −1 when none (volatile: the two cores read them) */
+  volatile int phase; float t, shadow_s, blend_s;
   float max_diff; int max_diff_fn;  /* in the background run: the largest difference from the flying answers */
   int n_inst[RN_FN_MAX];            /* instances wanted per formula of the built-in program (by index) */
   float selftest_tol;
