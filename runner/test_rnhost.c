@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
   uint32_t lb, le, ln, lt, ls, lc;
   uint8_t *b = slurp(argv[1], &lb), *ed = slurp(argv[2], &le), *nan = slurp(argv[3], &ln), *tr = slurp(argv[4], &lt), *sg = slurp(argv[5], &ls);
   calls = (int32_t *)slurp(argv[6], &lc); ncall_words = lc / 4;
-  float *arenas[3] = { ar[0], ar[1], ar[2] }, *pools[3] = { pl[0], pl[1], pl[2] }; int32_t *codes[3] = { cd[0], cd[1], cd[2] };
+  float *arenas[3] = { ar[0], ar[1], ar[2] }, *pools[3] = { pl[0], pl[1], pl[2] }; int32_t *codes[3] = { NULL, cd[1], cd[2] };   /* the built-in program runs from its image, as from flash */
   rn_host H; memset(&H, 0, sizeof H); H.event = on_event;
   int e = rn_host_init(&H, b, lb, arenas, ACAP, codes, CCAP, pools, PCAP);
   printf("built-in program: %s (%d formulas, %d self-tests)\n", rn_error_text(e), H.slot[0].P.n_fn, H.slot[0].P.n_tests);

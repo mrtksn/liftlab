@@ -135,7 +135,7 @@ int rn_load(rn_prog *P, const uint8_t *img, uint32_t len, float *arena, uint32_t
   if (rd_u32(&r) != RN_MAGIC) return RN_E_MAGIC;
   if (rd_u32(&r) != RN_VERSION) return RN_E_VERSION;
   uint32_t asz = rd_u32(&r), ce = rd_u32(&r), clen = rd_u32(&r), nfn = rd_u32(&r), ntest = rd_u32(&r);
-  if (r.bad || asz > arena_cap || clen > code_cap || ce > asz || nfn > RN_FN_MAX) return RN_E_TOO_BIG;
+  if (r.bad || asz > arena_cap || (code && clen > code_cap) || ce > asz || nfn > RN_FN_MAX) return RN_E_TOO_BIG;
   if (r.at + 4 * (ce + clen) > r.n) return RN_E_SIZE;
   if (clen > RN_CODE_MAX) return RN_E_TOO_BIG;
   memset(arena, 0, asz * sizeof(float));
