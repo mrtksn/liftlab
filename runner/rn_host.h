@@ -50,7 +50,9 @@ typedef struct {
   int last_event; char last_fn[RN_NAME];
   int pending;                      /* a slot prepared on the link core, started by the next rn_host_tick */
   volatile int to_builtin;          /* two slots: the flight loop hands over to the built-in program */
-  volatile int in_call;             /* a formula call is running (rn_host_prepare waits for it before reusing a slot) */
+  volatile int in_call;             /* formula calls running (rn_host_prepare waits for none before reusing a slot) */
+  /* Formulas may be called from two cores at once only if their working space is separate: the in-flight
+   * learning has its own (ownPool in js/rn-sigs.js); call the rest from one core. */
   void (*event)(void *ctx, int code, const char *what);   /* optional: tells the firmware what happened */
   void *event_ctx;
   void (*lock)(void *ctx, int on);  /* optional: a lock around slot bookkeeping, when two cores share the host */

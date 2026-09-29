@@ -179,12 +179,11 @@ static int run_on(rn_host *H, int s, int fn, int inst, const float *in, float *o
   return e;
 }
 
-static float shadow_out[512];
 static int call_(rn_host *H, int fn, int inst, const float *in, float *out);
 int rn_host_call(rn_host *H, int fn, int inst, const float *in, float *out) {
-  lock(H, 1); H->in_call = 1; lock(H, 0);
+  lock(H, 1); H->in_call++; lock(H, 0);          /* a count: the flight loop and the learning may call at once */
   int e = call_(H, fn, inst, in, out);
-  H->in_call = 0;
+  lock(H, 1); H->in_call--; lock(H, 0);
   return e;
 }
 static int call_(rn_host *H, int fn, int inst, const float *in, float *out) {
@@ -207,7 +206,8 @@ static int call_(rn_host *H, int fn, int inst, const float *in, float *out) {
   int cand = H->cand;
   if (cand >= 0 && H->phase != RN_PH_FLYING) {
     int n = H->slot[0].P.fn[fn].ret_size;
-    int ec = n <= (int)(sizeof shadow_out / sizeof *shadow_out) ? run_on(H, cand, fn, inst, in, shadow_out) : RN_T_KERNEL;
+    float shadow_out[n > 0 ? n : 1];                              /* on this caller's stack: two cores may shadow at once */
+    int ec = run_on(H, cand, fn, inst, in, shadow_out);
     if (ec || !finite_all(shadow_out, n)) {
       lock(H, 1); if (H->cand == cand) { H->slot[cand].loaded = 0; H->cand = -1; H->phase = RN_PH_FLYING; } lock(H, 0);
       event(H, RN_EV_REJECTED, H->slot[0].P.fn[fn].name);

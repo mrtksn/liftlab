@@ -88,6 +88,7 @@ static void bench_formulas(rn_prog *P, const uint8_t *img, uint32_t len) {
 
 /* The 1 kHz loop: every formula once per step, servoPredictor once per servo. */
 static volatile int64_t loop_sum, loop_max; static volatile int loop_n, loop_err, loop_late;
+static int f_learn;
 static void flight_task(void *arg) {
   float *out = malloc(1024 * sizeof(float));
   int nfn = H.slot[0].P.n_fn, sp = rn_host_find(&H, "servoPredictor");
@@ -96,13 +97,28 @@ static void flight_task(void *arg) {
     vTaskDelayUntil(&last, 1);
     int64_t t0 = esp_timer_get_time();
     for (int i = 0; i < nfn; i++) {
-      if (!fn_in[i]) continue;
+      if (!fn_in[i] || i == f_learn) continue;                  /* the learning runs on core 0 */
       int insts = i == sp ? N_SERVOS : 1;
       for (int s = 0; s < insts; s++) if (rn_host_call(&H, i, s, fn_in[i], out)) loop_err++;
     }
     rn_host_tick(&H, 0.001f);
     int64_t dt = esp_timer_get_time() - t0;
     loop_sum += dt; loop_n++; if (dt > loop_max) loop_max = dt; if (dt > 1000) loop_late++;
+  }
+}
+
+/* The in-flight learning at 200 Hz on core 0, as flight controllers usually run it: it has its own working
+ * space in the program (ownPool), so it can run while the flight loop does. */
+static volatile int64_t learn_sum, learn_max; static volatile int learn_n, learn_err;
+static void learn_task(void *arg) {
+  float *out = malloc(1024 * sizeof(float));
+  TickType_t last = xTaskGetTickCount();
+  for (;;) {
+    vTaskDelayUntil(&last, 5);
+    int64_t t0 = esp_timer_get_time();
+    if (fn_in[f_learn] && rn_host_call(&H, f_learn, 0, fn_in[f_learn], out)) learn_err++;
+    int64_t dt = esp_timer_get_time() - t0;
+    learn_sum += dt; learn_n++; if (dt > learn_max) learn_max = dt;
   }
 }
 
@@ -134,8 +150,11 @@ static void link_task(void *arg) {
     if (esp_timer_get_time() > next) {
       next += 2000000;
       int nn = loop_n; int64_t sum = loop_sum, mx = loop_max; loop_n = 0; loop_sum = 0; loop_max = 0;
-      if (nn) printf("loop: %d steps, %.0f us per step on average (%.1f%% of a core at 1 kHz), longest %lld us, over 1 ms: %d, traps: %d, flying slot %d\n",
+      if (nn) printf("flight loop, core 1: %d steps, %.0f us per step on average (%.1f%% of the core at 1 kHz), longest %lld us, over 1 ms: %d, traps: %d, flying slot %d\n",
                      nn, (double)sum / nn, (double)sum / nn / 10.0, (long long)mx, loop_late, loop_err, H.act);
+      int ln = learn_n; int64_t ls = learn_sum, lm = learn_max; learn_n = 0; learn_sum = 0; learn_max = 0;
+      if (ln) printf("learning, core 0: %d updates, %.0f us each on average (%.1f%% of the core at 200 Hz), longest %lld us, traps: %d\n",
+                     ln, (double)ls / ln, (double)ls / ln / 50.0, (long long)lm, learn_err);
     }
   }
 }
@@ -188,7 +207,9 @@ void app_main(void) {
 
   uart_driver_install(LINK, 4096, 2048, 0, NULL, 0);
   uart_vfs_dev_use_driver(LINK);
-  printf("\n1 kHz loop on core 1: every formula once per step, servoPredictor for %d servos. Listening for programs on this port.\n\n", N_SERVOS);
+  printf("\n1 kHz loop on core 1: every formula once per step (servoPredictor for %d servos), except the learning: 200 Hz on core 0. Listening for programs on this port.\n\n", N_SERVOS);
   xTaskCreatePinnedToCore(link_task, "link", 6144, NULL, 5, NULL, 0);
+  f_learn = rn_host_find(&H, "identifyEffectiveness");
+  xTaskCreatePinnedToCore(learn_task, "learn", 6144, NULL, 10, NULL, 0);
   xTaskCreatePinnedToCore(flight_task, "flight", 6144, NULL, configMAX_PRIORITIES - 1, NULL, 1);
 }

@@ -1445,7 +1445,9 @@ function rnLink(prog, fns) {
   for (const s of prog.consts.values()) constData[s.addr] = s.init[0];
   for (const s of prog.constBlocks) constData.set(s.init, s.addr);
   for (const f of fns) for (const s of f.slots) if (s.kind === 'state' || s.kind === 'arg' || s.kind === 'ret') { s.addr = addr; addr += s.size; }
-  const poolBase = addr; let poolSize = 0;
+  // Two pools: formulas whose signature says `ownPool` (they run on another core, as the in-flight learning can)
+  // get working space of their own after the shared one, so they can run at the same time as the rest.
+  const poolBase = addr; let poolSize = 0, ownSize = 0;
   for (const f of fns) {
     const live = f.slots.filter(s => (s.kind === 'tmp' || s.kind === 'var') && s.last >= 0).sort((a, b) => a.first - b.first || b.size - a.size);
     const active = [];                                    // { s, a, e } places in use: [a, e)
@@ -1455,12 +1457,15 @@ function rnLink(prog, fns) {
       active.sort((x, y) => x.a - y.a);
       const n = s.size; let at = 0;
       for (const b of active) { if (b.a - at >= n) break; at = Math.max(at, b.e); }
-      s.addr = poolBase + at; active.push({ s, a: at, e: at + n }); top = Math.max(top, at + n);
+      s.rel = at; active.push({ s, a: at, e: at + n }); top = Math.max(top, at + n);
     }
-    for (const s of f.slots) if (s.addr === null) s.addr = poolBase;       // never used
-    poolSize = Math.max(poolSize, top);
+    if (f.sig.ownPool) ownSize = Math.max(ownSize, top); else poolSize = Math.max(poolSize, top);
   }
-  const arenaSize = poolBase + poolSize;
+  for (const f of fns) for (const s of f.slots) {
+    if (s.kind !== 'tmp' && s.kind !== 'var') continue;
+    s.addr = s.rel === undefined ? poolBase : poolBase + (f.sig.ownPool ? poolSize : 0) + s.rel;
+  }
+  const arenaSize = poolBase + poolSize + ownSize;
   // Code: word offsets, then operands.
   const words = []; const fnTable = {}; const posAt = new Map();
   const opArity = RN_OPS.map(o => o[1].length);
