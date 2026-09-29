@@ -49,6 +49,14 @@ static float FMODF(float x, float y) { double q = (double)x / (double)y; return 
 #define FMODF fmodf
 #endif
 
+/* The step loop runs from RAM on the ESP32 (flash is behind a small cache). */
+#if defined(ESP_PLATFORM)
+#include "esp_attr.h"
+#define RN_HOT IRAM_ATTR
+#else
+#define RN_HOT
+#endif
+
 #define TRUTHY(x) ((x) != 0.0f && (x) == (x))
 #define ISNAN(x) ((x) != (x))
 
@@ -140,7 +148,11 @@ int rn_load(rn_prog *P, const uint8_t *img, uint32_t len, float *arena, uint32_t
   if (clen > RN_CODE_MAX) return RN_E_TOO_BIG;
   memset(arena, 0, asz * sizeof(float));
   memcpy(arena, img + r.at, ce * 4); r.at += ce * 4;
-  if (code) memcpy(code, img + r.at, clen * 4);
+  if (code) {                                    /* word by word: the buffer may be in memory that only takes 32-bit writes (the ESP32's IRAM) */
+    const uint8_t *src = img + r.at;
+    if (((uintptr_t)src & 3) == 0) { const int32_t *w = (const int32_t *)(uintptr_t)src; for (uint32_t k = 0; k < clen; k++) code[k] = w[k]; }
+    else for (uint32_t k = 0; k < clen; k++) { int32_t v; memcpy(&v, src + 4 * k, 4); code[k] = v; }
+  }
   else if (((uintptr_t)(img + r.at) & 3) == 0) code = (int32_t *)(uintptr_t)(img + r.at);   /* run the steps where they are (flash) */
   else return RN_E_SIZE;
   r.at += clen * 4;
@@ -372,7 +384,7 @@ static int k_bls(float *A, int32_t d, int32_t cl, int32_t lo, int32_t hi, int32_
 
 /* ── the step loop ── */
 #define IS_INT(v) ((float)(int32_t)(v) == (v))
-int rn_run(rn_prog *P, int32_t fi) {
+RN_HOT int rn_run(rn_prog *P, int32_t fi) {
   if (fi < 0 || fi >= P->n_fn) return RN_T_NO_FN;
   const rn_fn *f = &P->fn[fi];
   float *A = P->arena; const int32_t *c = P->code, n = P->arena_size, ce = P->const_end;

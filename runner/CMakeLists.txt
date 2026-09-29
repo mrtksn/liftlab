@@ -2,4 +2,5 @@
 # The rest of the folder builds the same C for the simulator (build_wasm.sh) and for a PC (the tests).
 idf_component_register(SRCS "rn.c" "rn_host.c" "rn_link.c" "rn_builtin.c"
                        INCLUDE_DIRS ".")
-target_compile_options(${COMPONENT_LIB} PRIVATE -O2 -Wno-unused-parameter)
+# The step loop is a switch over the opcodes: let it be a jump table (ESP-IDF turns them off by default).
+target_compile_options(${COMPONENT_LIB} PRIVATE -O2 -Wno-unused-parameter -fjump-tables -ftree-switch-conversion)

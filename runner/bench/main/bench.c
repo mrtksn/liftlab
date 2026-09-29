@@ -30,7 +30,7 @@ extern const uint32_t rn_builtin_len;
 
 #define CODE_CAP 8192           /* code words for a loaded program */
 #define POOL_CAP 256            /* floats of instance memory per slot */
-#define IMG_CAP (48 * 1024)     /* largest program accepted over the link (tools/export_program.js --link) */
+#define IMG_CAP (40 * 1024)     /* largest program accepted over the link (tools/export_program.js --link) */
 #define N_SERVOS 4
 #define LINK UART_NUM_0
 
@@ -152,8 +152,12 @@ void app_main(void) {
   float *a0 = NULL; uint32_t acap = 0;
   { const uint8_t *p = rn_builtin_img; int32_t asz = rd32(p + 8); acap = (uint32_t)asz + 512; }
   a0 = heap_caps_malloc(acap * sizeof(float), MALLOC_CAP_8BIT);
-  int e = a0 ? rn_load(&probe, rn_builtin_img, rn_builtin_len, a0, acap, NULL, 0) : RN_E_TOO_BIG;
-  printf("built-in program: %s, %u bytes, %d formulas, arena %d floats (%d KB), %d step words (run from flash)\n", rn_error_text(e), (unsigned)rn_builtin_len, (int)probe.n_fn, (int)probe.arena_size, (int)(probe.arena_size * 4 / 1024), (int)probe.code_len);
+  /* Steps in IRAM (only 32-bit access, which is all the runner does with them): flash is behind a small cache.
+   * IRAM is otherwise unused here, so this costs no data memory. */
+  int32_t cwords = rd32(rn_builtin_img + 16);
+  int32_t *c0 = heap_caps_malloc((size_t)cwords * 4, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT);
+  int e = a0 ? rn_load(&probe, rn_builtin_img, rn_builtin_len, a0, acap, c0, c0 ? (uint32_t)cwords : 0) : RN_E_TOO_BIG;
+  printf("built-in program: %s, %u bytes, %d formulas, arena %d floats (%d KB), %d step words (in %s)\n", rn_error_text(e), (unsigned)rn_builtin_len, (int)probe.n_fn, (int)probe.arena_size, (int)(probe.arena_size * 4 / 1024), (int)probe.code_len, c0 ? "IRAM" : "flash");
   if (e) return;
   float worst = 0; int64_t t0 = esp_timer_get_time();
   e = rn_selftest(&probe, rn_builtin_img, rn_builtin_len, 1e-2f, &worst);
@@ -161,18 +165,19 @@ void app_main(void) {
   bench_formulas(&probe, rn_builtin_img, rn_builtin_len);
 
   /* A slot for programs sent over the link and a buffer to receive them, then a third slot if there's room. */
-  float *a1 = heap_caps_malloc(acap * sizeof(float), MALLOC_CAP_8BIT);
-  int32_t *c1 = a1 ? heap_caps_malloc(CODE_CAP * 4, MALLOC_CAP_8BIT) : NULL;
-  uint8_t *img = c1 ? heap_caps_malloc(IMG_CAP, MALLOC_CAP_8BIT) : NULL;
+  uint8_t *img = heap_caps_malloc(IMG_CAP, MALLOC_CAP_8BIT);
+  float *a1 = img ? heap_caps_malloc(acap * sizeof(float), MALLOC_CAP_8BIT) : NULL;
+  int32_t *c1 = a1 ? heap_caps_malloc(CODE_CAP * 4, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT) : NULL;
+  if (!c1) { free(a1); a1 = NULL; free(img); img = NULL; }
   float *a2 = img ? heap_caps_malloc(acap * sizeof(float), MALLOC_CAP_8BIT) : NULL;
-  int32_t *c2 = a2 ? heap_caps_malloc(CODE_CAP * 4, MALLOC_CAP_8BIT) : NULL;
+  int32_t *c2 = a2 ? heap_caps_malloc(CODE_CAP * 4, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT) : NULL;
   if (a2 && !c2) { free(a2); a2 = NULL; }
   float *p0 = calloc(POOL_CAP, 4), *p1 = calloc(POOL_CAP, 4), *p2 = calloc(POOL_CAP, 4);
   printf("\nprogram slots: built-in, %s\n", !img ? "none for loaded programs (not enough memory): the built-in program only" :
          a2 ? "two for loaded programs (flying and next, plus the previous one to fall back to)" :
          "one for loaded programs (a new one loads while the built-in one flies)");
   float *arenas[3] = { a0, img ? a1 : NULL, a2 }, *pools[3] = { p0, p1, p2 };
-  int32_t *codes[3] = { NULL, c1, c2 };
+  int32_t *codes[3] = { c0, c1, c2 };
   H.event = host_event; H.lock = host_lock;
   e = rn_host_init(&H, rn_builtin_img, rn_builtin_len, arenas, acap, codes, CODE_CAP, pools, POOL_CAP);
   if (!e) e = rn_host_instances(&H, "servoPredictor", N_SERVOS);
