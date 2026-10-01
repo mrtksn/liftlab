@@ -11,3 +11,6 @@ runner/fc/fc.wasm
 runner/fc/esp32/build/
 runner/fc/esp32/sdkconfig
 runner/fc/esp32/sdkconfig.old
+runner/motortest/build/
+runner/motortest/sdkconfig
+runner/motortest/sdkconfig.old
