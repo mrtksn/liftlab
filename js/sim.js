@@ -509,6 +509,11 @@ function resetSim() {
   buildBodies();
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
+  if (terrain.boxes.length && terrainNear([setpoint.x, setpoint.y, setpoint.z], cReach + 0.3).length) {   // the target is in or against a building
+    Object.assign(setpoint, { x: 0, y: 0, z: 1.5 }); pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];   // start again at the start point, in the open
+    if (typeof syncSp === 'function') syncSp();
+    healthEvent('Started again at the start point: the target was against a building.', 'info');
+  }
   S.p = [setpoint.x, setpoint.y, setpoint.z];
   if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => (pt.r || 0) - pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;

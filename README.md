@@ -22,7 +22,7 @@ The header has three groups:
 - **Parkour city** (the default): a compact city about 1:8 around an open plaza at the start point. Next to the plaza are low obstacles: rows of gates to fly through, platforms on stilts to fly under or land on, tunnels, steps and low walls. Further out are towers, stepped and L-shaped buildings, some joined by bridges. Streets are 1.3 to 2.5 m wide and towers reach about 10 m.
 - **Full-scale city:** the same layout at real size (×8): streets 10 to 20 m wide, towers up to 80 m.
 
-The dice button builds another city from a new random seed. The same seed always gives the same city, and the choice is remembered. Changing the world restarts the flight in the plaza. Everything is a plain box, with no textures (`js/terrain.js`).
+The dice button builds another city from a new random seed. The same seed always gives the same city, and the choice is remembered. Changing the world restarts the flight in the plaza. Reset starts the drone at its target, unless the target is inside or against a building (say, after crashing into one): then it starts again at the start point. Everything is a plain box, with no textures (`js/terrain.js`).
 
 **Collisions.** The airframe touches things through small spheres: the hub's corners, each motor and servo, points along the arms, every corner of a box mass, rods along their length, and the sensors. Any of them inside the ground or a building gets the ground-contact spring, turned to face that surface. A part that hits a thin wall or slab hard is pushed back out the side it came in by, so it never tunnels through. Landing on anything (the ground, a roof, a bridge) faster than 3 m/s is a crash. Bumping into a wall isn't, but the props usually won't survive it.
 
