@@ -15,6 +15,8 @@ The header has three groups:
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
 
+A **crash** shows as a small banner above the flight controls, with the reason and a Reset button (or **R**). Nothing covers the view: the flight controller cuts the motors, and the physics keeps running, so the drone tumbles and falls until you reset. You can still orbit the camera to look at the wreck.
+
 ## The world
 
 **World** in the header picks where the drone flies:

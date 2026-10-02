@@ -512,7 +512,7 @@ $('#applyCurve').addEventListener('change', e => { learn.applyCurve = e.target.c
 function setLaunch(m, go = true) {
   launchMode = m;
   $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));
-  $('#crashReset').textContent = m === 'throw' ? 'Throw again' : 'Reset to hover';
+  $('#crashResetLbl').textContent = m === 'throw' ? 'Throw again' : 'Reset';
   if (go) { if (!running) { running = true; renderRun(); } doReset(); renderLearn(true); save(); }
 }
 $('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));

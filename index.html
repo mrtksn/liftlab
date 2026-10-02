@@ -232,12 +232,10 @@
           <button type="button" class="pk p-down" data-ctrl="back" aria-pressed="false" aria-label="Back (down arrow)"><span class="gl">▼</span><kbd>↓</kbd></button>
         </div>
       </div>
-      <div class="crash" id="crash" hidden>
-        <div class="crash-card" role="alert">
-          <b>Crashed</b>
-          <p id="crashWhy"></p>
-          <button class="btn primary" type="button" id="crashReset">Reset to hover</button>
-        </div>
+      <div class="crash" id="crash" role="alert" hidden>
+        <b>Crashed</b>
+        <span id="crashWhy"></span>
+        <button class="btn" type="button" id="crashReset" title="Start the flight again (R)"><span id="crashResetLbl">Reset</span> <kbd>R</kbd></button>
       </div>
       <dialog class="ask" id="saveAsk" aria-labelledby="saveAskTitle">
         <form method="dialog">
