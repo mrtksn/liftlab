@@ -61,7 +61,8 @@ function vibrationAt(pos) {
   let a = [0, 0, 0], w = [0, 0, 0];
   for (const c of actuators()) {
     const v = vib.get(c.id), st = act.get(c.id); if (!v || !st) continue;
-    const k = (st.T * motorEff(c) / c.tmax) * Math.exp(-nrm(sub(pos, posNow(c))) / VIB_REACH) * Math.sin(v.ph);
+    const s = hs.get(c.id), stub = s && s.prop ? 0.8 * clamp((st.Omega || 0) * propR(c) / 180, 0, 1.3) : 0;   // a broken prop's stub is badly out of balance
+    const k = (st.T * motorEff(c) / c.tmax + stub) * Math.exp(-nrm(sub(pos, posNow(c))) / VIB_REACH) * Math.sin(v.ph);
     a = add(a, scl(v.u, VIB_ACC * k)); w = add(w, scl(v.u, VIB_GYRO * k));
   }
   return { a, w };
@@ -102,7 +103,7 @@ function measure(c, rt, dt) {
   if (c.kind === 'mag') return run('magModel', m3v(RsT, MAG_EARTH), m3v(MtT, m3v(m3T(K.Rb[b]), scl(motorFieldAt(P), c.interference))), { noise: c.noise, hardIron: c.hardIron, softIron: c.softIron ?? 0.03 }, rt.st);
   if (c.kind === 'flow') {
     const down = m3v(Rs, [0, 0, -1]);
-    const d = down[2] < -0.2 ? ps[2] / -down[2] : Infinity;          // distance to the ground along the boresight
+    const d = terrainRay(ps, down, 50, 0.2);                          // distance to the ground (or a roof, or a wall) along the boresight
     const v = m3v(RsT, vs), w = m3v(MtT, wb);
     const f = isFinite(d) && d > 0.01 ? [w[1] - v[0] / d, -w[0] - v[1] / d] : [w[1], -w[0]];
     const q = isFinite(d) ? envr.texture * envr.light * clamp(1.25 - d / 8, 0, 1) : 0;   // image quality: texture, light, height

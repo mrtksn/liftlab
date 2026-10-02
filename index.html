@@ -22,6 +22,19 @@
         <select id="preset" aria-label="Start from a layout or a saved design" title="Start from a layout (Blank is a bare frame) or one of your saved designs"></select>
       </div>
     </div>
+    <div class="hgroup" role="group" aria-labelledby="grpWorld">
+      <span class="lbl" id="grpWorld">World</span>
+      <div class="hrow">
+        <select id="terrainSel" aria-label="World" title="Where the drone flies: open ground, a compact parkour city, or the same city at full scale">
+          <option value="open">Open field</option>
+          <option value="parkour">Parkour city</option>
+          <option value="city">Full-scale city</option>
+        </select>
+        <button class="btn icon" id="terrainNew" type="button" aria-label="Build another city" title="Build another city">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.4" cy="5.4" r="1.2"/><circle cx="10.6" cy="10.6" r="1.2"/><circle cx="8" cy="8" r="1.2"/></svg>
+        </button>
+      </div>
+    </div>
     <div class="hgroup" role="group" aria-labelledby="grpSim">
       <span class="lbl" id="grpSim">Simulation</span>
       <div class="hrow">
@@ -328,6 +341,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/math.js"></script>
+<script src="js/terrain.js"></script>
 <script src="js/laws.js"></script>
 <script src="js/runtime.js"></script>
 <script src="js/budget.js"></script>

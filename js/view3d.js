@@ -20,6 +20,7 @@ const LAYERS = [
   { key: 'est', label: 'Estimate', group: 'Flight', on: true, tip: 'Where the flight software thinks the drone is' },
   { key: 'target', label: 'Target', group: 'Flight', on: true, tip: 'The position the drone is flying to' },
   { key: 'grid', label: 'Ground grid', group: 'Scene', on: true, tip: 'The grid on the ground' },
+  { key: 'shadow', label: 'Shadow', group: 'Scene', on: true, tip: 'A shadow on whatever is under the drone, to judge its height' },
   { key: 'readouts', label: 'Readouts', group: 'Scene', on: true, tip: 'Position, speed and torque numbers, top left' },
   { key: 'legend', label: 'Legend', group: 'Scene', on: true, tip: 'The colour key, top left' },
 ];
@@ -94,13 +95,69 @@ function buildMaterials() {
     spin: new THREE.LineBasicMaterial({ color: colorOf('--ink-2'), transparent: true, opacity: 0.4 }),
     spinHead: new THREE.MeshBasicMaterial({ color: colorOf('--ink-2'), transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false }),
     ghost: new THREE.LineDashedMaterial({ color: colorOf('--sensor'), dashSize: 0.02, gapSize: 0.015, transparent: true, opacity: 0.9 }),
+    bldg: new THREE.MeshStandardMaterial({ color: colorOf('--bldg'), roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }),
+    bldgFade: new THREE.MeshStandardMaterial({ color: colorOf('--bldg'), roughness: 0.95, transparent: true, opacity: 0.14, depthWrite: false }),
+    bldgEdge: new THREE.LineBasicMaterial({ color: colorOf('--bldg-edge') }),
+    bldgEdgeFade: new THREE.LineBasicMaterial({ color: colorOf('--bldg-edge'), transparent: true, opacity: 0.3, depthWrite: false }),
+    shadow: new THREE.MeshBasicMaterial({ color: colorOf('--ink'), transparent: true, opacity: 0.2, depthWrite: false }),
+    stub: new THREE.MeshBasicMaterial({ color: colorOf('--bad') }),
   };
 }
 function applyTheme() {
   renderer.setClearColor(colorOf('--viewport'), 1);
+  buildMaterials(); buildWorldFx(); rebuildDrone(); buildGizmo(); buildCity();
+}
+
+/* ───────── the world: ground grid, buildings, shadow ───────── */
+const city = new THREE.Group(); scene.add(city);
+let cityVer = -1, bldg = [], shadowMesh = null;
+const bigWorld = () => terrain.scale > 2;
+const maxDist = () => bigWorld() ? 300 : 20;
+function buildCity() {
   if (grid) { scene.remove(grid); grid.geometry.dispose(); }
-  grid = new THREE.GridHelper(60, 240, colorOf('--grid-strong'), colorOf('--grid')); grid.rotation.x = Math.PI / 2; scene.add(grid);
-  buildMaterials(); buildWorldFx(); rebuildDrone(); buildGizmo();
+  const big = bigWorld();   // a full-scale city gets a coarser, wider grid and a longer view
+  grid = new THREE.GridHelper(big ? 1200 : 60, big ? 240 : 240, colorOf('--grid-strong'), colorOf('--grid')); grid.rotation.x = Math.PI / 2; scene.add(grid);
+  perspCam.near = big ? 0.05 : 0.02; perspCam.far = big ? 5000 : 200; perspCam.updateProjectionMatrix();
+  orthoCam.near = big ? -3000 : -60; orthoCam.far = big ? 5000 : 260; orthoCam.updateProjectionMatrix();
+  cam.dist = Math.min(cam.dist, maxDist());
+  city.traverse(o => { if (o.geometry) o.geometry.dispose(); }); while (city.children.length) city.remove(city.children[0]);
+  bldg = [];
+  for (const b of terrain.boxes) {
+    const geo = new THREE.BoxGeometry(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]);
+    const m = new THREE.Mesh(geo, mats.bldg); m.position.set((b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2);
+    const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mats.bldgEdge); m.add(e);
+    city.add(m); bldg.push({ m, e, b, faded: false });
+  }
+  shadowMesh = new THREE.Mesh(new THREE.CircleGeometry(1, 36), mats.shadow); shadowMesh.renderOrder = 1; city.add(shadowMesh);
+  cityVer = terrain.ver;
+}
+// Does the segment a→b pass through box b? (slab test)
+function segHitsBox(a, d, len, b) {
+  let t0 = 0, t1 = len;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-12) { if (a[i] < b.lo[i] || a[i] > b.hi[i]) return false; continue; }
+    let u = (b.lo[i] - a[i]) / d[i], v = (b.hi[i] - a[i]) / d[i]; if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 > t1) return false;
+  }
+  return true;
+}
+function updateCity(hub) {
+  if (cityVer !== terrain.ver) buildCity();
+  // Buildings between the camera and the drone (or the point the camera looks at) turn see-through.
+  const c = camera.position.toArray(), tg = cam.target.toArray();
+  const rays = [hub, tg].map(p => { const d = sub(p, c), L = nrm(d); return { d: scl(d, 1 / Math.max(L, 1e-9)), L }; });
+  for (const B of bldg) {
+    const fade = rays.some(r => segHitsBox(c, r.d, r.L, B.b));
+    if (fade !== B.faded) { B.faded = fade; B.m.material = fade ? mats.bldgFade : mats.bldg; B.e.material = fade ? mats.bldgEdgeFade : mats.bldgEdge; }
+  }
+  // The shadow: a soft disc on whatever is right under the drone, fainter the higher it flies.
+  const show = view.shadow && !editMode;
+  shadowMesh.visible = show;
+  if (show) {
+    const z = surfaceBelow(hub), h = hub[2] - z, r = cReach * 0.8;
+    shadowMesh.position.set(hub[0], hub[1], z + 0.004 * (bigWorld() ? 5 : 1)); shadowMesh.scale.setScalar(r * (1 + h * 0.04));
+    shadowMesh.material.opacity = 0.28 * clamp(1 - h / (bigWorld() ? 60 : 8), 0.08, 1);
+  }
 }
 function rod(a, b, r, mat) {
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b); const len = va.distanceTo(vb); if (len < 1e-4) return null;
@@ -213,7 +270,8 @@ function rebuildDrone() {
       const wake = new THREE.Mesh(new THREE.CylinderGeometry(0.71 * pr, pr, 3 * pr, 24, 1, true).rotateX(Math.PI / 2), mats.wake.clone());
       wake.position.z = 0.02 - 1.5 * pr; if (c.push) { wake.scale.z = -1; wake.position.z = 0.02 + 1.5 * pr; }   // the wake: behind the disc, past the motor for a puller, away from it for a pusher
       wake.visible = false; wake.userData.noPick = true; axis.add(wake);
-      parts.set(c.id, { axis, disc, arrow, wake, body, spin: sm });
+      const stub = new THREE.Mesh(new THREE.BoxGeometry(pr * 0.7, 0.012, 0.004), mats.stub); stub.position.z = 0.02; stub.visible = false; axis.add(stub);   // what's left of a broken prop
+      parts.set(c.id, { axis, disc, arrow, wake, body, spin: sm, stub });
     } else if (c.type === 'mass') {
       let geo;
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
@@ -338,6 +396,7 @@ function updateTorque(R, live) {
 function updateScene() {
   if (grid) grid.visible = view.grid;
   const R = qmat(S.q); const { hub } = hubState(R);
+  updateCity(hub);
   drone.position.set(...hub);
   if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
   else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
@@ -363,8 +422,10 @@ function updateScene() {
       p.body.material.color.copy(mats.motor.color); if (f > 0) p.body.material.color.lerp(f < 1 ? heatCol.warn : heatCol.bad, Math.min(1, f) * 0.85);
       p.disc.material.color.copy(s && (s.dead || s.loss > 0.004) ? heatCol.bad : mats.prop.color);
       if (s && s.dead) p.disc.material.opacity = 0.18;
+      const broke = !!(s && s.prop); p.disc.visible = !broke; p.stub.visible = broke;
+      if (broke) p.stub.rotation.z += 0.9;   // the stub whirls
     }
-    if (p.spin) p.spin.visible = editMode || view.spin;
+    if (p.spin) p.spin.visible = (editMode || view.spin) && p.disc.visible;
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
     p.arrow.visible = live && view.thrust && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
     else if (editMode) {   // editing: every motor shows which way its thrust points (pull or push); the selected one boldly
@@ -429,12 +490,12 @@ vpEl.addEventListener('pointermove', e => {
   if (!ptrs.has(e.pointerId)) return; const p = ptrs.get(e.pointerId);
   if (ptrs.size === 1) { cam.anim = null; cam.az -= (e.clientX - p.x) * 0.008; cam.el = clamp(cam.el + (e.clientY - p.y) * 0.006, -EL_MAX, EL_MAX); }
   p.x = e.clientX; p.y = e.clientY;
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0 > 0) cam.dist = clamp(cam.dist * pinch0 / d, 0.6, 20); pinch0 = d; }
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0 > 0) cam.dist = clamp(cam.dist * pinch0 / d, 0.6, maxDist()); pinch0 = d; }
 });
 const endPtr = e => { const handled = e.type === 'pointerup' && editPointerUp(e); ptrs.delete(e.pointerId); pinch0 = 0; return handled; };
 vpEl.addEventListener('pointerleave', () => { if (!edit.drag) setHover(null); });
 vpEl.addEventListener('pointerup', endPtr); vpEl.addEventListener('pointercancel', endPtr);
-vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.anim = null; cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, 20); }, { passive: false });
+vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.anim = null; cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, maxDist()); }, { passive: false });
 new ResizeObserver(() => { const w = vpEl.clientWidth, h = vpEl.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); perspCam.aspect = w / h; perspCam.updateProjectionMatrix(); orthoCam.top = NaN; }).observe(vpEl);
 
 /* ───────── the view box: orientation triad, projection and named views ───────── */

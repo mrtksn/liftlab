@@ -70,7 +70,7 @@ function payloadDrag(v, wind) {
 }
 
 function groundContact(depth, v) {
-  // depth: how far the contact point is below the ground [m]; v: its velocity, world frame
+  // depth: how far the contact point is inside the surface [m]; v: its velocity in the surface's axes (z out of it)
   const k = 3000, c = 60, mu = 8;                        // stiffness, damping, sliding friction
   return [-mu * v[0], -mu * v[1], Math.max(0, k * depth - c * v[2])];
 }
@@ -936,7 +936,7 @@ const LAW_DEFS = [
     shape: 3, sample: () => [[1, 0, 0], [0, 0, 0]] },
   { key: 'groundContact', group: 'plant', fn: groundContact, title: 'Ground contact',
     math: [`${V('F')} = (−μ<i>v</i><sub>x</sub>, −μ<i>v</i><sub>y</sub>, max(0, <i>k</i><sub>g</sub><i>h</i> − <i>c</i><sub>g</sub><i>v</i><sub>z</sub>))`],
-    doc: 'A penalty spring at each contact point (hub, motors, masses) that is below the ground.',
+    doc: 'A penalty spring at each contact point (hub corners, motors, arms, masses, rods, sensors) that is inside the ground or a building. For a building the same law is turned to face its surface: z is the way out, x and y lie along the surface.',
     args: [['depth', 'h, depth below ground [m]'], ['v', 'point velocity, world [m/s]']], returns: 'force, world [N]',
     shape: 3, sample: () => [0.01, [0.1, 0, -0.5]] },
 

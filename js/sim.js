@@ -263,19 +263,31 @@ function controlStep(dt) {
 
 /* ───────── physics ───────── */
 const PDT = 0.0005;
-// Where the airframe can touch the ground: rest points on the body that carries them (posed each step).
+// Where the airframe can touch the ground or a building: small spheres (rest point, radius r) on the body
+// that carries them, posed each step. The hub's corners, each motor and servo, the arms out to them, every
+// corner of a box mass, rods along their length, and the sensors.
 function contactPoints() {
   const on = c => (MB && MB.of.get(c.id)) || 0;
-  const pts = [{ rest: [0, 0, -0.03], b: 0 }];
+  const pts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }];
+  for (const x of [-0.06, 0.06]) for (const y of [-0.06, 0.06]) for (const z of [-0.02, 0.02]) pts.push({ rest: [x, y, z], b: 0, r: 0 });
   for (const c of cfg.comps) {
-    if (c.type === 'motor' || c.type === 'joint') pts.push({ rest: add(c.pos, [0, 0, -0.03]), b: on(c) });
-    else if (c.type === 'mass') { const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2; pts.push({ rest: add(c.pos, [0, 0, -hz]), b: on(c) }); }
-    else if (c.type === 'link') pts.push({ rest: linkTip(c), b: on(c) }, { rest: c.pos.slice(), b: on(c) });
-    else if (c.type === 'sensor') pts.push({ rest: add(c.pos, [0, 0, -0.005]), b: on(c) });
+    const b = on(c);
+    if (c.type === 'motor' || c.type === 'joint') {
+      pts.push({ rest: add(c.pos, [0, 0, -0.03]), b, r: 0 }, { rest: c.pos.slice(), b, r: c.type === 'motor' ? 0.018 : 0.015 });
+      if (!parentOf(c)) for (const k of [1 / 3, 2 / 3]) pts.push({ rest: scl(c.pos, k), b: 0, r: 0.008 });   // the arm from the hub
+    } else if (c.type === 'mass') {
+      const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2;
+      pts.push({ rest: add(c.pos, [0, 0, -hz]), b, r: 0 });
+      if (c.shape === 'box') { for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) pts.push({ rest: add(c.pos, [x * c.size[0] / 2, y * c.size[1] / 2, z * c.size[2] / 2]), b, r: 0 }); }
+      else if (c.shape === 'sphere') pts.push({ rest: c.pos.slice(), b, r: c.radius });
+      else pts.push({ rest: add(c.pos, [0, 0, c.length / 2 - c.radius]), b, r: c.radius }, { rest: add(c.pos, [0, 0, -c.length / 2 + c.radius]), b, r: c.radius });
+    } else if (c.type === 'link') pts.push({ rest: linkTip(c), b, r: 0 }, { rest: c.pos.slice(), b, r: 0 }, { rest: add(c.pos, scl(linkDir(c), c.length / 2)), b, r: 0.008 });
+    else if (c.type === 'sensor') pts.push({ rest: add(c.pos, [0, 0, -0.005]), b, r: 0.006 });
   }
+  cReach = Math.max(0.1, ...pts.map(p => nrm(p.rest) + p.r), ...actuators().map(c => nrm(c.pos) + propR(c)));
   return pts;
 }
-let cPts = [{ rest: [0, 0, -0.03], b: 0 }];
+let cPts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }], cReach = 0.3;   // how far from the hub any part (or prop tip) reaches
 const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // prop radius [m]
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area)
@@ -331,7 +343,7 @@ function rotorAir(rotors, K, R, RT, wv) {
   for (const ro of rotors) {
     const u = add(ro.va, run('wakeVelocity', ro.p, rotors.filter(o => o !== ro)));   // plus the other rotors' wash
     const ua = dot(u, ro.d);
-    const h = add(S.p, m3v(R, ro.p))[2];
+    const pw = add(S.p, m3v(R, ro.p)), h = pw[2] - (terrain.boxes.length ? surfaceBelow(pw) : 0);   // height above the ground or the roof below
     ro.ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h);
     ro.st.k = ro.T > 1e-6 ? ro.ae.T / ro.T : 1; ro.st.Teff = ro.ae.T;
   }
@@ -372,7 +384,8 @@ function dynamics(dt) {
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
   let Ibatt = 0.5;   // avionics
   const rotors = acts.map(c => {
-    const st = act.get(c.id), mp = heatParams(c, motorParams(c)), dead = hsOf(c).dead;   // the motor as it is at its temperature
+    const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
+    const mp = hsc.prop ? { ...mp0, kT: 0, kQ: 0.03 * mp0.kQ, J: 0.4 * mp0.J } : mp0;                   // a broken prop: a stub, no thrust, almost no drag
     const md = dead ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
     if (dead) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
@@ -418,15 +431,30 @@ function dynamics(dt) {
     const Fp = add(add(add(scl(Fc, -1), run('gravity', c.mass, G)), run('payloadDrag', st.v, wv)), wash);
     st.v = add(st.v, scl(Fp, dt / c.mass)); st.p = add(st.p, scl(st.v, dt));
     if (st.p[2] < 0.03) { st.p[2] = 0.03; if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
+    if (terrain.boxes.length) for (const h of terrainContacts(st.p, payloadR(c), terrainNear(st.p, payloadR(c) + 0.05), st.prev)) {   // a payload swung into a building
+      st.p = add(st.p, scl(h.n, h.depth)); const vn = dot(st.v, h.n); if (vn < 0) st.v = sub(st.v, scl(h.n, vn)); st.v = scl(st.v, 0.995);
+    }
+    st.prev = st.p.slice();
   }
-  // Ground.
+  // Ground and buildings: a contact spring at every point that's inside something, along the way out
+  // (groundContact, turned to face that surface). Landing on something at more than 3 m/s is a crash;
+  // bumping into a wall isn't, but the props may not survive it (below).
+  const near = terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : [];
   for (const pt of cPts) {
     if (pt.b >= N) continue;
-    const P = posed(pt.b, pt.rest), pw = toWorld(P); if (pw[2] >= 0) continue;
+    const P = posed(pt.b, pt.rest), pw = toWorld(P);
+    if (pw[2] >= pt.r && !near.length) { pt.prev = pw; continue; }
+    const hits = terrainContacts(pw, pt.r, near, pt.prev); pt.prev = pw; if (!hits.length) continue;
     const vel = velW(pt.b, P);
-    if (vel[2] < -3 && !S.crashed) crash(`Hit the ground at ${(-vel[2]).toFixed(1)} m/s.`);
-    push(pt.b, m3v(RT, run('groundContact', -pw[2], vel)), P);
+    for (const h of hits) {
+      const n = h.n, t1 = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : unit(crs([0, 0, 1], n)), t2 = crs(n, t1);   // the surface's own axes: on the ground, x, y, z
+      const vl = [dot(vel, t1), dot(vel, t2), dot(vel, n)];
+      if (n[2] > 0.7 && vl[2] < -3 && !S.crashed) crash(`Hit ${h.ground ? 'the ground' : 'the top of ' + h.what} at ${(-vl[2]).toFixed(1)} m/s.`);
+      const f = run('groundContact', h.depth, vl);
+      push(pt.b, m3v(RT, add(add(scl(t1, f[0]), scl(t2, f[1])), scl(n, f[2]))), P);
+    }
   }
+  propStrikes(rotors, toWorld, near);
   // Servos: each sees its command after its delay, drives toward it along its torque–speed line, and stops
   // hard a little past its travel.
   const tauJ = new Array(N).fill(0);
@@ -468,7 +496,7 @@ function dynamics(dt) {
   if (!S.crashed) {
     const up = dot(m3v(R, nb), [0, 0, 1]);
     if (!isFinite(S.p[0] + S.p[1] + S.p[2] + S.q[0] + S.w[0])) { crash('The state became invalid (NaN). Check your edited formulas.'); S.p = [setpoint.x, setpoint.y, 0.2]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.q = [1, 0, 0, 0]; S.mb = null; }
-    else if (up < -0.17 && !thr) crash('Flipped over. The actuators could not hold the attitude.');
+    else if (up < -0.17 && !thr && actuators().length) crash(actuators().some(c => hsOf(c).prop) ? 'Flipped over after losing a prop.' : 'Flipped over. The actuators could not hold the attitude.');
     else if (nrm(S.w) > 35) crash('Spun out of control. Check yaw authority and spin directions.');
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
@@ -482,7 +510,7 @@ function resetSim() {
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   S.p = [setpoint.x, setpoint.y, setpoint.z];
-  if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => -pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
+  if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => (pt.r || 0) - pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
@@ -506,6 +534,20 @@ function resetSim() {
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
   thr = null; if (launchMode === 'throw' && actuators().length) startThrow();
+}
+
+// A spinning prop that touches anything breaks. The disc's rim is checked at 16 points against the ground
+// and nearby buildings; a stopped prop just rests against things.
+function propStrikes(rotors, toWorld, near) {
+  for (const ro of rotors) {
+    const s = hsOf(ro.c); if (s.prop || ro.Om * ro.R < 12) continue;   // tips slower than 12 m/s: not spinning in earnest
+    const d = ro.d, e1 = unit(crs(d, Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0])), e2 = crs(d, e1);
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8, P = add(ro.p, add(scl(e1, ro.R * Math.cos(a)), scl(e2, ro.R * Math.sin(a))));
+      const what = solidAt(toWorld(P), near);
+      if (what) { breakDevice(ro.c, 'prop', 'hit ' + what); break; }
+    }
+  }
 }
 
 /* ───────── flight envelope ───────── */

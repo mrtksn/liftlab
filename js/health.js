@@ -26,11 +26,11 @@ const hb = { T: 25, fade: 0, cellsLost: 0, cut: false, cause: '' };
 const ambient = () => (envr.ambient ?? 25);
 function hsOf(c) {
   let s = hs.get(c.id);
-  if (!s) { s = { T: ambient(), loss: 0, dead: false, jam: null, limp: false, cause: '', failT: null }; hs.set(c.id, s); }
+  if (!s) { s = { T: ambient(), loss: 0, dead: false, prop: false, jam: null, limp: false, cause: '', failT: null }; hs.set(c.id, s); }
   return s;
 }
-// Thrust a motor really delivers, as a share of its card's max: its health, any damage, 0 if dead.
-const motorEff = c => { const s = hs.get(c.id); return c.health / 100 * (s ? (s.dead ? 0 : 1 - s.loss) : 1); };
+// Thrust a motor really delivers, as a share of its card's max: its health, any damage, 0 if dead or its prop is broken.
+const motorEff = c => { const s = hs.get(c.id); return c.health / 100 * (s ? (s.dead || s.prop ? 0 : 1 - s.loss) : 1); };
 const defaultBattery = () => ({ cells: 4, capacity: 1.3, rInt: 0.06, tmaxC: 60, failHeat: true, failMode: 'cell', vsens: true, isens: true, tsens: true });
 function battCfg() { if (!cfg.battery) cfg.battery = defaultBattery(); return cfg.battery; }
 // What the battery model gets: cells still working, capacity after wear, resistance at this temperature.
@@ -79,7 +79,10 @@ function heatBattery(I, dt) {
 // Break something on demand, or as a result of overheating.
 function breakDevice(c, mode, cause = 'broken on demand') {
   const s = hsOf(c); s.cause = cause; s.failT = S.t;
-  if (c.type === 'motor') { if (mode === 'loss') s.loss = Math.max(s.loss, (c.failLoss ?? 50) / 100); else s.dead = true; s.mode = mode === 'loss' ? 'loss' : 'stop'; }
+  if (c.type === 'motor') {
+    if (mode === 'prop') { s.prop = true; s.mode = 'prop'; healthEvent(`${c.name}: prop broke (${cause})`, 'bad'); if (typeof refreshEnvelope === 'function') refreshEnvelope(); return; }
+    if (mode === 'loss') s.loss = Math.max(s.loss, (c.failLoss ?? 50) / 100); else s.dead = true; s.mode = mode === 'loss' ? 'loss' : 'stop';
+  }
   else if (c.type === 'joint') { const st = jst.get(c.id); if (mode === 'limp') s.limp = true; else s.jam = st ? st.th : 0; s.mode = mode === 'limp' ? 'limp' : 'jam'; }
   healthEvent(`${c.name}: ${c.type === 'motor' ? (s.dead ? 'stopped' : `lost ${Math.round(s.loss * 100)}% of its thrust`) : (s.limp ? 'went limp' : 'jammed')} (${cause})`, 'bad');
   if (typeof refreshEnvelope === 'function') refreshEnvelope();

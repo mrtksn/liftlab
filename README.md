@@ -15,6 +15,35 @@ The header has three groups:
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
 
+## The world
+
+**World** in the header picks where the drone flies:
+- **Open field:** flat ground, nothing else.
+- **Parkour city** (the default): a compact city about 1:8 around an open plaza at the start point. Next to the plaza are low obstacles: rows of gates to fly through, platforms on stilts to fly under or land on, tunnels, steps and low walls. Further out are towers, stepped and L-shaped buildings, some joined by bridges. Streets are 1.3 to 2.5 m wide and towers reach about 10 m.
+- **Full-scale city:** the same layout at real size (×8): streets 10 to 20 m wide, towers up to 80 m.
+
+The dice button builds another city from a new random seed. The same seed always gives the same city, and the choice is remembered. Changing the world restarts the flight in the plaza. Everything is a plain box, with no textures (`js/terrain.js`).
+
+**Collisions.** The airframe touches things through small spheres: the hub's corners, each motor and servo, points along the arms, every corner of a box mass, rods along their length, and the sensors. Any of them inside the ground or a building gets the ground-contact spring, turned to face that surface. A part that hits a thin wall or slab hard is pushed back out the side it came in by, so it never tunnels through. Landing on anything (the ground, a roof, a bridge) faster than 3 m/s is a crash. Bumping into a wall isn't, but the props usually won't survive it.
+
+**Props are fragile.** Each prop's rim is checked at 16 points. If a spinning prop touches anything, it breaks:
+- the motor keeps spinning a stub, with no thrust and almost no drag;
+- the frame shakes from the stub's imbalance, which the IMU feels;
+- the view shows a red stub;
+- the Health panel says "prop broken" and logs what it hit.
+
+A quad that clips a wall usually loses its front props and flips. You can also break a prop on demand from the motor's Break… menu. Reset or Repair all fits new props.
+
+**Sensors see the city.**
+- The rangefinder and optical flow measure the distance along their beam to whatever is there (a roof or a wall), not the height above the street. A drone holding its height on a rangefinder therefore jumps up when it crosses a roof, as a real one would.
+- Ground effect works over rooftops too.
+- The barometer and GPS are unaffected.
+
+**In the view:**
+- Buildings between the camera and the drone turn see-through.
+- A soft shadow under the drone, on the street or a roof, helps judge height. Its switch is Shadow in the Show menu.
+- In the full-scale city, the view reaches further and you can zoom out to 300 m.
+
 ## Learning the airframe
 
 The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't need to know prop sizes, mass or inertia. What it needs is the **effectiveness matrix B**: how much linear and angular acceleration each actuator input produces. B comes from one of two sources.
@@ -362,6 +391,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/budget.js` | Flight computer budget: counts what the flight code costs per control step and keeps in memory, for an ESP32 |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
+| `js/terrain.js` | The world: the city generator (seeded), and the contact, ray and surface-below queries the physics and sensors use |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
 | `js/multibody.js` | Articulated-body dynamics: the frame and every servo joint solved together (recursive Newton–Euler) |
 | `js/joints.js` | Servo joints and rods: the attachment tree, poses from the joint angles (true and believed), carrying parts along, servo state |

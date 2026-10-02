@@ -712,6 +712,13 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
+// The world: open ground or a city (terrain.js). Changing it starts the flight again in the open plaza.
+function applyTerrain(kind, seed) {
+  setTerrain(kind, seed); syncTerrainUi(); cPts = contactPoints(); doReset(); save();
+}
+function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
+$('#terrainSel').addEventListener('change', e => applyTerrain(e.target.value, terrain.seed));
+$('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + Math.floor(Math.random() * 1e9)));
 function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }
 document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
 [['tFollow', 'follow'], ['tChase', 'chase']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
@@ -775,7 +782,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -807,6 +814,7 @@ function load() {
     if (!LAWS[key]) continue;
     try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
   }
+  if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
@@ -836,7 +844,8 @@ function boot() {
   buildSp(); buildThrowFields(); buildAllocFields(); buildFormulas(); bindPads();
   const cs = $('#chipSel'); for (const [k, c] of Object.entries(CHIPS)) cs.append(el('option', { value: k, text: c.label }));
   cs.value = budget.chip; cs.addEventListener('change', () => setChip(cs.value));
-  if (load()) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
+  const loaded = load(); if (!terrain.ver) setTerrain('parkour', 1); syncTerrainUi();
+  if (loaded) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   initDesigns(bootDesign);
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}

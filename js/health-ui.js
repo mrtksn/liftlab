@@ -53,7 +53,7 @@ function buildHealth() {
   box.append(el('div', { class: 'h-top' }, el('label', { class: 'check', for: supId }, cb, 'Supervisor on'), mode, repair),
     el('p', { class: 'hint', id: 'supWhy', text: 'Companion computer at 10 Hz, 40 ms each way over its link. Each part: its true temperature and state, then what the drone can sense and what the supervisor did.', title: 'The supervisor (like a Raspberry Pi next to the ESP32) reads the health sensors and the flight controller\'s data stream, and changes the controller\'s settings when a part fails, weakens or runs hot.' }));
   const list = el('div', { class: 'h-list' });
-  for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`]], v => breakDevice(c, v), 'Break ' + c.name)));
+  for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name)));
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name)));
   list.append(healthRow('batt', 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery')));
   box.append(list, el('span', { class: 'lbl', text: 'What happened' }), el('ol', { class: 'h-log', id: 'supLog' }));
@@ -62,7 +62,7 @@ function buildHealth() {
 const healthSig = () => actuators().map(c => c.id + c.name + (c.failLoss ?? 50)).join(',') + '|' + joints().map(j => j.id + j.name).join(',');
 function repairAll() {
   for (const c of actuators()) { const e = fcAct(c); if (e.eff !== 1) scaleActuatorColumns(c, 1 / e.eff); }
-  hs.forEach(s => Object.assign(s, { loss: 0, dead: false, jam: null, limp: false, cause: '', failT: null, mode: null }));
+  hs.forEach(s => Object.assign(s, { loss: 0, dead: false, prop: false, jam: null, limp: false, cause: '', failT: null, mode: null }));
   Object.assign(hb, { fade: 0, cellsLost: 0, cut: false, cause: '', failT: null });
   fc.act.clear(); fc.joint.clear(); fc.jAng.clear(); if (fc.mode !== 'landed') { fc.mode = 'normal'; fc.lim = { speed: null, lean: 35, accel: 6 }; }
   Object.assign(sup, { dec: {}, pol: { mode: 'normal' }, st: {}, sent: null, capLogged: new Set(), jLogged: new Set(), cells: null, vHist: [], cellLost: false });
@@ -80,7 +80,7 @@ function renderHealth(force) {
   const dec = (sup.dec && sup.dec.acts) || {};
   for (const c of actuators()) {
     const s = hs.get(c.id) || { T: ambient(), loss: 0 }, lim = c.tmaxC ?? 120, r = hread.m.get(c.id) || {}, e = fcAct(c);
-    const truth = s.dead ? ['stopped', 'bad'] : s.loss > 0.004 ? [`−${Math.round(s.loss * 100)}% thrust${s.cause === 'burned out' || s.T > lim ? ' (heat)' : ''}`, 'warn'] : ['working', ''];
+    const truth = s.prop ? ['prop broken', 'bad'] : s.dead ? ['stopped', 'bad'] : s.loss > 0.004 ? [`−${Math.round(s.loss * 100)}% thrust${s.cause === 'burned out' || s.T > lim ? ' (heat)' : ''}`, 'warn'] : ['working', ''];
     const seen = r.T != null ? `sensor ${Math.round(r.T)}°` : sup.tEst.has(c.id) && r.I != null ? `est. ${Math.round(sup.tEst.get(c.id))}° from ESC current` : 'temperature not measured';
     const did = !e.on ? 'removed from the table' : [e.eff < 0.99 || e.eff > 1.01 ? `table ×${e.eff.toFixed(2)}` : '', e.cap < 0.995 ? `capped at ${Math.round(e.cap * 100)}%` : ''].filter(Boolean).join(', ') || (dec[c.id] ? 'OK' : '');
     put(c.id, (s.T - ambient()) / Math.max(10, lim - ambient()), `${Math.round(s.T)} °C`, truth[0], truth[1], `${seen}${did ? ' · supervisor: ' + did : ''}`);
