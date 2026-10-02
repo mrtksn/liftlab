@@ -6,7 +6,7 @@
 // to 5 mm and angles to 5°; hold Shift for 1 mm / 1°.
 
 let editMode = false, editWasRunning = true;
-const edit = { hover: null, sel: null, drag: null, down: null };
+const edit = { hover: null, sel: null, drag: null, down: null, focusId: null, refocus: false, focusLocal: null, focusShift: null };   // focus: where the view is centred while editing
 const raycaster = new THREE.Raycaster(); raycaster.params.Line.threshold = 0.004; raycaster.params.Points.threshold = 0.004;
 const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]], AXIS_NAME = ['X', 'Y', 'Z'];
 let gizmo = null, travelG = null, hoverBox = null, selBox = null;
@@ -291,7 +291,7 @@ function editPointerMove(e, orbiting) {
 function editPointerUp(e) {
   if (!editMode) return false;
   if (edit.drag) { endDrag(); return true; }
-  if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) selectComp(pickComp(e));
+  if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) { edit.refocus = true; selectComp(pickComp(e)); }   // a click (not a drag) centres the view on what it picks
   edit.down = null; return false;
 }
 

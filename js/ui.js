@@ -254,7 +254,7 @@ function compCard(c) {
   const open = openSet.has(c.id);
   const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
   head.addEventListener('click', () => {
-    if (typeof editMode !== 'undefined' && editMode && edit.sel !== c.id) { selectComp(c.id); return; }   // in edit mode a card click selects the part
+    if (typeof editMode !== 'undefined' && editMode && edit.sel !== c.id) { edit.refocus = true; selectComp(c.id); return; }   // in edit mode a card click selects the part
     open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c));
   });
   const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });

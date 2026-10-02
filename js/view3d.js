@@ -397,9 +397,14 @@ function updateScene() {
   let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   const selC = editMode && compById(edit.sel);
   if (selC) {   // editing: orbit round the selected part; with the servo panel open, keep it clear of the panel
-    tgt = drone.localToWorld(new THREE.Vector3(...selC.pos));
-    if (selC.type === 'joint') tgt.addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion), -0.09 * cam.dist);
-  }
+    // The centre is set when the part is picked (clicking it again re-centres), not followed: dragging a part
+    // mustn't move the view under the pointer.
+    if (edit.focusId !== selC.id || edit.refocus) {
+      edit.focusId = selC.id; edit.refocus = false; edit.focusLocal = selC.pos.slice();
+      edit.focusShift = selC.type === 'joint' ? new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(-0.09 * cam.dist) : new THREE.Vector3();
+    }
+    tgt = drone.localToWorld(new THREE.Vector3(...edit.focusLocal)).add(edit.focusShift);
+  } else if (editMode) edit.focusId = null;
   cam.target.lerp(tgt, view.follow ? 0.12 : 0.06);
   if (view.chase && live) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
