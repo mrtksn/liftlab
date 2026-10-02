@@ -378,7 +378,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     if (F->t - F->test_t > FC_TEST_S || F->t - F->cmd_t > FC_CMD_TIMEOUT) { F->state = FC_DISARMED; fc_say(F, "motor test done"); return 0; }
     o->motor[F->cmd.test_motor] = F->cmd.test_throttle; return 0;
   }
-  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !open && F->t >= F->recover_t) { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
+  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !open && !F->open_loop && F->t >= F->recover_t)   /* (open_loop: a throw's open loop ended this step, its grace starts below) */ { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
   if (F->state == FC_ARMED && F->t - F->cmd_t > FC_CMD_TIMEOUT) {
     if (F->cmd.throttle < 0.05f) { F->state = FC_DISARMED; fc_say(F, "no commands, at idle: disarmed"); }   /* on the ground, most likely */
     else { start_descent(F); fc_say(F, "no commands: failsafe descent"); }

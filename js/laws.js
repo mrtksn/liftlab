@@ -98,14 +98,23 @@ function servoTorque(err, rate, p) {
 }
 
 function batteryModel(st, current, dt, p) {
-  // A LiPo: open-circuit voltage falls as it drains, and the pack sags under current through its internal
-  // resistance. current: total draw [A] (negative when braking motors push charge back).
-  // p: { cells still working, capacity [C] after wear, rInt [Ω] at its temperature, cut: pack disconnected }
+  // A LiPo: its resting voltage follows the usual discharge curve (flat through the middle, falling away below
+  // about 15%), and it sags under current through its internal resistance, which grows as the pack empties.
+  // Past empty (over-discharge) the voltage collapses. current: total draw [A] (negative when braking motors push
+  // charge back). p: { cells still working, capacity [C] after wear, rInt [Ω] at its temperature, cut: disconnected }
   const cells = p ? p.cells : 4, capacity = p ? p.capacity : 1.3 * 3600, rInt = p ? p.rInt : 0.06;
   if (st.soc === undefined) st.soc = 1;
   if (p && p.cut) return 0;
-  st.soc = clamp(st.soc - current * dt / Math.max(1, capacity), 0, 1);
-  return Math.max(0, cells * (3.5 + 0.7 * st.soc) - rInt * current);   // terminal voltage [V]
+  st.soc = clamp(st.soc - current * dt / Math.max(1, capacity), -0.08, 1);
+  const curve = [[-0.08, 2.0], [-0.04, 2.8], [0, 3.2], [0.05, 3.45], [0.1, 3.6], [0.15, 3.67], [0.2, 3.71], [0.3, 3.75], [0.4, 3.79],
+    [0.5, 3.83], [0.6, 3.87], [0.7, 3.92], [0.8, 3.98], [0.9, 4.06], [0.95, 4.13], [1, 4.2]];   // [charge, resting volts per cell]
+  let ocv = curve[curve.length - 1][1];
+  for (let i = 1; i < curve.length; i++) {
+    const a = curve[i - 1], b = curve[i];
+    if (st.soc <= b[0]) { ocv = a[1] + (b[1] - a[1]) * (st.soc - a[0]) / (b[0] - a[0]); break; }
+  }
+  const r = rInt * (1 + 1.5 * clamp((0.2 - st.soc) / 0.2, 0, 1.4));   // a nearly empty pack sags more
+  return Math.max(0, cells * ocv - r * current);   // terminal voltage [V]
 }
 
 function thermalModel(T, P, G, C, Tamb, dt) {
@@ -721,9 +730,17 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
 
 function positionControl(ep, v, ip, m, g, lim) {
   // ep: position error, v: velocity error (hub velocity − commanded velocity), ip: integral of ep; world frame
-  // lim: { accel } the most horizontal acceleration to ask for [m/s²] (the supervisor lowers it to fly gently)
+  // lim: { accel, speed } the most horizontal acceleration [m/s²] and speed toward the target [m/s] (the supervisor
+  // lowers them to fly gently)
+  // A far target doesn't ask for any speed it likes: the position error asks for a velocity (kp/kd per metre),
+  // capped at the speed limit sideways and at 3 m/s up, 1.5 m/s down. A drone sinking faster than that into its
+  // own downwash can't brake (its rotors lose thrust in the turbulent air), so it would drop past the target.
+  // Near the target it's the plain PID: kp·ep − kd·v + ki·∫ep.
   const kp = 4, kd = 3.6, ki = 1.0;                      // acceleration units, so they fit any mass
-  const a = [0, 1, 2].map(i => kp * ep[i] - kd * v[i] + ki * ip[i]);
+  const vh = lim && lim.speed > 0 ? lim.speed : 6, k = kp / kd;
+  const vx = k * ep[0], vy = k * ep[1], vxy = Math.hypot(vx, vy), sh = vxy > vh ? vh / vxy : 1;
+  const want = [vx * sh, vy * sh, clamp(k * ep[2], -1.5, 3)];
+  const a = [0, 1, 2].map(i => kd * (want[i] - v[i]) + ki * ip[i]);
   const ah = Math.hypot(a[0], a[1]), amax = lim && lim.accel > 0 ? lim.accel : 6;
   if (ah > amax) { a[0] *= amax / ah; a[1] *= amax / ah; }   // limit the horizontal demand
   a[2] = clamp(a[2], -6, 8);
@@ -1080,8 +1097,8 @@ const LAW_DEFS = [
     doc: 'Rotor wash hitting the hub, rigid masses and cable payloads pushes them along the wake.',
     args: [['w', 'wake air velocity at the part [m/s]'], ['area', 'frontal area of the part [m²]']], returns: 'force [N]', shape: 3, sample: () => [[0, 0, -5], 0.01] },
   { key: 'batteryModel', group: 'plant', fn: batteryModel, title: 'Battery',
-    math: [`<i>V</i> = <i>n</i><sub>cells</sub> (3.5 + 0.7·SoC) − <i>R</i><sub>int</sub>(<i>T</i>) <i>I</i>, &nbsp;d(SoC)/d<i>t</i> = −<i>I</i> / capacity`],
-    doc: 'A LiPo, sized by the Battery settings (4 cells, 1.3 Ah and 60 mΩ by default). It drains with the current all the motors draw and sags under load, so the same throttle gives less thrust as the flight goes on and during hard manoeuvres, unless the flight controller measures the voltage and corrects for it. A warm pack sags less (its resistance falls about 1.5% per °C), overheating costs it capacity and adds resistance for good, and a failed cell takes 3.5–4.2 V away. Reset restores a fresh pack.',
+    math: [`<i>V</i> = <i>n</i><sub>cells</sub> <i>V</i><sub>rest</sub>(SoC) − <i>R</i><sub>int</sub>(<i>T</i>, SoC) <i>I</i>, &nbsp;d(SoC)/d<i>t</i> = −<i>I</i> / capacity`, `<i>V</i><sub>rest</sub>: 4.2 V full, 3.83 V at half, 3.6 V at 10%, 3.2 V empty, collapsing past it`],
+    doc: 'A LiPo, sized by the Battery settings (4 cells, 1.3 Ah and 60 mΩ by default). It drains with the current all the motors draw and sags under load, so the same throttle gives less thrust as the flight goes on and during hard manoeuvres, unless the flight controller measures the voltage and corrects for it. A warm pack sags less (its resistance falls about 1.5% per °C), overheating costs it capacity and adds resistance for good, and a failed cell takes 3.5–4.2 V away. Near empty its voltage falls away and it sags more, so the thrust it can give drops until the drone can no longer hover; over-discharged, it collapses (and the ESCs\' low-voltage cutoff, set in the Battery settings, stops the motors). Reset restores the pack at its take-off charge.',
     args: [['st', 'battery state (soc)'], ['current', 'total draw [A]'], ['dt', 'time step [s]'], ['p', '{ cells, capacity [C], rInt [Ω], cut }']], returns: 'terminal voltage [V]', shape: 'n', sample: () => [{}, 12, 0.0005, { cells: 4, capacity: 4680, rInt: 0.06, cut: false }] },
   { key: 'thermalModel', group: 'plant', fn: thermalModel, title: 'Heating and cooling',
     math: [`<i>C</i> d<i>T</i>/d<i>t</i> = <i>P</i> − <i>G</i> (<i>T</i> − <i>T</i><sub>air</sub>)`, `motor: <i>P</i> = <i>i</i>²<i>R</i>(<i>T</i>), &nbsp;<i>G</i> = <i>G</i><sub>full</sub>(0.3 + 0.7 Ω/Ω<sub>max</sub>), &nbsp;<i>R</i> +0.39%/K, magnet −0.12%/K`, `battery: <i>P</i> = <i>I</i>²<i>R</i><sub>int</sub>`],
@@ -1172,9 +1189,9 @@ const LAW_DEFS = [
     sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.004, 'catch', { v: [0.5, 0.2], phi: [1, 1], m: [0, 1], coll: [0, 0] }, 0] },
 
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
-    math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
+    math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>d</sub>(sat(<i>K</i><sub>p</sub>/<i>K</i><sub>d</sub> ${V('e')}<sub>p</sub>) − (${V('v')} − ${V('v')}<sub>cmd</sub>)) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `sat: sideways ≤ the speed limit, up ≤ 3 m/s, down ≤ 1.5 m/s`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',
-    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²'], ['lim', '{ accel }: most horizontal acceleration [m/s²], from the supervisor']], returns: 'desired total force, world [N]',
+    args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²'], ['lim', '{ accel, speed }: most horizontal acceleration [m/s²] and speed [m/s], from the supervisor']], returns: 'desired total force, world [N]',
     shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81, { accel: 6 }] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
     math: [`tilt body: ${V('n')}<sub>d</sub> = ${V('F')}<sub>d</sub> / ‖${V('F')}<sub>d</sub>‖, &nbsp;at most 35° from vertical`, `mixed: ${V('n')}<sub>d</sub> ∝ ((1 − <i>s</i>)<i>F</i><sub>x</sub>, (1 − <i>s</i>)<i>F</i><sub>y</sub>, <i>F</i><sub>z</sub>), &nbsp;<i>s</i> = the servos' share of the sideways force`, `stay level: ${V('n')}<sub>d</sub> = ${V('ẑ')}`],

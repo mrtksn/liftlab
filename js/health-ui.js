@@ -19,10 +19,12 @@ function renderBattery() {
     num('capacity', { label: 'Capacity', min: 0.3, max: 10, hmax: 50, step: 0.1, u: 'Ah', dp: 1 }),
     num('rInt', { label: 'Internal resistance (at 25 °C)', min: 0.005, max: 0.2, step: 0.005, u: 'mΩ', dp: 0, k: 1000 }),
     num('tmaxC', { label: 'Temperature limit', min: 40, max: 90, step: 1, u: '°C', dp: 0 }),
+    num('startSoc', { label: 'Charge at take-off', min: 0.05, max: 1, step: 0.01, u: '%', dp: 0, k: 100 }),
+    num('escCut', { label: 'ESC low-voltage cutoff (0: off)', min: 0, max: 3.5, step: 0.05, u: 'V/cell', dp: 2 }),
     chk('vsens', 'Voltage sensor (the flight controller corrects the throttle for sag)'), chk('isens', 'Current sensor'), chk('tsens', 'Temperature sensor'),
     chk('failHeat', 'Overheating damages it'),
     el('div', { class: 'field' }, el('label', { for: 'batt-failMode', text: 'When it fails' }), sel),
-    el('p', { class: 'hint', text: 'Its weight isn\'t added for you: the layouts carry it as a mass part. It heats from the current through its internal resistance, which falls as it warms (so a warm pack sags less); past its limit it loses capacity and gains resistance for good, and 25 °C past it, it fails the way you set.' }));
+    el('p', { class: 'hint', text: 'Its weight isn\'t added for you: the layouts carry it as a mass part. It heats from the current through its internal resistance, which falls as it warms (so a warm pack sags less); past its limit it loses capacity and gains resistance for good, and 25 °C past it, it fails the way you set. Near empty its voltage falls away and sags more, so the thrust drops until it can\'t hover; over-discharged it collapses. The ESCs\' cutoff stops the motors once the pack stays under it (per cell, under load) for 1.5 s; they restart only after the throttle has been at zero.' }));
   renderBattSmall();
 }
 
@@ -88,9 +90,9 @@ function renderHealth(force) {
   });
   {
     const b = battCfg(), r = hread.b, soc = S.batt && S.batt.soc != null ? S.batt.soc : 1;
-    const truth = hb.cut ? ['cut out', 'bad'] : hb.cellsLost ? [`${hb.cellsLost} cell${hb.cellsLost > 1 ? 's' : ''} lost`, 'bad'] : hb.fade > 0.005 ? [`worn ${Math.round(hb.fade * 100)}%`, 'warn'] : ['working', ''];
+    const truth = hb.cut ? ['cut out', 'bad'] : hb.lvc ? ['ESCs cut (low voltage)', 'bad'] : hb.cellsLost ? [`${hb.cellsLost} cell${hb.cellsLost > 1 ? 's' : ''} lost`, 'bad'] : hb.fade > 0.005 ? [`worn ${Math.round(hb.fade * 100)}%`, 'warn'] : ['working', ''];
     const seen = [r.V != null ? `${r.V.toFixed(1)} V` : 'no voltage sensor', r.I != null ? `${r.I.toFixed(0)} A` : '', r.T != null ? `${Math.round(r.T)}°` : ''].filter(Boolean).join(' · ');
-    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)} °C`, truth[0], truth[1], `${Math.round(soc * 100)}% charge · sensors: ${seen}${sv && sv.cells < b.cells ? ` · supervisor: counts ${sv.cells} cells` : ''}`);
+    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)} °C`, truth[0], truth[1], `${Math.round(Math.max(0, soc) * 100)}% charge · sensors: ${seen}${sv && sv.cells < b.cells ? ` · supervisor: counts ${sv.cells} cells` : ''}`);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
   pill.className = 'pill ' + m[1]; pill.querySelector('span').textContent = sv ? m[0] : 'Off';

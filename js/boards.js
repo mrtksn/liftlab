@@ -165,7 +165,7 @@ function boardsStart() {
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
-  Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 });
+  Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
   const C = computers();
@@ -406,6 +406,9 @@ function autoPilot(dt, navigated) {
     if (h != null ? brt.out.alt - (P.alt0 ?? (P.alt0 = brt.out.alt)) > 0.6 * setpoint.z : P.t > 0.9) { P.thr = 0.5; P.phase = 'flying'; }
   } else if (P.phase !== 'takeoff') P.alt0 = null;
   if (brt.fcState === 0 && P.phase === 'flying') { P.phase = 'landed'; P.arm = 0; P.fly = 0; }
+  // the ESCs cut out on a flat pack and it came down: switch off, as you would
+  P.downT = P.phase === 'flying' && hb.lvc && S.p[2] - (terrain.boxes.length ? surfaceBelow(S.p) : 0) < 0.4 && nrm(S.v) < 0.2 ? (P.downT || 0) + dt : 0;
+  if (P.downT > 2) { P.phase = 'landed'; P.arm = 0; P.fly = 0; P.thr = 0; P.flat = true; }
 }
 // The sticks from the pilot keys (angle mode): the arrows lean, A/D turn, W/S climb or sink around the middle.
 function stickCommand() {
@@ -414,5 +417,5 @@ function stickCommand() {
   return { arm: P.arm, pitch: s * (k('fwd') - k('back')), roll: s * (k('right') - k('left')), yaw: k('yawL') - k('yawR'),
     throttle: P.thr > 0 ? clamp((flying ? 0.5 : P.thr) + 0.35 * (k('up') - k('down')), 0.06, 1) : 0 };
 }
-const flightPhaseText = () => !brt.ready ? (brt.err || 'starting') : { ground: 'on the ground', arming: 'arming', takeoff: brt.navOut && !brt.navOut.ready ? 'waiting for its position to settle' : 'taking off', flying: 'flying', landed: 'landed',
+const flightPhaseText = () => !brt.ready ? (brt.err || 'starting') : { ground: 'on the ground', arming: 'arming', takeoff: brt.navOut && !brt.navOut.ready ? 'waiting for its position to settle' : 'taking off', flying: 'flying', landed: brt.pilot.flat ? 'down: the battery is flat' : 'landed',
   hand: !thr || thr.phase === 'free' ? 'thrown' : thr.phase === 'toss' ? 'being thrown' : brt.navOut && !brt.navOut.ready ? 'in the hand, waiting for its position' : 'in the hand, motors off' }[brt.pilot.phase] || '';

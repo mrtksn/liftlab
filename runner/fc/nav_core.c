@@ -150,7 +150,9 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   for (int i = 0; i < 3; i++) {
     ep[i] = target[i] - N->p[i];
     ev[i] = N->v[i] - clampf(vref[i], -vmax, vmax);
-    N->iPos[i] = clampf(N->iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);
+    /* the integral only works near the target: on the way to a far one it would wind up and carry the drone past it
+     * (a 4 m descent left it 5 m·s, over a metre, too low) */
+    if (fabsf(ep[i]) < 1) N->iPos[i] = clampf(N->iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);
   }
   k = 0;
   for (int i = 0; i < 3; i++) b[k++] = ep[i];

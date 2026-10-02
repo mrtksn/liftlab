@@ -518,7 +518,7 @@ static void recover_check(learn_state *L) {                          /* upright 
   const float *a = fc_axis(&L->FA);
   float up = L->R[6] * a[0] + L->R[7] * a[1] + L->R[8] * a[2];
   L->zmin = minf(L->zmin, L->z);
-  L->calm_t = up > 0.9f && nrm3(L->w) < 1.5f && fabsf(L->vz) < 1 ? L->calm_t + L->dt : 0;
+  L->calm_t = up > 0.9f && nrm3(L->w) < 1.5f && fabsf(L->vz) < 1.8f ? L->calm_t + L->dt : 0;   /* (sinking at the navigation's 1.5 m/s toward its target counts as calm) */
   if (L->calm_t <= 0.5f) return;
   SAY_MORE(" Caught itself %.1f s after release (thrown to about %.1f m, lowest point on the way down %.1f m).", (double)L->thr_t, (double)L->zmax, (double)L->zmin);
   L->thr = LN_THR_NONE;

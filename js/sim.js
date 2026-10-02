@@ -328,11 +328,12 @@ function dynamics(dt) {
 
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
   let Ibatt = 0.5;   // avionics
+  const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0));
   const rotors = acts.map(c => {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
     const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, J: mp0.J * sp.J };   // this particular motor and prop
     const mp = hsc.prop ? { ...mpx, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
-    const off = isCollective(c) && !(st.u > 0);   // a helicopter's ESC spools the rotor up only once it gets a throttle signal
+    const off = (isCollective(c) && !(st.u > 0)) || lvc;   // a helicopter's ESC spools the rotor up only once it gets a throttle signal; the low-voltage cutoff stops them all
     const md = dead || off ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
     if (dead || off) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
@@ -347,7 +348,11 @@ function dynamics(dt) {
     }
     return { c, st, b, p: posed(b, c.pos), d, T: md.T * motorEff(c), R: propR(c), Om: md.Omega, J: mp.J, tauM: md.tau };
   });
-  S.battV = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
+  // The pack and the motors pull on each other within a step (more current, more sag, less current), so the voltage
+  // the ESCs see settles through their input capacitors (about 2 ms) rather than jumping each step, which would
+  // ring once a nearly empty pack's resistance is high.
+  const Vpack = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
+  S.battV += (Vpack - S.battV) * Math.min(1, dt / 0.002);
   S.battK = steadyX(1, S.battV) ** 2;
   S.battI = Ibatt;
   heatBattery(Math.max(0, Ibatt), dt);
@@ -471,7 +476,7 @@ function resetSim() {
   if (throwing) startThrow();
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
-  S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
+  S.batt = { soc: clamp(battCfg().startSoc ?? 1, 0.02, 1) }; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   resetEstimation(); resetLearning(); budgetReset();
   truth = massProps('truth'); model = massProps('model');

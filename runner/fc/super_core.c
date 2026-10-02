@@ -156,6 +156,17 @@ static void event(super_state *S, int tone, const char *fmt, ...) {
   S->log_seq++;
 }
 
+
+/* A LiPo cell's charge from its resting voltage (the usual discharge curve: flat through the middle, falling away
+ * below about 15%; the simulator's batteryModel uses the same one). */
+static float lipo_charge(float v) {
+  static const float c[][2] = { { 0, 3.2f }, { 0.05f, 3.45f }, { 0.1f, 3.6f }, { 0.15f, 3.67f }, { 0.2f, 3.71f }, { 0.3f, 3.75f }, { 0.4f, 3.79f },
+    { 0.5f, 3.83f }, { 0.6f, 3.87f }, { 0.7f, 3.92f }, { 0.8f, 3.98f }, { 0.9f, 4.06f }, { 0.95f, 4.13f }, { 1, 4.2f } };
+  if (v <= c[0][1]) return 0;
+  for (int i = 1; i < (int)(sizeof c / sizeof *c); i++) if (v <= c[i][1]) return c[i - 1][0] + (c[i][0] - c[i - 1][0]) * (v - c[i - 1][1]) / (c[i][1] - c[i - 1][1]);
+  return 1;
+}
+
 static void tick(super_state *S) {
   const fc_airframe *A = &S->FA.A; int nm = A->n_motors, nj = A->n_joints, sj[FC_MAX_JOINTS], ns = steer_list(S, sj);
   /* 1. how well each motor still does what its column says, from the stream */
@@ -248,7 +259,7 @@ static void tick(super_state *S) {
     S->vh_t[S->nvh] = (float)S->t; S->vh_v[S->nvh++] = per;
     for (int q = 0; q < S->nvh; q++) if (S->vh_t[q] > (float)S->t - 2) before = maxf(before, S->vh_v[q]);
     if (per < 3.3f && before - per > 0.5f && S->cells > 1) { S->cells--; S->nvh = 0; S->cell_lost = 1; event(S, 3, "Battery: its voltage fell by about a cell's worth. Counting %d working cells.", S->cells); }
-    soc = clampf((vrest / (float)(S->cells > 1 ? S->cells : 1) - 3.5f) / 0.7f, 0, 1); vcell = S->b_v / (float)(S->cells > 1 ? S->cells : 1);
+    soc = lipo_charge(vrest / (float)(S->cells > 1 ? S->cells : 1)); vcell = S->b_v / (float)(S->cells > 1 ? S->cells : 1);
   }
   S->soc = soc; S->have_soc = soc >= 0;
   float hot = -1; int any_failed = 0;

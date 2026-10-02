@@ -17,7 +17,7 @@
 
 /* ───────────────────────── the real drone ───────────────────────── */
 const hs = new Map();   // id -> { T, loss, dead, jam, limp, cause, failT }, for motors and servos
-const hb = { T: 25, fade: 0, cellsLost: 0, cut: false, cause: '' };
+const hb = { T: 25, fade: 0, cellsLost: 0, cut: false, cause: '', lvc: false, lvcT: 0 };
 const ambient = () => (envr.ambient ?? 25);
 function hsOf(c) {
   let s = hs.get(c.id);
@@ -26,13 +26,24 @@ function hsOf(c) {
 }
 // Thrust a motor really delivers, as a share of its card's max: its health, any damage, 0 if dead or its prop is broken.
 const motorEff = c => { const s = hs.get(c.id); return c.health / 100 * (s ? (s.dead || s.prop ? 0 : 1 - s.loss) : 1); };
-const defaultBattery = () => ({ cells: 4, capacity: 1.3, rInt: 0.06, tmaxC: 60, failHeat: true, failMode: 'cell', vsens: true, isens: true, tsens: true });
-function battCfg() { if (!cfg.battery) cfg.battery = defaultBattery(); return cfg.battery; }
+const defaultBattery = () => ({ cells: 4, capacity: 1.3, rInt: 0.06, tmaxC: 60, failHeat: true, failMode: 'cell', vsens: true, isens: true, tsens: true, startSoc: 1, escCut: 2.8 });
+function battCfg() { if (!cfg.battery) cfg.battery = defaultBattery(); else for (const [k, v] of Object.entries(defaultBattery())) if (cfg.battery[k] === undefined) cfg.battery[k] = v; return cfg.battery; }
 // What the battery model gets: cells still working, capacity after wear, resistance at this temperature.
 function battParams() {
   const b = battCfg();
   return { cells: Math.max(0, b.cells - hb.cellsLost), capacity: b.capacity * 3600 * (1 - hb.fade), cut: hb.cut,
     rInt: b.rInt * clamp(Math.exp(0.015 * (25 - hb.T)), 0.6, 3) * (1 + 2 * hb.fade) };
+}
+// The ESCs' low-voltage cutoff (hardware, not the flight code): every ESC watches the pack voltage it runs on, and
+// once it stays under the cutoff (per cell, under load) for 1.5 s, the ESCs stop their motors. They start
+// again only after the throttle has been at zero (disarmed), as hobby ESCs do. 0 turns it off.
+function escCutoffStep(dt, anyThrottle) {
+  const b = battCfg(), cut = b.escCut ?? 2.8, cells = Math.max(1, b.cells - hb.cellsLost);
+  if (hb.lvc) { if (!anyThrottle) { hb.lvc = false; hb.lvcT = 0; } return hb.lvc; }
+  if (!(cut > 0) || !anyThrottle || hb.cut) { hb.lvcT = 0; return false; }
+  hb.lvcT = S.battV / cells < cut ? hb.lvcT + dt : 0;
+  if (hb.lvcT > 1.5) { hb.lvc = true; healthEvent(`ESCs: low-voltage cutoff, the pack is down to ${(S.battV / cells).toFixed(2)} V per cell under load. Motors stopped.`, 'bad'); }
+  return hb.lvc;
 }
 // Thermal sizing: a motor's stator holds about 500 J/K per kg; its cooling is sized so that running at full
 // throttle without a break would settle 25% above its limit (full throttle is for bursts), and it cools
@@ -137,7 +148,7 @@ function healthReadings() {
   return out;
 }
 function resetHealth() {
-  hs.clear(); Object.assign(hb, { T: ambient(), fade: 0, cellsLost: 0, cut: false, cause: '', failT: null, P: 0 });
+  hs.clear(); Object.assign(hb, { T: ambient(), fade: 0, cellsLost: 0, cut: false, cause: '', failT: null, P: 0, lvc: false, lvcT: 0 });
   hread.m.clear(); hread.b = {}; hread.next = {}; hSeed = 0x9e3779b9;
   fc.jAng.clear(); sup.log = [];
   if (typeof invalidateDesc === 'function') invalidateDesc();

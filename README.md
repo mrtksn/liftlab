@@ -10,7 +10,7 @@ Open `index.html` in a browser. There is no build step. It needs an internet con
 
 The header has three groups:
 - **Airframe:** start from a layout or one of your saved designs. **Blank** is a bare frame with a battery and an IMU; it opens in edit mode, resting on the ground, for you to add motors to. If the airframe on screen has changes you haven't saved, you're asked first: save it (under a name you give, never over a different design), don't save, or cancel. Opening a saved design or a design file asks the same.
-- **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), and ¼× ½× 1× sets the speed. Every flight starts on the ground with the motors stopped; the simulator then arms the drone and takes off to the target height for you, as you would with a real one. (**Hover / Throw**, the throw start, comes back with the learning task.)
+- **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), and ¼× ½× 1× sets the speed. Every flight starts on the ground with the motors stopped; the simulator then arms the drone and takes off to the target height for you, as you would with a real one. (**Hover / Throw** shows when a board runs the learning task: Throw has the drone thrown from the hand, to 7 m by default.)
 - **Steering:** Tilt body, Mixed or Stay level.
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
@@ -152,9 +152,10 @@ The throw start needs the learning task. In the simulator the drone starts in th
 
 If the fit is poor, it catches itself on the airframe description instead and says so. The panel suggests a minimum throw height for the current airframe, since more actuators mean more pulses and a longer fall.
 
-Results on the stock presets (thrown to 4 m), with the learning on the Pi:
+Results on the stock presets (thrown to 7 m, the default), with the learning on the Pi:
 - **Identification:** the fit explains 99–100% of the rotation and 97–99% of the force; motor lag comes out at 30–45 ms (true 30 ms), the IMU offset about 1 cm from the balance point. The fit explains the fall well, but the effects it gives match the true ones only 50–85% (the panel's bars): turbulence and the prop's own inflow during the fall make it a rougher model than a hover calibration's.
-- **Recovery:** the quad, hexacopter and tilt-rotor quad catch themselves. The tilt-rotor quad gets through about half its pulses before it has to stop, and holds its servos until the calibration. The tricopter depends on the tumble: its tail is its only yaw control, and when the last tail pulse is cut short it sometimes spins up and crashes.
+- **Recovery:** the quad, hexacopter, tricopter, tilt-rotor quad and indoor quad all catch themselves, at about 5.5–6 m, then come down to the target at the navigation's 1.5 m/s (lowest point 1.3–1.4 m for a 1.5 m target). The tilt-rotor quad fires 9 of its 12 pulses before it has to stop (all 12 from 10 m, which also works). From 4 m, the old default, there was much less room: fewer pulses, and the lowest point on the way down was 0.7–1.2 m.
+- **A fix that came with the higher throw:** a long pulse sequence can leave the drone upside down when it starts to catch itself. The flight core is meant to allow any attitude for 3 s after a throw's open loop ends, but its tilt cut-off ran first on that very step and switched the motors off at once (the tilt-rotor quad, thrown to 6 m or more). It now waits.
 - **Afterwards:** the hover calibration brings the learned model to 87–97% of the force and 90–99% of the rotation on fresh moves, and it flies on that.
 
 ## Helicopter
@@ -178,7 +179,10 @@ The simulated world has effects the controller is never told about:
   - rotor drag, which grows with thrust and airspeed;
   - vortex ring state: descending straight down at around the rotor's own induced velocity costs it up to 30% of its thrust.
 - **Downwash on parts** (`wakeLoad`): rotor wash pushes the hub, rigid masses and cable payloads.
-- **Battery** (`batteryModel`): a 4-cell 1.3 Ah pack. It supplies the current the motors really draw, drains with it and sags under it, so the same throttle gives less thrust over a flight and during hard manoeuvres.
+- **Battery** (`batteryModel`): a 4-cell 1.3 Ah LiPo. It supplies the current the motors really draw, drains with it and sags under it, so the same throttle gives less thrust over a flight and during hard manoeuvres. Its resting voltage follows a real discharge curve: 4.2 V per cell full, flat around 3.8 V through the middle, 3.6 V at 10%, 3.2 V empty, and collapsing past that; near empty its internal resistance grows too, so it sags more. The flight controller's voltage compensation keeps the thrust up by raising the throttles until they run out; after that the drone can no longer hold its height.
+- **ESC low-voltage cutoff** (Battery section, 2.8 V per cell by default, 0 turns it off): once the pack stays under it, under load, for 1.5 s, the ESCs stop their motors; they restart only after the throttle has been at zero. **Charge at take-off** starts a flight on a part-used pack, to try this without waiting.
+
+  On the quad from 25%, with no supervisor: it flies on as the throttles creep up (0.63 to 0.80), and at about 3% left, 3 m up, the ESCs cut out and it falls. With the supervisor (and a voltage sensor), it heads home at 20% and lands with about 18% left.
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
 
@@ -411,6 +415,7 @@ Its settings go to the flight core (parts out, columns scaled, ceilings, lean an
 | Quad or hex, a motor loses 50% | Table scaled, flies on | Flies, less precisely |
 | Battery loses a cell | Goes home and lands | Keeps flying on a weaker pack |
 | Battery cuts out | Falls | Falls |
+| Battery runs flat | Goes home at 20% and lands | Flies on until the ESCs cut out (about 3% left) and falls |
 | Tilt-rotor quad, a servo jams | Spotted, taken out of the steering, flies on | Flies, fighting the stuck servo |
 | Overheating motor (with a sensor or ESC current) | Caps it, flies carefully, goes home before damage | Burns out |
 
@@ -715,7 +720,7 @@ The physics isn't simplified for speed; every step (2 kHz) does the full version
 
 ## Control and allocation
 
-- Position PID produces a desired force. Attitude uses geometric control on SO(3) with integral action.
+- Position PID produces a desired force. Far from the target, the position error asks for a velocity instead, capped at the speed limit sideways, 3 m/s up and 1.5 m/s down (sinking faster, the drone falls into its own downwash and can't brake in time), and the integral only builds up within a metre of the target (on the way to a far one it would wind up and carry the drone past it: a 4.5 m descent used to end over a metre too low, now 0.3 m). Attitude uses geometric control on SO(3) with integral action.
 - Gains are in acceleration units and multiplied by the modeled mass and inertia, so they carry over to new geometry.
 - Allocation is two-stage bounded weighted least squares. Stage 1 picks servo angle changes, each capped by what the servo can reach in the planning horizon. Stage 2 solves motor thrusts at the servos' actual angles. Each stage first finds the best achievable move, then chooses among equal ways of making it (see Allocation above).
 - Three steering modes:

@@ -449,7 +449,7 @@ function updateLive() {
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
   if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
   else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
-  const soc = S.batt.soc ?? 1; chip(`Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
+  const soc = Math.max(0, S.batt.soc ?? 1); chip(`Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
   if (brt.err && !brt.ready) chip(brt.err, 'bad', () => showTab('form'));
   else chip(`${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
   const R = qmat(S.q); const { hub } = hubState(R);
@@ -526,7 +526,7 @@ function syncFlightUi() {
 const throwFieldRefs = [];
 function buildThrowFields() {
   const box = $('#throwFields'); box.textContent = '';
-  const f1 = numField('throwH', { label: 'Throw height (top of the arc)', min: 2.5, max: 10, step: 0.1, u: 'm', dp: 1 }, () => throwCfg.height, v => { throwCfg.height = v; save(); });
+  const f1 = numField('throwH', { label: 'Throw height (top of the arc)', min: 2.5, max: 15, step: 0.1, u: 'm', dp: 1 }, () => throwCfg.height, v => { throwCfg.height = v; save(); });
   const f2 = numField('throwS', { label: 'Tumble when thrown', min: 0, max: 15, step: 0.5, u: 'rad/s', dp: 1 }, () => throwCfg.spin, v => { throwCfg.spin = v; save(); });
   box.append(f1.node, f2.node); throwFieldRefs.push(f1.refresh, f2.refresh);
 }
@@ -796,7 +796,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -837,7 +837,7 @@ function load() {
     if (isFinite(s.mixShare)) steerMix.share = +s.mixShare;
     if (s.allocPrefs) for (const k of ['allowance', 'efficiency', 'servoMove']) if (isFinite(s.allocPrefs[k])) allocPrefs[k] = +s.allocPrefs[k];
     if (s.launch === 'throw') launchMode = 'throw';
-    if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k])) throwCfg[k] = +s.throwCfg[k];
+    if (s.throwCfg) for (const k of ['height', 'spin']) if (isFinite(s.throwCfg[k]) && !(k === 'height' && !s.throwCfg.v && +s.throwCfg[k] === 4)) throwCfg[k] = +s.throwCfg[k];   // (4 m was the old default: now higher)
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
     cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
