@@ -492,24 +492,20 @@ function renderEst() {
   const dl = $('#estKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
 }
 
-/* ───────── controller model ───────── */
-function setModelMode(m) {
-  learn.mode = m; $('#useDesc').setAttribute('aria-pressed', String(m === 'config')); $('#useLearned').setAttribute('aria-pressed', String(m === 'ident'));
-  ctl.iAtt = [0, 0, 0]; ctl.iPos = [0, 0, 0];
-}
-$('#useDesc').addEventListener('click', () => setModelMode('config'));
-$('#useLearned').addEventListener('click', () => setModelMode('ident'));
-$('#keepLearn').addEventListener('change', e => { learn.keep = e.target.checked; save(); });
+/* ───────── the learning (a task on a board: boards.js) ───────── */
+$('#useDesc').addEventListener('click', () => { boardsLearnCmd('useDesc'); renderLearn(true); });
+$('#useLearned').addEventListener('click', () => { boardsLearnCmd('useLearned'); renderLearn(true); });
+$('#keepLearn').addEventListener('change', e => { learnPrefs.keep = e.target.checked; boardsLearnCmd(e.target.checked ? 'keepOn' : 'keepOff'); save(); });
 $('#calBtn').addEventListener('click', () => {
-  if (learn.cal) { endCalibration('Calibration stopped. The model keeps what it learned so far.'); return; }
+  const v = learn.view;
+  if (v && v.cal) { boardsLearnCmd('stop'); renderLearn(true); return; }
   if (S.crashed) return;
   if (typeof editMode !== 'undefined' && editMode) setEditMode(false);
   if (!running) { running = true; renderRun(); }
-  startCalibration(); renderLearn(true);
+  boardsLearnCmd('calibrate'); renderLearn(true);
 });
-$('#holdPulses').addEventListener('change', e => { learn.holdPulses = e.target.checked; save(); });
-$('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; save(); });
-$('#applyCurve').addEventListener('change', e => { learn.applyCurve = e.target.checked; save(); });
+$('#holdPulses').addEventListener('change', e => { learnPrefs.holdPulses = e.target.checked; boardsLearnCmd(e.target.checked ? 'holdOn' : 'holdOff'); save(); });
+$('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; boardsLearnCmd(e.target.checked ? 'thenCalOn' : 'thenCalOff'); save(); });
 function setLaunch(m, go = true) {
   launchMode = m;
   $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));
@@ -517,14 +513,13 @@ function setLaunch(m, go = true) {
   if (go) { if (!running) { running = true; renderRun(); } doReset(); renderLearn(true); save(); }
 }
 $('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));
-// What's on screen follows the flight computers: learning and the throw start need a learning task (the next stage),
-// Hold and Home need navigation, the supervisor's parts of the Health panel need a supervisor task.
+// What's on screen follows the flight computers: learning and the throw start need a learning task, Hold and Home
+// need navigation, the supervisor's parts of the Health panel need a supervisor task.
 function syncFlightUi() {
   const nav = hasTask('nav'), learnT = hasTask('learn');
   $('#learnSec').hidden = !learnT;
   $('#launchSeg').hidden = !learnT; if (!learnT && launchMode !== 'hover') setLaunch('hover', false);
   document.querySelectorAll('[data-act="hold"],[data-act="home"]').forEach(b => { b.hidden = !nav; });
-  sup.on = hasTask('super');
   if (typeof renderHealth === 'function') renderHealth(true);
   if (typeof renderComputers === 'function') renderComputers();
 }
@@ -536,55 +531,61 @@ function buildThrowFields() {
   box.append(f1.node, f2.node); throwFieldRefs.push(f1.refresh, f2.refresh);
 }
 function throwHintText() {
-  const plan = throwPlan(), T = throwPlanTime(plan);
-  if (!plan.length) return 'Add actuators to throw it.';
+  const b = boardOf('learn'), w = b && brt.ready && brt.inst.get(b.id);
+  if (!actuators().length) return 'Add actuators to throw it.';
+  if (!w) return '';
+  const T = w.learn_plan(), n = new Float32Array(w.memory.buffer, w.fr_ptr(), 1)[0];
+  if (learn.n > RN_THROW_IN) return `The throw start identifies at most ${RN_THROW_IN} inputs; this airframe has ${learn.n}.`;
   const v = G * T / 2, need = setpoint.z + 0.5 * G * (T / 2) ** 2 + v * v / 10 + 1.5;
-  return `This airframe has ${plan.length} pulses to fire, about ${T.toFixed(1)} s around the top of the throw. Throw it to at least ${need.toFixed(1)} m so there is room to catch it. Each pulse stops early once the drone turns 4 rad/s faster, well inside the gyro's range.`;
+  return `This airframe has ${n} pulses to fire, about ${T.toFixed(1)} s around the top of the throw. Throw it to at least ${need.toFixed(1)} m so there is room to catch it. Each pulse stops early once the drone turns 4 rad/s faster, well inside the gyro's range.`;
 }
 function throwStageText() {
-  if (!thr) return '';
-  if (thr.phase === 'hand') return 'In the hand, motors off';
-  if (thr.phase === 'toss') return 'Being thrown';
-  if (thr.phase === 'free') return 'Thrown, climbing with motors off';
-  if (thr.phase === 'excite') { const P = thr.plan[thr.i]; return P ? `Free fall: pulsing ${P.c.name}${P.second ? ' (servo at the other end)' : ''}` : 'Fitting the model'; }
-  return 'Catching itself on what it learned';
+  const v = learn.view;
+  if (thr && thr.phase === 'hand') return brt.pilot.phase === 'hand' && brt.navOut && !brt.navOut.ready ? 'In the hand, motors off; the navigation is finding its position' : 'In the hand, motors off';
+  if (thr && thr.phase === 'toss') return 'Being thrown';
+  if (!v) return '';
+  if (v.thr === 2) return 'Thrown, climbing with the motors off';
+  if (v.thr === 3) { const c = actuators()[v.pulseMotor]; return c ? `Free fall: pulsing ${c.name}` : 'Fitting the model'; }
+  if (v.thr === 4) return 'Catching itself on what it learned';
+  return '';
 }
+const CAL_STAGE = ['Settling', 'Testing each motor', 'Testing each servo', 'Sweeping servos', 'Exciting everything together', 'Validating'];
 let matchT = 0, matchCache = [];
 function renderResponses() {
   const box = $('#respRows'); if (!box) return; box.textContent = '';
-  const acts = actuators(); let any = false;
+  const v = learn.view; let any = false;
   const tbl = el('table', { class: 'resp' });
-  tbl.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'learned' }), el('th', { text: 'true' })));
+  tbl.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'measured' }), el('th', { text: 'true' })));
   const row = (name, what, l, t) => tbl.append(el('tr', {}, el('td', { text: `${name} ${what}` }), el('td', { text: l }), el('td', { text: t })));
-  for (const c of acts) {
-    const r = learn.resp.get(c.id) || {};
-    if (r.tau != null) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, r.applied != null ? 'curve bend (used)' : 'curve bend (not used)', r.curve.toFixed(2), trueBend(c).toFixed(2)); }
+  if (v) {
+    actuators().forEach((c, i) => { const r = v.motors[i]; if (r && r.measured) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, 'curve bend', r.curve.toFixed(2), trueBend(c).toFixed(2)); } });
+    joints().forEach((j, k) => { const r = v.joints[k]; if (r && r.measured) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s no-load`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); } });
   }
-  for (const j of joints()) {
-    const r = learn.resp.get(j.id) || {};
-    if (r.rate != null) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s no-load`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); }
-  }
-  if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag.' }));
+  if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag. The servos\' are sent to the flight core; the curve is only shown.' }));
 }
 function renderLearn(force) {
-  $('#useDesc').setAttribute('aria-pressed', String(learn.mode === 'config')); $('#useLearned').setAttribute('aria-pressed', String(learn.mode === 'ident'));
-  $('#keepLearn').checked = learn.keep;
-  const cal = learn.cal;
-  $('#calBtn').textContent = cal ? 'Stop' : learn.fit ? 'Calibrate again' : 'Calibrate';
-  $('#calBtn').disabled = !!S.crashed || !actuators().length || throwBusy();
-  $('#holdPulses').checked = learn.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate; $('#applyCurve').checked = learn.applyCurve;
-  $('#throwHint').textContent = throwHintText();
-  $('#calProg').hidden = !cal && !thr;
-  if (thr && !cal) {
-    const f = thr.phase === 'hand' || thr.phase === 'toss' ? 0 : thr.phase === 'free' ? 0.1 : thr.phase === 'excite' ? 0.1 + 0.7 * thr.i / Math.max(1, thr.plan.length) : 0.9;
-    $('#calFill').style.width = (100 * f).toFixed(1) + '%'; $('#calStage').textContent = throwStageText();
+  const v = learn.view, b = boardOf('learn');
+  $('#learnWhere').textContent = b ? `On ${b.name}, on the flight core's telemetry (200 times a second). It asks the flight core for test moves and tells it which model to fly on.` : '';
+  $('#useDesc').setAttribute('aria-pressed', String(!v || !v.useLearned)); $('#useLearned').setAttribute('aria-pressed', String(!!(v && v.useLearned)));
+  $('#keepLearn').checked = v ? v.keep : learnPrefs.keep;
+  const cal = v && v.cal, busy = !!thr || (v && v.thr > 0 && v.thr < 4);
+  $('#calBtn').textContent = cal ? 'Stop' : v && v.haveFit ? 'Calibrate again' : 'Calibrate';
+  $('#calBtn').disabled = !!S.crashed || !actuators().length || busy || !v;
+  $('#holdPulses').checked = v ? v.holdPulses : learnPrefs.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate;
+  if (force || performance.now() - (renderLearn.hintT || 0) > 2000) { renderLearn.hintT = performance.now(); $('#throwHint').textContent = throwHintText(); }
+  const throwing = busy || (v && v.thr === 4);
+  $('#calProg').hidden = !cal && !throwing;
+  if (throwing && !cal) { $('#calFill').style.width = (100 * (thr && thr.phase !== 'free' ? 0 : v ? v.thrProg : 0)).toFixed(1) + '%'; $('#calStage').textContent = throwStageText(); }
+  if (cal) {
+    const who = v.segKind === 1 ? actuators()[v.segWho] : v.segKind === 2 || v.segKind === 3 ? joints()[v.segWho] : null;
+    $('#calFill').style.width = (100 * v.calProg).toFixed(1) + '%';
+    $('#calStage').textContent = v.held ? 'Paused until the drone settles…' : `${CAL_STAGE[v.segKind] || 'Starting'}${who ? ': ' + who.name : ''} · ${v.left.toFixed(1)} s left`;
   }
-  if (cal) { $('#calFill').style.width = (100 * cal.t / cal.total).toFixed(1) + '%'; $('#calStage').textContent = cal.held ? 'Paused until the drone settles…' : `${cal.stage || 'Starting'} · ${Math.max(0, cal.total - cal.t).toFixed(1)} s left`; }
   if (learn.msg) $('#learnMsg').textContent = learn.msg;
-  $('#learnSmall').textContent = learn.mode === 'ident' ? (learn.keep ? 'learned · learning' : 'learned') : (learn.keep ? 'description · learning' : 'description');
+  $('#learnSmall').textContent = !v ? '' : v.useLearned ? (v.keep ? 'learned · learning' : 'learned') : (v.keep ? 'description · learning' : 'description');
   if (force || performance.now() - matchT > 400) { matchT = performance.now(); matchCache = matchScores(); }
   const box = $('#matchRows'); box.textContent = '';
-  if (throwBusy()) { $('#useDesc').setAttribute('aria-pressed', 'false'); $('#useLearned').setAttribute('aria-pressed', 'false'); box.append(el('p', { class: 'hint', text: 'Shown once it has caught itself.' })); return; }
+  if (busy) { box.append(el('p', { class: 'hint', text: 'Shown once it has caught itself.' })); return; }
   for (const m of matchCache) {
     const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad';
     box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, el('i', { class: cls, style: `width:${pc}%` })), el('span', { class: 'mv', text: pc + '%' })));
@@ -795,7 +796,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -831,9 +832,8 @@ function load() {
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.cfg.computers); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
-    if (s.keepLearning === false) learn.keep = false;
-    if (s.holdPulses === false) learn.holdPulses = false;
-    if (s.applyCurve === true) learn.applyCurve = true;
+    if (s.keepLearning === false) learnPrefs.keep = false;
+    if (s.holdPulses === false) learnPrefs.holdPulses = false;
     if (isFinite(s.mixShare)) steerMix.share = +s.mixShare;
     if (s.allocPrefs) for (const k of ['allowance', 'efficiency', 'servoMove']) if (isFinite(s.allocPrefs[k])) allocPrefs[k] = +s.allocPrefs[k];
     if (s.launch === 'throw') launchMode = 'throw';

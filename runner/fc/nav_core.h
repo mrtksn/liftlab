@@ -1,7 +1,7 @@
 /*
  * Drone Force Bench navigation task: holds and moves the drone's position, on top of the flight core.
  *
- * Portable C, like fc_core.c. It runs on the Raspberry Pi (pi_nav.c, talking to the ESP32 over the serial link) or
+ * Portable C, like fc_core.c. It runs on the Raspberry Pi (pi/dfb_pi.c, talking to the ESP32 over the serial link) or
  * on the flight controller itself (beside fc_core, without a link), and the simulator flies the same code built to
  * WebAssembly. It only ever talks to the flight core through guided commands (fc_cmd.guided): the acceleration
  * wanted and the heading. The flight core still does everything fast and everything about safety.
@@ -51,6 +51,7 @@ typedef struct {
   float p[3], v[3];                      /* the estimate, relative to home */
   int have_home;
   int ready;                             /* the estimate has settled on its references: it may take off */
+  int landed;                            /* the supervisor had it land, and it is down: it stays on the ground */
 } nav_out;
 
 typedef struct {
@@ -61,6 +62,9 @@ typedef struct {
   float p[3], v[3];
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
+  /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
+  int sup_mode; float lim_speed, lim_accel, lim_lean;
+  int auto_on, auto_land, landed; float auto_t[3], auto_v[3], land_t;
   char why[64];
   uint32_t steps;
 } nav_state;
@@ -72,5 +76,7 @@ int nav_init(nav_state *N, rn_host *H);
 /* One step of dt seconds. Returns 0, or −1 if a formula failed (then out->fly is 0: the flight core's failsafe
  * takes over when the guided commands stop making sense... the caller stops sending them). */
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out);
+/* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. */
+void nav_set(nav_state *N, const float *p, int n);
 
 #endif

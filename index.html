@@ -253,9 +253,10 @@
         <dl class="kv" id="estKv"></dl>
       </section>
       <section class="sec" id="learnSec">
-        <h2>Controller model <small id="learnSmall"></small></h2>
+        <h2>Learning <small id="learnSmall"></small></h2>
+        <p class="hint" id="learnWhere"></p>
         <div class="field-row">
-          <span class="lbl" id="modelLbl">Allocation uses</span>
+          <span class="lbl" id="modelLbl">The flight core flies on</span>
           <div class="seg seg-sm" role="group" aria-labelledby="modelLbl">
             <button type="button" id="useDesc" aria-pressed="true">Description</button>
             <button type="button" id="useLearned" aria-pressed="false">Learned</button>
@@ -278,7 +279,6 @@
         <div class="match" id="matchRows"></div>
         <span class="lbl">Actuator response (from the tests)</span>
         <div id="respRows"></div>
-        <label class="check" for="applyCurve" title="The throttle-curve bend is a small effect that the tests only see roughly, so it isn't used unless you turn this on"><input type="checkbox" id="applyCurve"> Linearize thrust with the measured curve (experimental)</label>
       </section>
       <section class="sec">
         <h2>Actuator commands <small>bar = throttle, tick = thrust</small></h2>

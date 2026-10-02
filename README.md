@@ -54,11 +54,16 @@ What flies the drone is its own flight code, the same C that runs on the ESP32 a
 - **Tasks:**
   - **Flight core** (`runner/fc/fc_core.c`), 1000 times a second: attitude, control and mixing, arming and the failsafes. It needs exact timing, so it must run on a microcontroller, and every drone has exactly one.
   - **Navigation** (`runner/fc/nav_core.c`), 100 times a second: where the drone is (GPS, optical flow and its rangefinder, barometer) and holding or moving its position. It sends the flight core *guided commands*: which way to accelerate and where to face. It can run on the Pi (talking to the ESP32 over the serial link) or on the ESP32 itself. With no navigation, you fly in **angle mode**: the keys lean the drone, and nothing holds its position.
-  - **Learning** and the **health supervisor** are listed as coming in the next stage: their formulas are there, but no board runs them yet, so the calibration, the learned model, the throw start and the supervisor's parts of the Health panel are hidden.
-- **Wiring:** the IMU, compass and barometer (the GY-87 is all three) go to the flight core's board; the GPS and the flow camera to the board that navigates.
-- **Link:** a board talks to the flight controller over a serial link, 6 ms late each way. The flight core sends the navigation its attitude, rates, accelerometer and barometer height 100 times a second; the navigation answers with a guided command each time. If the commands stop, the flight core goes to its failsafe and lands.
+  - **Learning** (`runner/fc/learn_core.c`), on the flight core's telemetry 200 times a second: what each motor and servo really does, in flight, in a hover calibration, or from a throw (below). It asks the flight core for test moves and tells it which model to fly on. It runs only on a Linux computer (a Pi): the throw's fit alone keeps about 300 KB. Without it, the boards fly on the airframe's description, and the learning panel and the throw start are hidden.
+  - **Health supervisor** (`runner/fc/super_core.c`), 10 times a second: failing, weakened or hot parts, and how to fly on what's left (see Heat, failures and the supervisor). Also Pi only. Without it, nothing watches for failures and its parts of the Health panel are hidden.
+- **Default:** the ESP32 runs the flight core; the Pi Zero runs the navigation, the learning and the supervisor. Take any of the Pi's tasks off to fly without it.
+- **Programs:** each board loads a program with the formulas of its tasks only. The ESP32's is small (about 14 KB of steps); the Pi's, with the throw's fit, about 170 KB.
+- **Wiring:** the IMU, compass and barometer (the GY-87 is all three) go to the flight core's board; the GPS and the flow camera to the board that navigates; the health sensors (motor temperatures, ESC telemetry, the battery's voltage, current and temperature) to the supervisor's board.
+- **Link:** a board talks to the flight controller over a serial link (921600 baud), 6 ms late each way. The flight core sends:
+  - the navigation its attitude, rates, accelerometer and barometer height 100 times a second; the navigation answers with a guided command each time. If the commands stop, the flight core goes to its failsafe and lands;
+  - the learning and the supervisor its telemetry 200 times a second (what each motor was told and what the IMU felt). The learning answers with test moves and the model to fly on; the supervisor with its settings, which also go to the navigation (to fly home or land) and the learning (to rescale what it learned). Tasks on the same board pass these directly.
 - **Load:** each board shows roughly how much of a core its tasks take and, on a microcontroller, how much memory the flight program needs. An overloaded board turns red.
-- **Export:** the flight core's board exports the airframe (`.dfa`, for `fly.py airframe`); the navigation's board exports its config (`.dnc`: mass, where the barometer, GPS antenna and flow camera sit, which of them there are) for `pi_nav`.
+- **Export:** the flight core's board exports the airframe (`.dfa`, for `fly.py airframe`). The Pi exports its navigation config (`.dnc`: mass, where the barometer, GPS antenna and flow camera sit, which of them there are), and with the learning or the supervisor the airframe again and the Pi config (`.dlc`: where the IMU sits, each motor's heat model, the battery) for `dfb_pi`.
 - **Changing the airframe** in flight changes the physics at once, but the flight core keeps flying on the airframe it was given until the next reset, as on the drone, which takes a new airframe only on the ground.
 
 How the simulator runs them: each board is one instance of the flight code built to WebAssembly (`runner/fc/build_wasm.sh` → `js/board-wasm.js`), with the flight program compiled from the formulas. The simulator supplies only what the hardware would: sensor readings at their rates and delays, what one board sends another (after the link's delay), and the pilot. Everything about flying (estimating, deciding, mixing, arming, failsafes) happens inside the boards.
@@ -69,8 +74,7 @@ The formulas are listed under the task that runs them, and the board it's on. Ed
 
 ## Learning the airframe
 
-**Paused in this version:** learning moves to a Learning task that runs on the Pi (the next stage). Until then the boards fly on the airframe's description, as exported. What follows is how it worked with the simulator's old controller, and how it will work again.
-
+The learning is a task on the Pi (Computers tab), the same C as `dfb_pi` runs on a real Pi: `runner/fc/learn_core.c` around the formulas `identifyEffectiveness`, `identifyMotorResponse`, `identifyServoResponse` and `identifyThrow`. It works on the flight core's telemetry, and it never drives a motor itself: it asks the flight core for test moves (which lapse 0.1 s after the last request, so if the Pi stops, the drone simply flies on) and tells it which model to fly on. The panel is called **Learning** and shows only when a board runs the task.
 
 The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't need to know prop sizes, mass or inertia. What it needs is the **effectiveness matrix B**: how much linear and angular acceleration each actuator input produces. B comes from one of two sources.
 
@@ -82,7 +86,7 @@ The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't
 
   A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on. That's 3 columns for one joint and 9 for two. Turning a rigid part about a hinge is linear in cos θ and sin θ, so this is exact, and its effect at any joint angles is a fixed sum of learned columns.
 
-**Calibrate** (Controller model panel) runs about 12 s of test moves while hovering, or about 25 s with servos:
+**Calibrate** (Learning panel) runs about 12 s of test moves while hovering, or about 25 s with servos:
 1. **Settle.**
 2. **Test each motor on its own.** It steps up then down, by 6% and then by 16%, while every other motor and servo keeps what it had (**Freeze other motors during pulses**). Each test waits until the drone is calm first. Freezing matters because otherwise the controller answers every pulse with the other motors, and inputs that always move together can't be told apart.
 3. **Test each servo on its own.** It swings one way, then the other, by 35% of its range, while the motors and every other servo hold still.
@@ -94,9 +98,11 @@ It then scores the learned model and the description on the same validation data
 
 **Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
 
-The learning runs at 200 Hz, as it does on the drone, where it has the ESP32's second core to itself. Between its updates the 1 kHz control steps average what it learns from (the inputs, accelerometer, gyro and motor commands), which is its anti-aliasing filter.
+The learning runs at 200 Hz, on each telemetry frame. Between frames the flight core averages what it sends (the inputs, accelerometer, gyro and motor commands), which is the learning's anti-aliasing filter. The learned model reaches the flight core 5 times a second while it learns in flight.
 
 While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
+
+On the stock presets in the simulator, a calibration from the description takes 11 to 25 s and ends with the learned model explaining 91 to 99% of the rotation and 69 to 98% of the force on fresh test moves, against 45 to 95% and 53 to 94% for the description (the tilt-rotor quad gains the most); it then flies on the learned model. The main-lifter layout is the exception: its hover already wanders in a slowly growing circle without any learning, and the motor tests push it over.
 
 ### Actuator response
 
@@ -105,13 +111,15 @@ The single-actuator tests learn how each actuator responds over time, not just h
 | Learned | From | Used for |
 |---|---|---|
 | Motor lag | `identifyMotorResponse`: which spin-up time best explains the response to a step | The effectiveness identification, which used to assume 35 ms for every motor |
-| Servo speed and lag | `identifyServoResponse`: the speed limit and lag that best explain how the drone's response traces the servo's real angle, with no angle feedback needed | `servoPredictor`, the servo angle the controller uses when a servo has no feedback |
-| Throttle-curve bend | `identifyMotorResponse`: whether a step up gives more than the same step down | `thrustLinearization`, only if you turn on **Linearize thrust with the measured curve**. Until then it assumes a typical brushless curve (bend 0.7) |
+| Servo speed and lag | `identifyServoResponse`: the speed limit and lag that best explain how the drone's response traces the servo's real angle, with no angle feedback needed | `servoPredictor` in the flight core (sent with the model), the servo angle the controller uses when a servo has no feedback |
+| Throttle-curve bend | `identifyMotorResponse`: whether a step up gives more than the same step down | Shown only. The flight core assumes a typical brushless curve (bend 0.7) |
+
+The tests run on the 200 Hz telemetry, so a motor's pulse is about 50 samples.
 
 In the tests on the stock presets:
-- **Motor lag:** comes out within 5 ms on every multirotor. The main-lifter's big rotor is usually within 5 ms too, but its fit is poor.
-- **Servo speed and lag:** the measured speed is what the servo really manages on a short step, below its no-load speed (340 against 360°/s on the tilt-rotor quad, 260 against 300°/s on the tricopter's loaded tail). The command delay comes out within 5 ms.
-- **Throttle-curve bend:** the real curve now comes from the motor physics (about 0.8). The tests see it only roughly, anywhere from 0.1 to 0.9, because the air a pulse pushes through the prop and the battery sagging under load produce effects of the same size. So it's shown but not used unless you ask. On real hardware this is usually measured on a thrust stand.
+- **Motor lag:** reads long. The thrust really follows a step in about 25–30 ms near hover; the tests give 40–65 ms on most motors (30–80 ms across the presets), with fits above 0.99. The throw's fit, which works on every 1 ms step, gets about 30 ms. Something in the 200 Hz path (most likely how the telemetry's averaging and the 25 Hz filter line up with the pulse edges) adds 10–30 ms; until that's found, treat the hover tests' lag as an upper bound.
+- **Servo speed and lag:** the measured speed is what the servo really manages on a short step, below its no-load speed (260 against 360°/s on the tilt-rotor quad, 260 against 300°/s on the tricopter's loaded tail, 150 against 300°/s on the helicopter's swashplate). The command delay (20 ms) comes out at 15–30 ms.
+- **Throttle-curve bend:** the real curve comes from the motor physics (about 0.8). The tests can't see it: they give anything from −0.5 to 1.5, because the air a pulse pushes through the prop and the battery sagging under load produce effects of the same size. So it's shown but not used. On real hardware this is measured on a thrust stand.
 
 The hardware has traits the controller is never told, marked **hidden** on the part cards, so there's something to learn:
 - **Spin-up time** of each motor (sets its prop and rotor inertia).
@@ -123,12 +131,12 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
 
 ## Throw start
 
-**Paused in this version:** the throw start needs the Learning task (the next stage).
+The throw start needs the learning task. In the simulator the drone starts in the hand (1.2 m up), is armed with its motors off, and the learning is told a throw is coming; on a real Pi you arm it in your hand and type `throw`. The hand throws it once the navigation (if any) has its position. From there the learning flies it: it notices the free fall (the accelerometer reads nearly nothing), pulses the motors in open loop through the flight core, fits, sends the model and lets the flight core catch it.
 
 **Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. The throw itself takes 0.12 s of hand push, which the IMU feels, so the drone knows it's climbing. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
 
 1. **Climb.** It rides the throw with the motors off.
-2. **Pulse over the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. A motor on steering joints is pulsed with each of those joints in the middle, at one end and at the other end, so all its columns can be told apart. The pulses are timed to finish just after the top; on the way down it soon needs its height to recover. If it runs out of room (it needs about 0.45 s to spin up and turn upright, then brakes at 0.8 g), it stops pulsing early. A motor it only tried in the middle is then treated as fixed there, and the servos are held in the middle, with the drone leaning to move, until a calibration has measured them.
+2. **Pulse over the top of the arc.** Each motor fires on its own at 50% throttle. A pulse ends after 80 ms, or earlier once the drone's rotation has changed by 4 rad/s, which keeps well inside the gyro's range. The flight core cuts a pulse itself the moment that happens, rather than a link's round trip later. A motor on steering joints is pulsed with each of those joints in the middle, at one end and at the other end, so all its columns can be told apart. The pulses are timed to finish just after the top; on the way down it soon needs its height to recover. If it runs out of room (it needs about 0.45 s to spin up and turn upright, then brakes at 0.8 g), it stops pulsing early. A motor it only tried in the middle is then treated as fixed there, and the servos are held in the middle, with the drone leaning to move, until a calibration has measured them.
 3. **Fit** (`identifyThrow`). In free fall the accelerometer feels no gravity, only the rotors and its own swing around the center of gravity. One least-squares fit on under a second of data gives:
    - the effectiveness matrix;
    - where the IMU sits relative to the balance point;
@@ -136,7 +144,7 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
    - the spin-up reaction (B₂, their G₂): a motor speeding up twists the frame the other way, several times harder than its steady drag torque. Without this term a pulse from standstill looks like a huge yaw effect;
    - the motor lag. The drone doesn't measure prop speed, so it runs a generic brushless motor model (back-EMF, a current limit, prop drag) with its time constant unknown.
 
-   It's built to run on a microcontroller. While falling it keeps one running fit per candidate lag (all motors the same), a fixed cost per step, and a compact 250 Hz log. At the moment it has to catch itself it picks the best of those fits at once. Then, on the spare core, it works out each motor's own lag from the log, one motor at a time, and switches to that if it explains the fall better. A big slow rotor and small fast ones can then share a frame.
+   While falling it keeps one running fit per candidate lag (all motors the same), a fixed cost per step, and a compact 250 Hz log. It fits on every control step: while it flies open loop, the flight core's telemetry carries each 1 ms step's sample rather than their average (the averaged 200 Hz frames made the motor lags come out 15 ms long and the effects 20–50% off). At the moment it has to catch itself it picks the best of those fits at once. Then, in the background, it works out each motor's own lag from the log, one motor at a time, and switches to that if it explains the fall better. A big slow rotor and small fast ones can then share a frame. It handles up to 12 inputs (a quad with a tilting motor on each arm); the main-lifter layout and anything bigger can't be thrown.
 
    Nothing fights the pulses, so each motor's effect comes out clean.
 4. **Catch.** The controller takes over on the model it just learned. It gets upright first and turns to the target heading afterwards.
@@ -144,11 +152,10 @@ The panel shows how close each actuator's learned effect is to the truth. The tr
 
 If the fit is poor, it catches itself on the airframe description instead and says so. The panel suggests a minimum throw height for the current airframe, since more actuators mean more pulses and a longer fall.
 
-Results on the stock presets (thrown to 4 m):
-- **Identification:** the fit explains 97–100% of the rotation and of the force. Motor lag comes out at the true 30 ms; the IMU offset within about 3 mm.
-- **Recovery:** the quad, hexacopter, tricopter and tilt-rotor quad catch themselves reliably. The tilt-rotor quad gets through about half its pulses before it has to stop, and holds its servos until the calibration. The main-lifter layout is marginal: its big rotor's slow spin-up and strong gyroscopic torque leave it skimming the ground or crashing, whatever the throw height.
-- **Helicopter:** the throw start doesn't work. Its only way to roll and pitch is the two-servo rotor head, and the free fall is too short to measure the head's nine basis columns well enough to fly on.
-- **Afterwards:** the hover calibration brings the learned model to 92–100% of the force and 96–99% of the rotation on the multirotors and the tilt-rotor quad.
+Results on the stock presets (thrown to 4 m), with the learning on the Pi:
+- **Identification:** the fit explains 99–100% of the rotation and 97–99% of the force; motor lag comes out at 30–45 ms (true 30 ms), the IMU offset about 1 cm from the balance point. The fit explains the fall well, but the effects it gives match the true ones only 50–85% (the panel's bars): turbulence and the prop's own inflow during the fall make it a rougher model than a hover calibration's.
+- **Recovery:** the quad, hexacopter and tilt-rotor quad catch themselves. The tilt-rotor quad gets through about half its pulses before it has to stop, and holds its servos until the calibration. The tricopter depends on the tumble: its tail is its only yaw control, and when the last tail pulse is cut short it sometimes spins up and crashes.
+- **Afterwards:** the hover calibration brings the learned model to 87–97% of the force and 90–99% of the rotation on fresh moves, and it flies on that.
 
 ## Helicopter
 
@@ -334,7 +341,7 @@ Sensor noise comes from a seeded generator, so every reset replays the same nois
 
 ## Heat, failures and the supervisor
 
-Every motor, servo and the battery has a temperature and a health, and each can fail. A **supervisor** watches them the way a Raspberry Pi next to the ESP32 would, and rewrites the flight controller's settings when something goes wrong. The flight controller itself doesn't change: it keeps running the same allocation, just on an edited table.
+Every motor, servo and the battery has a temperature and a health, and each can fail. The **health supervisor**, a task on the Pi (`runner/fc/super_core.c`, the same C as `dfb_pi`), watches them and rewrites the flight core's settings when something goes wrong. The flight core itself doesn't change: it keeps running the same allocation, just on an edited table.
 
 ### Heat (`thermalModel`)
 
@@ -355,7 +362,7 @@ The Health panel (right column) lists every part with its true temperature and s
 - **Servo:** jam it where it is, or make it go limp (friction only, no torque).
 - **Battery:** lose a cell, or cut out.
 
-**Repair all** undoes every failure and the supervisor's changes without resetting the flight.
+**Repair all** undoes every failure without resetting the flight. The boards keep what they decided (a motor taken out stays out) until the next reset.
 
 ### What the drone can sense
 
@@ -374,10 +381,7 @@ With a voltage sensor, the flight controller corrects its throttle for sag (`vol
 
 ### The supervisor
 
-**Paused in this version:** the supervisor becomes a task on the Pi in the next stage. Until then the Health panel shows each part's true state and what the drone can sense, and you can still break parts to see what the flight code does.
-
-
-It runs at 10 Hz and talks to the flight controller over a link that is 40 ms late each way. It reads the health sensors and a 50 Hz data stream from the controller: for each motor its column × thrust, for each steering servo how its column changes with angle, and the measured force and rotation. It runs three formulas in a chain:
+It runs at 10 Hz on the Pi. The health sensors are wired to its board; from the flight core's telemetry it takes 50 samples a second: for each motor its column (as the flight core flies it: described or learned) × thrust, for each steering servo how its column changes with angle, and the measured force and rotation. It runs four formulas in a chain:
 
 1. **`actuatorHealth`** compares what the table predicts with what the IMU measures. From how the error changes, it fits one explanation per part: "motor *i* makes only η of its thrust" or "servo *j* is δ away from where it's told". Each fit gets a confidence from how much of the error it explains and how much that part has been moving. It doesn't judge until it has about 3 s of flying, and it ignores the ground, the first 1.5 s and throws.
 2. **`faultDecision`** turns that into settings:
@@ -385,15 +389,18 @@ It runs at 10 Hz and talks to the flight controller over a link that is 40 ms la
    - **Weakened motor** (η < 0.88 for 1.5 s): its column in the table, learned or described, is scaled by η.
    - **Hot motor:** its throttle is capped, from 100% at 20 K under its limit to 55% at the limit, so the others take the load before it's damaged.
    - **Stuck servo** (δ confidently above 3°, or its feedback disagrees by 5°, for 0.5 s): taken out of the steering and held at the angle the supervisor believes it's really at, so the motors on it are modelled where they really point.
-3. **`flightPolicy`** decides how to fly on what's left, from the lift margin the remaining motors give, whether roll, pitch and yaw can still be held, the battery and the temperatures:
+3. **`liftMargin`** works out, with the table as the flight core now flies it (parts out, ceilings on, steering servos across what's left of their travel), how much lift there is and whether roll, pitch and yaw can still be held at hover.
+4. **`flightPolicy`** decides how to fly on what's left, from that margin, the battery and the temperatures:
 
 | Mode | When | Limits |
 |---|---|---|
 | Careful | a motor over 85% of its limit, a hot battery, margin < 1.6× | slower, less lean |
-| Return home | a motor or a battery cell failed, margin < 1.35×, battery < 20% or < 3.3 V per cell | flies home at 1.5 m/s, then lands |
+| Return home | a motor or a battery cell failed, margin < 1.35×, battery < 20% or < 3.3 V per cell for a second | flies home at 1.5 m/s, then lands |
 | Land | roll or pitch lost for 1 s, margin < 1.08×, battery < 8%, overheating | straight down, motors stop on the ground |
 
-It only steps up, never back down. A sudden voltage drop of about a cell's worth is read as a lost cell: the supervisor counts one cell fewer when it works out the charge, and heads home.
+It only steps up, never back down. A sudden voltage drop of about a cell's worth is read as a lost cell: the supervisor counts one cell fewer when it works out the charge, and heads home. The low-voltage rule waits a second so a helicopter's spool-up dip doesn't trigger it.
+
+Its settings go to the flight core (parts out, columns scaled, ceilings, lean and acceleration limits), to the navigation, which flies home and lands by itself (the pilot's keys are ignored meanwhile; once down, it disarms), and to the learning, which rescales what it has learned for a weakened motor. Without navigation the flight core lands where it is, with its failsafe descent.
 
 ### What it can and can't save (supervisor on vs off)
 
@@ -462,8 +469,8 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/boards.js` | The flight computers: boards, tasks, wiring, links; one WebAssembly instance of the flight code per board; the simulator's pilot (arm, take off) |
 | `js/board-wasm.js` | The flight code (`fc_core.c`, `nav_core.c`, the runner) built to WebAssembly by `runner/fc/build_wasm.sh` |
 | `js/fc-export.js` | The airframe file for the flight core (`.dfa`) |
-| `runner/fc/` | The flight code: the flight core (`fc_core.c`) and the navigation (`nav_core.c`), their tests, the WebAssembly build, and the ESP32 flight firmware (`esp32/`) |
-| `runner/pi/` | The Pi's side: `pi_nav.c` (the navigation, with GPS and the serial link; `build.sh`), its end-to-end test, `fly.py` |
+| `runner/fc/` | The flight code: the flight core (`fc_core.c`), the navigation (`nav_core.c`), the learning (`learn_core.c`) and the health supervisor (`super_core.c`), their tests, the WebAssembly build, and the ESP32 flight firmware (`esp32/`) |
+| `runner/pi/` | The Pi's side: `dfb_pi.c` (the navigation, the learning and the supervisor, with GPS and the serial link; `build.sh`), its built-in program (`rn_builtin_pi.c`), its end-to-end test, `fly.py` |
 | `runner/` | The runner in C (`rn.c`), the drone's program slots (`rn_host.c`), the Pi link (`rn_link.c`, `pi/send_program.py`), the built-in program, the ESP-IDF example (`esp32/`) and the tests |
 | `tools/` | Node tools: program export, the formula check against recorded flights, test data |
 | `css/style.css` | Styles, light and dark |
@@ -482,7 +489,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 **Controller:** `positionControl`, `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`, `allocationPreferences`, `allocation`, `thrustLinearization`, `voltageCompensation`.
 
-**Supervisor:** `actuatorHealth`, `faultDecision`, `flightPolicy`.
+**Supervisor:** `actuatorHealth`, `faultDecision`, `liftMargin`, `flightPolicy` (and `thermalModel`, for a motor's temperature from its ESC's current).
 
 The simulator only calls these by name through `run(key, …)`. To change a default, edit the function in `js/laws.js`.
 
@@ -496,7 +503,7 @@ Edits made in the Computers tab:
 
 ## Flight code on the drone: the step runner
 
-The flight formulas (estimation, in-flight learning, control, allocation: 16 of them) don't have to be ported to C by hand. The simulator compiles them into a list of steps for a small runner written in C. The same runner is built three ways:
+The flight formulas (estimation, control, allocation, navigation, learning, supervision) don't have to be ported to C by hand. The simulator compiles them into a list of steps for a small runner written in C. The same runner is built three ways:
 - for the ESP32, as an ESP-IDF component (`runner/`);
 - for a PC, where the tests run;
 - as WebAssembly, inside each simulated board (with the flight core and the navigation around it).
@@ -510,7 +517,7 @@ A formula edited in the Computers tab therefore flies in the simulator exactly a
 - **The compiler** (`js/rn-compile.js`) takes a subset of JavaScript: numbers, arrays and small records, the math helpers, `if`, `for` loops with a bound it can work out, `.map`, `.reduce`, `.slice` and `.push`. It uses each formula's signature (`js/rn-sigs.js`) for the types of its inputs.
 - **Lists of actuator inputs** have room for `RN_IN` = 24. A drone that gains parts in flight uses the spare places, and every loop's worst case is known.
 - **Memory:** a formula's memory (the `st` argument) becomes named fields in the arena.
-- **Size:** the default program is 29 KB of steps and 65 KB of working memory.
+- **Size:** each board loads only its tasks' formulas. The ESP32's built-in program (flight core and navigation, 13 formulas) is 14 KB of steps and 24 KB of working memory; the Pi's (navigation, learning, supervisor) is 173 KB of steps and 370 KB of working memory, most of it the throw's fit.
 
 Each flight formula's card in the Computers tab shows its compiled steps and how many run per call.
 
@@ -552,7 +559,7 @@ Nothing that flies changes before step 4. The Computers tab shows where an edit 
 
 Per call: the learning 390–850 µs, the allocation 88 µs, the position estimator 73 µs, allocation preferences 64 µs, the attitude estimator 53 µs, the rest under 25 µs each. The steps and the step loop run from IRAM and the step dispatch is a jump table; from flash, with ESP-IDF's default compare-chain switch, the same loop took 2.6 ms. A simple step costs about 90 cycles, roughly 10× hand-written C, so the flight-budget panel (which assumes about 6 operations, ~25 cycles, per step) is optimistic: real ESP32 time is about 4× its figure. The learning has its own working space in the program (`ownPool` in `js/rn-sigs.js`), so it can run on the other core at the same time.
 
-Memory on that board: the built-in program's arena (65 KB) and one slot for programs sent over the link (arena 65 KB, steps in IRAM, 40 KB receive buffer) fit, with 54 KB left; a third slot doesn't, so the board runs in two-slot mode. Over USB at 115200 baud, a 40 KB program arrives in about 4 s and is checked and self-tested in 33 ms.
+Memory on that board: the built-in program's arena (65 KB) and one slot for programs sent over the link (arena 65 KB, steps in IRAM, 40 KB receive buffer) fit, with 54 KB left; a third slot doesn't, so the board runs in two-slot mode. At 921600 baud (the firmware's default), a 40 KB program arrives in about 0.5 s (4 s at 115200) and is checked and self-tested in 33 ms.
 
 ### Checks
 
@@ -563,9 +570,11 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 ## The flight controller firmware
 
-`runner/fc/` is the drone's flight code around the formulas: the flight core (`fc_core.c`) and the navigation (`nav_core.c`). `runner/fc/esp32/` is the firmware for an ESP32 that runs the flight core, and `runner/pi/pi_nav.c` the program for the Pi that runs the navigation. The simulator flies exactly this code (see Flight computers): the IMU, compass, barometer and battery readings go in, and the throttles and servo angles it returns drive the simulated ESCs and servos.
+`runner/fc/` is the drone's flight code around the formulas: the flight core (`fc_core.c`), the navigation (`nav_core.c`), the learning (`learn_core.c`) and the health supervisor (`super_core.c`). `runner/fc/esp32/` is the firmware for an ESP32 that runs the flight core, and `runner/pi/dfb_pi.c` the program for the Pi that runs the other three. The simulator flies exactly this code (see Flight computers): the IMU, compass, barometer and battery readings go in, and the throttles and servo angles it returns drive the simulated ESCs and servos.
 
-**Guided commands.** Besides the sticks, the flight core takes a guided command: the world acceleration wanted and the heading. The navigation sends one 100 times a second; the throttle field still says whether to fly (below 0.05 the motors idle). Over the link it's a 12-float `RN_LINK_CMD` (the 7 stick floats, then guided, the acceleration and the heading). While they come, the ESP32 sends `RN_LINK_NAV` 100 times a second (attitude, rates, accelerometer, barometer height) and its full telemetry only twice a second, so both fit 115200 baud. If they stop for 0.5 s, the usual failsafe: it levels and lands.
+**Guided commands.** Besides the sticks, the flight core takes a guided command: the world acceleration wanted and the heading. The navigation sends one 100 times a second; the throttle field still says whether to fly (below 0.05 the motors idle). Over the link it's a 12-float `RN_LINK_CMD` (the 7 stick floats, then guided, the acceleration and the heading). While they come, the ESP32 sends `RN_LINK_NAV` 100 times a second (attitude, rates, accelerometer, barometer height) and its full telemetry only twice a second. If they stop for 0.5 s, the usual failsafe: it levels and lands.
+
+**The learning's and the supervisor's frames.** While the Pi asks for it (`RN_LINK_WANT`, twice a second), the ESP32 also sends `RN_LINK_LTEL`: attitude, the averaged accelerometer and gyro, battery, height, each motor's command and each servo's command and believed angle, and in open loop (a throw) every 1 ms step since the last frame. 200 times a second at 921600 baud, 100 at 460800, 50 slower. The Pi answers with test moves (`RN_LINK_EXC`, which lapse 0.1 s after the last one), the model to fly on (`RN_LINK_MODEL`) and the supervisor's settings (`RN_LINK_SET`: its mode, the lean, acceleration and speed limits, and each motor's and servo's state). The link runs at 921600 baud by default (the `baud` setting; boards set up with firmware v2 keep 115200 until it's changed with `fly.py PORT set baud=921600`, `save`, `reboot`: 115200 is too slow for the learning).
 
 **The compass** goes into the attitude estimator when there is one, so the heading doesn't drift; GPS navigation needs it. (The ESP32 firmware has no compass driver yet: on the drone, the heading drifts until it does.)
 
@@ -588,13 +597,13 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
   3. `thrustAxisTarget`, `attitudeError`, `attitudeControl`, `forceDemand`;
   4. allocation in two stages: servo angles, then thrusts;
   5. `thrustLinearization` and `voltageCompensation`.
-- **Learning is off** on the drone for now. It flies the exported table.
+- **The learning and the supervisor** run on the Pi (`dfb_pi`, below). The flight core only takes their frames: it adds the test moves to what it flies (or, for a throw, sets the motors itself in open loop), flies on the model it's sent, and applies the supervisor's limits and its motor and servo states. Without a Pi, it flies the exported table.
 
 ### Safety
 
 - **At power-on** every ESC gets its minimum pulse.
 - **Arming** needs all of these: the arm switch seen off since the last disarm (so nothing re-arms by itself), an airframe loaded, a working output for each of its motors and servos, a gyro, a settled attitude, less than 15° of tilt, the throttle stick at the bottom, and, when a battery sense wire is set, a reading that fits the pack.
-- **Disarmed**, the motors get the minimum pulse. The motor test spins one motor, at most at 30%, for 3 s from when it starts (it stops sooner if commands stop); another test needs the test switched off first.
+- **Disarmed**, the motors get the minimum pulse and the servos go back to their set angles (a helicopter's swashplate is levelled while its rotor runs down: left tilted on the ground, the spinning disc can roll it over). The motor test spins one motor, at most at 30%, for 3 s from when it starts (it stops sooner if commands stop); another test needs the test switched off first.
 - **Commands** are clamped to their ranges; one with a number that isn't finite is ignored.
 - **Link lost:** 0.5 s without a command. At idle (throttle at the bottom, most likely on the ground) it disarms. Otherwise it goes to the failsafe and levels:
   - **With a barometer** it descends at 1 m/s and disarms once it asks to sink but its height stays put for 1.5 s (landed). The barometer also measures the accelerometer's bias in flight (a few hundredths of a g from vibration or temperature is normal), so the speed it flies on is right.
@@ -631,19 +640,23 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 |---|---|---|
 | Core 1 | Control loop (1 kHz) | Runs the flight code |
 | Core 0 | Sensor task | Reads the IMU every step and the barometer at 25 Hz |
-| Core 0 | Link task | The Pi's commands, programs, airframe and settings; telemetry at 20 Hz |
+| Core 0 | Link task | The Pi's commands, programs, airframe, settings and the learning's and supervisor's frames; telemetry at 20 Hz, and LTEL at up to 200 Hz while asked |
 
-### The Pi's navigation: `runner/pi/pi_nav.c`
+### The Pi's program: `runner/pi/dfb_pi.c`
 
-The same navigation code the simulator runs, with the step runner and the built-in flight program, plus what a Pi needs around it:
-- **The link** to the ESP32 (`/dev/serial0` by default): it reads `RN_LINK_NAV`, runs a navigation step on each one, and answers with a guided command.
+The same navigation, learning and supervisor code the simulator runs on its Pi board, with the step runner and the Pi's built-in program (`rn_builtin_pi.c`: the formulas of those three tasks, made with `node tools/export_program.js --tasks nav,learn,super --c runner/pi/rn_builtin_pi.c`), plus what a Pi needs around it:
+- **The link** to the ESP32 (`/dev/serial0` at 921600 baud by default; `--link`, `--baud`): it reads `RN_LINK_NAV`, runs a navigation step on each one, and answers with a guided command. With the learning or the supervisor it also asks for `RN_LINK_LTEL` and runs them on every frame, answering with their frames (see Guided commands above). The supervisor's settings reach the navigation too (it flies home or lands) and the learning (it rescales what it learned).
 - **A GPS** on its own serial port (`--gps /dev/ttyUSB0`): NMEA `GGA` and `RMC`, as the NEO-6M sends at 9600 baud. Positions are metres north and west of the first fix.
-- **The pilot's commands**, as lines of text on its input or over UDP (port 14560): `arm`, `disarm`, `takeoff [height]`, `land`, `goto X Y Z`, `move VX VY VZ`, `heading DEG`, `hold`, `home`, `status`. It takes off only once its position estimate has settled; home is where it took off.
-- **Its config** from the simulator: Computers tab → the Pi's board → **Export the navigation config** (`.dnc`).
+- **The pilot's commands**, as lines of text on its input or over UDP (port 14560):
+  - flying: `arm`, `disarm`, `takeoff [height]`, `land`, `goto X Y Z`, `move VX VY VZ`, `heading DEG`, `hold`, `home`, `status`. It takes off only once its position estimate has settled; home is where it took off;
+  - learning: `calibrate` (while hovering) and `stop`, `learned` or `description` (which model to fly on), `keep on` / `keep off` (in-flight learning), `throw` (arm it in the hand, held level, then throw it upward: it catches itself and holds where it did), `learning` (where it is);
+  - `health`: the supervisor's mode, why, the lift margin and its latest events.
+- **Its files** from the simulator: Computers tab → the Pi's board → **Export**: the navigation config (`.dnc`), and with the learning or the supervisor the airframe (`.dfa`) and the Pi config (`.dlc`). `--no-learning` or `--no-supervisor` leaves one out. This Pi has no health sensor drivers yet (motor temperatures, ESC currents): the supervisor works from the flight core's data stream.
 
-Build and run it on the Pi: `sh runner/pi/build.sh`, then `./runner/pi/pi_nav --config drone.dnc --gps /dev/ttyUSB0`.
+Build and run it on the Pi: `sh runner/pi/build.sh`, then
+`./runner/pi/dfb_pi --nav drone.dnc --airframe drone.dfa --pi drone.dlc --gps /dev/ttyUSB0`.
 
-It's tested end to end on a PC: `runner/pi/test_pi_nav.c` puts a fake ESP32 (the real flight core flying a simple plant) and a fake GPS (NMEA at 5 Hz) behind two pseudo-terminals. It starts the real `pi_nav` on them and types `arm`, `takeoff 1.5`, `goto 2 1 2`. It checks the drone gets there, then stops `pi_nav` and checks the ESP32 goes to its failsafe. `runner/fc/test_nav.c` tests the navigation with the flight core directly, through a delaying link:
+It's tested end to end on a PC: `runner/pi/test_dfb_pi.c` puts a fake ESP32 (the real flight core flying a simple plant, sending LTEL 200 times a second while asked) and a fake GPS (NMEA at 5 Hz) behind two pseudo-terminals. It starts the real `dfb_pi` on them and types `arm`, `takeoff 1.5`, `calibrate`, `health` and `goto 2 1 2`. It checks the calibration runs over the link (about 13 s of tests, the height kept within 1.3–1.85 m; the plant is the description 4% stronger, so it rightly keeps flying on the description), that the supervisor answers, and that the drone gets there; then it stops `dfb_pi` and checks the ESP32 goes to its failsafe. `runner/fc/test_nav.c` tests the navigation with the flight core directly, through a delaying link:
 - take-off, hold and goto with GPS and barometer;
 - holding against wind and following a moving target;
 - link loss, landing in the failsafe;
@@ -662,7 +675,7 @@ It's tested end to end on a PC: `runner/pi/test_pi_nav.c` puts a fake ESP32 (the
 | `python3 fly.py PORT program formulas.rnp` | Send edited formulas; they reload in flight as before |
 
 - **Commands** go out 50 times a second while `fly.py` runs. If it stops, the drone goes to its failsafe.
-- **While a program is arriving** (a few seconds at 115200 baud), the firmware keeps flying on the last command, only as long as a frame that size takes and never out of a failsafe. In `fly`, start with `--program FILE.rnp` and press P to send it; don't run a second `fly.py` on the same port (it opens the port exclusively, and without the DTR/RTS toggle that resets most ESP32 boards).
+- **While a program is arriving** (under a second at 921600 baud), the firmware keeps flying on the last command, only as long as a frame that size takes and never out of a failsafe. In `fly`, start with `--program FILE.rnp` and press P to send it; don't run a second `fly.py` on the same port (it opens the port exclusively, and without the DTR/RTS toggle that resets most ESP32 boards).
 - **Gamepad:** after arming, the throttle stays at 0 until you first push the stick up; in flight, full down is the fastest descent, never idle. On the keyboard, `s` stops at 0.06 while armed and `x` goes to idle.
 - **Flashing** the merged image at offset 0 erases the saved airframe and wiring. Send them again afterwards.
 

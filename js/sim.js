@@ -56,7 +56,7 @@ const PRESETS = {
 const cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
-const flyMode = () => learn.holdServos ? 'tilt' : mode;
+const flyMode = () => learn.view && learn.view.holdServos ? 'tilt' : mode;
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
 const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25 };   // texture and light matter to optical flow
 // No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
@@ -84,7 +84,7 @@ let onCrash = () => {};
 const actuators = () => cfg.comps.filter(c => c.type === 'motor');   // thrust inputs; servo joints are in joints.js
 // Thrust share the flight software believes a motor gives: its known health, and what the supervisor has told
 // it (0 once a motor is taken out, the effectiveness it measured otherwise).
-const hModel = c => (c.healthKnown ? c.health / 100 : 1) * (typeof fcAct === 'function' ? (fcAct(c).on ? fcAct(c).eff : 0) : 1);
+const hModel = c => c.healthKnown ? c.health / 100 : 1;   // what the description tells the flight code (the supervisor's corrections are on its board)
 // A motor is mounted along its shaft (tilt, az: the way the shaft points, toward the prop). A puller's thrust
 // points along the shaft, toward the prop (a tractor); a pusher's prop is pitched the other way, so its thrust
 // points back along the shaft, toward the motor, and it blows air away past the prop. Spin is the prop's
@@ -466,7 +466,9 @@ function resetSim() {
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
   const R0 = qmat(S.q); let low = 0;
   for (const pt of cPts) low = Math.min(low, m3v(R0, pt.rest)[2] - (pt.r || 0));
-  S.p = [setpoint.x, setpoint.y, -low + 0.001]; spawnAt = S.p.slice();
+  const throwing = launchMode === 'throw' && hasTask('learn');   // a throw start: held in the hand at hand height
+  S.p = [setpoint.x, setpoint.y, throwing ? throwCfg.handH : -low + 0.001]; spawnAt = [setpoint.x, setpoint.y, -low + 0.001];
+  if (throwing) startThrow();
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;

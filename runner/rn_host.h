@@ -93,5 +93,7 @@ int rn_host_out_size(const rn_host *H, int fn);     /* floats of result */
 /* The flying program's memory field of formula fn, instance 0 (the firmware's glue may read or scale it, as the
  * supervisor scales the learned table). Returns NULL if the field has no value yet; *size gets its floats. */
 float *rn_host_field(rn_host *H, int fn, const char *field, int32_t *size);
+/* Forget formula fn's memory (every instance, every program slot): its next call starts afresh, as `st = {}`. */
+void rn_host_forget(rn_host *H, int fn);
 
 #endif

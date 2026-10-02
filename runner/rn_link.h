@@ -27,6 +27,14 @@ enum { RN_LINK_PROGRAM = 1, RN_LINK_STATUS = 2, RN_LINK_EVENT = 0x81, RN_LINK_RE
  *                                  16 floats: t, state, attitude q (4), body rates (3), specific force, body (3),
  *                                  height (barometer, or 0), have height (0/1), attitude settled (0/1) */
 enum { RN_LINK_CMD = 3, RN_LINK_AIRFRAME = 4, RN_LINK_SETTING = 5, RN_LINK_TELEM = 0x83, RN_LINK_NAV = 0x84 };
+/* The learning and the health supervisor (fc/learn_core.h, fc/super_core.h, on the Pi), as floats (fc/fc_core.h):
+ *   Pi → drone:  RN_LINK_EXC   the learning's excitation (test moves; the throw's open loop), at each LTEL
+ *                RN_LINK_MODEL the model to fly on (learned or the description), the servos' measured speed and lag
+ *                RN_LINK_SET   the supervisor's settings: parts out, scaled or capped, the flight mode and its limits
+ *                RN_LINK_WANT  one float: 1 = send LTEL (twice a second while the Pi runs the learning or the supervisor)
+ *   drone → Pi:  RN_LINK_LTEL  the learning's and the supervisor's telemetry, 200 times a second (at 921600 baud; fewer
+ *                              at slower links) */
+enum { RN_LINK_EXC = 6, RN_LINK_MODEL = 7, RN_LINK_SET = 8, RN_LINK_WANT = 9, RN_LINK_LTEL = 0x85 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

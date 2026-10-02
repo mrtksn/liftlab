@@ -19,6 +19,7 @@
 
 const RN_LIST_CAP = 48;            // capacity of a list built with push when nothing says otherwise
 const RN_UNROLL = 16;              // loops over fixed arrays up to this long are unrolled
+const RN_UNROLL_CODE = 800;        // … unless that would make more steps than this (then they stay loops)
 
 const RT = {
   num: { k: 'num' },
@@ -810,6 +811,7 @@ class RnFn {
       for (let i = 1; i < args.length; i++) {
         const w = args[i], r = this.arith(name === 'min' ? 'MIN' : 'MAX', v, w, node);
         if (v.ub !== undefined && w.ub !== undefined) { r.ub = name === 'min' ? Math.min(v.ub, w.ub) : Math.max(v.ub, w.ub); }
+        else if (name === 'min' && (v.ub !== undefined || w.ub !== undefined)) r.ub = v.ub ?? w.ub;   // min(x, n) ≤ n whatever x is
         if (v.lb !== undefined && w.lb !== undefined) { r.lb = name === 'min' ? Math.min(v.lb, w.lb) : Math.max(v.lb, w.lb); }
         else if (name === 'max' && (v.lb !== undefined || w.lb !== undefined)) r.lb = Math.max(v.lb ?? -Infinity, w.lb ?? -Infinity);
         v = r;
@@ -847,7 +849,7 @@ class RnFn {
     return result;
   }
   bindPattern(p, v, kind, node, param) {
-    if (p.type === 'Id') return this.bindName(p.name, v, kind, p, param);
+    if (p.type === 'Id') return this.bindName(p.name, v, kind, p, param, node);
     if (p.type === 'Default') return this.bindName(p.name, v.k === 'undef' ? this.expr(p.value) : v, kind, p, param);
     if (p.type === 'ArrayPattern') {
       p.elements.forEach((e, i) => { if (e) this.bindPattern(e, this.index(v, { t: RT.num, c: i }, node), kind, node, param); });
@@ -855,12 +857,20 @@ class RnFn {
     }
     this.err('Unsupported pattern', node);
   }
-  bindName(name, v, kind, node, param) {
+  bindName(name, v, kind, node, param, from) {
     if (v.k === 'fn' || v.k === 'kernel' || v.k === 'str' || v.k === 'null' || v.k === 'undef') {
       if (kind === 'let' && (v.k === 'null' || v.k === 'undef')) this.err('A variable needs a starting value with a type', node);
       return this.bind(name, { kind: 'const', v, param }, node);
     }
-    if (kind === 'const' || (v.fresh && v.s && v.s.kind === 'tmp' && !v.ro)) {
+    // A number is a value in JavaScript: `const t = M[p][k]` must keep what it read even if M[p][k] (or a variable
+    // it was read from) changes later, so a number that isn't a constant or a new result is copied.
+    // A constant array (`const yy = [0, 0, 0]`) whose elements the code changes gets a place of its own.
+    const fresh = v.fresh && v.s && v.s.kind === 'tmp' && !v.ro, scalar = v.t && (v.t.k === 'num' || v.t.k === 'enum');
+    const written = v.ro && this.elemAssigned && this.elemAssigned.has(name);
+    // (Unless nothing in the formula ever writes where it came from: then the name can stay a view of it.)
+    const root = from && !param ? rootName(from.type === 'ForOf' ? from.list : from) : null;
+    const stays = root && this.elemAssigned && !this.elemAssigned.has(root) && !this.assignedLater.has(root);
+    if ((kind === 'const' || fresh) && !(scalar && v.c === undefined && !fresh && !stays) && !written) {
       // const: a name for the value where it is (as in JavaScript, no copy). let from a new value: take it over.
       const b = this.bind(name, { kind, v: kind === 'let' ? { ...v, fresh: false } : v, param }, node);
       this.pinValue(v, b);
@@ -871,6 +881,7 @@ class RnFn {
     const t = v.t.k === 'arr' || v.t.k === 'list' || v.t.k === 'rec' ? JSON.parse(JSON.stringify(v.t)) : v.t;
     const s = this.slot('var', () => tsize(t), name), nv = { t, s, off: 0 };
     this.copyInto(nv, v, node);
+    if (kind === 'const') { if (v.ub !== undefined) nv.ub = v.ub; if (v.lb !== undefined) nv.lb = v.lb; }   // a copied number keeps what's known about it
     const b = this.bind(name, { kind, v: nv, param }, node); b.pins = [s]; this.touch(s);
     return b;
   }
@@ -883,8 +894,10 @@ class RnFn {
     switch (name) {
       case 'map': {
         const f = fnArg(0);
-        if (t.k === 'arr' && t.n <= RN_UNROLL) {
-          const vals = []; for (let i = 0; i < t.n; i++) vals.push(this.inline(f, [this.index(src, { t: RT.num, c: i }, node), { t: RT.num, c: i, lb: i, ub: i }], node));
+        const n0 = this.code.length, first = t.k === 'arr' && t.n <= RN_UNROLL ? this.inline(f, [this.index(src, { t: RT.num, c: 0 }, node), { t: RT.num, c: 0, lb: 0, ub: 0 }], node) : null;
+        if (first && first.t && tsize(first.t) > 64) this.code.length = n0;   // big elements: a loop, so one element's work space serves them all
+        else if (first) {
+          const vals = [first]; for (let i = 1; i < t.n; i++) vals.push(this.inline(f, [this.index(src, { t: RT.num, c: i }, node), { t: RT.num, c: i, lb: i, ub: i }], node));
           let el = null; for (const v of vals) { if (v.k) this.err('.map must give numbers or arrays', node); el = tunify(el, v.t); }
           if (vals.every(v => v.c !== undefined)) return { t: RT.arr(RT.num, t.n), s: this.prog.constBlock(vals.map(v => v.c)), off: 0, cvals: vals.map(v => v.c), ro: true };
           const out = this.tmp(RT.arr(el, t.n)); vals.forEach((v, i) => this.copyInto({ ...out, t: el, off: i * tsize(el) }, v, node)); return out;
@@ -1040,7 +1053,10 @@ class RnFn {
   }
   helperFn(name) {
     this.helperCache = this.helperCache || {};
-    if (!this.helperCache[name]) { const ast = rnParse(this.helpers[name]); this.helperCache[name] = { k: 'fn', node: ast, scopes: [] }; }
+    if (!this.helperCache[name]) {
+      const ast = rnParse(this.helpers[name]); this.helperCache[name] = { k: 'fn', node: ast, scopes: [] };
+      if (this.elemAssigned) { elementAssignedNames(ast, this.elemAssigned); assignedNames(ast, this.assignedLater); }   // what the helper writes counts too
+    }
     return this.helperCache[name];
   }
   blsCall(node) {
@@ -1286,14 +1302,17 @@ class RnFn {
     const a = this.expr(init.decls[0].init), b = this.expr(test.right);
     const incl = test.op === '<=' ? 1 : 0;
     if (a.c !== undefined && b.c !== undefined && b.c + incl - a.c <= RN_UNROLL && !assignedNames(node.body).has(name)) {
-      const brk = this.label();
+      // Unrolled, unless that makes a lot of code (a big body): then it stays a loop.
+      const brk = this.label(), n0 = this.code.length, count = b.c + incl - a.c;
+      let rolled = false;
       for (let i = a.c; i < b.c + incl; i++) {
         const cont = this.label(); this.push();
         this.bind(name, { kind: 'const', v: { t: RT.num, c: i, lb: i, ub: i } }, node);
         this.loops.push({ brk, cont, start: this.code.length }); this.stmt(node.body); this.loops.pop();
         this.pop(); this.place(cont);
+        if (i === a.c && count > 1 && (this.code.length - n0) * count > RN_UNROLL_CODE) { this.code.length = n0; rolled = true; break; }
       }
-      this.place(brk); this.pop(); return;
+      if (!rolled) { this.place(brk); this.pop(); return; }
     }
     if (b.ub === undefined) this.err(`Can't tell how many times this loop runs: "${srcOf(this.src, test.right)}" needs an upper limit (a list's length or a number)`, node);
     const max = Math.max(0, Math.ceil(b.ub + incl - (a.lb ?? a.c ?? 0)));
@@ -1367,7 +1386,7 @@ class RnFn {
     if (!this.lenient && !this.discovered) { this.sig = this.discover(); this.discovered = true; }
     const ast = rnParse(this.src);
     const fn = ast.type === 'Function' || ast.type === 'Arrow' ? ast : this.err('Expected a function');
-    this.assignedLater = assignedNames(fn.body);
+    this.assignedLater = assignedNames(fn.body); this.elemAssigned = elementAssignedNames(fn.body);
     const sig = this.sig;
     if (fn.params.length !== sig.args.length) this.err(`This formula takes ${sig.args.length} inputs (${sig.names.join(', ')}); the code has ${fn.params.length}`);
     this.push();
@@ -1408,6 +1427,19 @@ function assignedNames(node, out = new Set()) {
   for (const k in node) if (k !== 'pos' && node[k] && typeof node[k] === 'object') assignedNames(node[k], out);
   return out;
 }
+// The variable an expression reads from: x for x, x.a, x[i].b; null for anything computed.
+function rootName(n) { while (n && n.type === 'Member') n = n.obj; return n && n.type === 'Id' ? n.name : null; }
+// Names whose elements or fields are assigned anywhere inside a piece of code (x[i] = …, x.a += …, x[i]++).
+function elementAssignedNames(node, out = new Set()) {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) { node.forEach(n => elementAssignedNames(n, out)); return out; }
+  if ((node.type === 'Assign' || node.type === 'Update') && node.target.type === 'Member') {
+    let r = node.target; while (r.type === 'Member') r = r.obj;
+    if (r.type === 'Id') out.add(r.name);
+  }
+  for (const k in node) if (k !== 'pos' && node[k] && typeof node[k] === 'object') elementAssignedNames(node[k], out);
+  return out;
+}
 const srcOf = (src, node) => { const s = src.slice(node.pos, node.pos + 40); return s.split(/[;)\n]/)[0]; };
 
 const RN_GLOBALS = { G: 9.81, D2R: Math.PI / 180, R2D: 180 / Math.PI };
@@ -1423,6 +1455,20 @@ const RN_KERNELS = {
 // Helpers compiled from their JavaScript like any formula code.
 const RN_HELPERS = {
   eye: 'n => { const M = []; for (let i = 0; i < n; i++) { const row = new Array(n).fill(0); row[i] = 1; M.push(row); } return M; }',
+  // Gaussian elimination with partial pivoting (math.js solveLin), for the least-squares fits.
+  solveLin: `(A, b) => {
+    const n = b.length, x = new Array(n).fill(0);
+    const M = A.map((r, i) => { const row = new Array(n + 1).fill(0); for (let k = 0; k < n; k++) row[k] = r[k]; row[n] = b[i]; return row; });
+    for (let c = 0; c < n; c++) {
+      let p = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+      if (p !== c) for (let k = 0; k <= n; k++) { const t = M[p][k]; M[p][k] = M[c][k]; M[c][k] = t; }
+      const pv = M[c][c];
+      if (Math.abs(pv) >= 1e-14) for (let r = c + 1; r < n; r++) { const f = M[r][c] / pv; if (f !== 0) for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k]; }
+    }
+    for (let i = 0; i < n; i++) { const r = n - 1 - i; let s = M[r][n]; for (let k = r + 1; k < n; k++) s -= M[r][k] * x[k]; x[r] = Math.abs(M[r][r]) < 1e-14 ? 0 : s / M[r][r]; }
+    return x;
+  }`,
 };
 const RN_FOLD = {
   ADD: (a, b) => a + b, SUB: (a, b) => a - b, MUL: (a, b) => a * b, DIV: (a, b) => a / b, MOD: (a, b) => a % b, POW: (a, b) => a ** b,
@@ -1489,7 +1535,7 @@ function rnLink(prog, fns) {
       maxSteps += ins.w;
     }
     const state = (f.stateSlots || []).map(fl => ({ name: fl.name, t: fl.t, addr: fl.s ? fl.s.addr : -1, flag: fl.flag.addr, ring: fl.t && fl.t.k === 'ring' }));
-    fnTable[f.key] = { entry, end, maxSteps: Math.ceil(maxSteps * 1.1) + 16, args: f.args.map((a, i) => ({ name: f.sig.names[i], t: a.t, addr: a.s ? a.s.addr : -1, state: !!a.state })), ret: { t: f.sig.ret, addr: f.retV.s.addr }, state, nInstr: f.code.length };
+    fnTable[f.key] = { entry, end, maxSteps: Math.min(2e9, Math.ceil(maxSteps * 1.1) + 16), args: f.args.map((a, i) => ({ name: f.sig.names[i], t: a.t, addr: a.s ? a.s.addr : -1, state: !!a.state })), ret: { t: f.sig.ret, addr: f.retV.s.addr }, state, nInstr: f.code.length };
   }
   return { posAt, code: Int32Array.from(words), constData, constEnd, arenaSize, fns: fnTable, poolBase, poolSize };
 }

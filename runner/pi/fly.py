@@ -10,7 +10,7 @@
     python3 fly.py PORT test 1 0.1                 spin motor 1 at 10% for 2 s (PROPS OFF)
     python3 fly.py PORT fly [--gamepad] [--program f.rnp]   fly: keyboard (tethered bench tests) or a gamepad
 
-PORT: /dev/ttyUSB0 on the Pi, /dev/cu.usbserial-0001 on a Mac. 115200 baud unless --baud.
+PORT: /dev/ttyUSB0 on the Pi, /dev/cu.usbserial-0001 on a Mac. 921600 baud (the firmware's default since v3; its `baud` setting changes it) unless --baud.
 
 Flying: the firmware needs commands 50 times a second; fly.py sends them while it runs. If fly.py stops, the
 cable comes out or the computer hangs, the drone goes to its failsafe after 0.5 s: it levels, comes down at about
@@ -189,7 +189,7 @@ def fly(L, gamepad, program=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
-    ap.add_argument('port'); ap.add_argument('what', nargs='+'); ap.add_argument('--baud', type=int, default=115200)
+    ap.add_argument('port'); ap.add_argument('what', nargs='+'); ap.add_argument('--baud', type=int, default=921600)
     ap.add_argument('--gamepad', action='store_true'); ap.add_argument('--program', help='fly: a program to send with P')
     ap.add_argument('--yes', action='store_true', help="don't ask about props for a motor test")
     a = ap.parse_args()

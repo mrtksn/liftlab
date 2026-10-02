@@ -1,0 +1,283 @@
+/*
+ * Drone Force Bench on the Raspberry Pi: the navigation, the learning and the health supervisor.
+ *
+ * The same code the simulator runs for a Pi board (fc/nav_core.c, fc/learn_core.c, fc/super_core.c with the step
+ * runner and the Pi's built-in program, rn_builtin_pi.c: the formulas of those three tasks). It talks to the ESP32
+ * flight controller over the serial link (rn_link.h):
+ *   - navigation (--nav): the ESP32 sends RN_LINK_NAV 100 times a second while guided commands come; for each one this
+ *     runs a navigation step and sends a guided command (RN_LINK_CMD, 12 floats): the acceleration wanted and the
+ *     heading. If they stop (this program stops, the cable comes out), the ESP32 goes to its failsafe within 0.5 s
+ *     and lands. A GPS on its own serial port (NMEA: GGA and RMC, as the NEO-6M sends) gives position and velocity;
+ *     home is where it took off;
+ *   - learning and supervisor (--airframe and --pi): it asks for the ESP32's LTEL telemetry (RN_LINK_WANT, twice a
+ *     second) and answers with the learning's excitation and model (RN_LINK_EXC, RN_LINK_MODEL) and the
+ *     supervisor's settings (RN_LINK_SET). The supervisor's settings also reach the navigation here (it flies home or
+ *     lands) and the learning (it rescales what it learned). This Pi has no health sensor drivers yet: the
+ *     supervisor works from the flight core's data stream (a failed or weakened motor, a stuck servo, the lift left).
+ *
+ * The pilot's commands are lines of text, on standard input or UDP (port 14560 by default; fly.py or a phone can
+ * send them):
+ *   arm | disarm | takeoff [height m] | land | goto X Y Z | move VX VY VZ (target velocity, m/s; 0 0 0 stops)
+ *   heading DEG | hold | home | status
+ *   calibrate | stop | learned | description | keep on | keep off | throw | learning | health
+ * (throw: hold it level and arm it first; throw it upward and it flies itself from there.)
+ *
+ * Build:  sh runner/pi/build.sh
+ * Run:    ./dfb_pi --link /dev/serial0 --baud 921600 --nav drone.dnc [--gps /dev/ttyUSB0] [--airframe drone.dfa --pi drone.dlc]
+ * (the files: the simulator's Computers tab -> Export, on the Pi board.)
+ */
+#define _DEFAULT_SOURCE
+#include "nav_core.h"
+#include "super_core.h"
+#include "rn_link.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
+
+extern const uint8_t *const rn_builtin_img;
+extern const uint32_t rn_builtin_len;
+
+static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+
+static int open_serial(const char *dev, int baud) {
+  int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
+  if (fd < 0) { perror(dev); return -1; }
+  struct termios t; tcgetattr(fd, &t); cfmakeraw(&t);
+  speed_t sp = baud == 9600 ? B9600 : baud == 38400 ? B38400 : baud == 57600 ? B57600 : baud == 230400 ? B230400 : baud == 460800 ? B460800 : baud == 921600 ? B921600 : B115200;
+  cfsetispeed(&t, sp); cfsetospeed(&t, sp); t.c_cflag |= CLOCAL | CREAD; t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0;
+  tcsetattr(fd, TCSANOW, &t); tcflush(fd, TCIOFLUSH);
+  return fd;
+}
+
+/* ── GPS: NMEA sentences → position (x north, y west, z up) [m] around the first fix, and velocity ── */
+typedef struct { int have_origin; double lat0, lon0, alt0; float p[3], v[3]; double t; int fix; char line[128]; int n; } gps_t;
+static double nmea_deg(const char *f, const char *hemi) {   /* ddmm.mmmm or dddmm.mmmm */
+  double x = atof(f); int d = (int)(x / 100); double v = d + (x - d * 100) / 60;
+  return (*hemi == 'S' || *hemi == 'W') ? -v : v;
+}
+static int split(char *s, char **f, int max) { int n = 0; f[n++] = s; for (; *s && n < max; s++) if (*s == ',' || *s == '*') { *s = 0; f[n++] = s + 1; } return n; }
+static void gps_line(gps_t *G, char *s) {
+  char *f[24]; int n = split(s, f, 24);
+  if (n > 9 && !strcmp(f[0] + 2, "GGA")) {                   /* time, lat, N/S, lon, E/W, quality, sats, hdop, altitude */
+    if (atoi(f[6]) < 1 || !*f[2] || !*f[4]) { G->fix = 0; return; }
+    double lat = nmea_deg(f[2], f[3]), lon = nmea_deg(f[4], f[5]), alt = atof(f[9]);
+    if (!G->have_origin) { G->lat0 = lat; G->lon0 = lon; G->alt0 = alt; G->have_origin = 1; }
+    const double R = 6371000.0, k = M_PI / 180;
+    G->p[0] = (float)((lat - G->lat0) * k * R); G->p[1] = (float)(-(lon - G->lon0) * k * R * cos(G->lat0 * k)); G->p[2] = (float)(alt - G->alt0);
+    G->fix = 1; G->t = now_s();
+  } else if (n > 8 && !strcmp(f[0] + 2, "RMC") && *f[2] == 'A') {   /* speed over ground [knots], course [deg] */
+    double v = atof(f[7]) * 0.514444, c = atof(f[8]) * M_PI / 180;
+    G->v[0] = (float)(v * cos(c)); G->v[1] = (float)(-v * sin(c)); G->v[2] = 0;
+  }
+}
+static void gps_read(gps_t *G, int fd) {
+  char b[256]; ssize_t n = read(fd, b, sizeof b);
+  for (ssize_t i = 0; i < n; i++) {
+    if (b[i] == '$') G->n = 0;
+    if (b[i] == '\n' || b[i] == '\r') { if (G->n > 6) { G->line[G->n] = 0; gps_line(G, G->line + 1); } G->n = 0; }
+    else if (G->n < (int)sizeof G->line - 1) G->line[G->n++] = b[i];
+  }
+}
+
+/* ── the pilot ── */
+typedef struct { int arm, fly, landing; nav_sp sp; } pilot_t;
+static void pilot_line(pilot_t *P, const nav_out *o, char *s, char *reply, size_t rn) {
+  float a, b, c; reply[0] = 0;
+  if (!strncmp(s, "arm", 3)) { P->arm = 1; snprintf(reply, rn, "arming"); }
+  else if (!strncmp(s, "disarm", 6)) { P->arm = 0; P->fly = 0; snprintf(reply, rn, "disarmed"); }
+  else if (!strncmp(s, "takeoff", 7)) {
+    float h = 1.5f; sscanf(s + 7, "%f", &h);
+    if (!P->arm) snprintf(reply, rn, "arm first");
+    else { P->fly = 1; P->landing = 0; P->sp.target[0] = o->p[0]; P->sp.target[1] = o->p[1]; P->sp.target[2] = h; P->sp.fly = 1; snprintf(reply, rn, "taking off to %.1f m", h); }
+  }
+  else if (!strncmp(s, "land", 4)) { P->landing = 1; memset(P->sp.vref, 0, sizeof P->sp.vref); snprintf(reply, rn, "landing"); }
+  else if (sscanf(s, "goto %f %f %f", &a, &b, &c) == 3) { P->sp.target[0] = a; P->sp.target[1] = b; P->sp.target[2] = c; memset(P->sp.vref, 0, sizeof P->sp.vref); snprintf(reply, rn, "going to %.1f %.1f %.1f", a, b, c); }
+  else if (sscanf(s, "move %f %f %f", &a, &b, &c) == 3) { P->sp.vref[0] = a; P->sp.vref[1] = b; P->sp.vref[2] = c; snprintf(reply, rn, "moving"); }
+  else if (sscanf(s, "heading %f", &a) == 1) { P->sp.heading = a * (float)M_PI / 180; snprintf(reply, rn, "heading %.0f", a); }
+  else if (!strncmp(s, "hold", 4)) { memcpy(P->sp.target, o->p, sizeof P->sp.target); memset(P->sp.vref, 0, sizeof P->sp.vref); snprintf(reply, rn, "holding"); }
+  else if (!strncmp(s, "home", 4)) { P->sp.target[0] = P->sp.target[1] = 0; memset(P->sp.vref, 0, sizeof P->sp.vref); snprintf(reply, rn, "going home"); }
+  else if (!strncmp(s, "status", 6)) snprintf(reply, rn, "%s; at %.2f %.2f %.2f, speed %.2f %.2f %.2f%s", P->fly ? "flying" : P->arm ? "armed" : "disarmed", o->p[0], o->p[1], o->p[2], o->v[0], o->v[1], o->v[2], o->ready ? "" : "; position not settled yet");
+  else snprintf(reply, rn, "? arm | disarm | takeoff [h] | land | goto x y z | move vx vy vz | heading deg | hold | home | status | calibrate | stop | learned | description | keep on | keep off | throw | learning | health");
+}
+/* The learning's and the supervisor's commands. Returns 1 if it was one of theirs. */
+static int task_line(learn_state *L, int have_learn, super_state *S, int have_super, pilot_t *P, const nav_out *o, char *s, char *reply, size_t rn) {
+  static const struct { const char *w; int c; } cmds[] = { { "calibrate", LN_CMD_CALIBRATE }, { "stop", LN_CMD_STOP }, { "learned", LN_CMD_USE_LEARNED },
+    { "description", LN_CMD_USE_DESC }, { "keep on", LN_CMD_KEEP_ON }, { "keep off", LN_CMD_KEEP_OFF }, { "throw", LN_CMD_THROW } };
+  for (unsigned i = 0; i < sizeof cmds / sizeof *cmds; i++) if (!strncmp(s, cmds[i].w, strlen(cmds[i].w))) {
+    if (!have_learn) { snprintf(reply, rn, "the learning isn't running (start with --airframe and --pi)"); return 1; }
+    if (cmds[i].c == LN_CMD_THROW) {
+      if (!P->arm) { snprintf(reply, rn, "arm first, holding it level"); return 1; }
+      P->fly = 1; P->landing = 0;                   /* the navigation flies it once it has caught itself (there: see main) */
+      memcpy(P->sp.target, o->p, sizeof P->sp.target); memset(P->sp.vref, 0, sizeof P->sp.vref);
+    }
+    learn_command(L, cmds[i].c);
+    if (cmds[i].c == LN_CMD_CALIBRATE && L->cal) snprintf(reply, rn, "calibrating: about %.0f s of tests while it hovers (\"stop\" ends it)", (double)L->total);
+    else if (L->msg[0]) snprintf(reply, rn, "%s", L->msg);
+    else snprintf(reply, rn, "ok");
+    return 1;
+  }
+  if (!strncmp(s, "learning", 8)) {
+    if (!have_learn) snprintf(reply, rn, "the learning isn't running");
+    else if (L->cal) snprintf(reply, rn, "calibrating: %.0f%% done", (double)(L->total > 0 ? 100 * L->cal_t / L->total : 0));
+    else snprintf(reply, rn, "%s%s", L->use_learned ? "on the learned model. " : "on the description. ", L->msg);
+    return 1;
+  }
+  if (!strncmp(s, "health", 6)) {
+    if (!have_super) { snprintf(reply, rn, "the supervisor isn't running"); return 1; }
+    const char *mode[] = { "normal", "careful", "returning home", "landing" }; char why[96]; super_why_mode(S, why, sizeof why);
+    int k = snprintf(reply, rn, "%s%s%s; lift margin %.2fx", mode[S->mode & 3], why[0] ? ": " : "", why, (double)S->margin);
+    for (int i = 0; i < S->nlog && i < 3 && k < (int)rn; i++) k += snprintf(reply + k, rn - k, " | %.1f s %s", S->log[i].t, S->log[i].text);
+    return 1;
+  }
+  return 0;
+}
+
+#define ARENA_CAP 131072
+#define CODE_CAP 65536
+static float arenas_[3][ARENA_CAP], pools_[3][8192];
+static int32_t codes_[3][CODE_CAP];
+static uint8_t *read_file(const char *path, uint32_t *n) {
+  FILE *f = fopen(path, "rb"); if (!f) { perror(path); return 0; }
+  static uint8_t bufs[3][16384]; static int k; uint8_t *b = bufs[k++ % 3];
+  *n = (uint32_t)fread(b, 1, sizeof bufs[0], f); fclose(f); return b;
+}
+static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
+  static uint8_t fr[FC_MODEL_MAX * 4 + 32]; uint32_t len = rn_link_frame(fr, sizeof fr, type, (const uint8_t *)p, n);
+  if (len && write(fd, fr, len) < 0 && errno != EAGAIN) perror("link");
+}
+
+int main(int argc, char **argv) {
+  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
+  for (int i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
+    if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
+    if (i + 1 >= argc) break;
+    if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
+  }
+  if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
+    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
+    "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"); return 2; }
+
+  setvbuf(stdout, NULL, _IOLBF, 0);   /* a line at a time, also into a pipe or a log file */
+  static rn_host H; static nav_state N; static learn_state LS; static super_state SS;
+  float *arenas[3] = { arenas_[0], arenas_[1], arenas_[2] }, *pools[3] = { pools_[0], pools_[1], pools_[2] };
+  int32_t *codes[3] = { codes_[0], codes_[1], codes_[2] };
+  int e = rn_host_init(&H, rn_builtin_img, rn_builtin_len, arenas, ARENA_CAP, codes, CODE_CAP, pools, 8192);
+  if (e) { fprintf(stderr, "flight program didn't load (%d)\n", e); return 1; }
+  if (nav_init(&N, &H)) { fprintf(stderr, "%s\n", N.why); return 1; }
+  { uint32_t n; uint8_t *blob = read_file(cfg_path, &n); if (!blob) return 1;
+    if (nav_config_load(&N, blob, n)) { fprintf(stderr, "%s\n", N.why); return 1; } }
+  int have_learn = 0, have_super = 0;
+  if (af_path && pi_path) {
+    uint32_t na, np; uint8_t *af = read_file(af_path, &na), *pc = read_file(pi_path, &np); if (!af || !pc) return 1;
+    if (!no_learn) { if (learn_init(&LS, &H) || learn_config_load(&LS, pc, np) || learn_airframe(&LS, af, na)) fprintf(stderr, "learning: %s\n", LS.msg); else have_learn = 1; }
+    if (!no_super) { if (super_init(&SS, &H) || super_config_load(&SS, pc, np) || super_airframe(&SS, af, na)) fprintf(stderr, "supervisor: %s\n", SS.why_text); else have_super = 1; }
+  } else if (af_path || pi_path) fprintf(stderr, "the learning and the supervisor need both --airframe and --pi\n");
+
+  int link = open_serial(link_dev, baud); if (link < 0) return 1;
+  int gps = gps_dev ? open_serial(gps_dev, gps_baud) : -1;
+  int udp = socket(AF_INET, SOCK_DGRAM, 0);
+  struct sockaddr_in addr = { .sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_ANY) };
+  if (udp >= 0 && bind(udp, (struct sockaddr *)&addr, sizeof addr)) { perror("udp"); close(udp); udp = -1; }
+  fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
+  printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
+         have_learn ? "on" : "off", have_super ? "on" : "off");
+
+  static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
+  gps_t G; memset(&G, 0, sizeof G);
+  pilot_t P; memset(&P, 0, sizeof P);
+  nav_out o; memset(&o, 0, sizeof o);
+  double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0; float fc_state = 0; uint32_t seen_log = 0;
+  for (;;) {
+    struct pollfd pf[4] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { 0, POLLIN, 0 }, { udp, POLLIN, 0 } };
+    poll(pf, 4, 10);
+    double t = now_s();
+    if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
+    for (int k = 2; k < 4; k++) if (pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot */
+      static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
+      char *buf = k == 2 ? in : dg; int have = k == 2 ? in_n : 0, cap = k == 2 ? (int)sizeof in : (int)sizeof dg;
+      if (k == 2) n = read(0, buf + have, (size_t)(cap - 1 - have)); else n = recvfrom(udp, buf, (size_t)cap - 1, 0, (struct sockaddr *)&from, &fl);
+      if (n <= 0) continue;
+      have += (int)n; buf[have] = 0;
+      if (k == 3 && buf[have - 1] != '\n') buf[have++] = '\n';            /* a datagram is a whole line (or several) */
+      char *s = buf, *nl;
+      while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
+        *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
+        if (*s) {
+          char reply[600]; if (!task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) pilot_line(&P, &o, s, reply, sizeof reply);
+          if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
+        }
+        s = nl + 1;
+      }
+      if (k == 2) { in_n = (int)(buf + have - s); if (in_n >= (int)sizeof in - 1) in_n = 0; memmove(in, s, (size_t)in_n); }
+    }
+    uint8_t rx[512]; ssize_t n = (pf[0].revents & POLLIN) ? read(link, rx, sizeof rx) : 0;
+    for (ssize_t i = 0; i < n; i++) {
+      int type = rn_link_feed(&L, rx[i]);
+      if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
+      if (type == RN_LINK_LTEL && (have_learn || have_super)) {   /* the learning and the supervisor, on every frame */
+        static float lt[FC_LTEL_MAX], fo[FC_MODEL_MAX]; int n = (int)(L.len / 4); if (n > FC_LTEL_MAX) continue;
+        memcpy(lt, L.buf, (size_t)n * 4);
+        if (have_learn) {
+          static char was[sizeof LS.msg]; memcpy(was, LS.msg, sizeof was);
+          learn_ltel(&LS, lt, n);
+          int k = learn_exc_frame(&LS, fo); if (k) send_frame(link, RN_LINK_EXC, fo, (uint32_t)k * 4);
+          k = learn_model_frame(&LS, fo); if (k) { send_frame(link, RN_LINK_MODEL, fo, (uint32_t)k * 4); if (have_super) super_model(&SS, fo, k); }
+          if (strcmp(was, LS.msg) && LS.msg[0]) printf("learning: %s\n", LS.msg);
+          static double said; if (LS.cal && t - said > 10) { if (said > 0) printf("learning: calibrating, %.0f%% done\n", (double)(LS.total > 0 ? 100 * LS.cal_t / LS.total : 0)); said = t; }
+          if (!LS.cal) said = 0;
+          static int thr_was; if (thr_was && !LS.thr && P.fly) { memcpy(P.sp.target, o.p, sizeof P.sp.target); memset(P.sp.vref, 0, sizeof P.sp.vref); }   /* caught itself: hold there */
+          thr_was = LS.thr;
+        }
+        if (have_super) {
+          super_ltel(&SS, lt, n);
+          int k = super_set_frame(&SS, fo);
+          if (k) { send_frame(link, RN_LINK_SET, fo, (uint32_t)k * 4); nav_set(&N, fo, k); if (have_learn) learn_set(&LS, fo, k); }
+          for (; seen_log < SS.log_seq; seen_log++) { uint32_t back = SS.log_seq - 1 - seen_log; if (back < SP_LOG) printf("supervisor: %.1f s %s\n", SS.log[back].t, SS.log[back].text); }
+        }
+        continue;
+      }
+      if (type != RN_LINK_NAV || L.len != 64) continue;
+      float v[16]; memcpy(v, L.buf, 64); fc_state = v[1];
+      nav_in in; memset(&in, 0, sizeof in);
+      memcpy(in.q, v + 2, 16); memcpy(in.w, v + 6, 12); memcpy(in.acc, v + 9, 12); in.have_att = v[14] > 0.5f;
+      in.have_baro = v[13] > 0.5f; in.baro_alt = v[12]; in.baro_age = 0.005f;
+      if (G.fix && t - G.t < 1.0) { in.have_fix = 1; memcpy(in.fix_p, G.p, sizeof in.fix_p); memcpy(in.fix_v, G.v, sizeof in.fix_v); in.fix_age = (float)(t - G.t) + 0.1f; last_fix_t = G.t; }
+      float dt = last_nav > 0 ? (float)(t - last_nav) : 0.01f; last_nav = t; if (dt > 0.1f) dt = 0.1f;
+      /* landing: sink at 0.5 m/s; on the ground (height near home and not sinking any more), idle and disarm */
+      if (P.landing && P.fly) { P.sp.vref[2] = -0.5f; P.sp.target[2] = o.p[2] - 0.3f; if (o.p[2] < 0.15f && fabsf(o.v[2]) < 0.1f) { P.fly = 0; P.landing = 0; P.arm = 0; P.sp.fly = 0; printf("landed\n"); } }
+      P.sp.fly = P.fly;
+      if (nav_step(&N, &in, &P.sp, dt, &o)) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; continue; }
+      if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; printf("the supervisor landed it: disarmed\n"); }
+      if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
+      for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity */
+      float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
+      uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+      if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
+      last_send = t;
+    }
+    if ((have_learn || have_super) && t - last_want > 0.5) { float w = 1; send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, please */
+    /* no navigation telemetry yet (the ESP32 sends it once guided commands come): announce ourselves, disarmed */
+    if (t - last_send > 0.1) {
+      float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };
+      if (P.arm && t - last_nav > 0.3) P.arm = P.fly = 0;   /* lost the drone's telemetry: nothing to fly on */
+      uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+      if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
+      last_send = t;
+    }
+    (void)fc_state; (void)last_fix_t;
+  }
+}

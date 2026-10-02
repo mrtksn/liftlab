@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,13 +29,14 @@ void hw_defaults(hw_config *c) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
   c->sda = 21; c->scl = 22;
   c->batt_pin = -1; c->batt_divider = 11.0f;
-  c->rate_hz = 1000; c->telem_hz = 20; c->vref = 16.0f;
+  c->rate_hz = 1000; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
 }
 int hw_load(hw_config *c) {
   hw_defaults(c);
   nvs_handle_t h; if (nvs_open("dfb", NVS_READONLY, &h) != ESP_OK) return 0;
   hw_config t; size_t n = sizeof t;
   if (nvs_get_blob(h, "hw", &t, &n) == ESP_OK && n == sizeof t && t.version == HW_VERSION) *c = t;
+  else if (n == offsetof(hw_config, link_baud) && t.version == 2) { memcpy(c, &t, n); c->version = HW_VERSION; c->link_baud = 115200; }   /* saved by v3: its link speed */
   nvs_close(h); return 0;
 }
 int hw_save(const hw_config *c) {
@@ -120,6 +122,9 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   } else if (!strcmp(key, "vref")) {
     if (n != 1 || v[0] < 3 || v[0] > 60) { snprintf(err, errn, "vref: the pack voltage the airframe's thrust is for, e.g. 16 for 4S"); return -1; }
     c->vref = v[0];
+  } else if (!strcmp(key, "baud")) {
+    if (n != 1 || (v[0] != 115200 && v[0] != 230400 && v[0] != 460800 && v[0] != 921600)) { snprintf(err, errn, "baud: 115200, 230400, 460800 or 921600 (the learning wants 921600)"); return -1; }
+    c->link_baud = (int32_t)v[0];
   } else if (!strcmp(key, "telemetry")) {
     if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
     c->telem_hz = (int16_t)v[0];
@@ -131,8 +136,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
   for (int i = 0; i < FC_MAX_MOTORS && c->motor_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->motor_pin[i]);
   k += snprintf(out + k, n - k, " servos=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_pin[i]);
-  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d servo_center=",
-                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, (double)c->vref, c->rate_hz, c->telem_hz);
+  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld servo_center=",
+                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, (double)c->vref, c->rate_hz, c->telem_hz, (long)c->link_baud);
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_center_us[i]);
   k += snprintf(out + k, n - k, " servo_us_per_rad=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%.0f", i ? "," : "", (double)c->servo_us_per_rad[i]);

@@ -5,7 +5,7 @@
 const fs = require('fs'), path = require('path');
 const { defaultSources, golden } = require('./lib');
 const dir = process.argv[2] || '.'; fs.mkdirSync(dir, { recursive: true });
-const G = golden(), def = defaultSources();
+const G = golden(), all = defaultSources(), def = Object.fromEntries(rnTaskFormulas(['core', 'nav']).map(k => [k, all[k]]));   // the ESP32's program
 const samples = []; for (const [key, ss] of Object.entries(G)) samples.push(...ss.slice(0, 2).map(s => ({ key, args: s.args })));
 function image(srcs, sigs = RN_SIGS, tests = true) {
   const P = rnCompileAll(srcs, sigs, { throw: true }); rnVerify(P);

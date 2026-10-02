@@ -104,10 +104,6 @@ function flightMemory() {
   const parts = [
     ['Attitude estimator', est.att],
     ['Position estimator (0.8 s of history for late readings)', est.pos],
-    ['Learning in flight (RLS)', learn.st],
-    ['Learned models', [learn.B, learn.prior, learn.flyB, learn.resp]],
-    ['Calibration records', learn.cal],
-    ['Throw identification (running fits and log)', [thr && thr.st, learn.refine && learn.refine.st]],
     ['Servo predictors', joints().map(j => (jst.get(j.id) || {}).pst)],
   ];
   const seenAll = new Set();
@@ -155,7 +151,7 @@ function renderBudget(force) {
     for (const o of once) t.append(el('tr', {}, el('td', { text: `${lawName(o.key)} (t ${o.t.toFixed(1)} s)` }), el('td', { text: kops(o.ops) }), el('td', { text: ms(o.ops) })));
     box.append(t, el('p', { class: 'hint', text: 'Fits that run once. On the drone they belong on the second core, except the throw\'s first fit, which pauses control for that long while the motors are still off.' }));
   }
-  const rf = learn.refine;
+  const rf = null;
   if (rf) box.append(el('p', { class: 'hint', text: `Spare core: working out each motor's lag from the throw, ${Math.round((rf.progress || 0) * 100)}% done (${kops(rf.spent || 0)} ops so far).` }));
   const memT = el('table', { class: 'resp budget' });
   memT.append(el('tr', {}, el('th', { text: 'Memory' }), el('th', { text: 'KB' })));

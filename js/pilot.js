@@ -26,9 +26,9 @@ function releaseAll() { const cs = [...pilot.held.keys()]; pilot.held.clear(); c
 
 function pilotStep(dt) {
   if (S.crashed || dt <= 0) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
-  if (typeof autoPilotStep === 'function' && autoPilotStep(dt)) return;   // the supervisor is bringing it home or down
-  if (fc.mode === 'landed') { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
-  const L0 = PILOT_LEVELS[pilot.level], L = fc.lim.speed ? { ...L0, h: Math.min(L0.h, fc.lim.speed) } : L0;   // the supervisor's speed limit
+  const sv = brt.superView;   // the supervisor bringing it home or down: the navigation flies that by itself
+  if ((sv && sv.mode >= 2) || (brt.navOut && brt.navOut.landed)) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
+  const L0 = PILOT_LEVELS[pilot.level], L = sv && sv.lim.speed > 0 ? { ...L0, h: Math.min(L0.h, sv.lim.speed) } : L0;   // the supervisor's speed limit
   const f = (isHeld('fwd') ? 1 : 0) - (isHeld('back') ? 1 : 0);
   const l = (isHeld('left') ? 1 : 0) - (isHeld('right') ? 1 : 0);
   const u = (isHeld('up') ? 1 : 0) - (isHeld('down') ? 1 : 0);

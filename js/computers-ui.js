@@ -138,7 +138,7 @@ function goToLaw(key) {
 }
 
 /* ───────── the tab ───────── */
-const taskOfLaw = k => Object.keys(TASKS).find(t => TASKS[t].formulas.includes(k)) || Object.keys(TASKS_LATER).find(t => TASKS_LATER[t].formulas.includes(k)) || null;
+const taskOfLaw = k => Object.keys(TASKS).find(t => TASKS[t].formulas.includes(k)) || null;
 const COMP = { built: false };
 function lawSection(id, title, blurb, keys, small) {
   const sec = el('section', { class: 'sec', id }, el('h2', {}, document.createTextNode(title + ' '), el('small', { text: small || '' })), el('p', { class: 'hint', text: blurb }));
@@ -163,7 +163,7 @@ function buildComputers() {
     el('div', { id: 'taskLaws' }),
     el('section', { class: 'sec', id: 'rnBox' },
       el('h2', { text: 'The flight program' }),
-      el('p', { class: 'hint', text: 'The flight formulas are compiled into steps for a small runner: the heavy math (matrices, quaternions, the least-squares allocation) is built into the runner in C, and the formulas are the steps between. Every board has the same runner and loads the same program, so a formula edited here flies unchanged on the drone. An edit applied in flight reaches each board the way it would on the drone: the loader\'s checks, self-tests, a second of flying in the background beside the current version, then a short blend; if the new version stops in flight, the one before takes over again.' }),
+      el('p', { class: 'hint', text: 'The flight formulas are compiled into steps for a small runner: the heavy math (matrices, quaternions, the least-squares allocation) is built into the runner in C, and the formulas are the steps between. Every board has the same runner and loads a program with the formulas of its tasks, so a formula edited here flies unchanged on the drone. An edit applied in flight reaches each board the way it would on the drone: the loader\'s checks, self-tests, a second of flying in the background beside the current version, then a short blend; if the new version stops in flight, the one before takes over again.' }),
       el('p', { class: 'rn-status', id: 'rnStatus', role: 'status' }),
       el('ol', { class: 'rn-log', id: 'rnLog', hidden: true }),
       el('ul', { class: 'rn-problems', id: 'rnProblems' }),
@@ -221,7 +221,10 @@ function renderComputers(full) {
       const load = b.tasks.length ? `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(0)} KB of ${K.ramKB} KB` : ''}` : '';
       const ex = el('div', { class: 'board-ex' });
       if (b.tasks.includes('core')) ex.append(el('button', { class: 'btn', type: 'button', text: 'Export the airframe (.dfa)', title: 'What the flight core flies on: send it with fly.py airframe FILE.dfa', onclick: () => boardsExport('airframe') }));
-      if (b.tasks.includes('nav')) ex.append(el('button', { class: 'btn', type: 'button', text: 'Export the navigation config (.dnc)', title: K.mcu ? 'For the navigation on this board' : 'For pi_nav on this Pi: ./pi_nav --config FILE.dnc', onclick: () => boardsExport('nav') }));
+      if (b.tasks.includes('nav')) ex.append(el('button', { class: 'btn', type: 'button', text: 'Export the navigation config (.dnc)', title: K.mcu ? 'For the navigation on this board' : 'For dfb_pi on this Pi: ./dfb_pi --nav FILE.dnc', onclick: () => boardsExport('nav') }));
+      if (!K.mcu && (b.tasks.includes('learn') || b.tasks.includes('super'))) ex.append(
+        el('button', { class: 'btn', type: 'button', text: 'Export the airframe (.dfa)', title: 'The learning and the supervisor start from the same airframe as the flight core: ./dfb_pi --airframe FILE.dfa', onclick: () => boardsExport('airframe') }),
+        el('button', { class: 'btn', type: 'button', text: 'Export the Pi config (.dlc)', title: 'Where the IMU sits, the motors\' heat and the battery, for the learning and the supervisor: ./dfb_pi --pi FILE.dlc', onclick: () => boardsExport('pi') }));
       list.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : '') },
         el('div', { class: 'board-head' }, name, kind, del),
         el('p', { class: 'board-note', text: K.note }),
@@ -238,23 +241,24 @@ function renderComputers(full) {
     for (const [t, T] of Object.entries(TASKS)) {
       const cur = boardOf(t), sel = el('select', { 'aria-label': T.label + ' runs on' });
       if (!T.mcuOnly) sel.append(el('option', { value: '', text: 'No board (off)' }));
-      for (const b of C.boards) if (!T.mcuOnly || BOARD_KINDS[b.kind].mcu) sel.append(el('option', { value: String(b.id), text: b.name, selected: cur && cur.id === b.id ? 'selected' : null }));
+      for (const b of C.boards) if ((!T.mcuOnly || BOARD_KINDS[b.kind].mcu) && (!T.piOnly || !BOARD_KINDS[b.kind].mcu)) sel.append(el('option', { value: String(b.id), text: b.name, selected: cur && cur.id === b.id ? 'selected' : null }));
       if (!cur) sel.value = '';
       sel.addEventListener('change', () => {
         const C2 = JSON.parse(JSON.stringify(C)); for (const b of C2.boards) b.tasks = b.tasks.filter(x => x !== t);
         if (sel.value) C2.boards.find(b => String(b.id) === sel.value).tasks.push(t);
         setComputers(C2, 'task');
       });
-      rows.append(el('div', { class: 'task-row' }, el('div', {}, el('b', { text: T.label }), el('span', { class: 'hint', text: ' ' + T.what })), sel));
+      const noPi = T.piOnly && !C.boards.some(b => !BOARD_KINDS[b.kind].mcu);
+      if (noPi) sel.disabled = true;
+      rows.append(el('div', { class: 'task-row' }, el('div', {}, el('b', { text: T.label }), el('span', { class: 'hint', text: ' ' + T.what + (noPi ? ' Add a Raspberry Pi to run it.' : '') })), sel));
     }
-    for (const [t, T] of Object.entries(TASKS_LATER)) rows.append(el('div', { class: 'task-row later' }, el('div', {}, el('b', { text: T.label }), el('span', { class: 'hint', text: ' ' + T.what })), el('span', { class: 'chip', text: 'next stage' })));
     // the formulas, under the task that runs them
     const box = $('#taskLaws'); box.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {
       const b = boardOf(t); if (!b) continue;
       box.append(lawSection('laws-' + t, T.label, `${T.hz} times a second.`, T.formulas, 'on ' + b.name));
     }
-    const off = [...Object.entries(TASKS).filter(([t]) => !boardOf(t)), ...Object.entries(TASKS_LATER)];
+    const off = Object.entries(TASKS).filter(([t]) => !boardOf(t));
     if (off.length) box.append(lawSection('laws-off', 'Not on any board', 'These formulas belong to tasks no board runs: they don\'t fly. ' + off.map(([, T]) => T.label).join(', ') + '.', off.flatMap(([, T]) => T.formulas)));
   }
   renderRunner();
@@ -262,7 +266,7 @@ function renderComputers(full) {
 // Files for the drone: the airframe for the flight core, the config for the navigation.
 function boardsExport(what) {
   let data, ext;
-  try { if (what === 'airframe') { data = fcAirframeBlob(); ext = '.dfa'; } else { data = navConfigBlob(); ext = '.dnc'; } }
+  try { if (what === 'airframe') { data = fcAirframeBlob(); ext = '.dfa'; } else if (what === 'pi') { data = piConfigBlob(); ext = '.dlc'; } else { data = navConfigBlob(); ext = '.dnc'; } }
   catch (e) { rnEvent('Can\'t export: ' + e.message, 'bad'); renderRunner(); return; }
   const nm = ((typeof designs !== 'undefined' && designs.name) || 'drone').replace(/[^\w.-]+/g, '-');
   const a = document.createElement('a');

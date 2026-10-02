@@ -4,8 +4,8 @@
  * Core 1: the control loop (1 kHz by default): the newest IMU sample → fc_step (fc_core.c, the flight formulas
  *   through the program slots) → ESC and servo pulses.
  * Core 0: the sensor task (reads the IMU at the loop's rate and the barometer at 25 Hz, then wakes the control
- *   loop), and the link task (the Pi on the USB serial port, 115200 baud: commands, programs, the airframe,
- *   settings, telemetry and events; see rn_link.h).
+ *   loop), and the link task (the Pi on the USB serial port, 921600 baud by default (setting baud): commands,
+ *   programs, the airframe, settings, telemetry and events; the learning's and the supervisor's frames; see rn_link.h).
  *
  * Safety as the firmware sees it (the rest is in fc_core.h):
  *   - from power-on every ESC gets its minimum pulse (standard PWM ESCs arm on it and stay still);
@@ -15,6 +15,8 @@
  * Take the props off for anything but flying: the motor test spins motors.
  *
  * While the Pi's navigation sends guided commands (12-float RN_LINK_CMD), it gets RN_LINK_NAV 100 times a second.
+ * While the Pi runs the learning or the health supervisor (it sends RN_LINK_WANT), it gets RN_LINK_LTEL 200 times a
+ * second (fewer at slower links), and takes their RN_LINK_EXC, RN_LINK_MODEL and RN_LINK_SET (fc_core.h).
  * Telemetry (RN_LINK_TELEM), 36 floats: t, state, roll, pitch, yaw [deg], body rates [deg/s] ×3, height [m],
  * vertical speed [m/s], battery [V], loop [µs], longest loop [µs], flags (1 gyro, 2 barometer, 4 attitude
  * settled, 8 holding height, 16 airframe loaded), flying program slot, last formula error, 12 throttles, 8 servo
@@ -114,6 +116,11 @@ static float nav_box[16]; static volatile int nav_new;
 static uint8_t af_box[AIRFRAME_CAP]; static volatile uint32_t af_len; static volatile int af_new, af_result;
 static volatile float vbatt;
 
+/* the learning's and the supervisor's frames (link task → control loop), and LTEL (control loop → link task) */
+static float exc_box[8 + FC_MAX_MOTORS + FC_MAX_JOINTS], set_box[6 + 3 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS], model_box[FC_MODEL_MAX];
+static volatile int exc_n, set_n, model_n;
+static float ltel_box[FC_LTEL_MAX]; static volatile int ltel_n; static volatile int64_t want_us = -10000000;
+
 /* ── the control loop ── */
 static volatile int64_t loop_us, loop_max; static volatile int loop_late;
 static fc_out OUT;
@@ -152,8 +159,20 @@ static void flight_task(void *arg) {
       }
       af_new = 0;
     }
+    if (exc_n || set_n || model_n) {                  /* the Pi's learning and supervisor */
+      static float b[FC_MODEL_MAX]; int n;
+      if ((n = exc_n)) { portENTER_CRITICAL(&mux); memcpy(b, exc_box, (size_t)n * 4); exc_n = 0; portEXIT_CRITICAL(&mux); fc_exc(&F, b, n); }
+      if ((n = model_n)) { portENTER_CRITICAL(&mux); memcpy(b, model_box, (size_t)n * 4); model_n = 0; portEXIT_CRITICAL(&mux); if (fc_model(&F, b, n)) post("the learning's model doesn't fit this airframe"); }
+      if ((n = set_n)) { portENTER_CRITICAL(&mux); memcpy(b, set_box, (size_t)n * 4); set_n = 0; portEXIT_CRITICAL(&mux); fc_set(&F, b, n); }
+    }
     rn_host_tick(&H, dt);
     fc_step(&F, &m, dt, vbatt, &OUT);
+    static int lt_k = 0;                               /* LTEL: 200 Hz at 921600 baud, 100 at 460800, 50 slower */
+    int lt_every = HW.rate_hz / (HW.link_baud >= 921600 ? 200 : HW.link_baud >= 460800 ? 100 : 50);
+    if (++lt_k >= (lt_every > 0 ? lt_every : 1) && F.have_airframe && esp_timer_get_time() - want_us < 1000000) {
+      lt_k = 0; static float lt[FC_LTEL_MAX]; int n = fc_ltel(&F, lt);
+      portENTER_CRITICAL(&mux); memcpy(ltel_box, lt, (size_t)n * 4); ltel_n = n; portEXIT_CRITICAL(&mux);
+    }
     static int nav_n = 0;
     if (++nav_n >= HW.rate_hz / 100 && m.have_gyro) {   /* 100 Hz: attitude, rates, specific force (body), height */
       nav_n = 0; float nb[16]; const float *Ri = F.A.imu_R;
@@ -175,7 +194,7 @@ static void flight_task(void *arg) {
 /* ── the link ── */
 static uint8_t *img_buf;
 static void link_send(uint8_t type, const void *p, uint32_t n) {
-  static uint8_t fr[IMG_CAP > 512 ? 512 : IMG_CAP]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
+  static uint8_t fr[FC_MODEL_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
 }
 static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
@@ -212,7 +231,8 @@ static void setting(const char *line) {
 /* The longest payload each frame type may have: a damaged header can't swallow the frames after it. */
 static uint32_t frame_limit(uint8_t type) {
   switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
-    case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP; }
+    case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP;
+    case RN_LINK_EXC: return sizeof exc_box; case RN_LINK_SET: return sizeof set_box; case RN_LINK_MODEL: return sizeof model_box; case RN_LINK_WANT: return 4; }
   return 0;
 }
 static void link_task(void *arg) {
@@ -228,11 +248,11 @@ static void link_task(void *arg) {
     /* a frame whose bytes stopped coming is dropped, so the next frame isn't taken as its payload */
     if (L.state != 0 && now - last_rx > 50000) { rn_link_reset(&L); prev_state = 0; say("dropped a frame that stopped halfway"); }
     /* a frame running well past the time its length takes at this speed is damaged (commands swallowed as payload) */
-    if (L.state == 3 && now - frame_t0 > (int64_t)L.len * 10 * 1000000 / 115200 + 1000000) { rn_link_reset(&L); prev_state = 0; say("dropped a frame that ran over its time"); }
-    /* A program takes seconds to arrive (40 KB at 115200 baud), and no commands can come meanwhile: keep flying on
+    if (L.state == 3 && now - frame_t0 > (int64_t)L.len * 10 * 1000000 / HW.link_baud + 1000000) { rn_link_reset(&L); prev_state = 0; say("dropped a frame that ran over its time"); }
+    /* A program takes a while to arrive (40 KB: 3.5 s at 115200 baud), and no commands can come meanwhile: keep flying on
      * the last one while its bytes keep flowing, for as long as a frame that size takes at this speed. A link that
      * stops, or a frame that runs over, still ends in the failsafe; and this never takes it out of the failsafe. */
-    if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 50000 && now - frame_t0 < (int64_t)L.len * 10 * 1000000 / 115200 + 500000 && now - keep > 100000) {
+    if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 50000 && now - frame_t0 < (int64_t)L.len * 10 * 1000000 / HW.link_baud + 500000 && now - keep > 100000) {
       keep = now; keep_new = 1;
     }
     for (int i = 0; i < n; i++) {
@@ -262,12 +282,17 @@ static void link_task(void *arg) {
         char s[160]; snprintf(s, sizeof s, "%s: %s; flying slot %d (0 = built-in), candidate %d, phase %d; loop %lld us, over time %d; free heap %u",
                               fc_state_name(F.state), F.why, H.act, H.cand, H.phase, (long long)loop_us, loop_late, (unsigned)esp_get_free_heap_size());
         report(s);
-      } else if (type < 0) say("dropped a damaged or oversized frame");
+      } else if (type == RN_LINK_EXC || type == RN_LINK_SET || type == RN_LINK_MODEL) {   /* the learning and the supervisor: to the control loop */
+        float *box = type == RN_LINK_EXC ? exc_box : type == RN_LINK_SET ? set_box : model_box; volatile int *cnt = type == RN_LINK_EXC ? &exc_n : type == RN_LINK_SET ? &set_n : &model_n;
+        portENTER_CRITICAL(&mux); memcpy(box, L.buf, L.len & ~3u); *cnt = (int)(L.len / 4); portEXIT_CRITICAL(&mux);
+      } else if (type == RN_LINK_WANT) want_us = now;
+      else if (type < 0) say("dropped a damaged or oversized frame");
     }
     now = esp_timer_get_time();
     if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); }
     int guided = now - guided_us < 1000000;
     if (guided && nav_new) { float nb[16]; portENTER_CRITICAL(&mux); memcpy(nb, nav_box, sizeof nb); nav_new = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_NAV, nb, sizeof nb); }
+    if (ltel_n) { static float lt[FC_LTEL_MAX]; int k; portENTER_CRITICAL(&mux); k = ltel_n; memcpy(lt, ltel_box, (size_t)k * 4); ltel_n = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_LTEL, lt, (uint32_t)k * 4); }
     /* the full telemetry: at its rate, or twice a second while the Pi navigates (the link's room goes to RN_LINK_NAV) */
     if (telem_us && now >= next_t) { next_t = now + (guided ? 500000 : telem_us); telemetry(); }
   }
@@ -318,7 +343,9 @@ void app_main(void) {
   if (!img_buf) { printf("no memory for the link: this build can't run here\n"); return; }
   printf("control loop %d Hz on core 1; telemetry %d Hz; free heap %u bytes\n\n", HW.rate_hz, HW.telem_hz, (unsigned)esp_get_free_heap_size());
 
-  uart_driver_install(LINK, 4096, 4096, 0, NULL, 0);
+  printf("link: %ld baud from here on\n", (long)HW.link_baud); fflush(stdout); vTaskDelay(pdMS_TO_TICKS(20));
+  uart_driver_install(LINK, 8192, 8192, 0, NULL, 0);
+  uart_set_baudrate(LINK, (uint32_t)HW.link_baud);
   uart_vfs_dev_use_driver(LINK);
   xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, 1);
   xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);

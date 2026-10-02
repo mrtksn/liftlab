@@ -422,28 +422,40 @@ function identifyMotorResponse(wins, dt) {
   // costs more thrust the harder the prop is pushing. Both would otherwise look like a bend.
   const taus = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.065, 0.08, 0.1], lpHz = 25;
   const kf = dt / (dt + 1 / (2 * Math.PI * lpHz)), nw = wins.length, np = 4 + nw;
-  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  // Each window's mean response and starting throttle are taken out first (each window has its own offset c_w
+  // anyway): the same fit, but the sums stay small, which the drone's 32-bit arithmetic needs.
   let sst = 0;
-  for (const w of wins) { const m = w.y.reduce((a, v) => a + v, 0) / Math.max(1, w.y.length); for (const v of w.y) sst += (v - m) ** 2; }
-  let best = null;
-  for (const tau of taus) {
-    const A = Array.from({ length: np }, () => new Array(np).fill(0)), b = new Array(np).fill(0); let yy = 0;
-    wins.forEach((w, wi) => {
-      const u0 = w.u[0]; let m1 = u0, m2 = u0 * u0 - u0, l1 = m1, l2 = m2, I = 0;
-      for (let t = 0; t < w.u.length; t++) {
-        const u = w.u[t], a = Math.min(1, dt / tau);
-        m1 += (u - m1) * a; m2 += (u * u - u - m2) * a; l1 += kf * (m1 - l1); l2 += kf * (m2 - l2); I += (l1 - u0) * dt;
-        const phi = new Array(np).fill(0); phi[0] = l1; phi[1] = l2; phi[2] = I; phi[3] = (l1 - u0) * I; phi[4 + wi] = 1;
-        for (let p = 0; p < np; p++) { b[p] += phi[p] * w.y[t]; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
-        yy += w.y[t] ** 2;
-      }
-    });
-    const th = solveLin(A.map((r, i) => r.map((v, j) => v + (i === j ? 1e-9 : 0))), b);
-    const sse = yy - 2 * dotn(th, b) + dotn(th, A.map(r => dotn(r, th)));
-    if (!best || sse < best.sse) best = { tau, th, sse };
+  const ym = new Array(nw).fill(0);
+  for (let wi = 0; wi < nw; wi++) {
+    const w = wins[wi]; let m = 0; for (const v of w.y) m += v;
+    m /= Math.max(1, w.y.length); ym[wi] = m;
+    for (const v of w.y) sst += (v - m) ** 2;
   }
-  if (!best || Math.abs(best.th[0]) < 1e-6) return { tau: 0, curve: 0, gain: 0, fit: 0 };
-  return { tau: best.tau, curve: clamp(best.th[1] / best.th[0], -0.5, 1.5), gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
+  let bestSse = -1, bestTau = 0, bestG = 0, bestGk = 0;
+  for (let it = 0; it < taus.length; it++) {
+    const tau = taus[it], a = Math.min(1, dt / tau), A = [], b = new Array(np).fill(0);
+    for (let p = 0; p < np; p++) A.push(new Array(np).fill(0));
+    let yy = 0;
+    for (let wi = 0; wi < nw; wi++) {
+      const w = wins[wi], u0 = w.u[0], q0 = u0 * u0 - u0, phi = new Array(np).fill(0);
+      let m1 = u0, m2 = q0, l1 = m1, l2 = m2, I = 0;
+      phi[4 + wi] = 1;
+      for (let t = 0; t < w.u.length; t++) {
+        const u = w.u[t], y = w.y[t] - ym[wi];
+        m1 += (u - m1) * a; m2 += (u * u - u - m2) * a; l1 += kf * (m1 - l1); l2 += kf * (m2 - l2); I += (l1 - u0) * dt;
+        phi[0] = l1 - u0; phi[1] = l2 - q0; phi[2] = I; phi[3] = (l1 - u0) * I;
+        for (let p = 0; p < np; p++) { b[p] += phi[p] * y; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
+        yy += y * y;
+      }
+    }
+    for (let p = 0; p < np; p++) A[p][p] += 1e-9;
+    const th = solveLin(A, b);
+    let sse = yy;
+    for (let p = 0; p < np; p++) { let r = 0; for (let q = 0; q < np; q++) r += A[p][q] * th[q]; sse += th[p] * r - 2 * th[p] * b[p]; }
+    if (bestSse < 0 || sse < bestSse) { bestSse = sse; bestTau = tau; bestG = th[0]; bestGk = th[1]; }
+  }
+  if (bestSse < 0 || Math.abs(bestG) < 1e-6) return { tau: 0, curve: 0, gain: 0, fit: 0 };
+  return { tau: bestTau, curve: clamp(bestGk / bestG, -0.5, 1.5), gain: bestG, fit: clamp(1 - bestSse / Math.max(1e-12, sst), 0, 1) };
 }
 
 function identifyServoResponse(wins, dt) {
@@ -452,32 +464,43 @@ function identifyServoResponse(wins, dt) {
   // for a rigid tilting rotor. Model: the horn moves at most `rate`, the rotor follows with lag λ,
   //   y = g · sin(θ) + c_w.
   // Rate and lag are found on a grid (each pair is a two-number least-squares fit); the best pair wins.
-  const rates = [60, 80, 110, 150, 200, 260, 340, 450, 600, 800].map(d => d * Math.PI / 180);
-  const lags = [0, 0.005, 0.01, 0.015, 0.02, 0.03, 0.045, 0.065, 0.09], lpHz = 25;
+  const rates = [60, 80, 110, 150, 200, 260, 340, 450, 600, 800], lags = [0, 0.005, 0.01, 0.015, 0.02, 0.03, 0.045, 0.065, 0.09], lpHz = 25;
   const kf = dt / (dt + 1 / (2 * Math.PI * lpHz)), nw = wins.length, np = 1 + nw;
-  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
   let sst = 0;
-  for (const w of wins) { const m = w.y.reduce((a, v) => a + v, 0) / Math.max(1, w.y.length); for (const v of w.y) sst += (v - m) ** 2; }
-  let best = null;
-  for (const rate of rates) for (const lag of lags) {
-    const A = Array.from({ length: np }, () => new Array(np).fill(0)), b = new Array(np).fill(0); let yy = 0;
-    wins.forEach((w, wi) => {
-      let h = 0, th = 0, l = 0;
-      for (let t = 0; t < w.cmd.length; t++) {
-        h += clamp(w.cmd[t] - h, -rate * dt, rate * dt);
-        th = lag > 0 ? th + (h - th) * Math.min(1, dt / lag) : h;
-        l += kf * (Math.sin(th) - l);
-        const phi = new Array(np).fill(0); phi[0] = l; phi[1 + wi] = 1;
-        for (let p = 0; p < np; p++) { b[p] += phi[p] * w.y[t]; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
-        yy += w.y[t] ** 2;
-      }
-    });
-    const th = solveLin(A.map((r, i) => r.map((v, j) => v + (i === j ? 1e-9 : 0))), b);
-    const sse = yy - 2 * dotn(th, b) + dotn(th, A.map(r => dotn(r, th)));
-    if (!best || sse < best.sse) best = { rate, lag, th, sse };
+  const ym = new Array(nw).fill(0);   // each window's mean response, taken out first (as in identifyMotorResponse)
+  for (let wi = 0; wi < nw; wi++) {
+    const w = wins[wi]; let m = 0; for (const v of w.y) m += v;
+    m /= Math.max(1, w.y.length); ym[wi] = m;
+    for (const v of w.y) sst += (v - m) ** 2;
   }
-  if (!best) return { rate: 0, lag: 0, gain: 0, fit: 0 };
-  return { rate: best.rate, lag: best.lag, gain: best.th[0], fit: clamp(1 - best.sse / Math.max(1e-12, sst), 0, 1) };
+  let bestSse = -1, bestRate = 0, bestLag = 0, bestG = 0;
+  for (let ir = 0; ir < rates.length; ir++) {
+    for (let il = 0; il < lags.length; il++) {
+      const rate = rates[ir] * Math.PI / 180, lag = lags[il], A = new Array(np).fill(0).map(() => new Array(np).fill(0)), b = new Array(np).fill(0);
+      let yy = 0;
+      for (let wi = 0; wi < nw; wi++) {
+        const w = wins[wi], phi = new Array(np).fill(0);
+        let h = 0, th = 0, l = 0;
+        phi[1 + wi] = 1;
+        for (let t = 0; t < w.cmd.length; t++) {
+          const y = w.y[t] - ym[wi];
+          h += clamp(w.cmd[t] - h, -rate * dt, rate * dt);
+          th = lag > 0 ? th + (h - th) * Math.min(1, dt / lag) : h;
+          l += kf * (Math.sin(th) - l);
+          phi[0] = l;
+          for (let p = 0; p < np; p++) { b[p] += phi[p] * y; for (let q = 0; q < np; q++) A[p][q] += phi[p] * phi[q]; }
+          yy += y * y;
+        }
+      }
+      for (let p = 0; p < np; p++) A[p][p] += 1e-9;
+      const x = solveLin(A, b);
+      let sse = yy;
+      for (let p = 0; p < np; p++) { let r = 0; for (let q = 0; q < np; q++) r += A[p][q] * x[q]; sse += x[p] * r - 2 * x[p] * b[p]; }
+      if (bestSse < 0 || sse < bestSse) { bestSse = sse; bestRate = rate; bestLag = lag; bestG = x[0]; }
+    }
+  }
+  if (bestSse < 0) return { rate: 0, lag: 0, gain: 0, fit: 0 };
+  return { rate: bestRate, lag: bestLag, gain: bestG, fit: clamp(1 - bestSse / Math.max(1e-12, sst), 0, 1) };
 }
 
 function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
@@ -491,152 +514,207 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   // generic brushless model for each motor (speed x as a fraction of full, back-EMF, a current limit, prop
   // drag; only its time constant τ unknown): u_τ = x² is the thrust. A collective-pitch rotor (mot.coll) holds its
   // speed, so its thrust just follows the command through a lag τ and it has no spin-up reaction.
-  // Built to fit a microcontroller:
-  //   while falling (solve false), it keeps one running fit per candidate τ (all motors the same), a fixed
-  //     cost per step, and logs a compact 250 Hz record;
-  //   solve true: picks the best of those fits at once, so it can catch itself straight away;
+  // Built to fit a small computer:
+  //   solve 'fall' (while falling): one running fit per candidate τ (all motors the same), a fixed cost per
+  //     step, and a compact 250 Hz record;
+  //   solve 'catch': picks the best of those fits at once, so it can catch itself straight away;
   //   solve 'refine': afterwards, in the background, finds each motor's own τ from the record (one motor at
   //     a time, keeping what explains the rotation best), spending at most `budget` operations per call.
-  //     A big slow rotor and small fast ones can then share a frame. out.refined is true when finished.
+  //     A big slow rotor and small fast ones can then share a frame. out.refined is 1 when finished.
   // mot: per input, its motor's thrust command v, basis factor phi (inputs are thrust × (1, cos θ, sin θ)
-  // products) and motor number m. Returns B (6 rows × inputs), B2 (3 rows), r [m], each motor's lag and
-  // how much of the force and rotation it explains.
-  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09, 0.13], lpHz = 25, skip = 0.03, logEvery = 0.004;
+  // products), motor number m and whether it is a collective-pitch rotor. Returns B (6 rows × inputs), B2 (3
+  // rows), r [m], each motor's lag and how much of the force and rotation it explains.
+  const taus = [0.01, 0.02, 0.03, 0.045, 0.065, 0.09, 0.13], nt = 7, lpHz = 25, skip = 0.03, logEvery = 0.004, logMax = 450;
   const n = u.length, nf = 3 * n + 7, nr = 2 * n + 4;
-  const dotn = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
-  const zeros = (a, b) => b ? Array.from({ length: a }, () => new Array(b).fill(0)) : new Array(a).fill(0);
-  const grp = mot && mot.m ? mot.m : u.map((_, j) => j), groups = [...new Set(grp)];
-  const coll = mot && mot.coll ? mot.coll : u.map(() => false);           // collective-pitch rotors (helicopter blades)
-  const firstOf = groups.map(g => grp.indexOf(g));
-  const Lof = (a, W) => [0, 1, 2].map(i => [0, 1, 2].map(j =>             // [α]× + [ω]×²
-    [[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]][i][j] + W[i] * W[j] - (i === j ? dot(W, W) : 0)));
-  const gyroOf = W => [W[1] * W[2], W[2] * W[0], W[0] * W[1]];
+  // The motors: an input's group is its motor (inputs of one motor share its lag); first[g] is its first input.
+  const gOf = new Array(n).fill(0), first = new Array(n).fill(0);
+  let groups = 0;
+  for (let j = 0; j < n; j++) {
+    let g = -1;
+    for (let k = 0; k < j; k++) if (k < groups && mot.m[first[k]] === mot.m[j]) g = k;
+    if (g < 0) { g = groups; first[groups] = j; groups++; }
+    gOf[j] = g;
+  }
+  const ng = Math.max(0, Math.min(groups, n));
   const kOf = h => h / (h + 1 / (2 * Math.PI * lpHz));
-  // One step of the regressors for motor lags tauOf (motor number → τ), updating the filter state z.
-  const stepRegs = (z, v, ph, h, tauOf) => {
+  const Lof = (a, W) => {                                                  // [α]× + [ω]×², by rows
+    const ww = W[0] * W[0] + W[1] * W[1] + W[2] * W[2];
+    return [W[0] * W[0] - ww, -a[2] + W[0] * W[1], a[1] + W[0] * W[2], a[2] + W[1] * W[0], W[1] * W[1] - ww, -a[0] + W[1] * W[2],
+      -a[1] + W[2] * W[0], a[0] + W[2] * W[1], W[2] * W[2] - ww];
+  };
+  const gyroOf = W => [W[1] * W[2], W[2] * W[0], W[0] * W[1]];
+  const zeros = (a, b) => new Array(a).fill(0).map(() => new Array(b).fill(0));
+  const newZ = () => ({ x: new Array(n).fill(0), ul: new Array(n).fill(0), sq: new Array(n).fill(0), dq: new Array(n).fill(0) });
+  // One step of the regressors with each motor group's lag tauG[g], updating the filter state z.
+  const stepRegs = (z, v, ph, h, tauG) => {
     const k = kOf(h);
     for (let j = 0; j < n; j++) {
-      if (coll[j]) {                                                       // collective pitch: speed held, thrust follows the pitch with a lag
-        z.x[j] += (Math.max(0, v[j]) - z.x[j]) * Math.min(1, h / tauOf[grp[j]]);
-        z.ul[j] += k * (z.x[j] * ph[j] - z.ul[j]); z.dq[j] = 0; continue;
+      const tau = tauG[gOf[j]];
+      if (mot.coll[j]) {                                                   // collective pitch: speed held, thrust follows the pitch with a lag
+        z.x[j] += (Math.max(0, v[j]) - z.x[j]) * Math.min(1, h / tau);
+        z.ul[j] += k * (z.x[j] * ph[j] - z.ul[j]); z.dq[j] = 0;
+      } else {
+        const xt = Math.sqrt(Math.max(0, v[j]));
+        const drive = clamp(xt * xt + 4 * xt - 4 * z.x[j], -1, 2) - z.x[j] * z.x[j];   // motor torque − prop drag, per full-thrust torque
+        z.x[j] = Math.max(0, z.x[j] + drive / (5.26 * tau) * h);
+        z.ul[j] += k * (z.x[j] * z.x[j] * ph[j] - z.ul[j]);              // thrust, through the same filter as the gyro
+        const q = z.sq[j] + k * (z.x[j] * ph[j] - z.sq[j]);
+        z.dq[j] = (q - z.sq[j]) / h; z.sq[j] = q;                          // prop acceleration
       }
-      const xt = Math.sqrt(Math.max(0, v[j]));
-      const drive = clamp(xt * xt + 4 * xt - 4 * z.x[j], -1, 2) - z.x[j] * z.x[j];   // motor torque − prop drag, per full-thrust torque
-      z.x[j] = Math.max(0, z.x[j] + drive / (5.26 * tauOf[grp[j]]) * h);
-      z.ul[j] += k * (z.x[j] * z.x[j] * ph[j] - z.ul[j]);                  // thrust, through the same filter as the gyro
-      const q = z.sq[j] + k * (z.x[j] * ph[j] - z.sq[j]); z.dq[j] = (q - z.sq[j]) / h; z.sq[j] = q;   // prop acceleration
     }
   };
-  const newZ = () => ({ x: zeros(n), ul: zeros(n), sq: zeros(n), dq: zeros(n) });
-  const newM = force => ({ Ar: zeros(nr, nr), br: zeros(3, nr), Af: force ? zeros(nf, nf) : null, bf: force ? zeros(nf) : null });
-  const accumulate = (M, z, fl, a, L, gyro, vbb) => {
-    const phi = [...z.ul, ...z.dq, ...gyro, 1];                            // rotation rows share regressors
-    for (let p = 0; p < nr; p++) { const c = phi[p]; if (!c) continue; const row = M.Ar[p]; for (let q = 0; q < nr; q++) row[q] += c * phi[q]; for (let i = 0; i < 3; i++) M.br[i][p] += c * a[i]; }
-    if (M.Af) for (let i = 0; i < 3; i++) {                                // force rows share r and drag
-      const idx = [], val = [];
-      for (let j = 0; j < n; j++) { idx.push(i * n + j); val.push(z.ul[j]); }
-      for (let j = 0; j < 3; j++) { idx.push(3 * n + j); val.push(L[i][j]); }
-      idx.push(3 * n + 3 + i, 3 * n + 6); val.push(1, -vbb[i]);
-      for (let p = 0; p < idx.length; p++) { M.bf[idx[p]] += val[p] * fl[i]; for (let q = 0; q < idx.length; q++) M.Af[idx[p]][idx[q]] += val[p] * val[q]; }
+  // The rotation rows share their regressors: [u_τ, dx/dt, gyroscopic terms, 1].
+  const rotRegs = (z, W) => {
+    const phi = new Array(nr).fill(0), gy = gyroOf(W);
+    for (let j = 0; j < n; j++) { phi[j] = z.ul[j]; phi[n + j] = z.dq[j]; }
+    phi[2 * n] = gy[0]; phi[2 * n + 1] = gy[1]; phi[2 * n + 2] = gy[2]; phi[2 * n + 3] = 1;
+    return phi;
+  };
+  const addRot = (Ar, br, phi, a) => {
+    for (let p = 0; p < nr; p++) {
+      const c = phi[p];
+      if (c !== 0) { for (let q = 0; q < nr; q++) Ar[p][q] += c * phi[q]; for (let i = 0; i < 3; i++) br[i][p] += c * a[i]; }
     }
   };
-  const all = tau => Object.fromEntries(groups.map(g => [g, tau]));
-  if (!st.fits && !st.done) {
-    st.fits = taus.map(tau => ({ tau, z: newZ(), M: newM(true) }));
-    st.wl = w.slice(); st.fl = f.slice(); st.t = 0; st.log = []; st.hLog = 0; st.yy = zeros(6); st.ys = zeros(6); st.N = 0;
+  const addForce = (Af, bf, z, fl, L, vbb) => {                           // force rows share r and drag
+    const idx = new Array(n + 5).fill(0), val = new Array(n + 5).fill(0);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < n; j++) { idx[j] = i * n + j; val[j] = z.ul[j]; }
+      for (let j = 0; j < 3; j++) { idx[n + j] = 3 * n + j; val[n + j] = L[3 * i + j]; }
+      idx[n + 3] = 3 * n + 3 + i; val[n + 3] = 1; idx[n + 4] = 3 * n + 6; val[n + 4] = -vbb[i];
+      for (let p = 0; p < n + 5; p++) { bf[idx[p]] += val[p] * fl[i]; for (let q = 0; q < n + 5; q++) Af[idx[p]][idx[q]] += val[p] * val[q]; }
+    }
+  };
+  const ridgeSolve = (A, b) => {
+    const R = A.map((r, p) => { const row = r.slice(); row[p] += 1e-9 + 1e-6 * r[p]; return row; });
+    return solveLin(R, b);
+  };
+  const sseOf = (A, b, th, y2) => {
+    let s = y2;
+    for (let p = 0; p < th.length; p++) { let r = 0; for (let q = 0; q < th.length; q++) r += A[p][q] * th[q]; s += th[p] * r - 2 * th[p] * b[p]; }
+    return s;
+  };
+  const sst = (yy, ys, N, i) => Math.max(1e-9, yy[i] - ys[i] * ys[i] / N);
+  const fitRot = (Ar, br, yy, ys, N) => {
+    const thR = [ridgeSolve(Ar, br[0]), ridgeSolve(Ar, br[1]), ridgeSolve(Ar, br[2])];
+    let e = 0; for (let i = 0; i < 3; i++) e += sseOf(Ar, br[i], thR[i], yy[3 + i]);
+    return { thR, fitR: clamp(1 - e / (sst(yy, ys, N, 3) + sst(yy, ys, N, 4) + sst(yy, ys, N, 5)), 0, 1) };
+  };
+  const fitForce = (Af, bf, yy, ys, N) => {
+    const thF = ridgeSolve(Af, bf);
+    return { thF, fitF: clamp(1 - sseOf(Af, bf, thF, yy[0] + yy[1] + yy[2]) / (sst(yy, ys, N, 0) + sst(yy, ys, N, 1) + sst(yy, ys, N, 2)), 0, 1) };
+  };
+  const result = (Rr, Rf, tauG, refined, improved) => {
+    const B = [], B2 = [], tg = new Array(ng).fill(0);
+    for (let i = 0; i < 6; i++) { const row = new Array(n).fill(0); for (let j = 0; j < n; j++) row[j] = i < 3 ? Rf.thF[i * n + j] : Rr.thR[i - 3][j]; B.push(row); }
+    for (let i = 0; i < 3; i++) { const row = new Array(n).fill(0); for (let j = 0; j < n; j++) row[j] = Rr.thR[i][n + j]; B2.push(row); }
+    let tm = 0; for (let g = 0; g < ng; g++) { tg[g] = tauG[g]; tm += tauG[g]; }
+    return { B, B2, r: [Rf.thF[3 * n], Rf.thF[3 * n + 1], Rf.thF[3 * n + 2]], drag: Rf.thF[3 * n + 6], tau: tm / Math.max(1, ng), taus: tg,
+      fitF: Rf.fitF, fitR: Rr.fitR, refined, improved, progress: refined, spent: 0 };
+  };
+  const empty = () => ({ B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], drag: 0, tau: 0, taus: new Array(ng).fill(0), fitF: 0, fitR: 0, refined: 0, improved: 0, progress: 0, spent: 0 });
+
+  if (!st.fits && !st.done) {                                              // the start: a fit for each τ
+    st.fits = taus.map(tau => ({ tau, z: newZ(), Ar: zeros(nr, nr), br: zeros(3, nr), Af: zeros(nf, nf), bf: new Array(nf).fill(0) }));
+    st.wl = w.slice(); st.fl = f.slice(); st.t = 0; st.log = []; st.hLog = 0; st.yy = [0, 0, 0, 0, 0, 0]; st.ys = [0, 0, 0, 0, 0, 0]; st.N = 0;
   }
   if (dt > 0 && st.fits) {                                                 // falling: update the running fits
-    const k = kOf(dt), wPrev = st.wl;
-    st.wl = st.wl.map((v, i) => v + k * (w[i] - v));
-    st.fl = st.fl.map((v, i) => v + k * (f[i] - v));
-    const a = st.wl.map((v, i) => (v - wPrev[i]) / dt), W = st.wl, L = Lof(a, W), gyro = gyroOf(W);
-    const v = mot ? mot.v : u, ph = mot ? mot.phi : u.map(() => 1);
+    const k = kOf(dt), a = [0, 0, 0];
+    for (let i = 0; i < 3; i++) { const wn = st.wl[i] + k * (w[i] - st.wl[i]); a[i] = (wn - st.wl[i]) / dt; st.wl[i] = wn; st.fl[i] += k * (f[i] - st.fl[i]); }
+    const W = st.wl, L = Lof(a, W), tauG = new Array(ng).fill(0);
     st.t += dt;
-    for (const F of st.fits) { stepRegs(F.z, v, ph, dt, all(F.tau)); if (st.t >= skip) accumulate(F.M, F.z, st.fl, a, L, gyro, vb); }
-    if (st.t >= skip) { [...st.fl, ...a].forEach((y, i) => { st.yy[i] += y * y; st.ys[i] += y; }); st.N++; }
+    for (const F of st.fits) {
+      for (let g = 0; g < ng; g++) tauG[g] = F.tau;
+      stepRegs(F.z, mot.v, mot.phi, dt, tauG);
+      if (st.t >= skip) { addRot(F.Ar, F.br, rotRegs(F.z, W), a); addForce(F.Af, F.bf, F.z, st.fl, L, vb); }
+    }
+    if (st.t >= skip) { for (let i = 0; i < 3; i++) { st.yy[i] += st.fl[i] * st.fl[i]; st.ys[i] += st.fl[i]; st.yy[3 + i] += a[i] * a[i]; st.ys[3 + i] += a[i]; } st.N++; }
     st.hLog += dt;                                                         // the record: motor commands, basis factors, readings
-    if (st.hLog >= logEvery - 1e-9) {
-      st.log.push({ v: firstOf.map(j => v[j]), ph: ph.slice(), fl: st.fl.slice(), a, W: W.slice(), vb: vb.slice(), h: st.hLog, use: st.t >= skip });
+    if (st.hLog >= logEvery - 1e-9 && st.log.length < logMax) {
+      const vg = new Array(ng).fill(0); for (let g = 0; g < ng; g++) vg[g] = mot.v[first[g]];
+      st.log.push({ v: vg, ph: mot.phi.slice(), fl: st.fl.slice(), a, W: W.slice(), vb: vb.slice(), h: st.hLog, use: st.t >= skip ? 1 : 0 });
       st.hLog = 0;
     }
   }
-  const ridge = A => A.map((row, i) => row.map((v, j) => v + (i === j ? 1e-9 + 1e-6 * A[i][i] : 0)));
-  const sse = (A, b, th, y2) => y2 - 2 * dotn(th, b) + dotn(th, A.map(row => dotn(row, th)));
-  const fitsOf = (M, yy, ys, N, force) => {
-    const sst = i => Math.max(1e-9, yy[i] - ys[i] ** 2 / N);
-    const thR = [0, 1, 2].map(i => solveLin(ridge(M.Ar), M.br[i]));
-    const fitR = clamp(1 - thR.reduce((s, t, i) => s + sse(M.Ar, M.br[i], t, yy[3 + i]), 0) / (sst(3) + sst(4) + sst(5)), 0, 1);
-    if (!force) return { thR, fitR };
-    const thF = solveLin(ridge(M.Af), M.bf);
-    const fitF = clamp(1 - sse(M.Af, M.bf, thF, yy[0] + yy[1] + yy[2]) / (sst(0) + sst(1) + sst(2)), 0, 1);
-    return { thR, fitR, thF, fitF };
-  };
-  const result = (R, tauOf, extra) => ({
-    B: [0, 1, 2].map(i => R.thF.slice(i * n, i * n + n)).concat(R.thR.map(th => th.slice(0, n))),
-    B2: R.thR.map(th => th.slice(n, 2 * n)), r: R.thF.slice(3 * n, 3 * n + 3), drag: R.thF[3 * n + 6],
-    tau: groups.reduce((s, g) => s + tauOf[g], 0) / groups.length, taus: groups.map(g => tauOf[g]), fitF: R.fitF, fitR: R.fitR, ...extra });
-  if (solve === true) {                                                    // catch: the best single lag, at once
-    if (st.N < 20) return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
-    let best = null;
-    for (const F of st.fits) { const R = fitsOf(F.M, st.yy, st.ys, st.N, true); if (!best || R.fitR > best.score) best = { R, tau: F.tau, score: R.fitR }; }   // the lag that explains the rotation best
-    st.out = result(best.R, all(best.tau), { refined: groups.length < 2 });
-    if (groups.length < 2) st.job = null;
-    else {
-      const pass = groups.flatMap(g => taus.map(tau => ({ g, tau })));
-      st.job = { tauOf: all(best.tau), M: null, base: 0, queue: pass.concat(pass), firstPass: pass.length, total: 2 * pass.length, credit: 0, spent: 0, changed: false };
-    }
-    st.fits = null; st.done = true;                                        // the running fits aren't needed any more
+  if (solve === 'catch') {                                                 // catch: the best single lag, at once
+    if (st.N < 20 || !st.fits) return st.out ? st.out : empty();
+    let best = 0, bestFit = -1;
+    for (let i = 0; i < nt; i++) { const R = fitRot(st.fits[i].Ar, st.fits[i].br, st.yy, st.ys, st.N); if (R.fitR > bestFit) { bestFit = R.fitR; best = i; } }   // the lag that explains the rotation best
+    const F = st.fits[best], tauG = new Array(ng).fill(0);
+    for (let g = 0; g < ng; g++) tauG[g] = F.tau;
+    st.out = result(fitRot(F.Ar, F.br, st.yy, st.ys, st.N), fitForce(F.Af, F.bf, st.yy, st.ys, st.N), tauG, ng < 2 ? 1 : 0, 0);
+    if (ng >= 2) { st.tauG = tauG; st.job = { k: 0, credit: 0, spent: 0, changed: 0, ready: 0, base: 0 }; }   // each motor's own lag, in the background
+    st.fits = null; st.done = 1;                                           // the running fits aren't needed any more
     return st.out;
   }
-  if (solve === 'refine' && st.job) {                                      // background: each motor's own lag, from the record
-    const J = st.job, S = st.log, used = S.filter(s => s.use), N = used.length;
-    const yy = zeros(6), ys = zeros(6); for (const s of used) [...s.fl, ...s.a].forEach((y, i) => { yy[i] += y * y; ys[i] += y; });
-    const vOf = s => grp.map(g => s.v[groups.indexOf(g)]);
-    const build = (tauOf, force) => {                                      // the fit's sums over the whole record
-      const z = newZ(), M = newM(force);
-      for (const s of S) { stepRegs(z, vOf(s), s.ph, s.h, tauOf); if (s.use) accumulate(M, z, s.fl, s.a, Lof(s.a, s.W), gyroOf(s.W), s.vb); }
-      return M;
-    };
-    // A trial changes one motor's lag, so only that motor's rows of the sums change: recompute just those.
-    const trialSums = (base, tauOf, g, tau) => {
-      const C = []; grp.forEach((gg, j) => { if (gg === g) C.push(j, n + j); });
-      const Ar = base.Ar.map(r => r.slice()), br = base.br.map(r => r.slice());
-      for (const p of C) { Ar[p].fill(0); for (let q = 0; q < nr; q++) Ar[q][p] = 0; for (let i = 0; i < 3; i++) br[i][p] = 0; }
-      const z = newZ(), zt = newZ(), trial = { ...tauOf, [g]: tau };
-      for (const s of S) {
-        const v = vOf(s); stepRegs(z, v, s.ph, s.h, tauOf); stepRegs(zt, v, s.ph, s.h, trial);
-        if (!s.use) continue;
-        const phi = [...z.ul, ...z.dq, ...gyroOf(s.W), 1];
-        for (const p of C) phi[p] = p < n ? zt.ul[p] : zt.dq[p - n];
-        for (const p of C) { const c = phi[p]; for (let q = 0; q < nr; q++) { if (C.includes(q) && q < p) continue; const add = c * phi[q]; Ar[p][q] += add; if (q !== p) Ar[q][p] += add; } for (let i = 0; i < 3; i++) br[i][p] += c * s.a[i]; }
+  if (solve === 'refine' && st.job && st.out) {                            // background: each motor's own lag, from the record
+    const J = st.job, S = st.log, nS = S.length, firstPass = ng * nt, total = 2 * firstPass;
+    const yy = [0, 0, 0, 0, 0, 0], ys = [0, 0, 0, 0, 0, 0]; let N = 0;
+    for (const s of S) if (s.use) { for (let i = 0; i < 3; i++) { yy[i] += s.fl[i] * s.fl[i]; ys[i] += s.fl[i]; yy[3 + i] += s.a[i] * s.a[i]; ys[3 + i] += s.a[i]; } N++; }
+    const vOf = s => { const v = new Array(n).fill(0); for (let j = 0; j < n; j++) v[j] = s.v[gOf[j]]; return v; };
+    const solveCost = 3 * (2 * nr * nr * nr / 3 + 4 * nr * nr);
+    const groupSize = g => { let c = 0; for (let j = 0; j < n; j++) if (gOf[j] === g) c++; return c; };
+    J.credit += budget;
+    if (!J.ready) {                                                        // the fit's sums over the whole record with the lags now
+      const cost = nS * (14 * n + 2 * nr * nr + 6 * nr) + solveCost;
+      if (J.credit >= cost) {
+        J.credit -= cost; J.spent += cost;
+        const z = newZ(), Ar = zeros(nr, nr), br = zeros(3, nr);
+        for (const s of S) { stepRegs(z, vOf(s), s.ph, s.h, st.tauG); if (s.use) addRot(Ar, br, rotRegs(z, s.W), s.a); }
+        st.Ar = Ar; st.br = br; J.base = fitRot(Ar, br, yy, ys, N).fitR; J.ready = 1;
       }
-      return { Ar, br };
-    };
-    const solveCost = 3 * (2 * nr ** 3 / 3 + 4 * nr * nr);
-    const fullCost = S.length * (14 * n + 2 * nr * nr + 6 * nr) + solveCost;
-    const trialCost = g => { const k = grp.filter(x => x === g).length; return S.length * (14 * n + 14 * k + 4 * k * nr + 12 * k) + solveCost; };
-    J.credit += budget || 0;
-    const pay = c => { if (J.credit < c) return false; J.credit -= c; J.spent += c; return true; };
-    if (!J.M && pay(fullCost)) { J.M = build(J.tauOf, false); J.base = fitsOf(J.M, yy, ys, N, false).fitR; }
-    while (J.M && J.queue.length) {
-      if (J.queue.length === J.firstPass && !J.changed) { J.queue.length = 0; break; }   // nothing moved in the first pass: done
-      const { g, tau } = J.queue[0];
-      if (tau === J.tauOf[g]) { J.queue.shift(); continue; }
-      if (!pay(trialCost(g))) break;
-      J.queue.shift();
-      const M = trialSums(J.M, J.tauOf, g, tau), R = fitsOf(M, yy, ys, N, false);
-      if (R.fitR > J.base + 1e-4) { J.base = R.fitR; J.tauOf = { ...J.tauOf, [g]: tau }; J.M = M; J.changed = true; }
     }
-    const finalCost = S.length * (14 * n + 2 * nr * nr + 6 * (n + 5) ** 2) + 2 * (3 * n + 7) ** 3 / 3 + solveCost;
-    if (J.M && !J.queue.length && pay(finalCost)) {                        // done: the full fit with each motor's lag
-      st.out = result(fitsOf(build(J.tauOf, true), yy, ys, N, true), J.tauOf, { refined: true, improved: J.changed, spent: J.spent });
-      st.job = null; st.log = null;                                        // the record isn't needed any more
+    for (let it = 0; it < total; it++) {
+      if (!J.ready || J.k >= total) break;
+      if (J.k === firstPass && !J.changed) { J.k = total; break; }         // nothing moved in the first pass: done
+      const g = Math.floor((J.k % firstPass) / nt), tau = taus[J.k % nt];
+      if (tau === st.tauG[g]) { J.k++; continue; }
+      const kg = groupSize(g), cost = nS * (14 * n + 14 * kg + 4 * kg * nr + 12 * kg) + solveCost;
+      if (J.credit < cost) break;
+      J.credit -= cost; J.spent += cost; J.k++;
+      // A trial changes one motor's lag, so only that motor's rows of the sums change: recompute just those.
+      const inC = new Array(nr).fill(0);
+      for (let j = 0; j < n; j++) if (gOf[j] === g) { inC[j] = 1; inC[n + j] = 1; }
+      const Ar = zeros(nr, nr), br = zeros(3, nr);
+      for (let p = 0; p < nr; p++) for (let q = 0; q < nr; q++) Ar[p][q] = inC[p] || inC[q] ? 0 : st.Ar[p][q];
+      for (let i = 0; i < 3; i++) for (let p = 0; p < nr; p++) br[i][p] = inC[p] ? 0 : st.br[i][p];
+      const trial = st.tauG.slice(); trial[g] = tau;
+      const z = newZ(), zt = newZ();
+      for (const s of S) {
+        const v = vOf(s);
+        stepRegs(z, v, s.ph, s.h, st.tauG); stepRegs(zt, v, s.ph, s.h, trial);
+        if (s.use) {
+          const phi = rotRegs(z, s.W);
+          for (let j = 0; j < n; j++) if (inC[j]) { phi[j] = zt.ul[j]; phi[n + j] = zt.dq[j]; }
+          for (let p = 0; p < nr; p++) {
+            if (inC[p]) {
+              const c = phi[p];
+              for (let q = 0; q < nr; q++) if (!(inC[q] && q < p)) { const add = c * phi[q]; Ar[p][q] += add; if (q !== p) Ar[q][p] += add; }
+              for (let i = 0; i < 3; i++) br[i][p] += c * s.a[i];
+            }
+          }
+        }
+      }
+      const R = fitRot(Ar, br, yy, ys, N);
+      if (R.fitR > J.base + 1e-4) { J.base = R.fitR; st.tauG = trial; st.Ar = Ar; st.br = br; J.changed = 1; }
+    }
+    const finalCost = nS * (14 * n + 2 * nr * nr + 6 * (n + 5) * (n + 5)) + 2 * nf * nf * nf / 3 + solveCost;
+    if (J.ready && J.k >= total && J.credit >= finalCost) {                // done: the full fit with each motor's lag
+      J.credit -= finalCost; J.spent += finalCost;
+      const z = newZ(), Ar = zeros(nr, nr), br = zeros(3, nr), Af = zeros(nf, nf), bf = new Array(nf).fill(0);
+      for (const s of S) {
+        stepRegs(z, vOf(s), s.ph, s.h, st.tauG);
+        if (s.use) { addRot(Ar, br, rotRegs(z, s.W), s.a); addForce(Af, bf, z, s.fl, Lof(s.a, s.W), s.vb); }
+      }
+      st.out = result(fitRot(Ar, br, yy, ys, N), fitForce(Af, bf, yy, ys, N), st.tauG, 1, J.changed);
+      st.out.spent = J.spent;
+      st.job = null; st.log = []; st.Ar = null; st.br = null;              // the record isn't needed any more
       return st.out;
     }
-    st.out = { ...st.out, progress: 1 - J.queue.length / J.total, spent: J.spent };
+    st.out.progress = J.k / total; st.out.spent = J.spent;
     return st.out;
   }
-  return st.out || { B: zeros(6, n), B2: zeros(3, n), r: [0, 0, 0], tau: 0, taus: [], fitF: 0, fitR: 0 };
+  return st.out ? st.out : empty();
 }
 
 // ═════════════ Controller ═════════════
@@ -742,112 +820,151 @@ function actuatorHealth(st, batch, dt, memory) {
   //   κ_i = ⟨Δr, −phi_i⟩ / ‖phi_i‖²,  η_i = 1 − κ_i          δ_k = ⟨Δr, psi_k⟩ / ‖psi_k‖²
   // and only the best explanation is reported, with conf = how much of the change it explains × how
   // clearly the change stands out from the ordinary noise. memory: how long the normal gap is averaged [s].
-  const n = batch.length ? batch[0].phi.length : (st.eta ? st.eta.length : 0), ns = batch.length && batch[0].psi ? batch[0].psi.length : (st.del ? st.del.length : 0);
-  const init = (n, ns) => Object.assign(st, { eta: new Array(n).fill(1), conf: new Array(n).fill(0), del: new Array(ns).fill(0), sconf: new Array(ns).fill(0), lag: null, lagS: null, base: null, E: 0, N: 1e-2, pp: null, rp: null, sp: null, sr: null, k: 0 });
-  if (!st.eta || st.eta.length !== n || st.del.length !== ns) init(n, ns);
   const w = [1, 1, 1, 0.05, 0.05, 1];                       // rows: rotation is ~20× force per unit, yaw ~1×
   const kl = Math.min(1, 0.02 / 0.035), kf = 0.02 / 0.25, ks = 0.02 / memory;
-  const proj = (vs, d, rp, pp, sign) => vs.forEach((p, i) => { let dp = 0, q2 = 0; for (let j = 0; j < 6; j++) { const q = w[j] * p[j]; dp += d[j] * q; q2 += q * q; } rp[i] += kf * (sign * dp - rp[i]); pp[i] += kf * (q2 - pp[i]); });
   for (const s of batch) {
-    const psi = s.psi || [];
-    if (s.phi.length !== st.eta.length || psi.length !== st.del.length) init(s.phi.length, psi.length);   // the parts changed: start over
-    st.lag = st.lag ? st.lag.map((r, i) => r.map((v, j) => v + kl * (s.phi[i][j] - v))) : s.phi.map(r => r.slice());   // the motors' spin-up delay
-    st.lagS = st.lagS ? st.lagS.map((r, i) => r.map((v, j) => v + kl * (psi[i][j] - v))) : psi.map(r => r.slice());
-    const r = s.y.map((v, j) => w[j] * (v - st.lag.reduce((a, p) => a + p[j], 0)));
-    if (!st.base) { st.base = r.slice(); st.pp = st.lag.map(() => 0); st.rp = st.lag.map(() => 0); st.sp = psi.map(() => 0); st.sr = psi.map(() => 0); continue; }
-    const d = r.map((v, j) => v - st.base[j]);                     // the change in the gap
-    st.E += kf * (d.reduce((a, v) => a + v * v, 0) - st.E);
-    proj(st.lag, d, st.rp, st.pp, -1); proj(st.lagS, d, st.sr, st.sp, 1);
+    const n = s.phi.length, ns = s.psi.length;
+    if (!st.eta || st.eta.length !== n || st.del.length !== ns) {         // the first sample, or the parts changed: start over
+      st.eta = new Array(n).fill(1); st.conf = new Array(n).fill(0); st.del = new Array(ns).fill(0); st.sconf = new Array(ns).fill(0);
+      st.lag = s.phi.slice(); st.lagS = s.psi.slice();                    // the motors' spin-up delay
+      st.pp = new Array(n).fill(0); st.rp = new Array(n).fill(0); st.sp = new Array(ns).fill(0); st.sr = new Array(ns).fill(0);
+      st.E = 0; st.N = 1e-2; st.k = 0; st.started = 0; st.base = [0, 0, 0, 0, 0, 0];
+    } else {
+      for (let i = 0; i < n; i++) for (let j = 0; j < 6; j++) st.lag[i][j] += kl * (s.phi[i][j] - st.lag[i][j]);
+      for (let i = 0; i < ns; i++) for (let j = 0; j < 6; j++) st.lagS[i][j] += kl * (s.psi[i][j] - st.lagS[i][j]);
+    }
+    const r = [0, 0, 0, 0, 0, 0];
+    for (let j = 0; j < 6; j++) { let m = 0; for (let i = 0; i < n; i++) m += st.lag[i][j]; r[j] = w[j] * (s.y[j] - m); }
+    if (!st.started) { st.base = r; st.started = 1; continue; }
+    const d = [0, 0, 0, 0, 0, 0]; let dd = 0;
+    for (let j = 0; j < 6; j++) { d[j] = r[j] - st.base[j]; dd += d[j] * d[j]; }   // the change in the gap
+    st.E += kf * (dd - st.E);
+    for (let i = 0; i < n; i++) {                            // each motor, as the one explanation
+      let dp = 0, q2 = 0; for (let j = 0; j < 6; j++) { const q = w[j] * st.lag[i][j]; dp += d[j] * q; q2 += q * q; }
+      st.rp[i] += kf * (-dp - st.rp[i]); st.pp[i] += kf * (q2 - st.pp[i]);
+    }
+    for (let i = 0; i < ns; i++) {                           // each servo
+      let dp = 0, q2 = 0; for (let j = 0; j < 6; j++) { const q = w[j] * st.lagS[i][j]; dp += d[j] * q; q2 += q * q; }
+      st.sr[i] += kf * (dp - st.sr[i]); st.sp[i] += kf * (q2 - st.sp[i]);
+    }
     // Learn the normal gap and the noise: quickly for the first 3 s, then only while nothing stands out (and
     // very slowly even then, so a lasting change that isn't a fault is eventually taken as the new normal).
     st.k++;
     const warm = st.k < 150, quiet = warm || st.E < 4 * st.N, kb = warm ? 0.05 : quiet ? ks : ks * 0.05;
-    st.base = st.base.map((v, j) => v + kb * (r[j] - v));
+    for (let j = 0; j < 6; j++) st.base[j] += kb * (r[j] - st.base[j]);
     if (quiet) st.N += (warm ? 0.05 : ks) * (Math.max(st.E, 1e-6) - st.N);
   }
-  if (!st.pp) return { eta: st.eta.slice(), conf: st.conf.slice(), del: st.del.slice(), sconf: st.sconf.slice() };
-  const coef = (rp, pp) => rp.map((x, i) => pp[i] > 1e-6 ? x / pp[i] : 0);
-  const fitOf = (c, pp) => c.map((k, i) => st.E > 1e-9 ? clamp(k * k * pp[i] / st.E, 0, 1) : 0);
-  const kap = coef(st.rp, st.pp), dl = coef(st.sr, st.sp), fm = fitOf(kap, st.pp), fs = fitOf(dl, st.sp);
+  if (!st.started) return { eta: [], conf: [], del: [], sconf: [] };
+  const n = st.eta.length, ns = st.del.length;
+  const kap = st.rp.map((x, i) => st.pp[i] > 1e-6 ? x / st.pp[i] : 0), dl = st.sr.map((x, i) => st.sp[i] > 1e-6 ? x / st.sp[i] : 0);
+  const fm = kap.map((k, i) => st.E > 1e-9 ? clamp(k * k * st.pp[i] / st.E, 0, 1) : 0), fs = dl.map((k, i) => st.E > 1e-9 ? clamp(k * k * st.sp[i] / st.E, 0, 1) : 0);
   const stand = st.k < 150 ? 0 : st.E / (st.E + 4 * st.N);
-  const bm = fm.reduce((b, f, i) => f > fm[b] ? i : b, 0), bs = fs.length ? fs.reduce((b, f, i) => f > fs[b] ? i : b, 0) : -1;
-  const servoWins = bs >= 0 && fs[bs] > (fm[bm] || 0);
-  st.eta = kap.map((k, i) => !servoWins && i === bm ? clamp(1 - k, -0.5, 1.5) : 1);
-  st.conf = fm.map((f, i) => !servoWins && i === bm ? f * stand : 0);
-  st.del = dl.map((x, i) => servoWins && i === bs ? clamp(x, -1.5, 1.5) : 0);
-  st.sconf = fs.map((f, i) => servoWins && i === bs ? f * stand : 0);
+  let bm = 0, bs = -1;
+  for (let i = 0; i < n; i++) if (fm[i] > fm[bm]) bm = i;
+  for (let i = 0; i < ns; i++) if (bs < 0 || fs[i] > fs[bs]) bs = i;
+  const servoWins = bs >= 0 && fs[bs] > (n ? fm[bm] : 0);
+  for (let i = 0; i < n; i++) { const best = !servoWins && i === bm; st.eta[i] = best ? clamp(1 - kap[i], -0.5, 1.5) : 1; st.conf[i] = best ? fm[i] * stand : 0; }
+  for (let i = 0; i < ns; i++) { const best = servoWins && i === bs; st.del[i] = best ? clamp(dl[i], -1.5, 1.5) : 0; st.sconf[i] = best ? fs[i] * stand : 0; }
   return { eta: st.eta.slice(), conf: st.conf.slice(), del: st.del.slice(), sconf: st.sconf.slice() };
 }
 
-function faultDecision(obs, prev, dt) {
-  // What to do about each motor and servo, from what the supervisor sees. Motors: { id, name, on, eff (its
-  // table scale now), cmd (thrust asked, 0–1), temp (°C, from a sensor or estimated from ESC current; null
-  // if unknown), tmax, rpmRatio (ESC rpm ÷ what the command should give; null without telemetry), eta, conf }.
-  // Servos (kind 'servo'): { id, name, angle (what the controller believes) [rad], delta, conf }. eta, delta
-  // and conf come from actuatorHealth. prev: this function's result last time (timers live in it).
-  // Returns { acts: { [id]: { state, on, eff, cap, why } }, joints: { [id]: { state, on, angle, why } }, t }.
-  const t = prev.t || {}, acts = {}, joints = {};
-  for (const o of obs.filter(o => o.kind === 'servo')) {
+function faultDecision(st, motors, servos, dt) {
+  // What to do about each motor and servo, from what the supervisor sees. motors (one each): { on, eff (its
+  // table scale now), cmd (thrust asked, 0–1), temp (°C, from a sensor or estimated from ESC current; null if
+  // unknown), tmax, rpmRatio (ESC rpm ÷ what the command should give; null without telemetry), eta, conf }.
+  // servos (each steering one): { angle (what the controller believes) [rad], delta, conf, fbErr (with
+  // feedback: how far it is from its command [rad], else null) }. eta, delta and conf come from actuatorHealth.
+  // st: its memory (timers, what it decided before).
+  // Returns per motor { state: 0 ok, 1 degraded, 2 hot, 3 failed; on, eff, cap, why, val } and per servo
+  // { stuck, angle, why, val }; why says what it saw, val the number that goes with it.
+  const n = motors.length, ns = servos.length;
+  if (!st.dead || st.dead.length !== n || st.off.length !== ns) {
+    st.dead = new Array(n).fill(0); st.weak = new Array(n).fill(0); st.why = new Array(n).fill(0); st.val = new Array(n).fill(0); st.eff = new Array(n).fill(1);
+    st.off = new Array(ns).fill(0); st.stuck = new Array(ns).fill(0); st.swhy = new Array(ns).fill(0); st.sval = new Array(ns).fill(0);
+  }
+  // why: 0 nothing, 1 the ESC reports it stopped, 2 it no longer moves the drone, 3 it delivers val of its table,
+  // 4 running at val °C; servos: 1 it reports it isn't following its commands, 2 it's val rad from where it was told
+  const servoOut = servos.map((o, k) => {
     // A servo that isn't where the controller believes: leave it out of the steering and tell the controller
     // where it really is (kept up to date while it stays out, since a limp one keeps moving).
-    const k = t['s' + o.id] || (t['s' + o.id] = { off: 0 }), p = (prev.joints || {})[o.id];
     const fb = o.fbErr != null && Math.abs(o.fbErr) > 0.09;          // with feedback: it reports it isn't following its command
-    k.off = fb || (o.conf > 0.6 && Math.abs(o.delta) > 0.05) ? k.off + dt : 0;
-    if (p || k.off > 0.5) joints[o.id] = { state: 'stuck', on: false, angle: o.fbErr != null ? o.angle : o.angle + (o.conf > 0.4 ? o.delta : 0),
-      why: p ? p.why : fb ? 'it reports it isn\'t following its commands' : `it isn't where it was told to go (${Math.round(o.delta * 180 / Math.PI)}° off)` };
-  }
-  for (const o of obs.filter(o => o.kind !== 'servo')) {
-    const k = t[o.id] || (t[o.id] = { dead: 0, weak: 0 }), p = (prev.acts || {})[o.id] || {};
-    let on = o.on, eff = o.eff, state = 'ok', why = '';
+    st.off[k] = fb || (o.conf > 0.6 && Math.abs(o.delta) > 0.05) ? st.off[k] + dt : 0;
+    if (!st.stuck[k] && st.off[k] > 0.5) { st.stuck[k] = 1; st.swhy[k] = fb ? 1 : 2; st.sval[k] = o.delta; }
+    const angle = o.fbErr != null ? o.angle : o.angle + (o.conf > 0.4 ? o.delta : 0);
+    return { stuck: st.stuck[k], angle, why: st.swhy[k], val: st.sval[k] };
+  });
+  const motorOut = motors.map((o, i) => {
+    let on = o.on, eff = o.eff, lvl = 0;                    // 0 ok, 1 degraded, 2 hot, 3 failed
     // Failed: the ESC says it isn't spinning, or it has stopped doing anything while being asked to.
     const noSpin = o.rpmRatio != null && o.rpmRatio < 0.3, noEffect = o.conf > 0.7 && o.eta < 0.25;
-    k.dead = o.cmd > 0.15 && (noSpin || noEffect) ? k.dead + dt : 0;
-    if (!on || k.dead >= (noSpin ? 0.2 : 0.5)) {
-      on = false; state = 'failed';
-      why = !o.on && p.why ? p.why : noSpin ? 'the ESC reports it has stopped' : 'it no longer moves the drone';
+    st.dead[i] = o.cmd > 0.15 && (noSpin || noEffect) ? st.dead[i] + dt : 0;
+    if (!on || st.dead[i] >= (noSpin ? 0.2 : 0.5)) {
+      if (on) { st.why[i] = noSpin ? 1 : 2; st.val[i] = 0; }
+      on = false; lvl = 3;
     } else {
       // Degraded: its effect has settled well away from what the table says. Rescale the table to match.
       const off = o.conf > 0.3 && o.eta < 0.88;   // parts wear, they don't get stronger
-      k.weak = off ? k.weak + dt : 0;
-      if (k.weak > 1.5) { eff = clamp(o.eff * o.eta, 0.15, 1.3); k.weak = 0; why = `it delivers ${Math.round(o.eta * 100)}% of what its table says`; }
-      if (eff < 0.97) state = 'degraded';
+      st.weak[i] = off ? st.weak[i] + dt : 0;
+      if (st.weak[i] > 1.5) { eff = clamp(o.eff * o.eta, 0.15, 1.3); st.weak[i] = 0; st.why[i] = 3; st.val[i] = o.eta; }
+      if (eff < 0.97) lvl = 1;
     }
     // Hot: ease it off before it's damaged. Full throttle up to 20 °C below its limit, 55% at the limit.
     let cap = 1;
     if (o.temp != null && on) {
       cap = clamp(1 - 0.45 * (o.temp - (o.tmax - 20)) / 20, 0.55, 1);
-      if (cap < 0.999) { if (state === 'ok') state = 'hot'; why = why || `running at ${Math.round(o.temp)} °C (limit ${o.tmax})`; }
+      if (cap < 0.999) { if (lvl === 0) lvl = 2; if (st.why[i] === 0 || st.why[i] === 4) { st.why[i] = 4; st.val[i] = o.temp; } }
     }
-    acts[o.id] = { state, on, eff, cap, why: why || p.why || '' };
-  }
-  return { acts, joints, t };
+    return { state: lvl, on, eff, cap, why: st.why[i], val: st.val[i] };
+  });
+  return { motors: motorOut, servos: servoOut };
 }
 
 function flightPolicy(sum, prev) {
   // How to fly on what's left. sum: { margin: the most lift the working motors can make ÷ weight, cellLost: a battery cell failed, rpOk / yawOk:
   // whether roll and pitch / yaw can still be held at hover (dt: time since last call), anyFailed, hot: hottest motor as a share of its
   // limit (null if nothing is measured), soc: battery charge 0–1, vCell: V per cell, battT, battMax (°C) }.
-  // Returns { mode: 'normal' | 'caution' | 'return' | 'land', lim: { speed [m/s] | null, lean [°], accel [m/s²] }, why }.
+  // Returns { mode: 'normal' | 'caution' | 'return' | 'land', lim: { speed [m/s] (0: no limit), lean [°], accel [m/s²] }, why, rpBad, vBad }.
+  // why: 0 nothing, 1 a motor is running hot, 2 the battery is hot, 3 lift margin low, 4 a motor has failed, 5 lift margin very low,
+  // 6 a battery cell has failed, 7 battery below 20%, 8 battery voltage low, 9 roll and pitch can no longer be held,
+  // 10 not enough lift to stay up, 11 battery nearly empty, 12 battery overheating.
   // It never steps back down on its own: once it's heading home, it stays heading home.
-  const rank = { normal: 0, caution: 1, return: 2, land: 3 };
-  let mode = 'normal', why = '';
-  const up = (m, w) => { if (rank[m] > rank[mode]) { mode = m; why = w; } };
-  if (sum.hot != null && sum.hot > 0.85) up('caution', 'a motor is running hot');
-  if (sum.battT != null && sum.battT > sum.battMax - 8) up('caution', 'the battery is hot');
-  if (sum.margin < 1.6) up('caution', `lift margin ${sum.margin.toFixed(2)}×`);
-  if (sum.anyFailed) up('return', 'a motor has failed');
-  if (sum.margin < 1.35) up('return', `lift margin only ${sum.margin.toFixed(2)}×`);
-  if (sum.cellLost) up('return', 'a battery cell has failed');
-  if (sum.soc != null && sum.soc < 0.2) up('return', 'battery below 20%');
-  if (sum.vCell != null && sum.vCell < 3.3) up('return', 'battery voltage low');
-  const rpBad = sum.rpOk ? 0 : ((prev && prev.rpBad) || 0) + (sum.dt || 0.1);   // lost for a whole second, not one bad reading
-  if (rpBad > 1) up('land', 'roll and pitch can no longer be held');
-  if (sum.margin < 1.08) up('land', 'not enough lift to stay up');
-  if (sum.soc != null && sum.soc < 0.08) up('land', 'battery nearly empty');
-  if (sum.battT != null && sum.battT > sum.battMax + 5) up('land', 'battery overheating');
-  if (prev && rank[prev.mode] > rank[mode]) { mode = prev.mode; why = prev.why; }
-  const lim = { normal: { speed: null, lean: 35, accel: 6 }, caution: { speed: 2, lean: 20, accel: 3 }, return: { speed: 1.5, lean: 15, accel: 2 }, land: { speed: 0.5, lean: 10, accel: 1.5 } }[mode];
-  return { mode, lim, why, rpBad };
+  const rank = m => m === 'normal' ? 0 : m === 'caution' ? 1 : m === 'return' ? 2 : 3;
+  let level = 0, why = 0;                                   // 0 normal, 1 caution, 2 return, 3 land
+  const up = (l, w) => { if (l > level) { level = l; why = w; } };
+  if (sum.hot != null && sum.hot > 0.85) up(1, 1);
+  if (sum.battT != null && sum.battT > sum.battMax - 8) up(1, 2);
+  if (sum.margin < 1.6) up(1, 3);
+  if (sum.anyFailed) up(2, 4);
+  if (sum.margin < 1.35) up(2, 5);
+  if (sum.cellLost) up(2, 6);
+  if (sum.soc != null && sum.soc < 0.2) up(2, 7);
+  const vBad = sum.vCell != null && sum.vCell < 3.3 ? (prev ? prev.vBad : 0) + sum.dt : 0;   // sagging for a second (not a spool-up's dip)
+  if (vBad > 1) up(2, 8);
+  const rpBad = sum.rpOk ? 0 : (prev ? prev.rpBad : 0) + sum.dt;   // lost for a whole second, not one bad reading
+  if (rpBad > 1) up(3, 9);
+  if (sum.margin < 1.08) up(3, 10);
+  if (sum.soc != null && sum.soc < 0.08) up(3, 11);
+  if (sum.battT != null && sum.battT > sum.battMax + 5) up(3, 12);
+  if (prev && rank(prev.mode) > level) { level = rank(prev.mode); why = prev.why; }
+  const lim = level === 0 ? { speed: 0, lean: 35, accel: 6 } : level === 1 ? { speed: 2, lean: 20, accel: 3 } : level === 2 ? { speed: 1.5, lean: 15, accel: 2 } : { speed: 0.5, lean: 10, accel: 1.5 };
+  return { mode: level === 0 ? 'normal' : level === 1 ? 'caution' : level === 2 ? 'return' : 'land', lim, why, rpBad, vBad };
+}
+
+function liftMargin(cols, lo, hi) {
+  // What the drone can still do with the table as the flight controller now flies it (removed parts out,
+  // ceilings on): cols, one per input (motors, then each steering servo's angle change at the thrust it
+  // carries), with their limits. The hover solution says whether roll and pitch (and yaw) can be held at
+  // all; the climb solution how much lift there is: margin = the most upward acceleration ÷ g, plus 1.
+  const n = cols.length;
+  if (!n) return { margin: 0, rpOk: false, yawOk: false };
+  const hov = bls(cols, lo, hi, [0, 0, G, 0, 0, 0], [0.3, 0.3, 3, 10, 10, 1]);
+  const made = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < n; i++) for (let k = 0; k < 6; k++) made[k] += cols[i][k] * hov[i];
+  const rpOk = Math.abs(made[3]) < 2 && Math.abs(made[4]) < 2 && made[2] > 0.9 * G, yawOk = Math.abs(made[5]) < 1;
+  const up = bls(cols, lo, hi, [0, 0, 3 * G, 0, 0, 0], [0.01, 0.01, 1, 30, 30, 0.01]);
+  let az = 0;
+  for (let i = 0; i < n; i++) az += cols[i][2] * up[i];
+  return { margin: az / G, rpOk, yawOk };
 }
 
 function allocationPreferences(inputs, prefs) {
@@ -1048,11 +1165,11 @@ const LAW_DEFS = [
     sample: () => [[{ cmd: [0, 0.2, 0.2, 0.2, -0.2, -0.2], y: [0, 0.02, 0.1, 0.19, 0.1, -0.1] }], 0.001] },
 
   { key: 'identifyThrow', group: 'learn', fn: identifyThrow, title: 'Identification from a throw',
-    math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>B</i><sub>2</sub> d<i>x</i>/d<i>t</i> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 90 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
-    doc: 'Used by the throw start. The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling, the spin-up reaction and the motor lag, all without any description of the airframe. It pulses over the top of the throw, where the air through the props is calmest. Sized for a microcontroller: a fixed cost per step while falling, an instant fit to catch itself on, then each motor\'s own lag worked out in the background. After Blaha, Smeur and Remes (TU Delft, 2024).',
-    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'control period [s]'], ['solve', 'false while falling, true to fit at once, \'refine\' for the per-motor lags afterwards'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, its basis factor and the motor\'s number'], ['budget', 'refine only: operations it may spend this call']],
-    returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs, rotation from each rotor spinning up; r: IMU offset from the CoG [m]; taus: each motor\'s lag [s], tau: their mean; fitF, fitR: share of force and rotation explained }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
-    sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.001, true, { v: [0.5, 0.2], phi: [1, 1], m: [0, 1] }] },
+    math: [`${V('f̃')} = <i>B</i><sub>f</sub>${V('u')}<sub>τ</sub> + ([${V('ω̇')}]<sub>×</sub> + [${V('ω')}]<sub>×</sub>²)${V('r')} − <i>d</i>${V('v')}<sub>b</sub> + ${V('c')}<sub>f</sub> &nbsp;(free fall: no gravity in the accelerometer)`, `${V('ω̇')} = <i>B</i><sub>α</sub>${V('u')}<sub>τ</sub> + <i>B</i><sub>2</sub> d<i>x</i>/d<i>t</i> + <i>K</i>(ω<sub>y</sub>ω<sub>z</sub>, ω<sub>z</sub>ω<sub>x</sub>, ω<sub>x</sub>ω<sub>y</sub>) + ${V('c')}<sub>α</sub>, &nbsp;<i>u</i><sub>τ</sub> = <i>u</i> / (1 + τ<i>s</i>)`, `least squares for each τ in {10 … 130 ms}; the best fit gives <i>B</i>, ${V('r')} and the motor lag τ`],
+    doc: 'Used by the throw start (the learning task). The drone is thrown with its motors off and a random spin, and it pulses each motor briefly while it falls. Because it is in free fall, the accelerometer feels only the rotors and the IMU\'s swing around the center of gravity, so a plain least-squares fit on less than a second of data gives the effectiveness matrix, where the IMU sits relative to the balance point, the gyroscopic coupling, the spin-up reaction and the motor lag, all without any description of the airframe. It pulses over the top of the throw, where the air through the props is calmest. A fixed cost per step while falling, an instant fit to catch itself on, then each motor\'s own lag worked out in the background. Up to 12 inputs (a quadcopter with a tilting motor on each arm). After Blaha, Smeur and Remes (TU Delft, 2024).',
+    args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['vb', 'estimated velocity, body [m/s] (for air drag)'], ['dt', 'sample period [s]'], ['solve', '\'fall\' while falling, \'catch\' to fit at once, \'refine\' for the per-motor lags afterwards'], ['mot', '{ v, phi, m, coll }: per input, its motor\'s thrust command, its basis factor, the motor\'s number and whether it is a collective-pitch rotor (1)'], ['budget', 'refine only: operations it may spend this call']],
+    returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs, rotation from each rotor spinning up; r: IMU offset from the CoG [m]; taus: each motor\'s lag [s], tau: their mean; fitF, fitR: share of force and rotation explained; refined, progress }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
+    sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.004, 'catch', { v: [0.5, 0.2], phi: [1, 1], m: [0, 1], coll: [0, 0] }, 0] },
 
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>p</sub>${V('e')}<sub>p</sub> − <i>K</i><sub>d</sub>(${V('v')} − ${V('v')}<sub>cmd</sub>) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
@@ -1100,19 +1217,24 @@ const LAW_DEFS = [
     shape: 'pull', sample: () => [[{ kind: 'thrust', x: 0.5, lo: 0, hi: 1, power: 100, authority: 1 }, { kind: 'thrust', x: 0.95, lo: 0, hi: 1, power: 100, authority: 0.5 }, { kind: 'servo', x: 0, lo: -0.2, hi: 0.2, th: 0.3, range: 0.6, reach: 0.2, authority: 0.8 }], { allowance: 0.02, efficiency: 0.02, servoMove: 0.01 }] },
   { key: 'actuatorHealth', group: 'super', fn: actuatorHealth, title: 'Actuator health check',
     math: [`gap ${V('r')} = ${V('y')} − Σ<sub>i</sub> ${V('φ')}<sub>i</sub>, &nbsp;${V('φ')}<sub>i</sub> = <i>B</i><sub>i</sub> <i>v</i><sub>i</sub> (motor <i>i</i>'s column × its thrust); &nbsp;Δ${V('r')} = ${V('r')} − its normal value`, `motor <i>i</i> alone: κ<sub>i</sub> = ⟨Δ${V('r')}, −${V('φ')}<sub>i</sub>⟩ / ‖${V('φ')}<sub>i</sub>‖², &nbsp;η<sub>i</sub> = 1 − κ<sub>i</sub> &nbsp;(1: as its table says, 0.6: 40% weaker, ≈ 0: not working)`],
-    doc: 'Runs on the supervisor at 10 Hz on the flight controller\'s data stream (50 Hz, 40 ms late over the link). The controller\'s table says what each motor is doing; the IMU says what the drone does. The gap between them stays put while the table holds (a slow average learns it, with the ordinary noise). When a motor weakens, the gap moves by the part of it that went missing, even while the controller fights it, because the table still counts on that motor. Each motor is tried as the single explanation; the best fit gives which motor and how much it lost. conf is that fit times how clearly the change stands out.',
+    doc: 'Runs on the health supervisor\'s board at 10 Hz, on the flight core\'s data stream (it arrives over the link a few milliseconds late). The controller\'s table says what each motor is doing; the IMU says what the drone does. The gap between them stays put while the table holds (a slow average learns it, with the ordinary noise). When a motor weakens, the gap moves by the part of it that went missing, even while the controller fights it, because the table still counts on that motor. Each motor is tried as the single explanation; the best fit gives which motor and how much it lost. conf is that fit times how clearly the change stands out.',
     args: [['st', 'its own state'], ['batch', '[{ phi: one 6-vector per motor, psi: one per steering servo, y: measured [a; α] }] samples since last time'], ['dt', 'time since last call [s]'], ['memory', 'how long past data counts [s]']], returns: '{ eta, conf }: one per motor; { del, sconf }: one per servo',
-    shape: { eta: 'n', conf: 'n', del: 'n', sconf: 'n' }, sample: () => [{}, [{ phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], y: [0, 0, 10, 0, 200, 0] }, { phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], y: [0, 0, 7, -80, 120, -4] }], 0.1, 8] },
+    shape: { eta: 'n', conf: 'n', del: 'n', sconf: 'n' }, sample: () => [{}, [{ phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], psi: [], y: [0, 0, 10, 0, 200, 0] }, { phi: [[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5]], psi: [], y: [0, 0, 7, -80, 120, -4] }], 0.1, 8] },
   { key: 'faultDecision', group: 'super', fn: faultDecision, title: 'Fault decisions',
     math: [`failed: ESC rpm &lt; 30% of what the command should give for 0.2 s, or η &lt; 0.25 (conf &gt; 0.7) for 0.5 s while it's asked for thrust → removed (its limit set to 0)`, `degraded: η &lt; 0.88 held for 1.5 s (conf &gt; 0.3) → its column in the table × η`, `servo stuck: |δ| &gt; 3° (conf &gt; 0.6) for 0.5 s → left out of the steering, the controller told its real angle`, `hot: ceiling = 1 − 0.45 (<i>T</i> − (<i>T</i><sub>max</sub> − 20)) / 20, &nbsp;between 55% and 100%`],
-    doc: 'Turns what the supervisor sees into settings for the flight controller. A failed motor is taken out of the allocation, a degraded one has its column in the table (learned or described) scaled to what it really does, a stuck servo is taken out of the steering and the controller is told where it really is (so its rotor\'s column is right again), and a hot one is capped so the others take more of the load before it\'s damaged. Temperatures come from a sensor, or, if the ESC reports current, from the same heating model run on the supervisor; without either, heat can\'t be seen.',
-    args: [['obs', '[{ id, name, on, eff, cmd, temp, tmax, rpmRatio, eta, conf }] one per motor'], ['prev', 'its result last time'], ['dt', 'time since last call [s]']], returns: '{ acts: { id: { state, on, eff, cap, why } }, t }',
-    shape: 'obj', sample: () => [[{ id: 1, name: 'M1', on: true, eff: 1, cmd: 0.4, temp: 70, tmax: 120, rpmRatio: 1, eta: 0.98, conf: 0.8 }], {}, 0.1] },
+    doc: 'Turns what the supervisor sees into settings for the flight core. A failed motor is taken out of the allocation, a degraded one has its column in the table (learned or described) scaled to what it really does, a stuck servo is taken out of the steering and the flight core is told where it really is (so its rotor\'s column is right again), and a hot one is capped so the others take more of the load before it\'s damaged. Temperatures come from a sensor, or, if the ESC reports current, from the same heating model run on the supervisor; without either, heat can\'t be seen. why says what it saw (1 the ESC reports it stopped, 2 it no longer moves the drone, 3 it delivers val of its table, 4 it runs at val °C; servos: 1 it reports it isn\'t following, 2 it is val rad off), so the board can say it in words.',
+    args: [['st', 'its memory (timers, what it decided)'], ['motors', '[{ on, eff, cmd, temp, tmax, rpmRatio, eta, conf }] one per motor'], ['servos', '[{ angle, delta, conf, fbErr }] one per steering servo'], ['dt', 'time since last call [s]']], returns: '{ motors: [{ state (0 ok, 1 degraded, 2 hot, 3 failed), on, eff, cap, why, val }], servos: [{ stuck, angle, why, val }] }',
+    shape: 'obj', sample: () => [{}, [{ on: 1, eff: 1, cmd: 0.4, temp: 110, tmax: 120, rpmRatio: 1, eta: 0.98, conf: 0.8 }], [{ angle: 0.1, delta: 0, conf: 0, fbErr: null }], 0.1] },
   { key: 'flightPolicy', group: 'super', fn: flightPolicy, title: 'Flight policy',
-    math: [`land: roll/pitch lost, lift margin &lt; 1.08×, battery &lt; 8% or overheating`, `return home and land: a motor or a battery cell failed, margin &lt; 1.35×, battery &lt; 20% or &lt; 3.3 V/cell under load`, `careful: a motor above 85% of its limit, a hot battery, or margin &lt; 1.6×`],
-    doc: 'How the drone should fly on what\'s left. Each mode comes with limits the flight controller flies within: top speed, how far the body may lean and how hard it may accelerate sideways. Returning flies home at 1.5 m/s and lands; landing comes straight down and stops the motors on the ground. It only ever steps up: once it has decided to go home, it goes home.',
-    args: [['sum', '{ margin, rpOk, yawOk, anyFailed, cellLost, hot, soc, vCell, battT, battMax }'], ['prev', 'its result last time']], returns: '{ mode, lim: { speed, lean, accel }, why }',
-    shape: 'obj', sample: () => [{ margin: 2, rpOk: true, yawOk: true, anyFailed: false, hot: 0.5, soc: 0.8, vCell: 3.9, battT: 35, battMax: 60 }, { mode: 'normal' }] },
+    math: [`land: roll/pitch lost, lift margin &lt; 1.08×, battery &lt; 8% or overheating`, `return home and land: a motor or a battery cell failed, margin &lt; 1.35×, battery &lt; 20% or &lt; 3.3 V/cell under load for a second`, `careful: a motor above 85% of its limit, a hot battery, or margin &lt; 1.6×`],
+    doc: 'How the drone should fly on what\'s left. Each mode comes with limits the flight core and the navigation fly within: top speed, how far the body may lean and how hard it may accelerate sideways. Returning flies home at 1.5 m/s and lands (it needs the navigation task); landing comes straight down and stops the motors on the ground. It only ever steps up: once it has decided to go home, it goes home.',
+    args: [['sum', '{ dt, margin, rpOk, yawOk, anyFailed, cellLost, hot, soc, vCell, battT, battMax }'], ['prev', 'its result last time']], returns: '{ mode, lim: { speed (0: none), lean, accel }, why, rpBad }',
+    shape: 'obj', sample: () => [{ dt: 0.1, margin: 2, rpOk: true, yawOk: true, anyFailed: false, cellLost: false, hot: 0.5, soc: 0.8, vCell: 3.9, battT: 35, battMax: 60 }, { mode: 'normal', why: 0, rpBad: 0, vBad: 0 }] },
+  { key: 'liftMargin', group: 'super', fn: liftMargin, title: 'Lift and control margin',
+    math: [`hover: ${V('u')}<sub>h</sub> = argmin ‖<i>W</i><sup>½</sup>(<i>B</i>${V('u')} − (0, 0, <i>g</i>, 0, 0, 0))‖², &nbsp;roll and pitch held if what it makes is within 2 rad/s²`, `climb: ${V('u')}<sub>c</sub> for 3<i>g</i> up with the rotation held, &nbsp;margin = (<i>B</i>${V('u')}<sub>c</sub>)<sub>z</sub> / <i>g</i>`],
+    doc: 'The supervisor\'s view of how much lift there is and whether the drone can still be held level, with the table as the flight core flies it now (removed motors out, hot ones capped). Steering servos count too: each can turn its rotors across what\'s left of its travel. The flight policy decides from these.',
+    args: [['cols', 'one 6-vector per input (motors, then steering servos)'], ['lo', 'lower limits'], ['hi', 'upper limits']], returns: '{ margin; rpOk; yawOk }',
+    shape: 'obj', sample: () => [[[0, 0, 5, 100, 100, 5], [0, 0, 5, -100, 100, -5], [0, 0, 5, -100, -100, 5], [0, 0, 5, 100, -100, -5]], [0, 0, 0, 0], [1, 1, 1, 1]] },
 ];
 
 // Wrench sum and control chain shown at the top of the Formulas tab.
@@ -1122,6 +1244,6 @@ const LAW_OVERVIEW = [
 ];
 const LAW_CHAIN = {
   ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
-  super: ['actuatorHealth', 'faultDecision', 'flightPolicy'],
+  super: ['actuatorHealth', 'faultDecision', 'flightPolicy', 'liftMargin'],
   plant: ['batteryModel', 'thermalModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

@@ -36,6 +36,7 @@
 #ifndef FC_CORE_H
 #define FC_CORE_H
 #include <stdint.h>
+#include <stdarg.h>
 #include "rn_host.h"
 
 #define FC_MAX_MOTORS 12
@@ -87,6 +88,37 @@ typedef struct {
 } fc_cmd;
 typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_out;   /* throttles 0–1, servo angles [rad] */
 
+/* From the learning task (learn_core.h), over the link or on the same board. Each is a flat list of floats, the
+ * same on the link (rn_link.h) and in the simulator:
+ *   EXC    excitation: mode (0 none, 1 added to what the controller asks, 2 open loop: these are the throttles and
+ *          servo angles), hold motors (1: the motors keep the thrust they had when the hold began, plus mval),
+ *          hold servos (likewise), servo mask (bit j: sval[j] applies), nm, nj, mval[nm], sval[nj].
+ *          Then a pulse number and a rate limit [rad/s] (open loop): when the number changes the flight core notes the
+ *          body rates, and once they have changed by more than the limit (after 12 ms) it cuts the motors to 0 until
+ *          the next number, so a pulse stops at once rather than a link's round trip later.
+ *          It lapses FC_EXC_TIMEOUT after the last one (the Pi stopped): the controller simply flies on.
+ *   MODEL  the model it flies on: use learned (1) or the airframe description (0), hold servos (1: fly as a plain
+ *          multirotor with the steering servos at rest, until they are measured), nm, nj; per motor its number of
+ *          basis terms and its learned columns (acceleration per full thrust); per joint its speed and lag from the
+ *          servo tests (0: the description's); per motor the throttle-curve bend to linearize with (−1: the
+ *          description's).
+ * From the health supervisor (super_core.h):
+ *   SET    mode (0 normal, 1 careful, 2 return home, 3 land), lean limit [deg], acceleration limit [m/s²], speed
+ *          limit [m/s] (0: none; the navigation's), nm, nj; per motor on (0/1), effectiveness (its columns ×),
+ *          throttle ceiling; per joint out of the steering (0/1) and the angle it is really at [rad].
+ * To both (fc_ltel), 200 times a second: LTEL  t, state, flags (1 flying, 2 open loop, 4 on the learned model,
+ *          8 motors held), attitude q (4), specific force (3) and body rates (3) averaged since the last one (body
+ *          axes), battery volts, height and vertical speed (barometer and accelerometer), have height, nm, nj,
+ *          throttles sent u[nm], believed thrusts v[nm], servo commands[nj], servo
+ *          angles believed[nj]; then how many single control steps follow, each (dt, specific force (3), body rates
+ *          (3), believed thrusts v[nm]): every step's, while in open loop (the throw's fit needs them all), else none.
+ *          Flag 16: the open-loop pulse was cut (below). */
+#define FC_EXC_TIMEOUT 0.1f
+#define FC_SUB 8                        /* IMU samples an LTEL frame carries in open loop */
+#define FC_LTEL_MAX (19 + 2 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS + 1 + FC_SUB * (7 + FC_MAX_MOTORS))
+#define FC_LT_N 19                      /* where the per-motor values start in LTEL */
+#define FC_MODEL_MAX (4 + FC_MAX_MOTORS * (1 + 6 * FC_MAX_BASIS) + 2 * FC_MAX_JOINTS + FC_MAX_MOTORS)
+
 enum { FC_DISARMED = 0, FC_ARMED, FC_FAILSAFE, FC_CRASHED, FC_TESTING };
 
 typedef struct {
@@ -115,6 +147,21 @@ typedef struct {
   int trap;                              /* last formula error */
   float tau_des[3];                      /* the torque the attitude control last asked for (body) [N·m] */
   uint32_t steps;
+  /* the learning task's excitation and model (see EXC, MODEL above) */
+  int exc_mode, exc_hold_m, exc_hold_s, exc_smask; float exc_m[FC_MAX_MOTORS], exc_s[FC_MAX_JOINTS]; double exc_t;
+  int held_m, held_s; float hold_v[FC_MAX_MOTORS], hold_th[FC_MAX_JOINTS];
+  int open_loop; double recover_t;       /* open loop now; until when it is catching itself (no tilt check) */
+  int pulse_id, pulse_cut; float pulse_dw, pulse_w0[3]; double pulse_t;
+  int sub_n; float sub[FC_SUB][7 + FC_MAX_MOTORS], lt_vprev[FC_MAX_MOTORS];   /* open loop: each step's sample for LTEL */
+  int use_learned, hold_servos; float lcols[FC_MAX_MOTORS][FC_MAX_BASIS][6], laxis[3];
+  float j_rate[FC_MAX_JOINTS], j_lag[FC_MAX_JOINTS], m_bend[FC_MAX_MOTORS];   /* from the actuator tests (0 / −1: the description's) */
+  /* the supervisor's settings (see SET above) */
+  int sup_mode, sup_landing; float lim_lean, lim_accel;
+  int m_on[FC_MAX_MOTORS]; float m_eff[FC_MAX_MOTORS], m_cap[FC_MAX_MOTORS];
+  int j_off[FC_MAX_JOINTS]; float j_ang[FC_MAX_JOINTS];
+  /* what goes to the learning and the supervisor (LTEL): sums since the last frame */
+  float lt_f[3], lt_w[3], lt_u[FC_MAX_MOTORS], lt_v[FC_MAX_MOTORS], lt_tc[FC_MAX_JOINTS]; int lt_n;
+  float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
 } fc_state;
 
 /* Parse an airframe blob. Returns 0 or −1 with F->why set. */
@@ -133,5 +180,20 @@ void fc_keepalive(fc_state *F);
  * 50 ms, then the motors stop (crashed). */
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *out);
 const char *fc_state_name(int s);
+/* The learning and supervisor frames (above). Each returns 0, or −1 if the frame doesn't fit this airframe. */
+int fc_exc(fc_state *F, const float *p, int n);
+int fc_model(fc_state *F, const float *p, int n);
+int fc_set(fc_state *F, const float *p, int n);
+/* The LTEL frame since the last call (out: FC_LTEL_MAX floats). Returns its length. */
+int fc_ltel(fc_state *F, float *out);
+/* learn.js basisVals / dBasisVals: products of (1, cos θ, sin θ) over k joint angles (dm ≥ 0: the derivative with
+ * respect to joint dm). Returns 3^k. For the Pi's tasks too. */
+int fc_basis(float *v, const float *ang, int k, int dm);
+/* The nominal thrust axis it flies on (body), from the description or the learned model. */
+const float *fc_axis(const fc_state *F);
+/* Text without printf (%s, %d, %.Nf), for status lines on boards with no C library: fc_fmt writes, fc_fmt_add appends. */
+void fc_fmt(char *o, int size, const char *fmt, ...);
+void fc_fmt_add(char *o, int size, const char *fmt, ...);
+void fc_vfmt(char *o, int size, int *at, const char *fmt, va_list ap);
 
 #endif

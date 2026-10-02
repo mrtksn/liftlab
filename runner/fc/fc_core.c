@@ -20,9 +20,9 @@ static inline float fmaxf(float a, float b) { return a > b ? a : b; }
 #include <string.h>
 #endif
 
-/* A small formatter for the status line (%s, %d, %.Nf), so the flight code needs no printf. */
-static void fc_say(fc_state *F, const char *fmt, ...) {
-  char *o = F->why; int n = 0, cap = (int)sizeof F->why - 1; va_list ap; va_start(ap, fmt);
+/* A small formatter for the status lines (%s, %d, %.Nf), so the flight code needs no printf. Appends at o + *at. */
+void fc_vfmt(char *o, int size, int *at, const char *fmt, va_list ap) {
+  int n = *at, cap = size - 1;
   for (const char *p = fmt; *p && n < cap; p++) {
     if (*p != '%') { o[n++] = *p; continue; }
     int prec = -1; p++;
@@ -38,8 +38,11 @@ static void fc_say(fc_state *F, const char *fmt, ...) {
     } else if (n < cap) o[n++] = *p;
     if (!*p) break;
   }
-  o[n] = 0; va_end(ap);
+  o[n] = 0; *at = n;
 }
+void fc_fmt(char *o, int size, const char *fmt, ...) { int at = 0; va_list ap; va_start(ap, fmt); fc_vfmt(o, size, &at, fmt, ap); va_end(ap); }
+void fc_fmt_add(char *o, int size, const char *fmt, ...) { int at = 0; while (o[at] && at < size - 1) at++; va_list ap; va_start(ap, fmt); fc_vfmt(o, size, &at, fmt, ap); va_end(ap); }
+static void fc_say(fc_state *F, const char *fmt, ...) { int at = 0; va_list ap; va_start(ap, fmt); fc_vfmt(F->why, (int)sizeof F->why, &at, fmt, ap); va_end(ap); }
 
 #define G_ 9.81f
 #define FC_RN_IN 24                 /* actuator inputs the formulas' lists hold (RN_IN in js/rn-sigs.js) */
@@ -91,7 +94,7 @@ static void frame_from(float *M, const float *n, const float *xref) {
   M[0] = h[0]; M[1] = k[0]; M[2] = n[0]; M[3] = h[1]; M[4] = k[1]; M[5] = n[1]; M[6] = h[2]; M[7] = k[2]; M[8] = n[2];
 }
 /* learn.js basisVals / dBasisVals: products of (1, cos θ, sin θ) over a motor's joints, first joint most significant */
-static int basis(float *v, const float *ang, int k, int dm) {
+int fc_basis(float *v, const float *ang, int k, int dm) {
   int n = 1; v[0] = 1;
   for (int i = 0; i < k; i++) {
     float f[3] = { 1, cosf(ang[i]), sinf(ang[i]) };
@@ -101,12 +104,25 @@ static int basis(float *v, const float *ang, int k, int dm) {
   }
   return n;
 }
-static void col_at(const fc_state *F, int i, int dm, float *out) {   /* motor i's effect now (dm ≥ 0: its change as chain joint dm turns) */
-  const fc_motor *M = &F->A.mot[i]; float ang[FC_MAX_CHAIN], b[FC_MAX_BASIS];
-  for (int c = 0; c < M->n_chain; c++) ang[c] = F->th_hat[M->chain[c]];
-  int n = basis(b, ang, M->n_chain, dm);
-  for (int r = 0; r < 6; r++) { float s = 0; for (int k = 0; k < n && k < M->n_basis; k++) s += b[k] * M->cols[k][r]; out[r] = s; }
+/* Motor i's columns as flown: the learned ones, or the description's scaled by the supervisor's effectiveness. */
+static float col_k(const fc_state *F, int i, int k, int r) { return F->use_learned ? F->lcols[i][k][r] : F->A.mot[i].cols[k][r] * F->m_eff[i]; }
+static void col_at_angles(const fc_state *F, int i, const float *ang, int dm, float *out) {
+  const fc_motor *M = &F->A.mot[i]; float b[FC_MAX_BASIS];
+  int n = fc_basis(b, ang, M->n_chain, dm);
+  for (int r = 0; r < 6; r++) { float s = 0; for (int k = 0; k < n && k < M->n_basis; k++) s += b[k] * col_k(F, i, k, r); out[r] = s; }
 }
+static void col_at(const fc_state *F, int i, int dm, float *out) {   /* motor i's effect now (dm ≥ 0: its change as chain joint dm turns) */
+  const fc_motor *M = &F->A.mot[i]; float ang[FC_MAX_CHAIN];
+  for (int c = 0; c < M->n_chain; c++) ang[c] = F->th_hat[M->chain[c]];
+  col_at_angles(F, i, ang, dm, out);
+}
+static const float *axis_of(const fc_state *F) { return F->use_learned ? F->laxis : F->A.axis; }
+const float *fc_axis(const fc_state *F) { return axis_of(F); }
+static int mode_of(const fc_state *F) { return F->hold_servos ? 0 : F->A.mode; }
+static int steers(const fc_state *F, int j) { return F->A.jnt[j].steer && !F->hold_servos && !F->j_off[j]; }
+static float j_rate(const fc_state *F, int j) { return F->j_rate[j] > 0 ? F->j_rate[j] : F->A.jnt[j].rate; }
+static float j_lag(const fc_state *F, int j) { return F->j_rate[j] > 0 ? F->j_lag[j] : F->A.jnt[j].lag; }
+static float m_bend(const fc_state *F, int i) { return F->m_bend[i] >= 0 ? F->m_bend[i] : F->A.mot[i].bend; }
 
 /* ── the airframe ── */
 typedef struct { const uint8_t *p; uint32_t n, at; int bad; } rd;
@@ -144,6 +160,10 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len) {
   if (inputs > FC_RN_IN) { fc_say(F, "airframe: %d inputs, the formulas hold %d", inputs, FC_RN_IN); return -1; }
   F->A = A; F->have_airframe = 1; F->state = FC_DISARMED;
   for (int j = 0; j < A.n_joints; j++) F->th_cmd[j] = F->th_hat[j] = A.jnt[j].manual;
+  /* a new airframe: the description, nothing learned, every part working */
+  F->use_learned = F->hold_servos = 0; F->exc_mode = 0; F->sup_mode = 0; F->lim_lean = 0; F->lim_accel = 0;
+  for (int i = 0; i < FC_MAX_MOTORS; i++) { F->m_on[i] = 1; F->m_eff[i] = 1; F->m_cap[i] = 1; F->m_bend[i] = -1; }
+  for (int j = 0; j < FC_MAX_JOINTS; j++) { F->j_off[j] = 0; F->j_rate[j] = 0; F->j_lag[j] = 0; }
   fc_say(F, "airframe: %d motors, %d servo joints, %.2f kg", A.n_motors, A.n_joints, (double)A.m);
   return 0;
 }
@@ -186,7 +206,7 @@ int fc_init(fc_state *F, rn_host *H) {
 
 /* how far the nominal thrust axis leans from straight up [deg] */
 static float axis_tilt(const fc_state *F) {
-  const float *a = F->A.axis, *R = F->R;
+  const float *a = axis_of(F), *R = F->R;
   return acosf(clampf(R[6] * a[0] + R[7] * a[1] + R[8] * a[2], -1, 1)) * 57.2958f;
 }
 
@@ -213,14 +233,14 @@ void fc_command(fc_state *F, const fc_cmd *in) {
       F->batt_wired && !batt_ok(F) ? "the battery reading doesn't fit the pack (check the sense wire and vref)" : 0;
     if (no) fc_say(F, "won't arm: %s", no);
     else {
-      F->state = FC_ARMED; F->arm_released = 0; fc_say(F, "armed");
+      F->state = FC_ARMED; F->arm_released = 0; F->sup_landing = 0; fc_say(F, "armed");
       F->yaw_sp = atan2f(F->R[3], F->R[0]); memset(F->iAtt, 0, sizeof F->iAtt); F->iAz = 0; F->vz_i = 0; F->err_t = 0;
       memset(&F->last_out, 0, sizeof F->last_out);   /* what a failing first step would hold: idle, servos where they are */
       for (int i = 0; i < F->A.n_motors; i++) F->last_out.motor[i] = FC_IDLE;
       for (int j = 0; j < F->A.n_joints; j++) F->last_out.servo[j] = F->th_cmd[j];
     }
   }
-  if (c->arm && F->state == FC_FAILSAFE) { F->state = FC_ARMED; fc_say(F, "commands back: armed"); }
+  if (c->arm && F->state == FC_FAILSAFE && !F->sup_landing) { F->state = FC_ARMED; fc_say(F, "commands back: armed"); }
   /* motor test: disarmed only, one motor, for FC_TEST_S from when it starts; another needs the test switched off first */
   if (F->state == FC_TESTING && (c->arm || c->test_motor != prev_test)) { F->state = FC_DISARMED; fc_say(F, "motor test stopped"); }
   if (!c->arm && F->state == FC_DISARMED && c->test_motor >= 0 && c->test_motor < F->A.n_motors && F->have_airframe && F->test_released) {
@@ -237,19 +257,20 @@ static int allocate(fc_state *F, const float *wa, float *u) {
   int nm = A->n_motors;
   for (int stage = 0; stage < 2; stage++) {
     int ns = 0, sj[FC_MAX_JOINTS];
-    if (stage == 0) { for (int j = 0; j < A->n_joints; j++) if (A->jnt[j].steer) sj[ns++] = j; if (!ns) continue; }
+    if (stage == 0) { for (int j = 0; j < A->n_joints; j++) if (steers(F, j)) sj[ns++] = j; if (!ns) continue; }
     int n = 0; float amax = 1e-9f;
     for (int i = 0; i < nm; i++, n++) {
-      col_at(F, i, -1, cols + 6 * n); lo[n] = 0; hi[n] = 1;
+      col_at(F, i, -1, cols + 6 * n); lo[n] = 0; hi[n] = F->m_on[i] ? F->m_cap[i] : 0;   /* the supervisor's: removed, or capped */
       float *q = inp + 14 * n; memset(q, 0, 14 * sizeof(float));
-      q[0] = 0; q[1] = F->v[i]; q[2] = 0; q[3] = 1; q[6] = 1; q[7] = A->mot[i].power;   /* kind thrust, x, lo, hi, (authority), power */
+      q[0] = 0; q[1] = F->v[i]; q[2] = 0; q[3] = hi[n]; q[6] = 1; q[7] = A->mot[i].power;   /* kind thrust, x, lo, hi, (authority), power */
     }
     for (int s = 0; s < ns; s++, n++) {
-      const fc_joint *J = &A->jnt[sj[s]]; float th = F->th_hat[sj[s]], reach = J->rate * fmaxf(0.005f, A->horizon - J->lag);
+      const fc_joint *J = &A->jnt[sj[s]]; float th = F->th_hat[sj[s]], reach = j_rate(F, sj[s]) * fmaxf(0.005f, A->horizon - j_lag(F, sj[s]));
       float d[6] = { 0 };
       for (int i = 0; i < nm; i++) {
         const fc_motor *M = &A->mot[i]; int m = -1; for (int c = 0; c < M->n_chain; c++) if (M->chain[c] == sj[s]) m = c;
         if (m < 0) continue;
+        if (!F->m_on[i]) continue;
         float dc[6]; col_at(F, i, m, dc); float w = fmaxf(F->v[i], 0.02f);
         for (int r = 0; r < 6; r++) d[r] += dc[r] * w;
       }
@@ -263,7 +284,7 @@ static int allocate(fc_state *F, const float *wa, float *u) {
     p.n = 0; p_list(&p, inp, n, 14); p_f(&p, A->allowance); p_f(&p, A->efficiency); p_f(&p, A->servo_move);
     float pull[2 * (1 + FC_RN_IN)];
     if (call(F, F->f_pref, 0, &p, pull)) return -1;
-    p.n = 0; p_list(&p, cols, n, 6); p_list(&p, lo, n, 1); p_list(&p, hi, n, 1); p_v(&p, wa, 6); p_f(&p, (float)A->mode);
+    p.n = 0; p_list(&p, cols, n, 6); p_list(&p, lo, n, 1); p_list(&p, hi, n, 1); p_v(&p, wa, 6); p_f(&p, (float)mode_of(F));
     p_f(&p, 1); p_v(&p, pull, 2 * (1 + FC_RN_IN));
     if (call(F, F->f_alloc, 0, &p, out)) return -1;
     if (stage == 0) for (int s = 0; s < ns; s++) { const fc_joint *J = &A->jnt[sj[s]]; F->th_cmd[sj[s]] = clampf(F->th_hat[sj[s]] + out[1 + nm + s], -J->range, J->range); }
@@ -272,17 +293,30 @@ static int allocate(fc_state *F, const float *wa, float *u) {
   return 0;
 }
 
+/* The failsafe's descent (commands lost, or the supervisor landing it). */
+static void start_descent(fc_state *F) {
+  F->state = FC_FAILSAFE; F->fs_t = F->t; F->fs_land_t = 0; F->fs_alt_ref = F->alt_e; F->fs_alt_t = F->t;
+  F->fs_bump_t = -1e9; F->fs_vz = F->vz_i;
+  /* Without a barometer the thrust trim is frozen, at no more than it was when last hovering calmly: while
+   * climbing fast the trim also holds up against drag, and frozen that would keep it climbing. */
+  if (!F->have_alt) F->iAz = fminf(F->iAz, F->t - F->calm_t < 30 ? F->iAz_calm : 0);
+}
+
 /* One step; returns 0, or −1 when a formula failed (the outputs are then not to be used). */
 static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   const fc_airframe *A = &F->A; pk p; float r[8];
   F->t += dt; F->steps++; F->vbatt = vbatt;
   memset(o, 0, sizeof *o);
+  /* disarmed, the servos go back to their set angles: a helicopter's swashplate is levelled while its rotor runs
+   * down (left tilted on the ground, the spinning disc can roll it over), a tilt-rotor's motors point as built */
+  if (F->state == FC_DISARMED) for (int j = 0; j < A->n_joints; j++) F->th_cmd[j] = A->jnt[j].manual;
   for (int j = 0; j < A->n_joints; j++) o->servo[j] = F->th_cmd[j];
   if (!F->have_airframe || !F->sizes_ok) return 0;
 
   /* attitude, from the IMU in body axes */
   if (imu->have_gyro) {
     float g[3], a[3]; m3v(g, A->imu_R, imu->gyro); m3v(a, A->imu_R, imu->acc);
+    memcpy(F->fb, a, sizeof a); memcpy(F->gb, g, sizeof g); F->have_imu = 1;
     int hm = imu->have_mag && fin(imu->mag[0]) && fin(imu->mag[1]) && fin(imu->mag[2]);
     p.n = 0; p_v(&p, g, 3); p_v(&p, a, 3); p_f(&p, (float)hm); p_v(&p, hm ? imu->mag : (float[3]){ 0, 0, 0 }, 3); p_f(&p, dt);
     if (call(F, F->f_att, 0, &p, r)) return -1;
@@ -297,7 +331,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     if (still && F->att_ok) F->az_bias += (azm - F->az_bias) * fminf(1, dt / 1.0f);
     F->az_f += (azm - F->az_bias - F->az_f) * fminf(1, dt * 31.4f);
   } else {
-    F->att_ok = 0; F->att_t = 0; F->imu_gap += dt;
+    F->have_imu = 0; F->att_ok = 0; F->att_t = 0; F->imu_gap += dt;
     if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && F->imu_gap > 0.2f) { F->state = FC_CRASHED; fc_say(F, "IMU lost in flight: motors off"); }
   }
 
@@ -316,10 +350,22 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     F->baro_gap = 0;
   } else if ((F->baro_gap += dt) > 0.5f) F->have_alt = 0;                 /* none for 0.5 s: fly without it */
 
-  /* servos: where they are believed to be */
+  /* the learning task's excitation: added to what the controller asks, or open loop (the throw start) */
+  const int exc_live = F->exc_mode && F->t - F->exc_t < FC_EXC_TIMEOUT && F->state == FC_ARMED, open = exc_live && F->exc_mode == 2;
+  if (!(exc_live && F->exc_hold_s)) F->held_s = 0;
+  else if (!F->held_s) { for (int j = 0; j < A->n_joints; j++) F->hold_th[j] = steers(F, j) ? F->th_cmd[j] : A->jnt[j].manual; F->held_s = 1; }
+
+  /* servos: where they are believed to be (one the supervisor took out is where it says it is) */
   for (int j = 0; j < A->n_joints; j++) {
-    const fc_joint *J = &A->jnt[j]; float tgt = J->steer ? F->th_cmd[j] : J->manual, th;
-    p.n = 0; p_f(&p, tgt); p_f(&p, J->rate); p_f(&p, J->lag); p_f(&p, dt);
+    const fc_joint *J = &A->jnt[j]; float tgt = steers(F, j) ? F->th_cmd[j] : J->manual, th;
+    if (F->j_off[j]) { F->th_hat[j] = F->j_ang[j]; o->servo[j] = F->j_ang[j]; continue; }
+    if (exc_live && J->steer) {
+      int has = (F->exc_smask >> j) & 1;
+      if (open) tgt = has ? F->exc_s[j] : tgt;
+      else { if (F->exc_hold_s) tgt = F->hold_th[j]; if (has) tgt += F->exc_s[j]; }
+      tgt = clampf(tgt, -J->range, J->range);
+    }
+    p.n = 0; p_f(&p, tgt); p_f(&p, j_rate(F, j)); p_f(&p, j_lag(F, j)); p_f(&p, dt);
     if (call(F, F->f_srv, j, &p, &th)) return -1;
     F->th_hat[j] = th;
     o->servo[j] = tgt;
@@ -332,17 +378,13 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     if (F->t - F->test_t > FC_TEST_S || F->t - F->cmd_t > FC_CMD_TIMEOUT) { F->state = FC_DISARMED; fc_say(F, "motor test done"); return 0; }
     o->motor[F->cmd.test_motor] = F->cmd.test_throttle; return 0;
   }
-  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG) { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
+  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !open && F->t >= F->recover_t) { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
   if (F->state == FC_ARMED && F->t - F->cmd_t > FC_CMD_TIMEOUT) {
     if (F->cmd.throttle < 0.05f) { F->state = FC_DISARMED; fc_say(F, "no commands, at idle: disarmed"); }   /* on the ground, most likely */
-    else {
-      F->state = FC_FAILSAFE; F->fs_t = F->t; F->fs_land_t = 0; F->fs_alt_ref = F->alt_e; F->fs_alt_t = F->t;
-      F->fs_bump_t = -1e9; F->fs_vz = F->vz_i; fc_say(F, "no commands: failsafe descent");
-      /* Without a barometer the thrust trim is frozen, at no more than it was when last hovering calmly: while
-       * climbing fast the trim also holds up against drag, and frozen that would keep it climbing. */
-      if (!F->have_alt) F->iAz = fminf(F->iAz, F->t - F->calm_t < 30 ? F->iAz_calm : 0);
-    }
+    else { start_descent(F); fc_say(F, "no commands: failsafe descent"); }
   }
+  /* the supervisor says land (or go home, which without the navigation is the same): the failsafe's descent */
+  if (F->state == FC_ARMED && F->sup_mode >= 2 && !F->cmd.guided && F->cmd.throttle >= 0.05f && !open) { start_descent(F); F->sup_landing = 1; fc_say(F, "supervisor: landing"); }
   float fs_az = 0;
   if (F->state == FC_FAILSAFE) {
     if (F->have_alt) {
@@ -366,6 +408,22 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   }
   if (F->state != FC_ARMED && F->state != FC_FAILSAFE) return 0;
 
+  /* open loop (the throw start): the learning task's throttles as they are; nothing else runs */
+  if (open) {
+    int pulsing = 0; for (int i = 0; i < A->n_motors; i++) if (F->exc_m[i] > 0) pulsing = 1;
+    if (F->pulse_dw > 0 && pulsing && !F->pulse_cut && F->t - F->pulse_t > 0.012) {   /* a pulse turned it enough: stop now */
+      float d0 = F->gb[0] - F->pulse_w0[0], d1 = F->gb[1] - F->pulse_w0[1], d2 = F->gb[2] - F->pulse_w0[2];
+      if (d0 * d0 + d1 * d1 + d2 * d2 > F->pulse_dw * F->pulse_dw) F->pulse_cut = 1;
+    }
+    for (int i = 0; i < A->n_motors; i++) { float u = F->m_on[i] && !F->pulse_cut ? clampf(F->exc_m[i], 0, 1) : 0, k = m_bend(F, i); o->motor[i] = u; F->v[i] = (1 - k) * u + k * u * u; }
+    F->vz_i += (F->az_f - F->vz_i / FC_VZ_LEAK) * dt;   /* (the vertical speed, for the learning's timing) */
+    F->open_loop = 1; return 0;
+  }
+  if (F->open_loop) {                  /* it just ended: catch itself, from whatever attitude it is in (no tilt check for 3 s) */
+    F->open_loop = 0; F->recover_t = F->t + 3;
+    memset(F->iAtt, 0, sizeof F->iAtt); F->iAz = 0; F->vz_i = 0; F->yaw_sp = atan2f(F->R[3], F->R[0]);
+  }
+
   /* what the pilot asks for: lean angles, turn rate, and with the throttle stick around its middle (0.5):
    * with a barometer, climb or sink speed (in the middle it holds the height); without, vertical acceleration */
   fc_cmd c = F->cmd;
@@ -383,7 +441,9 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     memset(F->iAtt, 0, sizeof F->iAtt); F->iAz = 0; F->vz_i = 0; F->holding = 0; F->yaw_sp = atan2f(F->R[3], F->R[0]);
     return 0;
   }
-  const float lean = (A->lean_max > 0 ? A->lean_max : 30) * 0.0174533f;
+  float lean_deg = A->lean_max > 0 ? A->lean_max : 30;
+  if (F->lim_lean > 0 && F->lim_lean < lean_deg) lean_deg = F->lim_lean;   /* the supervisor's limit */
+  const float lean = lean_deg * 0.0174533f;
   /* the thrust for that acceleration: the model's, trimmed by what the accelerometer measures (the model's hover
    * thrust is never exactly right, and without this the drone would drift up or down at "hover") */
   F->vz_i += (F->az_f - F->vz_i / FC_VZ_LEAK) * dt;   /* vertical speed since take-off, from the accelerometer alone: drifts, so it leaks */
@@ -396,7 +456,9 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   float Fd[3];
   if (c.guided) {                                           /* the acceleration asked for, in the world */
     F->yaw_sp = c.heading;
-    Fd[0] = A->m * c.acc[0]; Fd[1] = A->m * c.acc[1]; Fd[2] = A->m * lift;
+    float ax = c.acc[0], ay = c.acc[1], ah = sqrtf(ax * ax + ay * ay);
+    if (F->lim_accel > 0 && ah > F->lim_accel) { ax *= F->lim_accel / ah; ay *= F->lim_accel / ah; }   /* the supervisor's limit */
+    Fd[0] = A->m * ax; Fd[1] = A->m * ay; Fd[2] = A->m * lift;
   } else {                                                  /* the sticks: lean angles, heading turned at a rate */
     float fwd = tanf(clampf(c.pitch, -1, 1) * lean) * lift, left = -tanf(clampf(c.roll, -1, 1) * lean) * lift;
     F->yaw_sp += clampf(c.yaw, -1, 1) * FC_YAW_RATE * dt;
@@ -408,11 +470,12 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
 
   /* the attitude wanted, and the torque for it (the simulator's controlStep) */
   float nd[3], Rd[9], F1[9], F2[9], eR[3], tau[3], Fb[3], f[3];
-  const float share = A->mode == 1 ? A->mix_share * F->rho : 0;
-  p.n = 0; p_v(&p, Fd, 3); p_f(&p, (float)A->mode); p_f(&p, share); p_f(&p, A->lean_max);
+  const int mode = mode_of(F);
+  const float share = mode == 1 ? A->mix_share * F->rho : 0;
+  p.n = 0; p_v(&p, Fd, 3); p_f(&p, (float)mode); p_f(&p, share); p_f(&p, lean_deg);
   if (call(F, F->f_ta, 0, &p, nd)) return -1;
   float l = sqrtf(nd[0] * nd[0] + nd[1] * nd[1] + nd[2] * nd[2]); nd[0] /= l; nd[1] /= l; nd[2] /= l;
-  frame_from(F1, nd, (float[3]){ cy, sy, 0 }); frame_from(F2, A->axis, (float[3]){ 1, 0, 0 }); m3mt(Rd, F1, F2);
+  frame_from(F1, nd, (float[3]){ cy, sy, 0 }); frame_from(F2, axis_of(F), (float[3]){ 1, 0, 0 }); m3mt(Rd, F1, F2);
   p.n = 0; p_v(&p, F->R, 9); p_v(&p, Rd, 9);
   if (call(F, F->f_err, 0, &p, eR)) return -1;
   if (c.throttle > 0.15f) for (int k = 0; k < 3; k++) F->iAtt[k] = clampf(F->iAtt[k] + eR[k] * dt, -0.5f, 0.5f);
@@ -420,7 +483,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   if (call(F, F->f_ctl, 0, &p, tau)) return -1;
   memcpy(F->tau_des, tau, sizeof F->tau_des);
   m3tv(Fb, F->R, Fd);
-  p.n = 0; p_v(&p, Fb, 3); p_v(&p, A->axis, 3); p_f(&p, (float)A->mode);
+  p.n = 0; p_v(&p, Fb, 3); p_v(&p, axis_of(F), 3); p_f(&p, (float)mode);
   if (call(F, F->f_fd, 0, &p, f)) return -1;
 
   /* allocation → throttles */
@@ -428,7 +491,13 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   m3v(ta, A->Jinv, tau); memcpy(wa + 3, ta, sizeof ta);
   float u[FC_MAX_MOTORS];
   if (allocate(F, wa, u)) return -1;
-  if (A->mode == 1) {                  /* how much of the asked-for sideways force the thrusts make (the simulator's steerMix.rho) */
+  /* the learning task's excitation: a pulse on one motor while the others hold, or a little on all of them */
+  if (exc_live && F->exc_mode == 1) {
+    if (F->exc_hold_m && !F->held_m) { memcpy(F->hold_v, u, sizeof(float) * (size_t)A->n_motors); F->held_m = 1; }
+    for (int i = 0; i < A->n_motors; i++) u[i] = clampf((F->exc_hold_m ? F->hold_v[i] : u[i]) + F->exc_m[i], 0, F->m_on[i] ? F->m_cap[i] : 0);
+  }
+  if (!(exc_live && F->exc_mode == 1 && F->exc_hold_m)) F->held_m = 0;
+  if (mode == 1) {                  /* how much of the asked-for sideways force the thrusts make (the simulator's steerMix.rho) */
     float dem = sqrtf(wa[0] * wa[0] + wa[1] * wa[1]);
     if (dem > 0.2f) {
       float gx = 0, gy = 0, col[6];
@@ -441,22 +510,36 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   float v[FC_MAX_MOTORS];
   for (int i = 0; i < A->n_motors; i++) {
     float want, sent;
-    p.n = 0; p_f(&p, u[i]); p_f(&p, A->mot[i].bend);
+    p.n = 0; p_f(&p, u[i]); p_f(&p, m_bend(F, i));
     if (call(F, F->f_lin, 0, &p, &want)) return -1;
     want = clampf(want, FC_IDLE, 1);
     sent = want; float eq = want;      /* eq: what it amounts to at the reference voltage (less when the correction runs out) */
     if (vc) { p.n = 0; p_f(&p, want); p_f(&p, vbatt); p_f(&p, F->vref); if (call(F, F->f_vc, 0, &p, &sent)) return -1; eq = fminf(want, sent * vbatt / F->vref); }
-    float k = A->mot[i].bend; v[i] = (1 - k) * eq + k * eq * eq;
+    float k = m_bend(F, i); v[i] = (1 - k) * eq + k * eq * eq;
     o->motor[i] = clampf(sent, 0, 1);
   }
   memcpy(F->v, v, sizeof(float) * (size_t)A->n_motors);
   return 0;
 }
 
+static void ltel_add(fc_state *F, const fc_out *o, float dt) {
+  if (F->open_loop && F->sub_n < FC_SUB) {             /* open loop: every step, for the throw's fit */
+    float *s = F->sub[F->sub_n++]; int k = 0; s[k++] = dt;
+    for (int i = 0; i < 3; i++) s[k++] = F->fb[i];
+    for (int i = 0; i < 3; i++) s[k++] = F->gb[i];
+    for (int i = 0; i < F->A.n_motors; i++) s[k++] = F->lt_vprev[i];   /* the thrusts it has been flying on (this step's take effect next) */
+  }
+  memcpy(F->lt_vprev, F->v, sizeof F->lt_vprev);
+  if (F->have_imu) for (int k = 0; k < 3; k++) { F->lt_f[k] += F->fb[k]; F->lt_w[k] += F->gb[k]; }
+  for (int i = 0; i < F->A.n_motors; i++) { F->lt_u[i] += o->motor[i]; F->lt_v[i] += F->v[i]; }
+  for (int j = 0; j < F->A.n_joints; j++) F->lt_tc[j] += o->servo[j];
+  F->lt_n++;
+}
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   fc_out n;
   if (!fin(dt) || dt <= 0) dt = 0.001f;
   int e = step(F, imu, dt, vbatt, &n);
+  ltel_add(F, e ? &F->last_out : &n, dt);
   int flying = F->state == FC_ARMED || F->state == FC_FAILSAFE;
   if (!e) { *o = n; F->err_t = 0; if (flying) F->last_out = n; return; }
   /* A formula failed even after the program slots fell back to the built-in program: hold the last outputs for a
@@ -465,4 +548,91 @@ void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   if (flying) { F->state = FC_CRASHED; fc_say(F, "the flight formulas failed: motors off"); }
   memset(o, 0, sizeof *o);
   for (int j = 0; j < F->A.n_joints; j++) o->servo[j] = F->th_cmd[j];
+}
+
+/* ── the learning task's and the supervisor's frames ── */
+int fc_exc(fc_state *F, const float *p, int n) {
+  if (n < 6) return -1;
+  int nm = (int)p[4], nj = (int)p[5];
+  if (nm != F->A.n_motors || nj != F->A.n_joints || n != 8 + nm + nj) return -1;
+  for (int k = 0; k < n; k++) if (!fin(p[k])) return -1;
+  int mode = (int)p[0]; if (mode < 0 || mode > 2) return -1;
+  F->exc_mode = mode; F->exc_hold_m = p[1] > 0.5f; F->exc_hold_s = p[2] > 0.5f; F->exc_smask = (int)p[3];
+  for (int i = 0; i < nm; i++) F->exc_m[i] = clampf(p[6 + i], -1, 1);
+  for (int j = 0; j < nj; j++) F->exc_s[j] = clampf(p[6 + nm + j], -3.2f, 3.2f);
+  int id = (int)p[6 + nm + nj];
+  if (id != F->pulse_id) { F->pulse_id = id; F->pulse_t = F->t; memcpy(F->pulse_w0, F->gb, sizeof F->pulse_w0); F->pulse_cut = 0; }
+  F->pulse_dw = p[7 + nm + nj] > 0 ? p[7 + nm + nj] : 0;
+  F->exc_t = F->t;
+  return 0;
+}
+/* The nominal thrust axis on the learned model (learn.js ctlAxis): the lifting rotors' force at rest, each weighted
+ * by how much it points up (a sideways tail rotor doesn't say which way is up). */
+static void learned_axis(fc_state *F) {
+  float s[3] = { 0, 0, 0 };
+  for (int i = 0; i < F->A.n_motors; i++) {
+    if (!F->m_on[i]) continue;
+    const fc_motor *M = &F->A.mot[i]; float ang[FC_MAX_CHAIN], c[6];
+    for (int k = 0; k < M->n_chain; k++) ang[k] = F->A.jnt[M->chain[k]].steer ? 0 : F->A.jnt[M->chain[k]].manual;
+    col_at_angles(F, i, ang, -1, c);
+    float l = sqrtf(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]); if (l < 1e-9f) continue;
+    float w = fmaxf(0, c[2] / l); for (int k = 0; k < 3; k++) s[k] += c[k] * w;
+  }
+  float l = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+  if (l > 1e-6f) for (int k = 0; k < 3; k++) F->laxis[k] = s[k] / l; else memcpy(F->laxis, F->A.axis, sizeof F->laxis);
+}
+int fc_model(fc_state *F, const float *p, int n) {
+  const fc_airframe *A = &F->A;
+  if (n < 4 || (int)p[2] != A->n_motors || (int)p[3] != A->n_joints) return -1;
+  for (int k = 0; k < n; k++) if (!fin(p[k])) return -1;
+  int k = 4;
+  static float cols[FC_MAX_MOTORS][FC_MAX_BASIS][6];
+  for (int i = 0; i < A->n_motors; i++) {
+    if (k >= n || (int)p[k] != A->mot[i].n_basis) return -1;
+    k++;
+    if (k + 6 * A->mot[i].n_basis > n) return -1;
+    for (int b = 0; b < A->mot[i].n_basis; b++) for (int r = 0; r < 6; r++) cols[i][b][r] = p[k++];
+  }
+  if (k + 2 * A->n_joints + A->n_motors != n) return -1;
+  int use = p[0] > 0.5f;
+  if (use != F->use_learned) memset(F->iAtt, 0, sizeof F->iAtt);   /* the integrators were wound up for the other model */
+  memcpy(F->lcols, cols, sizeof cols);
+  for (int j = 0; j < A->n_joints; j++) { float r = p[k++], l = p[k++]; F->j_rate[j] = r > 0 ? r : 0; F->j_lag[j] = r > 0 ? clampf(l, 0, 0.5f) : 0; }
+  for (int i = 0; i < A->n_motors; i++) { float b = p[k++]; F->m_bend[i] = b >= 0 ? clampf(b, 0, 1) : -1; }
+  F->use_learned = use; F->hold_servos = p[1] > 0.5f;
+  learned_axis(F);
+  return 0;
+}
+int fc_set(fc_state *F, const float *p, int n) {
+  if (n < 6) return -1;
+  int nm = (int)p[4], nj = (int)p[5];
+  if (nm != F->A.n_motors || nj != F->A.n_joints || n != 6 + 3 * nm + 2 * nj) return -1;
+  for (int k = 0; k < n; k++) if (!fin(p[k])) return -1;
+  int mode = (int)p[0]; if (mode < 0 || mode > 3) return -1;
+  if (mode > F->sup_mode) F->sup_mode = mode;           /* it only steps up (it may already be landing) */
+  F->lim_lean = p[1] > 0 ? p[1] : 0; F->lim_accel = p[2] > 0 ? p[2] : 0;
+  for (int i = 0; i < nm; i++) { F->m_on[i] = p[6 + 3 * i] > 0.5f; F->m_eff[i] = clampf(p[7 + 3 * i], 0.05f, 2); F->m_cap[i] = clampf(p[8 + 3 * i], 0, 1); }
+  for (int j = 0; j < nj; j++) { F->j_off[j] = p[6 + 3 * nm + 2 * j] > 0.5f; F->j_ang[j] = clampf(p[7 + 3 * nm + 2 * j], -3.2f, 3.2f); }
+  if (F->use_learned) learned_axis(F);
+  return 0;
+}
+int fc_ltel(fc_state *F, float *o) {
+  const fc_airframe *A = &F->A; float k = F->lt_n ? 1.0f / (float)F->lt_n : 0; int n = 0;
+  int flying = (F->state == FC_ARMED && F->cmd.throttle >= 0.05f) || F->state == FC_FAILSAFE;
+  o[n++] = (float)F->t; o[n++] = (float)F->state;
+  o[n++] = (float)(flying | (F->open_loop ? 2 : 0) | (F->use_learned ? 4 : 0) | (F->held_m ? 8 : 0) | (F->pulse_cut ? 16 : 0));
+  for (int i = 0; i < 4; i++) o[n++] = F->q[i];
+  for (int i = 0; i < 3; i++) o[n++] = F->lt_f[i] * k;
+  for (int i = 0; i < 3; i++) o[n++] = F->lt_w[i] * k;
+  o[n++] = F->vbatt; o[n++] = F->alt_e; o[n++] = F->have_alt ? F->vz_e : F->vz_i; o[n++] = (float)F->have_alt;
+  o[n++] = (float)A->n_motors; o[n++] = (float)A->n_joints;
+  for (int i = 0; i < A->n_motors; i++) o[n++] = F->lt_u[i] * k;
+  for (int i = 0; i < A->n_motors; i++) o[n++] = F->lt_v[i] * k;
+  for (int j = 0; j < A->n_joints; j++) o[n++] = F->lt_tc[j] * k;
+  for (int j = 0; j < A->n_joints; j++) o[n++] = F->th_hat[j];
+  o[n++] = (float)F->sub_n;
+  for (int s = 0; s < F->sub_n; s++) for (int k = 0; k < 7 + A->n_motors; k++) o[n++] = F->sub[s][k];
+  F->sub_n = 0;
+  memset(F->lt_f, 0, sizeof F->lt_f); memset(F->lt_w, 0, sizeof F->lt_w); memset(F->lt_u, 0, sizeof F->lt_u); memset(F->lt_v, 0, sizeof F->lt_v); memset(F->lt_tc, 0, sizeof F->lt_tc); F->lt_n = 0;
+  return n;
 }

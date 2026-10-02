@@ -120,13 +120,36 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   memcpy(out->p, N->p, sizeof out->p); memcpy(out->v, N->v, sizeof out->v); out->have_home = N->have_home;
   N->steps++;
 
+  if (N->landed) { out->landed = 1; return 0; }                    /* the supervisor landed it: it stays down */
   if (!sp->fly || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
+
+  /* the supervisor's return home and landing: it moves the target itself, as the pilot would, within the limits */
+  const float *target = sp->target, *vref = sp->vref;
+  if (N->sup_mode >= 2 && N->have_home) {
+    if (!N->auto_on) { N->auto_on = 1; memcpy(N->auto_t, N->p, sizeof N->auto_t); memset(N->auto_v, 0, sizeof N->auto_v); N->land_t = 0; }
+    if (N->sup_mode == 3) N->auto_land = 1;
+    float spd = N->lim_speed > 0 ? N->lim_speed : 1, want[3] = { 0, 0, 0 };
+    if (!N->auto_land) {
+      float dx = -N->auto_t[0], dy = -N->auto_t[1], d = sqrtf(dx * dx + dy * dy);
+      if (d > 0.05f) { float s = (spd < 1.5f * d ? spd : 1.5f * d) / d; want[0] = dx * s; want[1] = dy * s; }
+      if (d < 0.15f && sqrtf(N->p[0] * N->p[0] + N->p[1] * N->p[1]) < 0.4f) N->auto_land = 1;
+    } else want[2] = N->p[2] > 0.8f ? -0.6f : -0.3f;
+    for (int i = 0; i < 3; i++) { N->auto_v[i] += clampf(want[i] - N->auto_v[i], -2 * dt, 2 * dt); N->auto_t[i] += N->auto_v[i] * dt; }
+    if (N->auto_t[2] < -0.2f) N->auto_t[2] = -0.2f;
+    target = N->auto_t; vref = N->auto_v;
+    if (N->auto_land) {                  /* down: settled low and slow for half a second */
+      float vv = sqrtf(N->v[0] * N->v[0] + N->v[1] * N->v[1] + N->v[2] * N->v[2]);
+      N->land_t = N->p[2] < 0.2f && vv < 0.3f ? N->land_t + dt : 0;
+      if (N->land_t > 0.5f) { N->landed = 1; out->landed = 1; say(N, "the supervisor landed it"); return 0; }
+    }
+  }
 
   /* where to go: the acceleration toward the target */
   float ep[3], ev[3], vmax = C->speed_max > 0 ? C->speed_max : 6;
+  if (N->lim_speed > 0 && N->lim_speed < vmax) vmax = N->lim_speed;   /* the supervisor's limit */
   for (int i = 0; i < 3; i++) {
-    ep[i] = sp->target[i] - N->p[i];
-    ev[i] = N->v[i] - clampf(sp->vref[i], -vmax, vmax);
+    ep[i] = target[i] - N->p[i];
+    ev[i] = N->v[i] - clampf(vref[i], -vmax, vmax);
     N->iPos[i] = clampf(N->iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);
   }
   k = 0;
@@ -134,11 +157,20 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   for (int i = 0; i < 3; i++) b[k++] = ev[i];
   for (int i = 0; i < 3; i++) b[k++] = N->iPos[i];
   b[k++] = C->m; b[k++] = G_;
-  b[k++] = 0; for (int i = 0; i < 6; i++) b[k++] = 0;   /* lim: none */
+  b[k++] = 1;                                                      /* lim: the supervisor's (or the usual 6 m/s², 35°) */
+  b[k++] = 1; b[k++] = N->lim_accel > 0 ? N->lim_accel : 6; b[k++] = 1; b[k++] = N->lim_lean > 0 ? N->lim_lean : 35; b[k++] = N->lim_speed > 0; b[k++] = N->lim_speed;
   float Fd[3];
   if ((e = call(N, N->f_pc, b, Fd))) return -1;
   for (int i = 0; i < 3; i++) out->acc[i] = Fd[i] / C->m;
   out->acc[2] -= G_;
   out->heading = sp->heading; out->fly = 1;
   return 0;
+}
+
+void nav_set(nav_state *N, const float *p, int n) {
+  if (n < 6) return;
+  for (int k = 0; k < 4; k++) if (!fin(p[k])) return;
+  int mode = (int)p[0]; if (mode < 0 || mode > 3) return;
+  if (mode > N->sup_mode) N->sup_mode = mode;                       /* it only steps up */
+  N->lim_lean = p[1]; N->lim_accel = p[2]; N->lim_speed = p[3];
 }

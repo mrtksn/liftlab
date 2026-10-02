@@ -18,13 +18,13 @@
 #include <stdint.h>
 #include "rn_ops.h"
 
-#define RN_FN_MAX 20
+#define RN_FN_MAX 32
 #define RN_NAME 32
 #define RN_ARGS_MAX 12           /* inputs per formula */
 #define RN_STATE_MAX 16          /* fields in a formula's memory */
 #define RN_SNAME 16              /* a memory field's name, zero-padded */
 #define RN_BLS_MAX 48            /* most inputs the least-squares kernel handles */
-#define RN_CODE_MAX 32768        /* most code words in a program */
+#define RN_CODE_MAX 65536        /* most code words in a program */
 
 /* A formula's memory field: its present flag, its place and size in the arena (address −1, size 0 while it
  * has no type yet), and its name, so the memory can move to another program by name. */

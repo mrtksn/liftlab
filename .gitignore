@@ -10,6 +10,8 @@ runner/bench/sdkconfig.old
 runner/fc/board.wasm
 runner/pi/pi_nav
 runner/pi/test_pi_nav
+runner/pi/dfb_pi
+runner/pi/test_dfb_pi
 runner/fc/esp32/build/
 runner/fc/esp32/sdkconfig
 runner/fc/esp32/sdkconfig.old

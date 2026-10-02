@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "fc_core.h"
 
-#define HW_VERSION 2
+#define HW_VERSION 3
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -17,6 +17,7 @@ typedef struct {
   int8_t batt_pin; float batt_divider;             /* ADC pin (−1: none) and the divider's ratio (pack V / pin V) */
   int16_t rate_hz, telem_hz;                       /* control loop, telemetry */
   float vref;                                      /* the pack voltage the airframe's thrust is for (16: 4S) */
+  int32_t link_baud;                               /* the Pi's serial link (and the USB port): 921600 for the learning */
 } hw_config;
 
 void hw_defaults(hw_config *c);

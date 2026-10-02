@@ -232,3 +232,12 @@ float *rn_host_field(rn_host *H, int fn, const char *field, int32_t *size) {
   }
   return 0;
 }
+
+void rn_host_forget(rn_host *H, int fn) {
+  if (fn < 0 || fn >= RN_FN_MAX) return;
+  for (int s = 0; s < 3; s++) {
+    rn_slot *S = &H->slot[s]; int j = fmap[s][fn]; if (!S->loaded || j < 0) continue;
+    const rn_fn *f = &S->P.fn[j]; int n = H->n_inst[fn] > 0 ? H->n_inst[fn] : 1;
+    for (int inst = 0; inst < n; inst++) for (int32_t k = 0; k < f->n_state; k++) { float *fl, *d; field_ptrs(S, j, inst, k, &fl, &d); *fl = 0; }
+  }
+}
