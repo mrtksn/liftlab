@@ -48,13 +48,14 @@ function pilotStep(dt) {
   ctl.vRef = pilot.vref.slice();
 }
 function pilotHold() {   // hold where the flight software believes it is
-  const hub = sensing === 'truth' ? hubState(qmat(S.q)).hub : est.p;
+  if (!est.havePos) return;   // no position estimate (no navigation): nothing to hold
+  const hub = est.p;
   setpoint.x = clamp(hub[0], -PILOT_BOX.xy, PILOT_BOX.xy); setpoint.y = clamp(hub[1], -PILOT_BOX.xy, PILOT_BOX.xy);
   setpoint.z = clamp(hub[2], PILOT_BOX.zMin, PILOT_BOX.zMax);
   pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];
   flashCtl('hold');
 }
-function pilotHome() { setpoint.x = 0; setpoint.y = 0; setpoint.z = 1.5; setpoint.yaw = 0; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
+function pilotHome() { if (!hasTask("nav")) return; const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
 function setPilotLevel(k) {
   pilot.level = k;
   document.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === k)));
@@ -73,7 +74,7 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyH') pilotHome();
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
-  else if (e.code === 'KeyT' && typeof setLaunch === 'function') setLaunch('throw');
+  else if (e.code === 'KeyT' && typeof setLaunch === 'function' && hasTask('learn')) setLaunch('throw');   // the throw start needs the learning task
   else if (e.code === 'KeyK') document.getElementById('runBtn').click();
   else if (e.code === 'KeyR') document.getElementById('resetBtn').click();
   else if (e.code === 'Digit1') setPilotLevel('gentle');

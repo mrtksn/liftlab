@@ -2,8 +2,7 @@
 // Sensors. The physical side works out what each sensor truly experiences at its position and
 // mount (rotation, lever-arm acceleration, motor vibration, magnetic interference) and samples it
 // through the imperfection models in laws.js at the sensor's rate, delivering readings after its delay.
-// The flight-software side fuses the delivered readings and runs the estimators; the controller
-// flies on that estimate unless you switch it to ground truth.
+// The flight computers (boards.js) get the delivered readings and do the estimating.
 
 const MAG_EARTH = [0.5, 0, -0.866];        // Earth's field, strength 1, pointing north (+X) and 60° down
 const VIB_FREQ = 380;                       // motor rotation frequency at full thrust [Hz]
@@ -40,7 +39,7 @@ const defaultSensors = () => [
 /* ───────── runtime ───────── */
 const sens = new Map();   // sensor id -> { st, acc, queue, latest, fresh }
 const vib = new Map();    // motor id -> { ph, u, um }
-const est = { fGyro: [0, 0, 0], fAccel: [0, 0, 9.81], q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], att: {}, pos: {}, haveImu: false };
+const est = { fGyro: [0, 0, 0], fAccel: [0, 0, 9.81], q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], havePos: false, haveImu: false, drv: {} };
 let sensing = 'sensors';  // what the controller flies on: 'sensors' or 'truth'
 const sensorsOf = kind => cfg.comps.filter(c => c.type === 'sensor' && c.kind === kind);
 const allSensors = () => cfg.comps.filter(c => c.type === 'sensor');
@@ -132,10 +131,10 @@ function primeSensors() { // one immediate reading from every sensor, so the est
   }
 }
 
-/* ───────── flight-software side ───────── */
-// Readings are rotated into the body frame with the mount the controller knows, and position
-// readings are shifted to the frame hub with the sensor position it knows. Several sensors of the
-// same kind are averaged.
+/* ───────── what the boards receive ───────── */
+// The sensor drivers' part: readings that have arrived (after each sensor's delay), turned into body axes with the
+// mount the flight software knows, several of a kind averaged. The estimating is the boards' (boards.js): the flight
+// core's attitude, the navigation's position. est holds what they believe, for the panels and the view.
 // Where the flight software thinks a sensor is and how it's turned: its described mount, carried by the
 // joints above it at the angles the software believes. An unknown sensor is assumed at the hub, unrotated.
 const knownMount = c => c.known ? m3m(poseOf(c, angleSeen).R, eulerR(c.mount[0], c.mount[1], c.mount[2])) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -147,50 +146,30 @@ function senseAndEstimate(dt) {
   const ready = kind => sensorsOf(kind).filter(c => sens.get(c.id) && sens.get(c.id).latest);
   const imus = ready('imu');
   est.haveImu = imus.length > 0;
+  const drv = est.drv || (est.drv = {});
   if (est.haveImu) {
-    const gyro = mean3(imus.map(c => sub(m3v(knownMount(c), sens.get(c.id).latest.gyro), c.known ? chainRateSeen(c) : [0, 0, 0])));   // minus its joints' own turning
-    const accel = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.accel)));
-    const mags = ready('mag');
-    const mag = mags.length ? mean3(mags.map(c => m3v(knownMount(c), sens.get(c.id).latest))) : null;
-    est.fGyro = gyro; est.fAccel = accel;               // fused readings, also used to learn the airframe
-    const a = run('attitudeEstimator', est.att, gyro, accel, mag, dt);
-    est.q = qnorm(a.q); est.R = qmat(est.q); est.w = a.w;
-    const baros = ready('baro');
-    const age = list => list.reduce((s, c) => s + (S.t - sens.get(c.id).ts), 0) / list.length;
-    const baro = baros.length ? { alt: baros.reduce((s, c) => s + sens.get(c.id).latest - m3v(est.R, knownPos(c))[2], 0) / baros.length, age: age(baros) } : null;
-    const fixes = ready('fix').filter(c => !c.dropout);
-    const fix = fixes.length ? {
-      p: mean3(fixes.map(c => sub(sens.get(c.id).latest.p, m3v(est.R, knownPos(c))))),
-      v: mean3(fixes.map(c => sub(sens.get(c.id).latest.v, m3v(est.R, add(crs(est.w, knownPos(c)), c.known ? chainVel(c, true) : [0, 0, 0]))))),
-      age: age(fixes),
-    } : null;
-    // Optical flow: velocity over the ground (shifted to the hub) and height from the rangefinder.
-    let flow = null; est.flowState = sensorsOf('flow').length ? 'none' : null;
-    const flows = ready('flow').filter(c => sens.get(c.id).latest.range > 0);
-    if (flows.length) {
-      const vs = [], hs = [];
-      for (const c of flows) {
-        const L = sens.get(c.id).latest, Rm = knownMount(c), rk = knownPos(c);
-        const wj = c.known ? chainRateSeen(c) : [0, 0, 0], vj = c.known ? chainVel(c, true) : [0, 0, 0];   // a camera on a moving joint also sees the joint's motion
-        const o = run('flowVelocity', L.flow, L.range, m3v(m3T(Rm), add(est.w, wj)), m3m(est.R, Rm));
-        hs.push(o[2] - m3v(est.R, rk)[2]);
-        if (L.q > 0) vs.push(sub([o[0], o[1], 0], m3v(est.R, add(crs(est.w, rk), vj))));
-      }
-      flow = { v: vs.length ? mean3(vs).slice(0, 2) : null, h: hs.reduce((a, b) => a + b, 0) / hs.length, age: age(flows) };
-      est.flowState = vs.length ? 'tracking' : 'range only';
-    } else if (ready('flow').length) est.flowState = 'out of range';
-    const pv = run('positionEstimator', est.pos, est.R, accel, baro, fix, flow, model.m, dt);
-    est.p = pv.p; est.v = pv.v;
+    est.fGyro = mean3(imus.map(c => sub(m3v(knownMount(c), sens.get(c.id).latest.gyro), c.known ? chainRateSeen(c) : [0, 0, 0])));   // minus its joints' own turning
+    est.fAccel = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.accel)));
   }
-  for (const rt of sens.values()) rt.fresh = false;
+  const mags = ready('mag');
+  drv.mag = mags.length ? mean3(mags.map(c => m3v(knownMount(c), sens.get(c.id).latest))) : null;
+  const baros = ready('baro');
+  if (baros.length) { const fr = baros.filter(c => sens.get(c.id).fresh); if (fr.length) { drv.baro = { alt: fr.reduce((s, c) => s + sens.get(c.id).latest, 0) / fr.length }; drv.baroTs = Math.max(...fr.map(c => sens.get(c.id).ts)); } }
+  else drv.baro = null;
+  const fix = ready('fix').filter(c => !c.dropout)[0];
+  drv.fix = fix ? { c: fix, p: sens.get(fix.id).latest.p, v: sens.get(fix.id).latest.v, ts: sens.get(fix.id).ts } : null;
+  if (drv.fix && S.t - drv.fix.ts > 1) drv.fix = null;   // a fix that stopped coming
+  const flow = ready('flow')[0];
+  est.flowState = sensorsOf('flow').length ? 'none' : null;
+  if (flow) { const L = sens.get(flow.id).latest; drv.flow = L.range > 0 ? { c: flow, flow: L.flow, range: L.range, q: L.q, ts: sens.get(flow.id).ts } : null; est.flowState = !(L.range > 0) ? 'out of range' : L.q > 0 ? 'tracking' : 'range only'; }
+  else drv.flow = null;
 }
+function sensorsDone() { for (const rt of sens.values()) rt.fresh = false; }
 function resetEstimation() {
   seedRng(12345);
   sens.clear(); vib.clear(); syncSensors();
-  est.att = {}; est.pos = {};
   const R = qmat(S.q); const hub = S.p.slice();
-  est.pos.p = hub.slice(); est.pos.v = [0, 0, 0];   // the drone starts where it thinks it is
-  est.q = S.q.slice(); est.R = R; est.w = [0, 0, 0]; est.p = hub.slice(); est.v = [0, 0, 0];
+  est.q = S.q.slice(); est.R = R; est.w = [0, 0, 0]; est.p = hub.slice(); est.v = [0, 0, 0]; est.havePos = false; est.drv = {};
   S.acc = [0, 0, 0]; S.wdot = [0, 0, 0];
   primeSensors();
 }
@@ -201,8 +180,8 @@ function estimateErrors() {
   const upT = m3v(R, nb), upE = m3v(est.R, nb); const tilt = Math.acos(clamp(dot(upT, upE), -1, 1)) * R2D;
   const hT = Math.atan2(R[3], R[0]), hE = Math.atan2(est.R[3], est.R[0]); let dh = (hE - hT) * R2D; dh = ((dh + 180) % 360 + 360) % 360 - 180;
   const dp = sub(est.p, hub);
-  let gb = null, gl = null;
+  let gb = null;
   const imu = sensorsOf('imu')[0]; const rt = imu && sens.get(imu.id);
-  if (rt && rt.st.bg) { gb = nrm(rt.st.bg) * R2D; if (LAWS.attitudeEstimator.status === 'default' && est.att.ie) gl = nrm(est.att.ie) * (0.08 / 0.6) * R2D; }  // kI / kP of the default filter
-  return { ang, tilt, head: dh, pos: Math.hypot(dp[0], dp[1]) * 100, alt: dp[2] * 100, vel: nrm(sub(est.v, vh)) * 100, gb, gl };
+  if (rt && rt.st.bg) gb = nrm(rt.st.bg) * R2D;
+  return { ang, tilt, head: dh, pos: est.havePos ? Math.hypot(dp[0], dp[1]) * 100 : null, alt: est.havePos ? dp[2] * 100 : null, vel: est.havePos ? nrm(sub(est.v, vh)) * 100 : null, gb, gl: null };
 }

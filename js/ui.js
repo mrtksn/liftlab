@@ -441,15 +441,17 @@ function renderMass() {
 function updateLive() {
   const chips = $('#liveChips'); chips.textContent = ''; const chip = (t, c, onclick) => chips.append(el(onclick ? 'button' : 'span', { class: 'chip ' + (c || ''), text: t, type: onclick ? 'button' : null, onclick }));
   if (S.crashed) chip('Crashed', 'bad'); else {
-    const last = hist.err.length ? hist.err[hist.err.length - 1] : 0; chip(last < 10 ? 'Holding target' : 'Recovering', last < 10 ? 'good' : 'warn');
-    if (ctl.sat) chip('Motor at limit', 'warn');
+    const last = hist.err.length ? hist.err[hist.err.length - 1] : 0;
+    if (hasTask('nav') && brt.pilot.phase === 'flying') chip(last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
+    if (brt.out && brt.out.sat) chip('Motor at limit', 'warn');
     if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('Cable slack', 'warn');
   }
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
   if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
   else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
   const soc = S.batt.soc ?? 1; chip(`Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
-  chip(`∫ attitude ${(nrm(ctl.iAtt) * R2D).toFixed(1)}°·s`); chip(`∫ position ${(nrm(ctl.iPos) * 100).toFixed(0)} cm·s`);
+  if (brt.err && !brt.ready) chip(brt.err, 'bad', () => showTab('form'));
+  else chip(`${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
   const R = qmat(S.q); const { hub } = hubState(R);
   $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
   $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
@@ -461,33 +463,32 @@ function updateLive() {
   }
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
-  updateActs(); updateAllocInfo(); renderEst(); renderLearn(); renderBudget();
+  updateActs(); updateAllocInfo(); renderEst(); if (hasTask('learn')) renderLearn();
 }
 
 /* ───────── state estimate ───────── */
-function setSensing(m) {
-  sensing = m; $('#useSensors').setAttribute('aria-pressed', String(m === 'sensors')); $('#useTruth').setAttribute('aria-pressed', String(m === 'truth'));
-  ctl.iAtt = [0, 0, 0]; save();
-}
-$('#useSensors').addEventListener('click', () => setSensing('sensors')); $('#useTruth').addEventListener('click', () => setSensing('truth'));
+function setSensing(m) { sensing = 'sensors'; }   // the flight computers always fly on their sensors
 function renderEst() {
   const chips = $('#senseChips'); chips.textContent = ''; const chip = (t, c) => chips.append(el('span', { class: 'chip ' + (c || ''), text: t }));
   const has = k => sensorsOf(k).length > 0, fixOk = sensorsOf('fix').some(c => !c.dropout);
-  if (sensing === 'truth') chip('Flying on ground truth: sensors are ignored', 'accent');
+  const core = boardOf('core'), nav = boardOf('nav');
   if (!has('imu')) chip('No IMU: attitude is unknown', 'bad');
   if (!has('mag')) chip('No compass: heading drifts', 'warn');
   const fs = est.flowState;
   if (fs === 'tracking') chip('Optical flow tracking', 'good');
   else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn');
   else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn');
-  if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn');
-  if (!has('baro') && !fixOk && !(fs === 'tracking' || fs === 'range only')) chip('No altitude reference', 'warn');
-  if (has('imu') && has('mag') && fixOk && sensing !== 'truth') chip('All references present', 'good');
-  $('#estMode').textContent = sensing === 'truth' ? 'shown for reference' : 'estimate − truth';
+  if (!nav) chip('No navigation: angle mode, no position hold', 'warn');
+  else {
+    if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn');
+    if (!has('baro') && !fixOk && !(fs === 'tracking' || fs === 'range only')) chip('No altitude reference', 'warn');
+    if (has('imu') && has('mag') && fixOk) chip('All references present', 'good');
+  }
+  $('#estMode').textContent = `attitude: ${core ? core.name : '—'}${nav ? ' · position: ' + nav.name : ''}`;
   const e = estimateErrors(); const f = (v, d, u) => (v == null ? '—' : v.toFixed(d) + ' ' + u);
   const rows = [['Attitude error', f(e.ang, 2, '°')], ['Tilt error', f(e.tilt, 2, '°')], ['Heading error', f(e.head, 1, '°')],
     ['Horizontal position error', f(e.pos, 1, 'cm')], ['Altitude error', f(e.alt, 1, 'cm')], ['Velocity error', f(e.vel, 1, 'cm/s')],
-    ['Gyro bias (IMU 1) · learned', e.gb == null ? '—' : `${e.gb.toFixed(2)} · ${e.gl == null ? '—' : e.gl.toFixed(2)} °/s`]];
+    ['Gyro turn-on bias (IMU 1)', e.gb == null ? '—' : `${e.gb.toFixed(2)} °/s`]];
   const dl = $('#estKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
 }
 
@@ -516,6 +517,17 @@ function setLaunch(m, go = true) {
   if (go) { if (!running) { running = true; renderRun(); } doReset(); renderLearn(true); save(); }
 }
 $('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));
+// What's on screen follows the flight computers: learning and the throw start need a learning task (the next stage),
+// Hold and Home need navigation, the supervisor's parts of the Health panel need a supervisor task.
+function syncFlightUi() {
+  const nav = hasTask('nav'), learnT = hasTask('learn');
+  $('#learnSec').hidden = !learnT;
+  $('#launchSeg').hidden = !learnT; if (!learnT && launchMode !== 'hover') setLaunch('hover', false);
+  document.querySelectorAll('[data-act="hold"],[data-act="home"]').forEach(b => { b.hidden = !nav; });
+  sup.on = hasTask('super');
+  if (typeof renderHealth === 'function') renderHealth(true);
+  if (typeof renderComputers === 'function') renderComputers();
+}
 const throwFieldRefs = [];
 function buildThrowFields() {
   const box = $('#throwFields'); box.textContent = '';
@@ -817,7 +829,7 @@ function load() {
   }
   if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.cfg.computers); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learn.keep = false;
     if (s.holdPulses === false) learn.holdPulses = false;
@@ -842,20 +854,18 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 
 /* ───────── boot ───────── */
 function boot() {
-  buildSp(); buildThrowFields(); buildAllocFields(); buildFormulas(); bindPads();
-  const cs = $('#chipSel'); for (const [k, c] of Object.entries(CHIPS)) cs.append(el('option', { value: k, text: c.label }));
-  cs.value = budget.chip; cs.addEventListener('change', () => setChip(cs.value));
+  buildSp(); buildThrowFields(); buildAllocFields(); buildComputers(); bindPads();
   const loaded = load(); if (!terrain.ver) setTerrain('parkour', 1); syncTerrainUi();
   if (loaded) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
-  initDesigns(bootDesign);
+  initDesigns(bootDesign); syncFlightUi();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   showTab(tab === 'form' ? 'form' : 'air');
   let lastT = performance.now(), envT = 0, uiT = 0;
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
-    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (typeof renderRunner === 'function' && !$('#paneForm').hidden) renderRunner(); }
+    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }

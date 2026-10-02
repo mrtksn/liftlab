@@ -1,8 +1,7 @@
 'use strict';
 // The airframe as the flight controller firmware needs it (runner/fc/fc_core.h): the model the simulator's
-// controller flies on, at the joints' rest angles. "Export for the flight controller" saves it as a file for
-// the drone (the Pi sends it over the link and the ESP32 keeps it); the firmware-in-the-loop mode hands the same
-// bytes to the firmware built to WebAssembly.
+// flight core flies on, at the joints' rest angles. The Computers tab saves it as a file for the drone (fly.py
+// sends it over the link and the ESP32 keeps it); the simulator hands the same bytes to its flight-core board.
 const FC_MAX_MOTORS = 12, FC_MAX_JOINTS = 8, FC_MAX_CHAIN = 2;
 
 function fcAirframe(opts = {}) {
@@ -47,16 +46,4 @@ function fcAirframeBlob(opts) {
   const body = new Uint8Array(new Uint32Array(w).buffer), out = new Uint8Array(body.length + 4);
   out.set(body); new DataView(out.buffer).setUint32(body.length, rnCrc32(body), true);
   return out;
-}
-
-// Saves the airframe file (Airframe tab → Export for the flight controller).
-function fcExportAirframe() {
-  let blob;
-  try { blob = fcAirframeBlob(); } catch (e) { FIL.err = 'Can\'t export for the flight controller: ' + e.message; filRender(); return; }
-  FIL.err = ''; filRender();
-  const nm = ((typeof designs !== 'undefined' && designs.name) || 'airframe').replace(/[^\w.-]+/g, '-');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([blob], { type: 'application/octet-stream' }));
-  a.download = nm + '.dfa'; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }

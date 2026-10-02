@@ -288,7 +288,7 @@ function rnDownload() {
 }
 
 // Start: compile now (the JavaScript runner can fly at once), then switch to the C runner when it's ready.
-function rnOnLaw(key) { if (RN_SIGS[key]) { clearTimeout(RN.pending); RN.pending = setTimeout(rnStage, 30); } }
+function rnOnLaw(key) { if (RN_SIGS[key]) { clearTimeout(RN.pending); RN.pending = setTimeout(() => { rnStage(); if (typeof boardsStageProgram === 'function') boardsStageProgram(); }, 30); } }
 rnRebuild();
 lawListeners.add(rnOnLaw);
 (function startWasm() {

@@ -76,7 +76,7 @@ static void plant_step(body *B, const fc_airframe *A, const fc_out *o, double dt
 static void imu_of(const body *B, fc_imu *m, int have_gyro, int baro) {
   if (B->t == 0) { double R[9]; qm(R, B->q); for (int i = 0; i < 3; i++) acc_b[i] = R[6 + i] * 9.81; }   /* at rest before the first step */
   for (int k = 0; k < 3; k++) { m->gyro[k] = (float)(B->w[k] + B->gyro_bias[k]); m->acc[k] = (float)(acc_b[k] + B->acc_bias[k]); }
-  m->have_gyro = have_gyro; m->baro_alt = (float)B->p[2] + 100; m->have_baro = baro;
+  m->have_gyro = have_gyro; m->baro_alt = (float)B->p[2] + 100; m->have_baro = baro; m->have_mag = 0;
 }
 static double tilt_deg(const body *B) { double R[9]; qm(R, B->q); return acos(R[8] > 1 ? 1 : R[8]) * 57.29578; }
 static void euler(const body *B, double *roll, double *pitch, double *yaw) {

@@ -195,9 +195,12 @@ static int batt_ok(const fc_state *F) { return F->vbatt > 0.6f * F->vref && F->v
 void fc_command(fc_state *F, const fc_cmd *in) {
   /* a command with a number that isn't finite is ignored (it doesn't count as a command either) */
   if (!fin(in->roll) || !fin(in->pitch) || !fin(in->yaw) || !fin(in->throttle) || !fin(in->test_throttle)) return;
+  if (in->guided && (!fin(in->acc[0]) || !fin(in->acc[1]) || !fin(in->acc[2]) || !fin(in->heading))) return;
   fc_cmd cc = *in, *c = &cc;
   c->roll = clampf(c->roll, -1, 1); c->pitch = clampf(c->pitch, -1, 1); c->yaw = clampf(c->yaw, -1, 1);
   c->throttle = clampf(c->throttle, 0, 1); c->test_throttle = clampf(c->test_throttle, 0, 0.3f);
+  c->guided = c->guided ? 1 : 0;
+  if (c->guided) { c->acc[0] = clampf(c->acc[0], -10, 10); c->acc[1] = clampf(c->acc[1], -10, 10); c->acc[2] = clampf(c->acc[2], -FC_AZ_MAX, FC_AZ_MAX); }
   if (c->test_motor < 0 || c->test_motor >= FC_MAX_MOTORS) c->test_motor = -1;
   int prev_test = F->cmd.test_motor;
   F->cmd = *c; F->cmd_t = F->t;
@@ -280,7 +283,8 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   /* attitude, from the IMU in body axes */
   if (imu->have_gyro) {
     float g[3], a[3]; m3v(g, A->imu_R, imu->gyro); m3v(a, A->imu_R, imu->acc);
-    p.n = 0; p_v(&p, g, 3); p_v(&p, a, 3); p_f(&p, 0); p_v(&p, (float[3]){ 0, 0, 0 }, 3); p_f(&p, dt);
+    int hm = imu->have_mag && fin(imu->mag[0]) && fin(imu->mag[1]) && fin(imu->mag[2]);
+    p.n = 0; p_v(&p, g, 3); p_v(&p, a, 3); p_f(&p, (float)hm); p_v(&p, hm ? imu->mag : (float[3]){ 0, 0, 0 }, 3); p_f(&p, dt);
     if (call(F, F->f_att, 0, &p, r)) return -1;
     float n = sqrtf(r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
     for (int k = 0; k < 4; k++) F->q[k] = r[k] / n;
@@ -366,13 +370,14 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
    * with a barometer, climb or sink speed (in the middle it holds the height); without, vertical acceleration */
   fc_cmd c = F->cmd;
   float az;
-  if (F->have_alt) {
+  if (c.guided) { az = c.acc[2]; F->holding = 0; }          /* the navigation task asks for the acceleration itself */
+  else if (F->have_alt) {
     float s = c.throttle - 0.5f, vz_cmd;
     if (fabsf_(s) < 0.05f) { if (!F->holding) { F->alt_hold = F->alt_e; F->holding = 1; } vz_cmd = clampf(FC_K_HOLD * (F->alt_hold - F->alt_e), -1, 1); }
     else { F->holding = 0; vz_cmd = (s - (s > 0 ? 0.05f : -0.05f)) / 0.45f * FC_VZ_MAX; }
     az = clampf(FC_K_V * (vz_cmd - vz), -FC_AZ_MAX, FC_AZ_MAX);
   } else { az = (c.throttle - 0.5f) * 2 * FC_AZ_MAX; F->holding = 0; }
-  if (F->state == FC_FAILSAFE) { c.roll = c.pitch = c.yaw = 0; az = fs_az; }   /* level, descending */
+  if (F->state == FC_FAILSAFE) { c.roll = c.pitch = c.yaw = 0; c.guided = 0; az = fs_az; }   /* level, descending */
   else if (c.throttle < 0.05f) {                            /* stick at the bottom: idle, nothing to steer with */
     for (int i = 0; i < A->n_motors; i++) { o->motor[i] = FC_IDLE; F->v[i] = 0; }
     memset(F->iAtt, 0, sizeof F->iAtt); F->iAz = 0; F->vz_i = 0; F->holding = 0; F->yaw_sp = atan2f(F->R[3], F->R[0]);
@@ -388,11 +393,18 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     F->iAz_calm = F->t - F->calm_t > 1 ? F->iAz : F->iAz_calm + (F->iAz - F->iAz_calm) * fminf(1, dt / 2); F->calm_t = F->t;
   }
   float lift = G_ + az + F->iAz;
-  float fwd = tanf(clampf(c.pitch, -1, 1) * lean) * lift, left = -tanf(clampf(c.roll, -1, 1) * lean) * lift;
-  F->yaw_sp += clampf(c.yaw, -1, 1) * FC_YAW_RATE * dt;
+  float Fd[3];
+  if (c.guided) {                                           /* the acceleration asked for, in the world */
+    F->yaw_sp = c.heading;
+    Fd[0] = A->m * c.acc[0]; Fd[1] = A->m * c.acc[1]; Fd[2] = A->m * lift;
+  } else {                                                  /* the sticks: lean angles, heading turned at a rate */
+    float fwd = tanf(clampf(c.pitch, -1, 1) * lean) * lift, left = -tanf(clampf(c.roll, -1, 1) * lean) * lift;
+    F->yaw_sp += clampf(c.yaw, -1, 1) * FC_YAW_RATE * dt;
+    float cy0 = cosf(F->yaw_sp), sy0 = sinf(F->yaw_sp);
+    Fd[0] = A->m * (fwd * cy0 - left * sy0); Fd[1] = A->m * (fwd * sy0 + left * cy0); Fd[2] = A->m * lift;
+  }
   if (F->yaw_sp > 3.14159265f) F->yaw_sp -= 6.2831853f; else if (F->yaw_sp < -3.14159265f) F->yaw_sp += 6.2831853f;
   float cy = cosf(F->yaw_sp), sy = sinf(F->yaw_sp);
-  float Fd[3] = { A->m * (fwd * cy - left * sy), A->m * (fwd * sy + left * cy), A->m * lift };
 
   /* the attitude wanted, and the torque for it (the simulator's controlStep) */
   float nd[3], Rd[9], F1[9], F2[9], eR[3], tau[3], Fb[3], f[3];
@@ -406,6 +418,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   if (c.throttle > 0.15f) for (int k = 0; k < 3; k++) F->iAtt[k] = clampf(F->iAtt[k] + eR[k] * dt, -0.5f, 0.5f);
   p.n = 0; p_v(&p, eR, 3); p_v(&p, F->w, 3); p_v(&p, F->iAtt, 3); p_v(&p, A->J, 9);
   if (call(F, F->f_ctl, 0, &p, tau)) return -1;
+  memcpy(F->tau_des, tau, sizeof F->tau_des);
   m3tv(Fb, F->R, Fd);
   p.n = 0; p_v(&p, Fb, 3); p_v(&p, A->axis, 3); p_f(&p, (float)A->mode);
   if (call(F, F->f_fd, 0, &p, f)) return -1;

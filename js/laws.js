@@ -292,12 +292,19 @@ function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
   // Complementary filter. Integrates the accelerometer (rotated by the attitude estimate) and pulls the
   // result toward whatever references exist: position fix, optical flow, rangefinder, barometer.
   // Each is null when not available; its `age` says how long ago it was measured, so it is compared
-  // with the estimate from that moment. The simulator seeds st.p and st.v with the start point at reset.
+  // with the estimate from that moment. Height starts from the rangefinder (height above the ground), else the
+  // barometer, else the fix. The barometer reads pressure altitude, which has its own zero: while the
+  // rangefinder sees the ground, the barometer's offset from it is learned (st.bo), so the two agree.
   const kP = 0.8, kV = 0.3, kFixV = 0.6, kBaro = 1.5, kBaroV = 0.6;
   const kFlow = 2.0, kRange = 2.5, kRangeV = 1.2;        // optical flow velocity, rangefinder height
   const kBias = 0.4;                                     // learns the accelerometer's horizontal bias from velocity errors
   const cd = 0.25, kDrag = 1.0;                          // airframe drag coefficient [N per m/s] (see bodyDrag), drag-fusion gain
-  if (!st.p) { st.p = fix ? fix.p.slice() : [0, 0, baro ? baro.alt : 0]; st.v = [0, 0, 0]; }
+  if (!st.p) {
+    st.p = [0, 0, 0]; st.v = [0, 0, 0]; st.bo = 0;       // st.bo: the barometer's offset
+    if (fix) { st.p[0] = fix.p[0]; st.p[1] = fix.p[1]; st.p[2] = fix.p[2]; }
+    if (baro) st.p[2] = baro.alt;
+    if (flow && flow.h != null) { st.p[2] = flow.h; if (baro) st.bo = baro.alt - flow.h; }
+  }
   if (!st.h) { st.h = []; st.af = accel.slice(); st.ab = [0, 0]; }   // recent estimates (newest last), filtered accel, accel bias
   const a = add(m3v(R, accel), [0, 0, -G]);              // world acceleration from the IMU
   a[0] -= st.ab[0]; a[1] -= st.ab[1];
@@ -331,7 +338,8 @@ function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
   if (range) { const e = flow.h - past(flow.age).p[2]; st.p[2] += kRange * e * dt; st.v[2] += kRangeV * e * dt; }  // flat ground assumed
   if (baro) {
     const w = range ? 0.15 : 1;                          // near the ground the rangefinder is far better
-    const e = baro.alt - past(baro.age).p[2]; st.p[2] += w * kBaro * e * dt; st.v[2] += w * kBaroV * e * dt;
+    const e = baro.alt - st.bo - past(baro.age).p[2]; st.p[2] += w * kBaro * e * dt; st.v[2] += w * kBaroV * e * dt;
+    if (range) st.bo += 0.5 * e * dt;                    // while the rangefinder sees the ground, learn the barometer's zero
   }
   st.h.push({ p: st.p.slice(), v: st.v.slice() }); if (st.h.length > 800) st.h.shift();
   return { p: st.p.slice(), v: st.v.slice() };

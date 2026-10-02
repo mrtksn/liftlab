@@ -10,7 +10,7 @@ Open `index.html` in a browser. There is no build step. It needs an internet con
 
 The header has three groups:
 - **Airframe:** start from a layout or one of your saved designs. **Blank** is a bare frame with a battery and an IMU; it opens in edit mode, resting on the ground, for you to add motors to. If the airframe on screen has changes you haven't saved, you're asked first: save it (under a name you give, never over a different design), don't save, or cancel. Opening a saved design or a design file asks the same.
-- **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), **Hover / Throw** chooses what a reset does, and ¼× ½× 1× sets the speed.
+- **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), and ¼× ½× 1× sets the speed. Every flight starts on the ground with the motors stopped; the simulator then arms the drone and takes off to the target height for you, as you would with a real one. (**Hover / Throw**, the throw start, comes back with the learning task.)
 - **Steering:** Tilt body, Mixed or Stay level.
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
@@ -46,7 +46,31 @@ A quad that clips a wall usually loses its front props and flips. You can also b
 - A soft shadow under the drone, on the street or a roof, helps judge height. Its switch is Shadow in the Show menu.
 - In the full-scale city, the view reaches further and you can zoom out to 300 m.
 
+## Flight computers
+
+What flies the drone is its own flight code, the same C that runs on the ESP32 and the Raspberry Pi, nothing else. The **Computers** tab lists the boards on the drone and what each runs:
+
+- **Boards:** ESP32, ESP32-S3, ESP32-C3 (microcontrollers), Raspberry Pi Zero, Zero 2 W or 4 (Linux computers). Add up to four, rename them, remove them. The default is what you have: an ESP32 flight controller and a Pi Zero.
+- **Tasks:**
+  - **Flight core** (`runner/fc/fc_core.c`), 1000 times a second: attitude, control and mixing, arming and the failsafes. It needs exact timing, so it must run on a microcontroller, and every drone has exactly one.
+  - **Navigation** (`runner/fc/nav_core.c`), 100 times a second: where the drone is (GPS, optical flow and its rangefinder, barometer) and holding or moving its position. It sends the flight core *guided commands*: which way to accelerate and where to face. It can run on the Pi (talking to the ESP32 over the serial link) or on the ESP32 itself. With no navigation, you fly in **angle mode**: the keys lean the drone, and nothing holds its position.
+  - **Learning** and the **health supervisor** are listed as coming in the next stage: their formulas are there, but no board runs them yet, so the calibration, the learned model, the throw start and the supervisor's parts of the Health panel are hidden.
+- **Wiring:** the IMU, compass and barometer (the GY-87 is all three) go to the flight core's board; the GPS and the flow camera to the board that navigates.
+- **Link:** a board talks to the flight controller over a serial link, 6 ms late each way. The flight core sends the navigation its attitude, rates, accelerometer and barometer height 100 times a second; the navigation answers with a guided command each time. If the commands stop, the flight core goes to its failsafe and lands.
+- **Load:** each board shows roughly how much of a core its tasks take and, on a microcontroller, how much memory the flight program needs. An overloaded board turns red.
+- **Export:** the flight core's board exports the airframe (`.dfa`, for `fly.py airframe`); the navigation's board exports its config (`.dnc`: mass, where the barometer, GPS antenna and flow camera sit, which of them there are) for `pi_nav`.
+- **Changing the airframe** in flight changes the physics at once, but the flight core keeps flying on the airframe it was given until the next reset, as on the drone, which takes a new airframe only on the ground.
+
+How the simulator runs them: each board is one instance of the flight code built to WebAssembly (`runner/fc/build_wasm.sh` → `js/board-wasm.js`), with the flight program compiled from the formulas. The simulator supplies only what the hardware would: sensor readings at their rates and delays, what one board sends another (after the link's delay), and the pilot. Everything about flying (estimating, deciding, mixing, arming, failsafes) happens inside the boards.
+
+The formulas are listed under the task that runs them, and the board it's on. Edit one in flight and every board running it loads the new program through its own loader, as it would on the drone: self-tests, a second in the background beside the current version, then the swap. The log under **The flight program** shows each board's steps. The physics and sensor models are listed last, under **The world**: they're the simulator's, not flight code.
+
+**Every flight:** the drone starts on the ground under the target, motors stopped. The simulator arms it after the attitude settles. With navigation, it asks the navigation to fly; the navigation takes off once its position estimate has settled on its references, and home is where it took off. Without navigation, the simulator opens the throttle until the barometer shows it has climbed most of the way, then centres the stick (which holds the height).
+
 ## Learning the airframe
+
+**Paused in this version:** learning moves to a Learning task that runs on the Pi (the next stage). Until then the boards fly on the airframe's description, as exported. What follows is how it worked with the simulator's old controller, and how it will work again.
+
 
 The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't need to know prop sizes, mass or inertia. What it needs is the **effectiveness matrix B**: how much linear and angular acceleration each actuator input produces. B comes from one of two sources.
 
@@ -98,6 +122,8 @@ The hardware has traits the controller is never told, marked **hidden** on the p
 The panel shows how close each actuator's learned effect is to the truth. The truth comes from linearizing the real simulated physics (airflow and battery included) by nudging each input.
 
 ## Throw start
+
+**Paused in this version:** the throw start needs the Learning task (the next stage).
 
 **Reset to: Throw** (or **T**) starts the drone the way Blaha, Smeur and Remes (TU Delft, 2024) do: it is held still for a moment, then thrown upward with its motors off and a random tumble. The throw itself takes 0.12 s of hand push, which the IMU feels, so the drone knows it's climbing. It knows its sensors and how many actuators it has, and nothing about its geometry, mass, props or motors.
 
@@ -276,7 +302,7 @@ The readout under the speed line gives the net torque in body axes: roll about X
 
 ## Sensors and estimation
 
-The controller doesn't see the true state. It flies on what its sensors report, through two estimators, just like real flight software. Sensors are parts you attach on the Airframe tab, each with a position and mount angle you can set:
+The flight code doesn't see the true state. It flies on what its sensors report, through two estimators: the attitude estimator in the flight core, the position estimator in the navigation. Sensors are parts you attach on the Airframe tab, each with a position and mount angle you can set:
 
 | Sensor | Imperfections |
 |---|---|
@@ -302,7 +328,7 @@ The camera sees the ground slide by at flow ≈ ω − v/d: rotation makes the i
 - The sensor looks along its own −Z. A flow sensor that is rotated but marked unknown to the controller reads velocity in the wrong direction, and the drone flies away, which is what happens on a real drone with a mis-set sensor orientation.
 - With a GPS as well, flow makes the velocity estimate several times better, but position still follows the GPS's slow wander, because nothing can tell that wander apart from real motion.
 
-The **State estimate** panel shows estimate-minus-truth errors and warns about missing references. The dashed outline in the 3D view is where the flight software thinks the drone is. **Controller flies on: Ground truth** bypasses the sensors for comparison.
+The **State estimate** panel shows the boards' estimate minus the truth, and warns about missing references. The dashed outline in the 3D view is where the flight software thinks the drone is. (There is no flying on ground truth any more: the boards only ever see their sensors, as on the drone.)
 
 Sensor noise comes from a seeded generator, so every reset replays the same noise.
 
@@ -346,7 +372,10 @@ With no temperature sensor but with ESC current, the supervisor runs the same he
 
 With a voltage sensor, the flight controller corrects its throttle for sag (`voltageCompensation`: u_sent = u · V_ref / V), so thrust per command, and so the table, stays true as the pack drains.
 
-### The supervisor (Formulas: Supervisor group)
+### The supervisor
+
+**Paused in this version:** the supervisor becomes a task on the Pi in the next stage. Until then the Health panel shows each part's true state and what the drone can sense, and you can still break parts to see what the flight code does.
+
 
 It runs at 10 Hz and talks to the flight controller over a link that is 40 ms late each way. It reads the health sensors and a 50 Hz data stream from the controller: for each motor its column × thrust, for each steering servo how its column changes with angle, and the measured force and rotation. It runs three formulas in a chain:
 
@@ -382,7 +411,7 @@ A quad that loses a motor needs a controller that lets the body spin and flies o
 
 ## Flying it
 
-The pads on the 3D view and the keyboard steer the drone. They move the target the controller holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls.
+The pads on the 3D view and the keyboard steer the drone. With navigation they move the target it holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls. Without navigation (angle mode) they are the sticks: the arrows lean the drone (Gentle, Normal and Sport set how far), A/D turn it, W/S climb and sink around the hover throttle; Hold and Home are hidden, since nothing knows where the drone is.
 
 | Key | Action |
 |---|---|
@@ -390,9 +419,8 @@ The pads on the 3D view and the keyboard steer the drone. They move the target t
 | A / D | Turn left / right |
 | ↑ / ↓ | Forward / back, relative to the heading |
 | ← / → | Left / right, relative to the heading |
-| Space | Stop and hold the current position |
-| H | Fly back to the start point |
-| T | Throw start: throw the drone with its motors off and let it learn itself in free fall |
+| Space | Stop and hold the current position (navigation only) |
+| H | Fly back to where it took off (navigation only) |
 | 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
 | C | Chase camera: keep the view behind the drone |
 | E | Edit mode: select and drag parts in the 3D view |
@@ -406,7 +434,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 | File | What it holds |
 |---|---|
-| `js/laws.js` | **The governing formulas**: 41 functions for the physics, airflow, sensors, estimators, identification, controller and supervisor, plus the text shown for each in the Formulas tab |
+| `js/laws.js` | **The governing formulas**: 41 functions for the physics, airflow, sensors, estimators, identification, controller and supervisor, plus the text shown for each in the Computers tab |
 | `js/runtime.js` | Law registry: compiles edits, validates what each formula returns, falls back to the default when an edit fails |
 | `js/budget.js` | Flight computer budget: counts what the flight code costs per control step and keeps in memory, for an ESP32 |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
@@ -417,11 +445,11 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/learn.js` | Controller model: described vs. learned effectiveness, the calibration cycle and learning in flight |
 | `js/health.js` | Heat, failures and health sensors for every part; the flight controller's settings the supervisor can change; the supervisor itself |
 | `js/health-ui.js` | The Battery section and the Health panel |
-| `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and fusing readings for the estimators |
+| `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and the drivers' part: readings in body axes for the boards |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
 | `js/editor.js` | Edit mode: picking parts and the move and rotate handles |
-| `js/formulas-ui.js` | The Formulas tab |
+| `js/computers-ui.js` | The Computers tab: boards, tasks, the formulas under the task that runs them, the world's models |
 | `js/ui.js` | Airframe editor, telemetry, traces, header controls, persistence and the boot loop |
 | `js/designs.js` | Undo and redo, saved designs (your account or this browser) and design files |
 | `js/rn-parse.js` | The step compiler's parser for the formula subset |
@@ -430,10 +458,12 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 | `js/rn-ops.js` | The runner's instruction set, shared by the compiler, both runners and the C header |
 | `js/rn-vm.js` | The JavaScript runner, the program image with its self-tests, and the WebAssembly runner's wrapper |
 | `js/rn-wasm.js` | The C runner built to WebAssembly (generated by `runner/build_wasm.sh`) |
-| `js/rn-bridge.js` | The simulator's flight code on the runner, and loading edits in flight |
-| `js/fc-export.js` | The airframe file for the flight controller (Export for the flight controller) |
-| `js/fc-fil.js`, `js/fc-wasm.js` | Firmware in the loop: the flight controller's C code built to WebAssembly, flying in the simulator |
-| `runner/fc/` | The flight code (`fc_core.c`), its tests and WebAssembly build, and the ESP32 flight firmware (`esp32/`) |
+| `js/rn-bridge.js` | Compiling the flight formulas into the program every board loads |
+| `js/boards.js` | The flight computers: boards, tasks, wiring, links; one WebAssembly instance of the flight code per board; the simulator's pilot (arm, take off) |
+| `js/board-wasm.js` | The flight code (`fc_core.c`, `nav_core.c`, the runner) built to WebAssembly by `runner/fc/build_wasm.sh` |
+| `js/fc-export.js` | The airframe file for the flight core (`.dfa`) |
+| `runner/fc/` | The flight code: the flight core (`fc_core.c`) and the navigation (`nav_core.c`), their tests, the WebAssembly build, and the ESP32 flight firmware (`esp32/`) |
+| `runner/pi/` | The Pi's side: `pi_nav.c` (the navigation, with GPS and the serial link; `build.sh`), its end-to-end test, `fly.py` |
 | `runner/` | The runner in C (`rn.c`), the drone's program slots (`rn_host.c`), the Pi link (`rn_link.c`, `pi/send_program.py`), the built-in program, the ESP-IDF example (`esp32/`) and the tests |
 | `tools/` | Node tools: program export, the formula check against recorded flights, test data |
 | `css/style.css` | Styles, light and dark |
@@ -456,7 +486,7 @@ Keys are ignored while you type in a text field or the formula editor. In the pu
 
 The simulator only calls these by name through `run(key, …)`. To change a default, edit the function in `js/laws.js`.
 
-Edits made in the Formulas tab:
+Edits made in the Computers tab:
 - take effect on the next time step, mid-flight;
 - are test-called with sample inputs before they're accepted, so syntax errors and wrong return shapes are rejected with a message;
 - are switched off automatically if they throw or return something unusable during flight, and the default takes over;
@@ -469,9 +499,9 @@ Edits made in the Formulas tab:
 The flight formulas (estimation, in-flight learning, control, allocation: 16 of them) don't have to be ported to C by hand. The simulator compiles them into a list of steps for a small runner written in C. The same runner is built three ways:
 - for the ESP32, as an ESP-IDF component (`runner/`);
 - for a PC, where the tests run;
-- as WebAssembly, which the simulator flies on by default (Formulas tab → **Flight code runs on: Step runner**).
+- as WebAssembly, inside each simulated board (with the flight core and the navigation around it).
 
-A formula edited in the Formulas tab therefore flies in the simulator exactly as the drone would run it, and **Download program for the drone** gives the file to send it.
+A formula edited in the Computers tab therefore flies in the simulator exactly as the drone would run it, and **Download the program** gives the file to send it.
 
 ### What a program is
 
@@ -482,7 +512,7 @@ A formula edited in the Formulas tab therefore flies in the simulator exactly as
 - **Memory:** a formula's memory (the `st` argument) becomes named fields in the arena.
 - **Size:** the default program is 29 KB of steps and 65 KB of working memory.
 
-Each flight formula's card in the Formulas tab shows its compiled steps and how many run per call.
+Each flight formula's card in the Computers tab shows its compiled steps and how many run per call.
 
 ### Safety on the drone
 
@@ -500,7 +530,7 @@ The simulator (`js/rn-bridge.js`) and the drone (`runner/rn_host.c`) take a new 
 4. **Swap:** the new program flies with the memory it built up. The old one is kept.
 5. **Fall back:** if the new program traps in flight, the previous one takes over within the same control step, with the memory carried across. On the drone, the built-in program (compiled into the firmware) is always there last.
 
-Nothing that flies changes before step 4. The Formulas tab shows where an edit is and keeps a log.
+Nothing that flies changes before step 4. The Computers tab shows where an edit is and keeps a log.
 
 ### The drone and the Raspberry Pi
 
@@ -533,7 +563,11 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 ## The flight controller firmware
 
-`runner/fc/` is the drone's flight code around the formulas, and `runner/fc/esp32/` the firmware for an ESP32 that runs it. The simulator can fly the same C code: **Airframe → Flight controller → Fly the firmware** runs it built to WebAssembly against the simulator's physics. The IMU, barometer and battery readings go in, and the throttles and servo angles it returns drive the simulated ESCs and servos. So what flies in the simulator is what will fly on the drone.
+`runner/fc/` is the drone's flight code around the formulas: the flight core (`fc_core.c`) and the navigation (`nav_core.c`). `runner/fc/esp32/` is the firmware for an ESP32 that runs the flight core, and `runner/pi/pi_nav.c` the program for the Pi that runs the navigation. The simulator flies exactly this code (see Flight computers): the IMU, compass, barometer and battery readings go in, and the throttles and servo angles it returns drive the simulated ESCs and servos.
+
+**Guided commands.** Besides the sticks, the flight core takes a guided command: the world acceleration wanted and the heading. The navigation sends one 100 times a second; the throttle field still says whether to fly (below 0.05 the motors idle). Over the link it's a 12-float `RN_LINK_CMD` (the 7 stick floats, then guided, the acceleration and the heading). While they come, the ESP32 sends `RN_LINK_NAV` 100 times a second (attitude, rates, accelerometer, barometer height) and its full telemetry only twice a second, so both fit 115200 baud. If they stop for 0.5 s, the usual failsafe: it levels and lands.
+
+**The compass** goes into the attitude estimator when there is one, so the heading doesn't drift; GPS navigation needs it. (The ESP32 firmware has no compass driver yet: on the drone, the heading drifts until it does.)
 
 ### What it flies
 
@@ -599,7 +633,24 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 | Core 0 | Sensor task | Reads the IMU every step and the barometer at 25 Hz |
 | Core 0 | Link task | The Pi's commands, programs, airframe and settings; telemetry at 20 Hz |
 
-### The Pi side: `runner/pi/fly.py`
+### The Pi's navigation: `runner/pi/pi_nav.c`
+
+The same navigation code the simulator runs, with the step runner and the built-in flight program, plus what a Pi needs around it:
+- **The link** to the ESP32 (`/dev/serial0` by default): it reads `RN_LINK_NAV`, runs a navigation step on each one, and answers with a guided command.
+- **A GPS** on its own serial port (`--gps /dev/ttyUSB0`): NMEA `GGA` and `RMC`, as the NEO-6M sends at 9600 baud. Positions are metres north and west of the first fix.
+- **The pilot's commands**, as lines of text on its input or over UDP (port 14560): `arm`, `disarm`, `takeoff [height]`, `land`, `goto X Y Z`, `move VX VY VZ`, `heading DEG`, `hold`, `home`, `status`. It takes off only once its position estimate has settled; home is where it took off.
+- **Its config** from the simulator: Computers tab → the Pi's board → **Export the navigation config** (`.dnc`).
+
+Build and run it on the Pi: `sh runner/pi/build.sh`, then `./runner/pi/pi_nav --config drone.dnc --gps /dev/ttyUSB0`.
+
+It's tested end to end on a PC: `runner/pi/test_pi_nav.c` puts a fake ESP32 (the real flight core flying a simple plant) and a fake GPS (NMEA at 5 Hz) behind two pseudo-terminals. It starts the real `pi_nav` on them and types `arm`, `takeoff 1.5`, `goto 2 1 2`. It checks the drone gets there, then stops `pi_nav` and checks the ESP32 goes to its failsafe. `runner/fc/test_nav.c` tests the navigation with the flight core directly, through a delaying link:
+- take-off, hold and goto with GPS and barometer;
+- holding against wind and following a moving target;
+- link loss, landing in the failsafe;
+- optical flow alone indoors;
+- the tilt-rotor quad.
+
+### The Pi side for manual flying: `runner/pi/fly.py`
 
 | Command | What it does |
 |---|---|
@@ -633,7 +684,7 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 - after a fast pass the drone levels out slowly and drifts on for a while;
 - a hard lean reads a few degrees less than it is.
 
-The firmware tracks what it believes exactly. The belief is the formula's, and you can improve it in the Formulas tab (a lower accelerometer gain, or a model of rotor drag) and send it to the drone.
+The firmware tracks what it believes exactly. The belief is the formula's, and you can improve it in the Computers tab (a lower accelerometer gain, or a model of rotor drag) and send it to the drone.
 
 ## What it models
 
@@ -687,7 +738,7 @@ The cost: with slow, laggy servos, the motors take more of the quick work, so th
 
 ## Flight computer budget
 
-The **Flight computer** panel shows what the flight software alone would cost on the drone's own computer: an ESP32, ESP32-S3 or ESP32-C3. With the step runner flying, it counts the runner's steps (see above); with JavaScript, the cost of the same formulas written as plain C, which is what the table below shows. The simulator's physics isn't counted. Only what runs inside the control step is: estimation, learning, control, allocation and the code around them, plus the throw's background refinement.
+Each board in the Computers tab shows roughly what its tasks cost it: the formulas' costs (below) at each task's rate, plus the code around them, against the board's speed; and on a microcontroller, the flight program's memory. The table below was measured with the simulator's old controller, which included the in-flight learning; that now belongs to the Learning task on the Pi.
 
 - **Operations:** the math helpers add up the arithmetic they do while a control step runs, and formulas with loops of their own are counted from their sizes. A multiply-add counts 2, a square root or trig call about 15. Time assumes plain C in 32-bit floats: about 60 million operations per second on the ESP32, 80 on the S3 and 4 on the C3, which has no float unit.
 - **Memory:** the numbers the flight code keeps between steps, at 4 bytes each.

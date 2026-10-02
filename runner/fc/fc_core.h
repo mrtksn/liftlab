@@ -16,7 +16,8 @@
  *   thrustAxisTarget, the attitude wanted, attitudeError, attitudeControl, forceDemand;
  *   allocation in two stages as in the simulator: the steering servos' angle changes, then every motor's thrust
  *     (allocationPreferences, allocation), thrustLinearization and voltageCompensation → throttles 0–1.
- * There is no horizontal position hold: that needs GPS or optical flow, which come later.
+ * It holds no position itself: the navigation task (nav_core.c) does, with GPS or optical flow, and sends
+ * guided commands (an acceleration and a heading) in place of the sticks.
  *
  * Safety:
  *   - it arms only when asked, with the airframe loaded, a gyro, the drone level (< 15°), the throttle stick
@@ -73,11 +74,16 @@ typedef struct {
 typedef struct {
   float gyro[3], acc[3]; int have_gyro;  /* IMU sensor axes, rad/s and m/s² (the accelerometer reads +g up when level) */
   float baro_alt; int have_baro;         /* barometer height [m] from any reference, if there is one */
+  float mag[3]; int have_mag;            /* compass, body axes (any scale), if there is one: it holds the heading */
 } fc_imu;
 typedef struct {
   int arm;                               /* 1 arm, 0 disarm */
   float roll, pitch, yaw, throttle;      /* sticks: roll/pitch −1…1 (right, forward), yaw rate −1…1 (left turn +), throttle 0…1 */
   int test_motor; float test_throttle;   /* motor test (disarmed only): index, or −1 */
+  /* Guided (from the navigation task, nav_core.c, on this board or the Pi): instead of the sticks, the world
+   * acceleration wanted [m/s², x north/forward at take-off, y left, z up; gravity not included] and the heading
+   * [rad]. The throttle still says whether to fly: below 0.05 the motors idle (on the ground, before take-off). */
+  int guided; float acc[3], heading;
 } fc_cmd;
 typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_out;   /* throttles 0–1, servo angles [rad] */
 
@@ -107,6 +113,7 @@ typedef struct {
   float v[FC_MAX_MOTORS];                /* believed thrust fraction each motor was last asked for */
   float vbatt, vref;                     /* battery voltage (0: not measured), the voltage the tables are for */
   int trap;                              /* last formula error */
+  float tau_des[3];                      /* the torque the attitude control last asked for (body) [N·m] */
   uint32_t steps;
 } fc_state;
 

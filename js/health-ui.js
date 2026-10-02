@@ -50,8 +50,10 @@ function buildHealth() {
   const mode = el('span', { class: 'pill good', id: 'supMode' }, el('i'), el('span', { text: 'Normal' }));
   const repair = el('button', { class: 'btn', type: 'button', text: 'Repair all', title: 'Undo every failure and damage (the supervisor\'s settings too), without resetting the flight' });
   repair.addEventListener('click', () => { repairAll(); renderHealth(true); });
-  box.append(el('div', { class: 'h-top' }, el('label', { class: 'check', for: supId }, cb, 'Supervisor on'), mode, repair),
-    el('p', { class: 'hint', id: 'supWhy', text: 'Companion computer at 10 Hz, 40 ms each way over its link. Each part: its true temperature and state, then what the drone can sense and what the supervisor did.', title: 'The supervisor (like a Raspberry Pi next to the ESP32) reads the health sensors and the flight controller\'s data stream, and changes the controller\'s settings when a part fails, weakens or runs hot.' }));
+  const hasSup = typeof hasTask === 'function' && hasTask('super');
+  const supLbl = el('label', { class: 'check', for: supId }, cb, 'Supervisor on'); supLbl.hidden = !hasSup; mode.hidden = !hasSup;
+  box.append(el('div', { class: 'h-top' }, supLbl, mode, repair),
+    hasSup ? el('p', { class: 'hint', id: 'supWhy', text: 'Companion computer at 10 Hz, 40 ms each way over its link. Each part: its true temperature and state, then what the drone can sense and what the supervisor did.', title: 'The supervisor (like a Raspberry Pi next to the ESP32) reads the health sensors and the flight controller\'s data stream, and changes the controller\'s settings when a part fails, weakens or runs hot.' }) : el('p', { class: 'hint', text: 'Each part: its true temperature and state, and what the drone can sense. Break any of them to see what the flight code does.' }));
   const list = el('div', { class: 'h-list' });
   for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name)));
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name)));
@@ -102,6 +104,6 @@ function renderHealth(force) {
   const log = $('#supLog'); log.textContent = '';
   for (const l of sup.log.slice(0, 8)) log.append(el('li', { class: l.tone }, el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
   if (!sup.log.length) log.append(el('li', { class: 'muted', text: 'Nothing yet.' }));
-  $('#healthSmall').textContent = sup.on ? (fc.mode === 'normal' ? 'all normal' : m[0].toLowerCase()) : 'supervisor off';
+  $('#healthSmall').textContent = sup.on ? (fc.mode === 'normal' ? 'all normal' : m[0].toLowerCase()) : 'the parts';
 }
 renderBattery();

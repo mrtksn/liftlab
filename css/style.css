@@ -488,3 +488,23 @@ select.break{font-size:12px;padding:1px 2px;max-width:78px}
 .ask-name{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
 .ask-name input{border:1px solid var(--line-strong);background:var(--panel-2);border-radius:6px;padding:6px 8px}
 .ask-btns{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+
+/* computers tab */
+.boards{display:flex;flex-direction:column;gap:8px}
+.board{border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;background:var(--panel)}
+.board.over{border-color:var(--bad)}
+.board-head{display:flex;gap:6px;align-items:center}
+.board-name{flex:1;min-width:0;border:1px solid transparent;background:transparent;border-radius:5px;padding:3px 6px;font-weight:600;font-size:14px}
+.board-name:hover,.board-name:focus{border-color:var(--line-strong);background:var(--panel-2)}
+.board-head select{max-width:48%}
+.board-note{margin:2px 0 6px;font-size:12px;color:var(--muted)}
+.board-kv{margin:0}
+.board-kv dd.bad{color:var(--bad)}
+.board-ex{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.board-ex .btn{font-size:12.5px;padding:4px 9px}
+.board-add{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.task-row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.task-row:first-child{border-top:0}
+.task-row .hint{font-size:12px}
+.task-row select{flex:none;max-width:45%}
+.task-row.later{opacity:.7}

@@ -39,7 +39,8 @@ const PRESETS = {
     const main = mkMotor('Main rotor', 0, 0, 0.14, { tmax: 24, prop: 0.3, kappa: 0.035, tau: 0.1, pitch: 'collective', mass: 0.2, spin: 1, parent: roll.id });
     const boom = mkLink('Tail boom', -0.03, 0, 0.04, { az: 180, el: 0, length: 0.45, mass: 0.05 });
     const tail = mkMotor('Tail rotor', -0.48, 0, 0.04, { tilt: 90, az: -90, tmax: 4, prop: 0.06, kappa: 0.012, tau: 0.02, mass: 0.04, spin: 1, parent: boom.id });
-    const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] })];   // battery forward, to balance the tail
+    const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }),   // battery forward, to balance the tail
+      mkMass('Landing skids', 0.02, 0, -0.12, { mass: 0.06, size: [0.32, 0.2, 0.012] })];   // it stands on these, the tail rotor clear of the ground
     const sn = defaultSensors(); sn[1].pos = [-0.25, 0, 0.07];   // compass back along the boom, away from the main motor
     return { frame: 0.4, comps: c.concat(sn), mode: 'tilt' }; } },
   indoor: { label: 'Indoor quad (optical flow, no GPS)', build() {
@@ -170,59 +171,6 @@ function setAuthority(rows) {
   rows.forEach((r, i) => { r.inp.authority = a[i] / mx; });
 }
 function servoReach(j) { const m = servoModelHat(j); return m.rate * Math.max(0.005, allocPrefs.horizon - m.lag); }
-function allocate(w, cm) {
-  // w: wanted [force; torque] in the controller's model units. Columns are acceleration per full thrust.
-  const wa = (() => { const f = scl([w[0], w[1], w[2]], 1 / cm.m); const a = m3v(cm.Jinv, [w[3], w[4], w[5]]); return [...f, ...a]; })();
-  const acts = actuators();
-  const thrustIn = c => { const st = act.get(c.id), hi = fcHi(c); return { col: colAt(c), lo: 0, hi, inp: { kind: 'thrust', x: st.v || 0, lo: 0, hi: Math.max(hi, 1e-3), power: powerFull(c) } }; };   // a removed motor's limit is 0; a hot one's is capped
-  // Stage 1: servo joints. Each steering joint adds a small angle change δ as an input. Its effect is what
-  // turning it does to every motor it carries, Σ thrust × d(column)/dθ, and δ is bounded by how far the
-  // servo can get within the planning horizon.
-  // After a throw cut short, the servos' effect is only partly known: hold them in the middle until caught.
-  const holdMid = !!learn.holdServos;
-  if (holdMid) for (const j of steerJoints()) jst.get(j.id).thCmd = 0;
-  const sj = holdMid ? [] : steerJoints().filter(fcJointOk);   // a servo the supervisor has found stuck is left out
-  if (sj.length) {
-    const rows = acts.map(thrustIn), who = acts.map(() => null);
-    for (const j of sj) {
-      const th = angleSeen(j), R = j.range * D2R, reach = servoReach(j);
-      let d = [0, 0, 0, 0, 0, 0];
-      for (const c of motorsUnder(j)) d = add6(d, scl6(dColAt(c, j), Math.max(act.get(c.id).v || 0, 0.02)));
-      const lo = Math.min(0, Math.max(-R - th, -reach)), hi = Math.max(0, Math.min(R - th, reach));
-      rows.push({ col: d, lo, hi, inp: { kind: 'servo', x: 0, lo, hi, th, range: R, reach } });
-      who.push(j);
-    }
-    setAuthority(rows);
-    const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
-    const x = run('allocation', rows.map(r => r.col), rows.map(r => r.lo), rows.map(r => r.hi), wa, flyMode(), pull);
-    if (!servoHeld()) who.forEach((j, i) => {   // servos stay put while a calibration step holds them
-      if (j) jst.get(j.id).thCmd = clamp(angleSeen(j) + x[i], -j.range * D2R, j.range * D2R);
-    });
-  }
-  // Stage 2: thrust for every motor at the joints' angles now (measured, or predicted without feedback),
-  // so the motors cover whatever a moving servo hasn't reached yet.
-  const rows = acts.map(thrustIn);
-  setAuthority(rows);
-  const pull = run('allocationPreferences', rows.map(r => r.inp), allocPrefs);
-  const u = holdU(run('allocation', rows.map(r => r.col), rows.map(() => 0), rows.map(r => r.hi), wa, flyMode(), pull));   // held during calibration pulses
-  if (flyMode() === 'mixed') {   // how much of the asked-for sideways force this step's thrusts actually make
-    const dem = Math.hypot(wa[0], wa[1]);
-    if (dem > 0.2) {
-      const gx = rows.reduce((s, r, j) => s + r.col[0] * u[j], 0), gy = rows.reduce((s, r, j) => s + r.col[1] * u[j], 0);
-      const ratio = clamp((gx * wa[0] + gy * wa[1]) / (dem * dem), 0, 1);
-      steerMix.rho += (ratio - steerMix.rho) * Math.min(1, 0.001 / 0.3);   // about 0.3 s to settle
-    } else steerMix.rho += (1 - steerMix.rho) * 0.001 / 2;                 // drift back when not asked
-  }
-  ctl.sat = false;
-  acts.forEach((c, i) => {
-    const st = act.get(c.id);
-    // u[i] is thrust as a fraction of max; the learned throttle curve turns it into the throttle to send
-    const want = fcOn(c) ? clamp(run('thrustLinearization', u[i], curveHat(c)) + calExc(c) + ditherFor(c, S.t), 0, fcHi(c)) : 0;   // plus calibration or learning excitation
-    const [sent, eq] = fcThrottle(c, want); setThrottle(c, st, eq, sent);   // corrected for the battery's voltage when it's measured
-    if (u[i] >= 0.995) ctl.sat = true;
-  });
-}
-
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
 function setThrottle(c, st, u, sent = u) { st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(sent, 0, 1) : steadyX(sent, S.battV) ** 2); }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
@@ -236,37 +184,13 @@ function updateServoBelief(dt) {
   if (joints().length) model = massProps('model');   // parts on joints move the CoG the controller believes in
 }
 function hubState() { return { hub: S.p, vh: S.v }; }
-// One step of the flight software. Everything in it is what the drone's own computer would run, and the
-// flight budget (budget.js) counts it.
-function control(dt) { budgetBegin(); try { controlStep(dt); } finally { budgetEnd(dt); } }
+// One step of the flight software: the sensor readings go to the flight computers, which fly the drone (boards.js).
+function control(dt) { controlStep(dt); }
 function controlStep(dt) {
   senseAndEstimate(dt);
   updateServoBelief(dt);
-  if (typeof FIL !== 'undefined' && FIL.on) { filStep(dt); return; }   // the drone's own flight code flies it (js/fc-fil.js)
-  learnStep(dt);
-  if (S.crashed || !fc.armed) { for (const a of act.values()) { a.Tcmd = 0; a.u = 0; a.v = 0; } return; }   // crashed, or landed and disarmed
-  if (throwTick(dt)) return;             // throw start: open loop until it has identified itself
-  throwRecoverCheck();
-  // The flight software sees only the estimate, unless you hand it the ground truth.
-  let R, w, hub, vh;
-  if (sensing === 'truth') { R = qmat(S.q); w = S.w; ({ hub, vh } = hubState(R)); }
-  else { R = est.R; w = est.w; hub = est.p; vh = est.v; }
-  const cm = ctlModel(), axis = ctlAxis();
-  const RT = m3T(R);
-  const ep = sub([setpoint.x, setpoint.y, setpoint.z], hub);
-  for (let i = 0; i < 3; i++) ctl.iPos[i] = clamp(ctl.iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);   // vertical has room to trim out an unknown hover throttle
-  const Fd = run('positionControl', ep, sub(vh, ctl.vRef), ctl.iPos, cm.m, G, fc.lim);
-  const nd = unit(run('thrustAxisTarget', Fd, flyMode(), mixShare(), fc.lim.lean));
-  let psi = setpoint.yaw * D2R;
-  if (thr && thr.phase === 'recover') { const bx = m3v(R, [1, 0, 0]); psi = Math.atan2(bx[1], bx[0]); }   // catching a throw: get upright first, turn to the heading later
-  const Rd = m3m(frameFrom(nd, [Math.cos(psi), Math.sin(psi), 0]), m3T(frameFrom(axis, [1, 0, 0])));
-  const eR = run('attitudeError', R, Rd);
-  ctl.eAtt = nrm(eR);
-  for (let i = 0; i < 3; i++) ctl.iAtt[i] = clamp(ctl.iAtt[i] + eR[i] * dt, -0.5, 0.5);
-  const tau = run('attitudeControl', eR, w, ctl.iAtt, cm.J);
-  const f = run('forceDemand', m3v(RT, Fd), axis, flyMode());
-  ctl.wDes = [f[0], f[1], f[2], tau[0], tau[1], tau[2]];
-  allocate(ctl.wDes, cm);
+  boardsControl(dt);
+  sensorsDone();
 }
 
 /* ───────── physics ───────── */
@@ -408,8 +332,9 @@ function dynamics(dt) {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
     const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, J: mp0.J * sp.J };   // this particular motor and prop
     const mp = hsc.prop ? { ...mpx, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
-    const md = dead ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
-    if (dead) st.esc = 0;
+    const off = isCollective(c) && !(st.u > 0);   // a helicopter's ESC spools the rotor up only once it gets a throttle signal
+    const md = dead || off ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
+    if (dead || off) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
     Ibatt += st.esc * md.i;
     heatMotor(c, st, md, mp, dt);
@@ -497,9 +422,8 @@ function dynamics(dt) {
   // controller's corrections).
   const TQS = 0.15;
   S.tqRaw = tqNet; S.tq = S.tq ? add(S.tq, scl(sub(tqNet, S.tq), Math.min(1, dt / TQS))) : tqNet.slice();
-  {   // and what the controller asked for, in N·m (on the learned model it works in angular acceleration)
-    const fil = typeof FIL !== 'undefined' && FIL.on, w = !fil && fc.armed && ctl.wDes ? ctl.wDes.slice(3) : null;
-    const want = w ? (flyingLearned() ? m3v(model.J, w) : w) : null;
+  {   // and what the flight core's attitude control asked for, in N·m
+    const want = brt.out && brt.fcState === 1 ? brt.out.tau : null;
     S.tqWant = !want ? null : S.tqWant ? add(S.tqWant, scl(sub(want, S.tqWant), Math.min(1, dt / TQS))) : want.slice();
   }
   // Everything together: the frame and every joint, solved as one articulated body.
@@ -525,42 +449,32 @@ function dynamics(dt) {
 }
 function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
 
+// Every flight starts on the ground, motors stopped, under the target (or at the start point if a building is in
+// the way); the flight computers then start as if just powered on, and the simulator arms and takes off for you.
+let spawnAt = [0, 0, 0];
 function resetSim() {
-  thr = null; if (typeof filStop === 'function') filStop();
+  thr = null;
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
-  buildBodies();
-  // start with the nominal thrust axis pointing up at the target heading
-  S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
-  if (terrain.boxes.length && terrainNear([setpoint.x, setpoint.y, setpoint.z], cReach + 0.3).length) {   // the target is in or against a building
-    Object.assign(setpoint, { x: 0, y: 0, z: 1.5 }); pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];   // start again at the start point, in the open
+  buildBodies(); cPts = contactPoints();
+  const blocked = (x, y) => { for (let z = 0.3; z <= Math.max(0.3, setpoint.z) + 0.01; z += 0.4) if (terrainNear([x, y, z], cReach + 0.4).length) return true; return false; };
+  if (terrain.boxes.length && blocked(setpoint.x, setpoint.y)) {   // a building in the way: start again at the start point, in the open
+    Object.assign(setpoint, { x: 0, y: 0, z: 1.5 }); pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];
     if (typeof syncSp === 'function') syncSp();
     healthEvent('Started again at the start point: the target was against a building.', 'info');
   }
-  S.p = [setpoint.x, setpoint.y, setpoint.z];
-  if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => (pt.r || 0) - pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
+  // level, facing the target heading, resting on its lowest point
+  S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
+  const R0 = qmat(S.q); let low = 0;
+  for (const pt of cPts) low = Math.min(low, m3v(R0, pt.rest)[2] - (pt.r || 0));
+  S.p = [setpoint.x, setpoint.y, -low + 0.001]; spawnAt = S.p.slice();
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   resetEstimation(); resetLearning(); budgetReset();
-  for (let k = 0; k < 4; k++) {   // settle into hover: motors at their steady speed, servos where they're told
-    control(0);
-    let I = 0.5;
-    for (const c of actuators()) {
-      const st = act.get(c.id), mp = motorParams(c);
-      if (isCollective(c)) {   // spooled up at the governed speed, blades at the pitch hover needs
-        const L = collectiveLoad(c, mp, st.u); st.col = st.u; st.gi = 0; st.Omega = L.Og; st.T = L.kT * L.Og ** 2; st.i = L.kQ * L.Og ** 2 / mp.Ke;
-        st.esc = (mp.Ke * L.Og + mp.R * st.i) / S.battV;
-      } else { st.Omega = steadyX(st.u, S.battV) * mp.Om; st.T = mp.kT * st.Omega ** 2; st.i = mp.kQ * st.Omega ** 2 / mp.Ke; st.esc = st.u; }
-      I += st.esc * st.i;
-    }
-    S.battV = run('batteryModel', S.batt, I, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
-    for (const j of joints()) { const st = jst.get(j.id), t = jointTarget(j); st.th = st.thR = t + (j.offset || 0) * D2R; st.pst = {}; st.thHat = t; st.rate = 0; st.acc = 0; st.dq = []; }
-  }
-  truth = massProps('truth'); model = massProps('model'); cPts = contactPoints();
-  S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
+  truth = massProps('truth'); model = massProps('model');
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
-  thr = null; if (launchMode === 'throw' && actuators().length) startThrow();
+  boardsStart();
 }
 
 // A spinning prop that touches anything breaks. The disc's rim is checked at 16 points against the ground

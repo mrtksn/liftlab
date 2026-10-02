@@ -7,10 +7,9 @@ runner/bench/build/
 runner/bench/sdkconfig
 runner/bench/sdkconfig.old
 .venv/
-runner/fc/fc.wasm
+runner/fc/board.wasm
+runner/pi/pi_nav
+runner/pi/test_pi_nav
 runner/fc/esp32/build/
 runner/fc/esp32/sdkconfig
 runner/fc/esp32/sdkconfig.old
-runner/motortest/build/
-runner/motortest/sdkconfig
-runner/motortest/sdkconfig.old

@@ -14,6 +14,7 @@
  *   - commands must keep coming (fly.py sends them 50 times a second): 0.5 s without one while flying → failsafe.
  * Take the props off for anything but flying: the motor test spins motors.
  *
+ * While the Pi's navigation sends guided commands (12-float RN_LINK_CMD), it gets RN_LINK_NAV 100 times a second.
  * Telemetry (RN_LINK_TELEM), 36 floats: t, state, roll, pitch, yaw [deg], body rates [deg/s] ×3, height [m],
  * vertical speed [m/s], battery [V], loop [µs], longest loop [µs], flags (1 gyro, 2 barometer, 4 attitude
  * settled, 8 holding height, 16 airframe loaded), flying program slot, last formula error, 12 throttles, 8 servo
@@ -107,6 +108,9 @@ static void sensor_task(void *arg) {
 
 /* ── link task → control loop: the newest command, an airframe to load ── */
 static fc_cmd cmd_box; static volatile int cmd_new, keep_new;
+static volatile int64_t guided_us = -10000000;   /* when the last guided command came (the Pi's navigation is flying) */
+/* what the navigation flies on (RN_LINK_NAV), from the control loop at 100 Hz */
+static float nav_box[16]; static volatile int nav_new;
 static uint8_t af_box[AIRFRAME_CAP]; static volatile uint32_t af_len; static volatile int af_new, af_result;
 static volatile float vbatt;
 
@@ -123,6 +127,7 @@ static void flight_task(void *arg) {
     portENTER_CRITICAL(&imu_mux); m = imu_now; us = imu_us; seq = imu_seq; nb = baro_new; baro_new = 0; m.baro_alt = baro_alt; portEXIT_CRITICAL(&imu_mux);
     if (seq == last_seq) { m.have_gyro = 0; us = t0; }  /* no new sample: none this step (5 ms of these in flight stops it) */
     m.have_baro = nb;                                  /* only a new barometer reading counts */
+    m.have_mag = 0;                                    /* no compass driver yet */
     /* the time since the last step, as measured (a late step integrates the time that really passed) */
     float dt = (float)(us - last_us) * 1e-6f; last_us = us; last_seq = seq;
     dt = dt < 0.5f * dt0 ? 0.5f * dt0 : dt > 3 * dt0 ? 3 * dt0 : dt;
@@ -149,6 +154,14 @@ static void flight_task(void *arg) {
     }
     rn_host_tick(&H, dt);
     fc_step(&F, &m, dt, vbatt, &OUT);
+    static int nav_n = 0;
+    if (++nav_n >= HW.rate_hz / 100 && m.have_gyro) {   /* 100 Hz: attitude, rates, specific force (body), height */
+      nav_n = 0; float nb[16]; const float *Ri = F.A.imu_R;
+      nb[0] = (float)F.t; nb[1] = (float)F.state; for (int k = 0; k < 4; k++) nb[2 + k] = F.q[k]; for (int k = 0; k < 3; k++) nb[6 + k] = F.w[k];
+      for (int k = 0; k < 3; k++) nb[9 + k] = F.have_airframe ? Ri[3 * k] * m.acc[0] + Ri[3 * k + 1] * m.acc[1] + Ri[3 * k + 2] * m.acc[2] : m.acc[k];
+      nb[12] = F.have_alt ? F.alt_e : 0; nb[13] = (float)F.have_alt; nb[14] = (float)F.att_ok; nb[15] = 0;
+      portENTER_CRITICAL(&mux); memcpy(nav_box, nb, sizeof nb); nav_new = 1; portEXIT_CRITICAL(&mux);
+    }
     if (F.have_airframe) hw_outputs_set(&OUT, F.A.n_motors, F.A.n_joints); else hw_outputs_safe();
     if (F.state != last_state || strcmp(F.why, last_why)) {
       char s[80]; snprintf(s, sizeof s, "%s: %s", fc_state_name(F.state), F.why); post(s);
@@ -198,7 +211,7 @@ static void setting(const char *line) {
 }
 /* The longest payload each frame type may have: a damaged header can't swallow the frames after it. */
 static uint32_t frame_limit(uint8_t type) {
-  switch (type) { case RN_LINK_CMD: return 28; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
+  switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
     case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP; }
   return 0;
 }
@@ -226,9 +239,11 @@ static void link_task(void *arg) {
       int type = rn_link_feed(&L, rx[i]);
       if (L.state != 0 && prev_state == 0) frame_t0 = esp_timer_get_time();
       prev_state = L.state;
-      if (type == RN_LINK_CMD && L.len == 28) {
-        float v[7]; memcpy(v, L.buf, 28);
-        fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6] };
+      if (type == RN_LINK_CMD && (L.len == 28 || L.len == 48)) {   /* the pilot's sticks, or a guided command from the Pi */
+        float v[12] = { 0 }; memcpy(v, L.buf, L.len);
+        fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6],
+                     v[7] > 0.5f, { v[8], v[9], v[10] }, v[11] };
+        if (c.guided || L.len == 48) guided_us = now;
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_PROGRAM) {
         char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)L.len); say(s);
@@ -251,7 +266,10 @@ static void link_task(void *arg) {
     }
     now = esp_timer_get_time();
     if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); }
-    if (telem_us && now >= next_t) { next_t = now + telem_us; telemetry(); }
+    int guided = now - guided_us < 1000000;
+    if (guided && nav_new) { float nb[16]; portENTER_CRITICAL(&mux); memcpy(nb, nav_box, sizeof nb); nav_new = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_NAV, nb, sizeof nb); }
+    /* the full telemetry: at its rate, or twice a second while the Pi navigates (the link's room goes to RN_LINK_NAV) */
+    if (telem_us && now >= next_t) { next_t = now + (guided ? 500000 : telem_us); telemetry(); }
   }
 }
 
