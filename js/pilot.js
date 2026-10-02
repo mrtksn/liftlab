@@ -71,6 +71,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); pilotHold(); }
   else if (e.code === 'KeyH') pilotHome();
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
+  else if (e.code === 'KeyQ') document.getElementById('tTorque').click();
   else if (e.code === 'KeyT' && typeof setLaunch === 'function') setLaunch('throw');
   else if (e.code === 'Digit1') setPilotLevel('gentle');
   else if (e.code === 'Digit2') setPilotLevel('normal');

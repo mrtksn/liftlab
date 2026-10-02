@@ -133,11 +133,13 @@
         <span id="hudTime">t 0.0 s</span>
         <span id="hudPos"></span>
         <span id="hudCmd"></span>
+        <span id="hudTq"></span>
         <span id="hudSup" class="hud-sup" hidden></span>
         <div class="legend">
           <span class="key"><i class="sw" style="background:var(--accent)"></i>thrust</span>
           <span class="key"><i class="sw" style="background:var(--cable)"></i>cable</span>
           <span class="key"><i class="sw" style="background:var(--grav)"></i>weight</span>
+          <span class="key"><i class="sw" style="background:var(--torque)"></i>torque</span>
           <span class="key"><i class="sw" style="background:var(--wind)"></i>wind</span>
           <span class="key"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
           <span class="key"><i class="ring"></i>controller's CoG</span>
@@ -151,6 +153,7 @@
         <button class="btn" type="button" id="tFollow" aria-pressed="true">Follow</button>
         <button class="btn" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
         <button class="btn" type="button" id="tForces" aria-pressed="true">Forces</button>
+        <button class="btn" type="button" id="tTorque" aria-pressed="true" title="Show torques: each rotor's reaction (yaw) torque, and the net torque turning the drone about its centre of mass (Q)">Torque</button>
         <button class="btn" type="button" id="tTrail" aria-pressed="true">Trail</button>
         <button class="btn" type="button" id="tEst" aria-pressed="true" title="Show where the flight software thinks the drone is">Estimate</button>
         <button class="btn" type="button" id="tAir" aria-pressed="false" title="Show the rotor wakes">Airflow</button>

@@ -200,6 +200,15 @@ The box under the view buttons (top right of the 3D view) sets how you look at t
 
 Named views are relative to the drone: in flight "front" means facing its nose wherever it's heading (and turns Chase off); while editing, body axes. Selecting a part while editing centres the view on it. You can orbit all the way over the top and underneath.
 
+### Torque
+
+**Torque** (key **Q**) draws the torques on the drone in pink, as turning arrows. An arc goes round the torque's axis the way it turns (right-hand rule: thumb along the axis, fingers the way it turns), and sweeps further the bigger the torque:
+- **At each rotor:** its reaction torque, the motor pushing the frame back the opposite way to the prop's spin. The thrust arrows don't show this, and it is what makes a quad yaw: the rotors spinning one way against the ones spinning the other.
+- **At the centre of mass:** the **net torque**, everything that turns the drone together: thrust lever arms, rotor reactions, gyroscopic torques, air drag, cables and the ground. Weight adds none there. It is drawn as an arc with an axis arrow, seen through the airframe, and smoothed over 50 ms. It equals J·ω̇ + ω × Jω, so it is exactly what changes the drone's spin.
+- **Faint arrow:** the torque the controller **asked for**, smoothed the same way. It differs from the net torque mostly while it's changing, because the motors take a few tens of milliseconds to follow.
+
+The readout under the speed line gives the net torque in body axes: roll about X (forward), pitch about Y (left), yaw about Z (up), in N·m. In a steady hover it hovers around zero.
+
 ## Sensors and estimation
 
 The controller doesn't see the true state. It flies on what its sensors report, through two estimators, just like real flight software. Sensors are parts you attach on the Airframe tab, each with a position and mount angle you can set:

@@ -1,7 +1,7 @@
 'use strict';
-// three.js scene: the airframe, force arrows, cable payloads, target marker and trail.
+// three.js scene: the airframe, force arrows, torque arcs, cable payloads, target marker and trail.
 
-const view = { follow: true, chase: false, forces: true, trail: true, est: true, air: false };
+const view = { follow: true, chase: false, forces: true, torque: true, trail: true, est: true, air: false };
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -17,6 +17,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
 let mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let tqNetGlyph = null, tqWantArrow = null, tqRotor = [];   // torque: net about the centre of mass, the controller's wish, per rotor
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), anim: null };
 const EL_MAX = Math.PI / 2 - 0.002;
 // How far away something looks, for sizing handles to the screen (the orbit distance, in orthographic).
@@ -235,8 +236,37 @@ function buildGhost() {   // outline of where the flight software thinks the dro
   const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mats.ghost); ls.computeLineDistances(); ghost.add(ls);
   worldFx.add(ghost);
 }
+/* A torque, drawn as a turning arrow: an arc round the torque's axis, turning the way the torque turns
+ * (right-hand rule: thumb along the axis, fingers the way it turns). The arc grows with the torque: set(frac)
+ * shows that fraction of 315°. Built at unit radius; scale the group to size it. */
+const TQ_SEG = 48, TQ_SPAN = 1.75 * Math.PI, TQ_RAD = 6;
+class TqArc extends THREE.Curve { getPoint(t, o = new THREE.Vector3()) { const a = t * TQ_SPAN; return o.set(Math.cos(a), Math.sin(a), 0); } }
+function torqueGlyph(color, tube, opacity = 1, onTop = false) {   // onTop: seen through the airframe
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: opacity < 1 || onTop, opacity, depthWrite: opacity >= 1 && !onTop, depthTest: !onTop });
+  const arc = new THREE.Mesh(new THREE.TubeGeometry(new TqArc(), TQ_SEG, tube, TQ_RAD, false), mat);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(tube * 2.6, tube * 7, 12), mat);
+  g.add(arc); g.add(head); g.userData = { arc, head };
+  g.set = frac => {   // how much of the arc to show (0–1), with the arrowhead at its end
+    const k = Math.max(2, Math.round(clamp(frac, 0, 1) * TQ_SEG)), a = k / TQ_SEG * TQ_SPAN;
+    arc.geometry.setDrawRange(0, k * TQ_RAD * 6);
+    head.position.set(Math.cos(a), Math.sin(a), 0); head.rotation.set(0, 0, a);
+  };
+  g.traverse(o => { o.userData.noPick = true; o.renderOrder = onTop ? 22 : 18; });
+  return g;
+}
 function buildWorldFx() {
-  for (const o of [gravArrow, windArrow, spMarker, trailLine]) if (o) { worldFx.remove(o); o.traverse(x => x.geometry && x.geometry.dispose()); }
+  for (const o of [gravArrow, windArrow, spMarker, trailLine, tqNetGlyph, tqNetGlyph && tqNetGlyph.userData.axis, tqWantArrow, ...tqRotor]) if (o) { worldFx.remove(o); o.traverse(x => x.geometry && x.geometry.dispose()); }
+  const tqCol = colorOf('--torque');
+  tqNetGlyph = torqueGlyph(tqCol, 0.045, 0.95, true);
+  worldFx.add(tqNetGlyph);
+  const axisArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, tqCol, 0.035, 0.022);   // the torque's axis (right-hand rule)
+  for (const o of [axisArrow.line, axisArrow.cone]) { o.userData.noPick = true; o.material.depthTest = false; o.material.transparent = true; o.renderOrder = 22; }
+  worldFx.add(axisArrow); tqNetGlyph.userData.axis = axisArrow;
+  tqWantArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, tqCol, 0.03, 0.02);   // what the controller asked for: faint
+  for (const o of [tqWantArrow.line, tqWantArrow.cone]) { o.material.transparent = true; o.material.opacity = 0.35; o.material.depthTest = false; o.renderOrder = 21; o.userData.noPick = true; }
+  worldFx.add(tqWantArrow);
+  tqRotor = [];
   gravArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(), 0.2, colorOf('--grav'), 0.035, 0.02); worldFx.add(gravArrow);
   windArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.2, colorOf('--wind'), 0.04, 0.025); worldFx.add(windArrow);
   spMarker = new THREE.Group();
@@ -247,6 +277,40 @@ function buildWorldFx() {
   for (const v of pendVis.values()) { v.line.material = mats.cable; v.ball.material = mats.payload; }
 }
 const tmpV = new THREE.Vector3();
+// Torque sizes: an arc's sweep and an axis arrow's length grow with the torque and level off for big ones.
+const TQ_ROTOR = 0.03, TQ_NET = 0.08;   // N·m for about two thirds of the full sweep
+function updateTorque(R, live) {
+  const on = live && view.torque && !S.crashed, rs = S.rotors || [];
+  // Each rotor's reaction: the motor turning the prop pushes the frame the other way, about the rotor's axis.
+  while (tqRotor.length < rs.length) { const g = torqueGlyph(colorOf('--torque'), 0.07, 0.8); worldFx.add(g); tqRotor.push(g); }
+  tqRotor.forEach((g, i) => {
+    const ro = rs[i], t = ro && ro.tqReact, m = t ? nrm(t) : 0;
+    g.visible = on && i < rs.length && m > 2e-4; if (!g.visible) return;
+    const d = m3v(R, ro.d), pw = add(S.p, m3v(R, ro.p)), u = scl(m3v(R, t), 1 / m);
+    g.position.set(pw[0] - d[0] * 0.018, pw[1] - d[1] * 0.018, pw[2] - d[2] * 0.018);   // just below the disc
+    g.quaternion.setFromUnitVectors(Z, tmpV.set(u[0], u[1], u[2]));
+    g.scale.setScalar(clamp((ro.R || 0.06) * 0.7, 0.03, 0.12));
+    g.set(1 - Math.exp(-m / TQ_ROTOR));
+  });
+  // The net torque about the centre of mass: everything together (rotors, air, cables, ground; weight adds none).
+  const tq = S.tq, m = tq ? nrm(tq) : 0, ax = tqNetGlyph.userData.axis;
+  const cg = add(S.p, m3v(R, truth.c));
+  tqNetGlyph.visible = ax.visible = on && m > 0.002;
+  if (tqNetGlyph.visible) {
+    const u = scl(m3v(R, tq), 1 / m), f = 1 - Math.exp(-m / TQ_NET);
+    tqNetGlyph.position.set(cg[0], cg[1], cg[2]); tqNetGlyph.quaternion.setFromUnitVectors(Z, tmpV.set(u[0], u[1], u[2]));
+    tqNetGlyph.scale.setScalar(0.15); tqNetGlyph.set(f);
+    ax.position.set(cg[0], cg[1], cg[2]); ax.setDirection(tmpV.set(u[0], u[1], u[2])); ax.setLength(0.06 + 0.3 * f, 0.035, 0.022);
+  }
+  // What the controller asked for, smoothed the same way (sim.js), to compare with what it gets: the motors take
+  // a few tens of milliseconds to follow, so the two differ most while it's changing.
+  const want = on ? S.tqWant : null, mw = want ? nrm(want) : 0;
+  tqWantArrow.visible = mw > 0.002;
+  if (tqWantArrow.visible) {
+    const u = scl(m3v(R, want), 1 / mw), f = 1 - Math.exp(-mw / TQ_NET);
+    tqWantArrow.position.set(cg[0], cg[1], cg[2]); tqWantArrow.setDirection(tmpV.set(u[0], u[1], u[2])); tqWantArrow.setLength(0.06 + 0.3 * f, 0.03, 0.02);
+  }
+}
 function updateScene() {
   const R = qmat(S.q); const { hub } = hubState(R);
   drone.position.set(...hub);
@@ -292,6 +356,7 @@ function updateScene() {
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;
   gravArrow.visible = live && view.forces; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
   const wv = windVec(); windArrow.visible = live && view.forces && envr.wind > 0.05;
+  updateTorque(R, live);
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
   for (const c of cfg.comps) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;

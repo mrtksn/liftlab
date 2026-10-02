@@ -356,8 +356,11 @@ function dynamics(dt) {
   const K = mbKinematics(cat6(S.w, m3v(RT, S.v)));
   const posed = (b, rest) => add(K.ob[b], m3v(K.Rb[b], sub(rest, MB.bodies[b].pivot)));   // a rest point on body b, now (frame axes)
   const fext = MB.bodies.map(() => [0, 0, 0, 0, 0, 0]);
-  const push = (b, F, P) => { fext[b] = add6v(fext[b], mbForce(K, b, F, P)); };   // force F (frame axes) at P
-  const pushT = (b, T) => { fext[b] = add6v(fext[b], mbTorque(K, b, T)); };
+  // Every load also adds to the torque about the centre of mass (frame axes), for the view: gravity adds nothing
+  // there, so it is what the rotors, the air, cables and the ground do to the drone's attitude.
+  const cgF = truth.c; let tqNet = [0, 0, 0];
+  const push = (b, F, P) => { fext[b] = add6v(fext[b], mbForce(K, b, F, P)); tqNet = add(tqNet, crs(sub(P, cgF), F)); };   // force F (frame axes) at P
+  const pushT = (b, T) => { fext[b] = add6v(fext[b], mbTorque(K, b, T)); tqNet = add(tqNet, T); };
   const toWorld = P => add(S.p, m3v(R, P)), velW = (b, P) => m3v(R, mbPointVel(K, b, P));
 
   // Gravity on every body at its own centre of mass.
@@ -391,6 +394,7 @@ function dynamics(dt) {
   for (const ro of rotors) {
     const Tw = Math.max(ro.ae.T, 1e-6);
     const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, spinOf(ro.c), ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
+    ro.tqReact = rw.tau;                                                               // (the reaction alone: r = 0 above)
     push(ro.b, add(rw.F, ro.ae.H), ro.p);
     const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, spinOf(ro.c) * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
@@ -435,6 +439,13 @@ function dynamics(dt) {
     if (over > 0) t += -Math.sign(x) * 50 * over - 0.5 * (st.rate || 0);
     tauJ[i] = t; st.tq = t;
   }
+  // Torque about the centre of mass, smoothed over about 50 ms for the view (it flickers step to step).
+  S.tqRaw = tqNet; S.tq = S.tq ? add(S.tq, scl(sub(tqNet, S.tq), Math.min(1, dt / 0.05))) : tqNet.slice();
+  {   // and what the controller asked for, in N·m (on the learned model it works in angular acceleration)
+    const fil = typeof FIL !== 'undefined' && FIL.on, w = !fil && fc.armed && ctl.wDes ? ctl.wDes.slice(3) : null;
+    const want = w ? (flyingLearned() ? m3v(model.J, w) : w) : null;
+    S.tqWant = !want ? null : S.tqWant ? add(S.tqWant, scl(sub(want, S.tqWant), Math.min(1, dt / 0.05))) : want.slice();
+  }
   // Everything together: the frame and every joint, solved as one articulated body.
   const sol = mbSolve(K, fext, tauJ);
   const al = top3(sol.a0), acl = add(bot3(sol.a0), crs(S.w, m3v(RT, S.v)));   // spatial → ordinary acceleration of the hub
@@ -464,7 +475,7 @@ function resetSim() {
   buildBodies();
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
-  S.p = [setpoint.x, setpoint.y, setpoint.z]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0;
+  S.p = [setpoint.x, setpoint.y, setpoint.z]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };

@@ -454,6 +454,10 @@ function updateLive() {
   $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
   const vh = hubState(R).vh, gs = Math.hypot(vh[0], vh[1]);
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
+  {   // the net torque on the drone about its centre of mass, in body axes (roll: X forward, pitch: Y left, yaw: Z up)
+    const t = S.tq, f = x => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
+    $('#hudTq').textContent = view.torque && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '';
+  }
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
   updateActs(); updateAllocInfo(); renderEst(); renderLearn(); renderBudget();
@@ -702,7 +706,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
-[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTrail', 'trail'], ['tEst', 'est'], ['tAir', 'air']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTorque', 'torque'], ['tTrail', 'trail'], ['tEst', 'est'], ['tAir', 'air']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
 /* ───────── tabs ───────── */
