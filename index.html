@@ -16,33 +16,41 @@
       <h1>Drone Force Bench</h1>
       <span>multibody physics · control allocation · flight envelope</span>
     </div>
-    <div class="group">
-      <label class="lbl" for="preset">Start from</label>
-      <select id="preset"></select>
-    </div>
-    <div class="group">
-      <button class="btn primary" id="runBtn" type="button">Pause</button>
-      <button class="btn" id="resetBtn" type="button">Reset</button>
-      <button class="btn poke" id="pokeBtn" type="button" title="Hold to charge, release to poke. Longer hold, harder poke (P)."><span class="poke-lbl">Poke</span></button>
-      <select id="speed" aria-label="Simulation speed">
-        <option value="1">1× speed</option>
-        <option value="0.5">0.5× speed</option>
-        <option value="0.25">0.25× speed</option>
-      </select>
-    </div>
-    <div class="group">
-      <span class="lbl" id="launchLbl">Reset to</span>
-      <div class="seg" role="group" aria-labelledby="launchLbl">
-        <button type="button" id="launchHover" aria-pressed="true" title="Reset starts hovering at the target">Hover</button>
-        <button type="button" id="launchThrow" aria-pressed="false" title="Reset throws the drone with its motors off. It learns what it is while falling, then catches itself (T)">Throw</button>
+    <div class="hgroup" role="group" aria-labelledby="grpAir">
+      <span class="lbl" id="grpAir">Airframe</span>
+      <div class="hrow">
+        <select id="preset" aria-label="Start from a layout or a saved design" title="Start from a layout (Blank is a bare frame) or one of your saved designs"></select>
       </div>
     </div>
-    <div class="group">
+    <div class="hgroup" role="group" aria-labelledby="grpSim">
+      <span class="lbl" id="grpSim">Simulation</span>
+      <div class="hrow">
+        <button class="btn icon primary" id="runBtn" type="button" aria-label="Pause" title="Pause (K)">
+          <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>
+          <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.3-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5z"/></svg>
+        </button>
+        <button class="btn icon" id="resetBtn" type="button" aria-label="Reset" title="Reset the flight (R)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="seg" role="group" aria-label="Reset into" title="What Reset does">
+          <button type="button" id="launchHover" aria-pressed="true" title="Reset starts hovering at the target">Hover</button>
+          <button type="button" id="launchThrow" aria-pressed="false" title="Reset throws the drone with its motors off. It learns what it is while falling, then catches itself (T)">Throw</button>
+        </div>
+        <div class="seg seg-speed" role="group" aria-label="Simulation speed" id="speedSeg">
+          <button type="button" data-speed="0.25" aria-pressed="false" title="Quarter speed">¼×</button>
+          <button type="button" data-speed="0.5" aria-pressed="false" title="Half speed">½×</button>
+          <button type="button" data-speed="1" aria-pressed="true" title="Real time">1×</button>
+        </div>
+      </div>
+    </div>
+    <div class="hgroup" role="group" aria-labelledby="modeLbl">
       <span class="lbl" id="modeLbl">Steering</span>
-      <div class="seg" role="group" aria-labelledby="modeLbl">
-        <button type="button" id="modeTilt" aria-pressed="true" title="Lean the whole body to move sideways; servos only help turn">Tilt body</button>
-        <button type="button" id="modeMixed" aria-pressed="false" title="Servos make part of the sideways force, the body leans for the rest">Mixed</button>
-        <button type="button" id="modeLevel" aria-pressed="false" title="Stay level; servos make all the sideways force">Stay level</button>
+      <div class="hrow">
+        <div class="seg" role="group" aria-labelledby="modeLbl">
+          <button type="button" id="modeTilt" aria-pressed="true" title="Lean the whole body to move sideways; servos only help turn">Tilt body</button>
+          <button type="button" id="modeMixed" aria-pressed="false" title="Servos make part of the sideways force, the body leans for the rest">Mixed</button>
+          <button type="button" id="modeLevel" aria-pressed="false" title="Stay level; servos make all the sideways force">Stay level</button>
+        </div>
       </div>
     </div>
   </header>
@@ -200,6 +208,7 @@
           <div class="pilot-acts">
             <button type="button" class="btn" data-act="hold" title="Stop and hold the current position">Hold <kbd>Space</kbd></button>
             <button type="button" class="btn" data-act="home" title="Fly back to the start point">Home <kbd>H</kbd></button>
+            <button type="button" class="btn poke" id="pokeBtn" title="Hold to charge, release to poke. Longer hold, harder poke (P)."><span class="poke-lbl">Poke</span> <kbd>P</kbd></button>
           </div>
         </div>
         <div class="pad" role="group" aria-label="Move">
@@ -217,6 +226,18 @@
           <button class="btn primary" type="button" id="crashReset">Reset to hover</button>
         </div>
       </div>
+      <dialog class="ask" id="saveAsk" aria-labelledby="saveAskTitle">
+        <form method="dialog">
+          <h2 id="saveAskTitle">Save this airframe first?</h2>
+          <p id="saveAskWhy"></p>
+          <label class="ask-name" id="saveAskNameRow"><span class="lbl">Save as</span><input type="text" id="saveAskName" maxlength="60" placeholder="Untitled design" autocomplete="off"></label>
+          <div class="ask-btns">
+            <button class="btn" value="cancel" type="submit">Cancel</button>
+            <button class="btn" value="discard" type="submit">Don't save</button>
+            <button class="btn primary" value="save" type="submit" id="saveAskSave">Save and continue</button>
+          </div>
+        </form>
+      </dialog>
     </section>
 
     <aside class="panel" id="telemetry" aria-label="Telemetry">

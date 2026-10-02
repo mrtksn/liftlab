@@ -8,6 +8,13 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
+The header has three groups:
+- **Airframe:** start from a layout or one of your saved designs. **Blank** is a bare frame with a battery and an IMU; it opens in edit mode, resting on the ground, for you to add motors to. If the airframe on screen has changes you haven't saved, you're asked first: save it (under a name you give, never over a different design), don't save, or cancel. Opening a saved design or a design file asks the same.
+- **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), **Hover / Throw** chooses what a reset does, and ¼× ½× 1× sets the speed.
+- **Steering:** Tilt body, Mixed or Stay level.
+
+**Poke** is with the flight controls on the 3D view, beside Hold and Home.
+
 ## Learning the airframe
 
 The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't need to know prop sizes, mass or inertia. What it needs is the **effectiveness matrix B**: how much linear and angular acceleration each actuator input produces. B comes from one of two sources.
@@ -172,6 +179,7 @@ Tests (quad unless noted):
 
 The **Design** section at the top of the Airframe panel:
 - **Save** keeps the current airframe under the name in the box. Saving under a name that's already in the list replaces it; a new name makes a new entry. The header shows "unsaved changes" once you edit a saved design.
+- **Before something replaces the airframe** (Start from, opening a saved design, Open file…), you're asked to save it if you changed it since it was loaded or last saved.
 - **Saved designs** lists them newest first, with their motor and servo counts. Click one to open it; it also appears under Start from. ⤓ saves it to a file, and × deletes it (click twice).
 - **Where they're kept:** as a published artifact, in your account, private to you and there on any device. Opened from the repository, in that browser.
 - **Save to file** and **Open file…** write and read a design as JSON (`"format": "drone-force-bench-design"`), so a design can live in the repository or go to another machine.
@@ -229,6 +237,8 @@ The controller doesn't see the true state. It flies on what its sensors report, 
 | Barometer | Noise and slow drift. |
 | Position fix | GPS, RTK GPS or motion-capture presets: noise, a slowly wandering error, update rate, delay, and a "signal lost" switch. |
 | Optical flow + rangefinder | A downward camera that tracks how the ground slides past, plus a distance sensor. Flow noise grows as tracking quality drops; each axis has its own scale error; it saturates above a maximum flow rate. Quality depends on the ground's texture, the light and the height. The rangefinder has minimum and maximum range and noise that grows with distance. |
+
+Every sensor has a mass, editable on its card (defaults: IMU 3 g, compass 2 g, barometer 2 g, GPS 15 g, optical flow 5 g). It counts toward the weight, the centre of mass and the inertia, rides on whatever it is attached to, and touches the ground. Designs saved before sensors had a mass get these defaults when opened.
 
 Each sensor can be marked as known or unknown to the controller. When it's unknown, the controller assumes the sensor sits at the hub with no rotation, which is how you model a misplaced or misaligned sensor.
 
@@ -338,7 +348,9 @@ The pads on the 3D view and the keyboard steer the drone. They move the target t
 | 1 / 2 / 3 | Gentle (1 m/s) / Normal (3 m/s) / Sport (6 m/s) |
 | C | Chase camera: keep the view behind the drone |
 | E | Edit mode: select and drag parts in the 3D view |
-| P (hold) | Charge a poke; release to hit. Tap for a nudge, hold 1.5 s for the strongest. The Poke button works the same way |
+| P (hold) | Charge a poke; release to hit. Tap for a nudge, hold 1.5 s for the strongest. The Poke button on the view works the same way |
+| K | Pause / run |
+| R | Reset |
 
 Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
 

@@ -68,7 +68,7 @@ function setEditMode(on) {
   editMode = on;
   if (on) { editWasRunning = running; running = false; releaseAll(); showTab('air'); }
   else { running = editWasRunning; selectComp(null); setHover(null); }
-  $('#runBtn').textContent = running ? 'Pause' : 'Run';
+  renderRun();
   $('#tEdit').setAttribute('aria-pressed', String(on));
   $('.view').classList.toggle('editing', on);
   $('#editBar').hidden = !on;

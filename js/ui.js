@@ -44,7 +44,8 @@ const FD = {
   lel: { label: 'Points up or down (−90° straight down)', path: ['el'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
   lroll: { label: 'Rolled about its length', path: ['roll'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   llen: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, hmax: 3, step: 0.005, u: 'm', dp: 3 },
-  jmass: { label: 'Servo mass', path: ['mass'], min: 0, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
+  smass: { label: 'Mass', path: ['mass'], min: 0.001, max: 0.05, hmin: 0.0001, hmax: 1, step: 0.001, u: 'g', dp: 1, k: 1000 },
+  jmass: { label: 'Servo mass', path: ['mass'], min: 0.002, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
   range: { label: 'Servo limit ±', path: ['range'], min: 5, max: 90, step: 1, u: '°', dp: 0 },
   rate: { label: 'Servo speed', hmax: 5000,  path: ['rate'], min: 20, max: 1000, step: 10, u: '°/s', dp: 0 },
   lx: { label: 'Size X', path: ['size', 0], min: 0.01, max: 0.5, step: 0.005, u: 'm', dp: 3 },
@@ -105,12 +106,12 @@ function summary(c) {
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'sensor') {
-    const u = c.known ? '' : ' · mount unknown';
-    if (c.kind === 'imu') return `${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
-    if (c.kind === 'mag') return `${c.rate} Hz · ×${c.interference.toFixed(1)} interference${u} · ${p}`;
-    if (c.kind === 'baro') return `${c.rate} Hz · ±${c.noise.toFixed(2)} m${u} · ${p}`;
-    if (c.kind === 'flow') return `${c.rate} Hz · range ${c.maxRange} m${u} · ${p}`;
-    return `${c.quality === 'custom' ? 'Custom' : FIX_QUALITY[c.quality].label} · ${c.rate} Hz · ${c.latency} ms${c.dropout ? ' · no fix' : ''}${u}`;
+    const u = (c.known ? '' : ' · mount unknown'), g = Math.round(c.mass * 1000) + ' g · ';
+    if (c.kind === 'imu') return `${g}${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
+    if (c.kind === 'mag') return `${g}${c.rate} Hz · ×${c.interference.toFixed(1)} interference${u} · ${p}`;
+    if (c.kind === 'baro') return `${g}${c.rate} Hz · ±${c.noise.toFixed(2)} m${u} · ${p}`;
+    if (c.kind === 'flow') return `${g}${c.rate} Hz · range ${c.maxRange} m${u} · ${p}`;
+    return g + `${c.quality === 'custom' ? 'Custom' : FIX_QUALITY[c.quality].label} · ${c.rate} Hz · ${c.latency} ms${c.dropout ? ' · no fix' : ''}${u}`;
   }
   return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
 }
@@ -244,7 +245,7 @@ function compBody(c) {
       });
       b.append(q, el('p', { class: 'hint', text: 'Antenna or marker position:' }), pos, slider(c, 'rateFix'), slider(c, 'lat'), slider(c, 'fixNoise'), slider(c, 'wander'), slider(c, 'velNoise'), checkF(c, 'dropout', 'Signal lost (no fix)'));
     }
-    b.append(checkF(c, 'known', c.kind === 'baro' ? 'Controller knows the position' : c.kind === 'fix' ? 'Controller knows the antenna position' : 'Controller knows the position and mount'));
+    b.append(slider(c, 'smass'), checkF(c, 'known', c.kind === 'baro' ? 'Controller knows the position' : c.kind === 'fix' ? 'Controller knows the antenna position' : 'Controller knows the position and mount'));
   } else {
     b.append(el('p', { class: 'hint', text: 'Attachment point:' }), pos, slider(c, 'cable'), slider(c, 'mass'), checkF(c, 'known', 'Controller knows the static load'));
   }
@@ -502,7 +503,7 @@ $('#calBtn').addEventListener('click', () => {
   if (learn.cal) { endCalibration('Calibration stopped. The model keeps what it learned so far.'); return; }
   if (S.crashed) return;
   if (typeof editMode !== 'undefined' && editMode) setEditMode(false);
-  if (!running) { running = true; $('#runBtn').textContent = 'Pause'; }
+  if (!running) { running = true; renderRun(); }
   startCalibration(); renderLearn(true);
 });
 $('#holdPulses').addEventListener('change', e => { learn.holdPulses = e.target.checked; save(); });
@@ -512,7 +513,7 @@ function setLaunch(m, go = true) {
   launchMode = m;
   $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));
   $('#crashReset').textContent = m === 'throw' ? 'Throw again' : 'Reset to hover';
-  if (go) { if (!running) { running = true; $('#runBtn').textContent = 'Pause'; } doReset(); renderLearn(true); save(); }
+  if (go) { if (!running) { running = true; renderRun(); } doReset(); renderLearn(true); save(); }
 }
 $('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));
 const throwFieldRefs = [];
@@ -634,10 +635,12 @@ function buildSp() {
 const presetSel = $('#preset');
 presetSel.addEventListener('change', () => {   // layouts and your saved designs (options built by designs.js)
   const v = presetSel.value; presetSel.value = ''; if (!v) return;
-  if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) openDesign(d); }
-  else loadPreset(v.slice(2));
+  if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
+  else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
 });
-function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad(); }
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad();
+  if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
+}
 function afterLoad() {
   frameMassField.refresh();
   truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
@@ -651,9 +654,13 @@ function setMode(m, recalc = true) {
   ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
 }
 $('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeMixed').addEventListener('click', () => setMode('mixed')); $('#modeLevel').addEventListener('click', () => setMode('level'));
+function renderRun() {   // one button: shows pause while running, play while paused
+  const b = $('#runBtn'); b.classList.toggle('paused', !running);
+  b.setAttribute('aria-label', running ? 'Pause' : 'Run'); b.title = running ? 'Pause (K)' : 'Run (K)';
+}
 $('#runBtn').addEventListener('click', () => {
   if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
-  running = !running; $('#runBtn').textContent = running ? 'Pause' : 'Run';
+  running = !running; renderRun();
 });
 function doReset() { pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
 $('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
@@ -705,7 +712,8 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
-$('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
+function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }
+document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
 [['tFollow', 'follow'], ['tChase', 'chase']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
@@ -767,7 +775,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learn.keep, holdPulses: learn.holdPulses, applyCurve: learn.applyCurve, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), launch: launchMode, throwCfg: { height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -784,6 +792,8 @@ function migrateComps(comps) {
     if (c.type === 'joint' && c.torque == null) c.torque = 0.8;
     if (c.type === 'sensor' && c.kind === 'imu') { if (c.scaleErr == null) c.scaleErr = 0.005; if (c.misalign == null) c.misalign = 0.2; }
     if (c.type === 'sensor' && c.kind === 'mag' && c.softIron == null) c.softIron = 0.03;
+    if (c.type === 'sensor' && !(c.mass > 0)) c.mass = SENSOR_MASS[c.kind] || 0.003;   // saved when sensors weighed nothing
+    if (c.type === 'joint' && !(c.mass > 0)) c.mass = 0.015;
     if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
     if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
   }
@@ -810,7 +820,7 @@ function load() {
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
     cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
-    if (s.designCur || s.designName) bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean };
+    bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
     return true;
   }
   return false;

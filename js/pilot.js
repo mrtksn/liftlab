@@ -5,6 +5,7 @@
 //   W / S       climb / descend          ↑ / ↓   forward / back   (relative to the heading)
 //   A / D       turn left / right        ← / →   left / right
 //   Space       hold here                H       fly home
+//   K           pause / run              R       reset
 //   1 / 2 / 3   gentle / normal / sport  C       chase camera
 
 const PILOT_LEVELS = {
@@ -64,7 +65,7 @@ function flashCtl(id) { const b = document.querySelector(`[data-act="${id}"]`); 
 const typingIn = t => t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' ||
   (t.tagName === 'INPUT' && !['range', 'checkbox', 'radio', 'button'].includes(t.type)));
 window.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;
   const c = KEYMAP[e.code];
   if (c) { e.preventDefault(); if (!e.repeat) press(c, 'key:' + e.code); return; }
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
@@ -73,6 +74,8 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
   else if (e.code === 'KeyT' && typeof setLaunch === 'function') setLaunch('throw');
+  else if (e.code === 'KeyK') document.getElementById('runBtn').click();
+  else if (e.code === 'KeyR') document.getElementById('resetBtn').click();
   else if (e.code === 'Digit1') setPilotLevel('gentle');
   else if (e.code === 'Digit2') setPilotLevel('normal');
   else if (e.code === 'Digit3') setPilotLevel('sport');

@@ -54,7 +54,9 @@ window.addEventListener('keydown', e => {
 });
 
 /* ───────── saved designs ───────── */
-const designs = { list: [], cur: null, name: '', savedSnap: null, col: null, where: 'browser' };
+const designs = { list: [], cur: null, name: '', savedSnap: null, baseSnap: null, col: null, where: 'browser' };
+// Changed and not saved: different from how it was loaded (a layout, a design, a file) and from its last save.
+const designChanged = () => { const s = designSnap(); return s !== designs.baseSnap && !(designs.cur && s === designs.savedSnap); };
 const LSD = 'drone-force-bench-v1-designs';
 const claudeUse = name => (window.claude && typeof window.claude.use === 'function') ? window.claude.use(name).catch(() => null) : Promise.resolve(null);
 const localDesigns = () => { try { const l = JSON.parse(localStorage.getItem(LSD) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
@@ -105,7 +107,7 @@ async function saveDesign() {
   const ok = await storeDesign(rec);
   btn.disabled = false;
   if (!ok) return;
-  designs.cur = rec.id; designs.name = name; inp.value = name; designs.savedSnap = designSnap();
+  designs.cur = rec.id; designs.name = name; inp.value = name; designs.savedSnap = designs.baseSnap = designSnap();
   designNote(same ? `Updated “${name}”.` : `Saved “${name}”.`);
   renderDesigns();
 }
@@ -147,9 +149,37 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
 async function importDesign(file) {
   try {
     const got = readDesignFile(await file.text()), name = got.name || file.name.replace(/\.json$/i, '');
+    if (!await askToSave(name)) return;
     applyDesign(got.design); designLoaded(null, name); afterLoad();
     designNote(`Opened ${file.name}. Save to keep it in your designs.`);
   } catch (e) { designNote(`${file.name} isn't a design file.`); }
+}
+
+/* ───────── unsaved changes ───────── */
+// Before something replaces the airframe on screen: if it has changes nobody saved, ask to save them,
+// throw them away, or stay. Resolves true to go ahead (and runs `then`), false to stay.
+function askToSave(what, then) {
+  return new Promise(resolve => {
+    const go = () => { if (then) then(); resolve(true); };
+    const dlg = document.getElementById('saveAsk');
+    if (!designChanged() || !dlg || typeof dlg.showModal !== 'function') { go(); return; }
+    const cur = designs.cur && designs.list.find(d => d.id === designs.cur), name = $('#saveAskName');
+    $('#saveAskWhy').textContent = (cur ? `You changed “${cur.name}” since you last saved it.` : 'You changed this airframe and haven’t saved it.') + ` Opening “${what}” replaces it.`;
+    name.value = cur ? cur.name : (($('#designName').value || '').trim());
+    dlg.returnValue = '';
+    dlg.addEventListener('close', async () => {
+      const r = dlg.returnValue;
+      if (r === 'discard') { go(); return; }
+      if (r !== 'save') { resolve(false); return; }
+      let n = (name.value || '').trim() || 'Untitled design';   // never write over a different saved design from here
+      const taken = x => designs.list.some(d => d.name === x && d.id !== designs.cur);
+      if (taken(n)) { const b = n; for (let k = 2; taken(n); k++) n = `${b} (${k})`; }
+      $('#designName').value = n;
+      await saveDesign();
+      if (designs.savedSnap === designSnap()) go(); else { designNote('Couldn’t save the design, so nothing was replaced.'); resolve(false); }
+    }, { once: true });
+    dlg.showModal(); name.focus(); name.select();
+  });
 }
 
 /* ───────── panel ───────── */
@@ -160,7 +190,7 @@ function designNote(t) {
 }
 function renderDesignState() {
   const st = document.getElementById('designState'); if (!st) return;
-  if (designs.pendingClean) { designs.pendingClean = false; designs.savedSnap = designs.cur ? designSnap() : null; }
+  if (designs.pendingClean) { designs.pendingClean = false; designs.savedSnap = designs.cur ? designSnap() : null; designs.baseSnap = designSnap(); }
   const dirty = !designs.cur || designs.savedSnap !== designSnap();
   st.textContent = designs.cur ? (dirty ? 'unsaved changes' : 'saved') : '';
 }
@@ -176,7 +206,7 @@ function renderDesigns() {
   box.textContent = '';
   for (const d of designs.list) {
     const open = el('button', { class: 'dname', type: 'button', title: 'Open this design', text: d.name || 'Untitled design' });
-    open.addEventListener('click', () => openDesign(d));
+    open.addEventListener('click', () => askToSave(d.name || 'Untitled design', () => openDesign(d)));
     const exp = el('button', { class: 'icon-btn dexp', type: 'button', title: 'Save to file', 'aria-label': 'Save ' + d.name + ' to a file', text: '⤓' });
     exp.addEventListener('click', () => exportDesign(d));
     const del = el('button', { class: 'icon-btn', type: 'button', title: 'Delete', 'aria-label': 'Delete ' + d.name, text: '×' });
@@ -201,6 +231,7 @@ function renderDesigns() {
 }
 function initDesigns(boot) {
   if (boot) { designs.cur = boot.cur; designs.name = boot.name; $('#designName').value = boot.name; designs.savedSnap = boot.cur && boot.clean ? designSnap() : null; }
+  if (!boot || !boot.edited) designs.baseSnap = designSnap();   // the airframe on screen is as it was loaded
   $('#designSave').addEventListener('click', saveDesign);
   $('#designName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveDesign(); } });
   $('#designExport').addEventListener('click', () => exportDesign(null));

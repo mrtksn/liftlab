@@ -17,6 +17,8 @@ const FIX_QUALITY = {
   rtk: { label: 'RTK GPS', rate: 10, latency: 80, noise: 0.02, wander: 0.02, velNoise: 0.03 },
   mocap: { label: 'Motion capture', rate: 100, latency: 10, noise: 0.002, wander: 0, velNoise: 0.01 },
 };
+// What each sensor board weighs [kg]: a breakout like the MPU6050, QMC5883, BMP180; a GPS with its patch antenna; a flow camera with its rangefinder.
+const SENSOR_MASS = { imu: 0.003, mag: 0.002, baro: 0.002, fix: 0.015, flow: 0.005 };
 function fixDefaults(q) { const { label, ...rest } = FIX_QUALITY[q]; return rest; }
 function mkSensor(kind, name, x, y, z, o = {}) {
   const d = {
@@ -26,7 +28,7 @@ function mkSensor(kind, name, x, y, z, o = {}) {
     fix: Object.assign({ quality: 'gps', dropout: false }, fixDefaults('gps')),
     flow: { rate: 100, latency: 20, noise: 0.05, scale: 0.03, maxRate: 7, minRange: 0.05, maxRange: 4, rangeNoise: 0.01 },   // camera looks along its −Z
   }[kind];
-  return base(Object.assign({ type: 'sensor', kind, name, pos: [x, y, z], mount: [0, 0, 0], known: true }, d, o));
+  return base(Object.assign({ type: 'sensor', kind, name, pos: [x, y, z], mount: [0, 0, 0], known: true, mass: SENSOR_MASS[kind] }, d, o));
 }
 const defaultSensors = () => [
   mkSensor('imu', 'IMU', 0, 0, 0.01),

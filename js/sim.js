@@ -11,6 +11,8 @@ function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
 const r3 = v => +v.toFixed(3);
 const PRESETS = {
+  blank: { label: 'Blank (frame, battery, IMU)', blank: true, build() {   // a bare frame to build on: nothing to lift it yet
+    return { frame: 0.12, comps: [mkMass('Battery', 0, 0, -0.03, { mass: 0.1, size: [0.07, 0.035, 0.02] }), mkSensor('imu', 'IMU', 0, 0, 0.01)], mode: 'tilt' }; } },
   quadx: { label: 'Quad X', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
@@ -102,7 +104,7 @@ function massProps(which) {
   const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) }];
   for (const c of cfg.comps) {
     const pose = () => poseOf(c, ang);
-    if (c.type === 'motor' || c.type === 'joint') items.push({ m: c.mass, r: pose().p, I: null });
+    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
     else if (c.type === 'hang') { if (which === 'model' && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
     else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
@@ -269,6 +271,7 @@ function contactPoints() {
     if (c.type === 'motor' || c.type === 'joint') pts.push({ rest: add(c.pos, [0, 0, -0.03]), b: on(c) });
     else if (c.type === 'mass') { const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2; pts.push({ rest: add(c.pos, [0, 0, -hz]), b: on(c) }); }
     else if (c.type === 'link') pts.push({ rest: linkTip(c), b: on(c) }, { rest: c.pos.slice(), b: on(c) });
+    else if (c.type === 'sensor') pts.push({ rest: add(c.pos, [0, 0, -0.005]), b: on(c) });
   }
   return pts;
 }
@@ -478,7 +481,9 @@ function resetSim() {
   buildBodies();
   // start with the nominal thrust axis pointing up at the target heading
   S.q = matToQuat(m3m(frameFrom([0, 0, 1], [cosd(setpoint.yaw), sind(setpoint.yaw), 0]), m3T(frameFrom(nb, [1, 0, 0]))));
-  S.p = [setpoint.x, setpoint.y, setpoint.z]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
+  S.p = [setpoint.x, setpoint.y, setpoint.z];
+  if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => -pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
+  S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
@@ -500,7 +505,7 @@ function resetSim() {
   truth = massProps('truth'); model = massProps('model'); cPts = contactPoints();
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   hist.t.length = hist.tilt.length = hist.err.length = hist.est.length = hist.util.length = 0; trail.length = 0;
-  thr = null; if (launchMode === 'throw') startThrow();
+  thr = null; if (launchMode === 'throw' && actuators().length) startThrow();
 }
 
 /* ───────── flight envelope ───────── */
@@ -535,8 +540,9 @@ function envelopeCalc() {
   const units = k === 4 ? ['g', 'ang', 'ang', 'ang'] : ['lin', 'lin', 'g', 'ang', 'ang', 'ang'];
   const res = { k, labels, units, w, rank: rankOf(gens.map(x => x.g), k), n: gens.length };
   if (res.rank < k) {
-    res.verdict = 'bad'; res.title = 'Not controllable';
-    res.why = k === 6 ? `Stay-level mode needs thrust vectoring. The actuators control only ${res.rank} of 6 axes, so the craft cannot push sideways without tilting.`
+    res.verdict = 'bad'; res.title = actuators().length ? 'Not controllable' : 'Nothing lifts it';
+    res.why = !actuators().length ? 'It has no motors yet, so it rests on the ground. Add motors (and servos, if you like) from Attach: a quad needs four, spinning in alternate directions.'
+      : k === 6 ? `Stay-level mode needs thrust vectoring. The actuators control only ${res.rank} of 6 axes, so the craft cannot push sideways without tilting.`
       : `The actuators control only ${res.rank} of 4 axes (climb, roll, pitch, yaw). Add a motor, a servo or change spin directions.`;
     res.head = null; return res;
   }

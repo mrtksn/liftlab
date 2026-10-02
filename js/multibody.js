@@ -44,7 +44,7 @@ function buildBodies() {
   for (const c of cfg.comps) {
     const b = bodyIndexOf(c), o = MB.bodies[b].pivot;
     MB.of.set(c.id, b);
-    if (c.type === 'motor' || c.type === 'joint') items[b].push({ m: c.mass, r: sub(c.pos, o), I: null });
+    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor') items[b].push({ m: c.mass, r: sub(c.pos, o), I: null });
     else if (c.type === 'mass') items[b].push({ m: c.mass, r: sub(c.pos, o), I: shapeI(c) });
     else if (c.type === 'link') items[b].push({ m: c.mass, r: sub(add(c.pos, scl(linkDir(c), c.length / 2)), o), I: rodI(c) });
   }
