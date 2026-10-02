@@ -192,6 +192,15 @@ A design is the airframe alone: frame mass, every part and the steering mode. Fl
 
 ## Views
 
+**Show** (top right of the 3D view) has a switch for everything drawn over the scene, grouped:
+- **Forces:** thrust, weight, wind.
+- **Torque:** rotor torque, net torque, wanted torque. All off by default; **Q** turns rotor and net torque on and off together.
+- **Airframe:** prop spin, servo range, centre of mass, sensor beams, airflow.
+- **Flight:** trail, estimate, target.
+- **Scene:** ground grid, readouts, legend.
+
+Presets switch everything back to the defaults, everything on, or just the drone. The button counts how many switches differ from the defaults, the legend lists only what's shown, and your choice is kept in this browser.
+
 The box under the view buttons (top right of the 3D view) sets how you look at the drone, in flight and while editing:
 - **Orientation triad:** the drone's X (forward), Y (left) and Z (up) as the camera sees them. Click an axis end to look from that side: the filled ends are front, left and top, the hollow ones back, right and bottom.
 - **Persp / Ortho:** perspective, or orthographic (no foreshortening, so parts line up and lengths compare directly). Zoom works the same in both.
@@ -202,10 +211,10 @@ Named views are relative to the drone: in flight "front" means facing its nose w
 
 ### Torque
 
-**Torque** (key **Q**) draws the torques on the drone in pink, as turning arrows. An arc goes round the torque's axis the way it turns (right-hand rule: thumb along the axis, fingers the way it turns), and sweeps further the bigger the torque:
+Off by default: turn it on in the **Show** menu (or with **Q**). It draws the torques on the drone in pink, as turning arrows. An arc goes round the torque's axis the way it turns (right-hand rule: thumb along the axis, fingers the way it turns), and sweeps further the bigger the torque:
 - **At each rotor:** its reaction torque, the motor pushing the frame back the opposite way to the prop's spin. The thrust arrows don't show this, and it is what makes a quad yaw: the rotors spinning one way against the ones spinning the other.
-- **At the centre of mass:** the **net torque**, everything that turns the drone together: thrust lever arms, rotor reactions, gyroscopic torques, air drag, cables and the ground. Weight adds none there. It is drawn as an arc with an axis arrow, seen through the airframe, and smoothed over 50 ms. It equals J·ω̇ + ω × Jω, so it is exactly what changes the drone's spin.
-- **Faint arrow:** the torque the controller **asked for**, smoothed the same way. It differs from the net torque mostly while it's changing, because the motors take a few tens of milliseconds to follow.
+- **At the centre of mass:** the **net torque**, everything that turns the drone together: thrust lever arms, rotor reactions, gyroscopic torques, air drag, cables and the ground. Weight adds none there. It is drawn as an arc with an axis arrow, seen through the airframe, and smoothed over 0.15 s (the rotor arcs over 0.1 s). It equals J·ω̇ + ω × Jω, so it is exactly what changes the drone's spin.
+- **Wanted torque** (a faint arrow, a separate switch): the torque the controller **asked for**, smoothed the same way. It differs from the net torque mostly while it's changing, because the motors take a few tens of milliseconds to follow.
 
 The readout under the speed line gives the net torque in body axes: roll about X (forward), pitch about Y (left), yaw about Z (up), in N·m. In a steady hover it hovers around zero.
 

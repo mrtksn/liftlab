@@ -456,7 +456,7 @@ function updateLive() {
   $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
   {   // the net torque on the drone about its centre of mass, in body axes (roll: X forward, pitch: Y left, yaw: Z up)
     const t = S.tq, f = x => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
-    $('#hudTq').textContent = view.torque && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '';
+    $('#hudTq').textContent = view.readouts && (view.rtorque || view.ntorque || view.want) && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '';
   }
   $('#kbdHint').hidden = document.hasFocus();
   syncSp();
@@ -706,8 +706,50 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', true); });
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 $('#speed').addEventListener('change', e => speed = parseFloat(e.target.value));
-[['tFollow', 'follow'], ['tChase', 'chase'], ['tForces', 'forces'], ['tTorque', 'torque'], ['tTrail', 'trail'], ['tEst', 'est'], ['tAir', 'air']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
+[['tFollow', 'follow'], ['tChase', 'chase']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
 onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
+
+/* ───────── Show menu: what the view draws ───────── */
+// One switch per overlay (LAYERS in view3d.js), grouped, with presets. The choice is kept in this browser.
+const SHOW_LS = 'drone-force-bench-show';
+const SHOW_PRESETS = {
+  Defaults: () => Object.fromEntries(LAYERS.map(L => [L.key, L.on])),
+  All: () => Object.fromEntries(LAYERS.map(L => [L.key, true])),
+  'Drone only': () => Object.fromEntries(LAYERS.map(L => [L.key, L.key === 'grid'])),
+};
+function showSave() { try { localStorage.setItem(SHOW_LS, JSON.stringify(Object.fromEntries(LAYERS.map(L => [L.key, view[L.key]])))); } catch (e) {} }
+function showApply() {   // buttons, legend keys and readouts follow the layers
+  for (const b of document.querySelectorAll('#showMenu [data-key]')) b.setAttribute('aria-pressed', String(!!view[b.dataset.key]));
+  const torque = view.rtorque || view.ntorque || view.want;
+  for (const el of document.querySelectorAll('.hud-tl [data-layer]')) {
+    const k = el.dataset.layer; el.hidden = !(k === 'torque' ? torque : view[k]);
+  }
+  $('#legend').hidden = !view.legend;
+  const n = LAYERS.filter(L => view[L.key] !== L.on).length;
+  $('#tShow').firstChild.textContent = n ? `Show (${n} changed) ` : 'Show ';
+}
+function setLayers(next) { for (const L of LAYERS) if (L.key in next) view[L.key] = !!next[L.key]; showApply(); showSave(); }
+function toggleTorque() {   // Q: rotor and net torque together
+  const on = !(view.rtorque || view.ntorque); setLayers({ rtorque: on, ntorque: on });
+}
+(function buildShowMenu() {
+  try { const s = JSON.parse(localStorage.getItem(SHOW_LS) || 'null'); if (s) for (const L of LAYERS) if (typeof s[L.key] === 'boolean') view[L.key] = s[L.key]; } catch (e) {}
+  const menu = $('#showMenu'), btn = $('#tShow');
+  const groups = [...new Set(LAYERS.map(L => L.group))];
+  menu.innerHTML = groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
+    LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
+    + `<div class="show-grp show-presets"><span class="lbl">Presets</span><div class="show-btns">${Object.keys(SHOW_PRESETS).map(p => `<button type="button" class="btn" data-preset="${p}">${p}</button>`).join('')}</div></div>`;
+  menu.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.key) setLayers({ [b.dataset.key]: !view[b.dataset.key] });
+    else if (b.dataset.preset) setLayers(SHOW_PRESETS[b.dataset.preset]());
+  });
+  const open = on => { menu.hidden = !on; btn.setAttribute('aria-expanded', String(on)); btn.setAttribute('aria-pressed', String(on)); };
+  btn.addEventListener('click', e => { e.stopPropagation(); open(menu.hidden); });
+  document.addEventListener('pointerdown', e => { if (!menu.hidden && !e.target.closest('.show-wrap')) open(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { open(false); btn.focus(); } });
+  showApply();
+})();
 
 /* ───────── tabs ───────── */
 function showTab(which) {

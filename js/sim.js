@@ -395,6 +395,7 @@ function dynamics(dt) {
     const Tw = Math.max(ro.ae.T, 1e-6);
     const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, spinOf(ro.c), ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
     ro.tqReact = rw.tau;                                                               // (the reaction alone: r = 0 above)
+    ro.st.tqR = ro.st.tqR ? add(ro.st.tqR, scl(sub(rw.tau, ro.st.tqR), Math.min(1, dt / 0.1))) : rw.tau.slice();   // smoothed, for the view
     push(ro.b, add(rw.F, ro.ae.H), ro.p);
     const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, spinOf(ro.c) * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
@@ -439,12 +440,14 @@ function dynamics(dt) {
     if (over > 0) t += -Math.sign(x) * 50 * over - 0.5 * (st.rate || 0);
     tauJ[i] = t; st.tq = t;
   }
-  // Torque about the centre of mass, smoothed over about 50 ms for the view (it flickers step to step).
-  S.tqRaw = tqNet; S.tq = S.tq ? add(S.tq, scl(sub(tqNet, S.tq), Math.min(1, dt / 0.05))) : tqNet.slice();
+  // Torque about the centre of mass, smoothed over about 0.15 s for the view (step to step it jitters with the
+  // controller's corrections).
+  const TQS = 0.15;
+  S.tqRaw = tqNet; S.tq = S.tq ? add(S.tq, scl(sub(tqNet, S.tq), Math.min(1, dt / TQS))) : tqNet.slice();
   {   // and what the controller asked for, in N·m (on the learned model it works in angular acceleration)
     const fil = typeof FIL !== 'undefined' && FIL.on, w = !fil && fc.armed && ctl.wDes ? ctl.wDes.slice(3) : null;
     const want = w ? (flyingLearned() ? m3v(model.J, w) : w) : null;
-    S.tqWant = !want ? null : S.tqWant ? add(S.tqWant, scl(sub(want, S.tqWant), Math.min(1, dt / 0.05))) : want.slice();
+    S.tqWant = !want ? null : S.tqWant ? add(S.tqWant, scl(sub(want, S.tqWant), Math.min(1, dt / TQS))) : want.slice();
   }
   // Everything together: the frame and every joint, solved as one articulated body.
   const sol = mbSolve(K, fext, tauJ);

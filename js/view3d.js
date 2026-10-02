@@ -1,7 +1,29 @@
 'use strict';
 // three.js scene: the airframe, force arrows, torque arcs, cable payloads, target marker and trail.
 
-const view = { follow: true, chase: false, forces: true, torque: true, trail: true, est: true, air: false };
+const view = { follow: true, chase: false };
+// What the view draws: each overlay on its own switch (the Show menu, ui.js). The defaults are what a new viewer
+// sees; their choice is remembered in their browser.
+const LAYERS = [
+  { key: 'thrust', label: 'Thrust', group: 'Forces', on: true, tip: 'Each rotor\'s thrust, along its axis' },
+  { key: 'weight', label: 'Weight', group: 'Forces', on: true, tip: 'Gravity at the true centre of mass' },
+  { key: 'wind', label: 'Wind', group: 'Forces', on: true, tip: 'Wind direction and strength' },
+  { key: 'rtorque', label: 'Rotor torque', group: 'Torque', on: false, tip: 'Each rotor\'s reaction torque on the frame, opposite to its spin: what makes the drone yaw (Q toggles torque)' },
+  { key: 'ntorque', label: 'Net torque', group: 'Torque', on: false, tip: 'Everything turning the drone about its centre of mass, smoothed (Q toggles torque)' },
+  { key: 'want', label: 'Wanted torque', group: 'Torque', on: false, tip: 'What the controller asked for, to compare with the net torque' },
+  { key: 'spin', label: 'Prop spin', group: 'Airframe', on: true, tip: 'Which way each prop turns' },
+  { key: 'servo', label: 'Servo range', group: 'Airframe', on: true, tip: 'The swing range of servos that steer a rotor' },
+  { key: 'cog', label: 'Centre of mass', group: 'Airframe', on: true, tip: 'The true centre of mass (dot) and where the controller thinks it is (ring)' },
+  { key: 'beam', label: 'Sensor beams', group: 'Airframe', on: true, tip: 'Rangefinder beams' },
+  { key: 'air', label: 'Airflow', group: 'Airframe', on: false, tip: 'The rotor wakes' },
+  { key: 'trail', label: 'Trail', group: 'Flight', on: true, tip: 'The path flown' },
+  { key: 'est', label: 'Estimate', group: 'Flight', on: true, tip: 'Where the flight software thinks the drone is' },
+  { key: 'target', label: 'Target', group: 'Flight', on: true, tip: 'The position the drone is flying to' },
+  { key: 'grid', label: 'Ground grid', group: 'Scene', on: true, tip: 'The grid on the ground' },
+  { key: 'readouts', label: 'Readouts', group: 'Scene', on: true, tip: 'Position, speed and torque numbers, top left' },
+  { key: 'legend', label: 'Legend', group: 'Scene', on: true, tip: 'The colour key, top left' },
+];
+for (const L of LAYERS) view[L.key] = L.on;
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const vpEl = document.getElementById('viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -280,12 +302,14 @@ const tmpV = new THREE.Vector3();
 // Torque sizes: an arc's sweep and an axis arrow's length grow with the torque and level off for big ones.
 const TQ_ROTOR = 0.03, TQ_NET = 0.08;   // N·m for about two thirds of the full sweep
 function updateTorque(R, live) {
-  const on = live && view.torque && !S.crashed, rs = S.rotors || [];
+  const ok = live && !S.crashed, rs = S.rotors || [];
+  // shown above `hi`, hidden below `lo`: no flicker on and off round one threshold
+  const keep = (o, m, lo, hi) => (o.userData.shown = m > (o.userData.shown ? lo : hi));
   // Each rotor's reaction: the motor turning the prop pushes the frame the other way, about the rotor's axis.
   while (tqRotor.length < rs.length) { const g = torqueGlyph(colorOf('--torque'), 0.07, 0.8); worldFx.add(g); tqRotor.push(g); }
   tqRotor.forEach((g, i) => {
-    const ro = rs[i], t = ro && ro.tqReact, m = t ? nrm(t) : 0;
-    g.visible = on && i < rs.length && m > 2e-4; if (!g.visible) return;
+    const ro = rs[i], t = ro && ro.st && ro.st.tqR, m = t ? nrm(t) : 0;
+    g.visible = ok && view.rtorque && i < rs.length && keep(g, m, 2e-4, 5e-4); if (!g.visible) return;
     const d = m3v(R, ro.d), pw = add(S.p, m3v(R, ro.p)), u = scl(m3v(R, t), 1 / m);
     g.position.set(pw[0] - d[0] * 0.018, pw[1] - d[1] * 0.018, pw[2] - d[2] * 0.018);   // just below the disc
     g.quaternion.setFromUnitVectors(Z, tmpV.set(u[0], u[1], u[2]));
@@ -295,7 +319,7 @@ function updateTorque(R, live) {
   // The net torque about the centre of mass: everything together (rotors, air, cables, ground; weight adds none).
   const tq = S.tq, m = tq ? nrm(tq) : 0, ax = tqNetGlyph.userData.axis;
   const cg = add(S.p, m3v(R, truth.c));
-  tqNetGlyph.visible = ax.visible = on && m > 0.002;
+  tqNetGlyph.visible = ax.visible = ok && view.ntorque && keep(tqNetGlyph, m, 0.002, 0.005);
   if (tqNetGlyph.visible) {
     const u = scl(m3v(R, tq), 1 / m), f = 1 - Math.exp(-m / TQ_NET);
     tqNetGlyph.position.set(cg[0], cg[1], cg[2]); tqNetGlyph.quaternion.setFromUnitVectors(Z, tmpV.set(u[0], u[1], u[2]));
@@ -304,14 +328,15 @@ function updateTorque(R, live) {
   }
   // What the controller asked for, smoothed the same way (sim.js), to compare with what it gets: the motors take
   // a few tens of milliseconds to follow, so the two differ most while it's changing.
-  const want = on ? S.tqWant : null, mw = want ? nrm(want) : 0;
-  tqWantArrow.visible = mw > 0.002;
+  const want = ok && view.want ? S.tqWant : null, mw = want ? nrm(want) : 0;
+  tqWantArrow.visible = !!want && keep(tqWantArrow, mw, 0.002, 0.005);
   if (tqWantArrow.visible) {
     const u = scl(m3v(R, want), 1 / mw), f = 1 - Math.exp(-mw / TQ_NET);
     tqWantArrow.position.set(cg[0], cg[1], cg[2]); tqWantArrow.setDirection(tmpV.set(u[0], u[1], u[2])); tqWantArrow.setLength(0.06 + 0.3 * f, 0.03, 0.02);
   }
 }
 function updateScene() {
+  if (grid) grid.visible = view.grid;
   const R = qmat(S.q); const { hub } = hubState(R);
   drone.position.set(...hub);
   if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
@@ -320,7 +345,7 @@ function updateScene() {
   for (const j of joints()) {   // each joint's group turns about its hinge (level and at rest while editing)
     const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? previewAngle(j) : angleTrue(j));   // editing: at rest, or the preview
     const rv = rangeVis.get(j.id); if (!rv) continue;
-    rv.g.visible = editMode || (view.forces && motorsUnder(j).length > 0);   // flying: a faint fan behind a servo that steers a rotor
+    rv.g.visible = editMode || (view.servo && motorsUnder(j).length > 0);   // flying: a faint fan behind a servo that steers a rotor
     { const s = hs.get(j.id), broke = s && (s.limp || s.jam != null); for (const k of ['fan', 'line', 'dash']) rv.m[k].color.copy(broke ? heatCol.bad : heatCol.swing); if (broke && !editMode) rv.g.visible = true; }   // a jammed or limp servo shows red
     if (!editMode) { rv.m.fan.opacity = 0.08; rv.m.line.opacity = 0.3; rv.m.dash.opacity = 0; }
     else {   // brighter for the servo you're working on, or one carrying it
@@ -339,8 +364,9 @@ function updateScene() {
       p.disc.material.color.copy(s && (s.dead || s.loss > 0.004) ? heatCol.bad : mats.prop.color);
       if (s && s.dead) p.disc.material.opacity = 0.18;
     }
+    if (p.spin) p.spin.visible = editMode || view.spin;
     p.wake.visible = live && view.air && T > 0.02; if (p.wake.visible) p.wake.material.opacity = 0.05 + 0.3 * clamp(T / c.tmax, 0, 1);
-    p.arrow.visible = live && view.forces && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
+    p.arrow.visible = live && view.thrust && T > 0.02; if (p.arrow.visible) p.arrow.setLength(0.04 + T * 0.035, 0.03, 0.018);
     else if (editMode) {   // editing: every motor shows which way its thrust points (pull or push); the selected one boldly
       const big = shown || edit.sel === c.id; p.arrow.visible = true;
       if (big) p.arrow.setLength(0.16, 0.035, 0.022); else p.arrow.setLength(0.075, 0.022, 0.014);
@@ -350,12 +376,12 @@ function updateScene() {
   }
   for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
     const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
-    const L = rt && rt.latest; p.beam.visible = live;
+    const L = rt && rt.latest; p.beam.visible = live && view.beam;
     if (live) { p.beam.scale.z = L && L.range > 0 ? L.range : c.maxRange; p.beam.computeLineDistances(); }
   }
-  cogDot.position.set(...truth.c); modelRing.position.set(...model.c); modelRing.visible = nrm(sub(truth.c, model.c)) > 0.004;
-  gravArrow.visible = live && view.forces; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
-  const wv = windVec(); windArrow.visible = live && view.forces && envr.wind > 0.05;
+  cogDot.position.set(...truth.c); modelRing.position.set(...model.c); cogDot.visible = editMode || view.cog; modelRing.visible = cogDot.visible && nrm(sub(truth.c, model.c)) > 0.004;
+  gravArrow.visible = live && view.weight; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
+  const wv = windVec(); windArrow.visible = live && view.wind && envr.wind > 0.05;
   updateTorque(R, live);
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
   for (const c of cfg.comps) {
@@ -365,7 +391,7 @@ function updateScene() {
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
-  spMarker.visible = live; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
+  spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
   let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);

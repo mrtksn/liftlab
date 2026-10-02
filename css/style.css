@@ -204,6 +204,15 @@ button.chip{background:transparent;cursor:pointer}
 .hud-tl{top:10px;left:12px;display:flex;flex-direction:column;gap:3px}
 .hud-tr{top:8px;right:8px;pointer-events:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:calc(100% - 16px)}
 .tog-row{pointer-events:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.show-wrap{position:relative}
+.show-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:30;width:min(360px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px 10px;box-shadow:0 6px 24px color-mix(in srgb,var(--ink) 18%,transparent);display:flex;flex-direction:column;gap:7px;font-family:var(--f-body)}
+.show-menu[hidden]{display:none}
+.show-grp{display:flex;flex-direction:column;gap:4px}
+.show-grp .lbl{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.show-btns{display:flex;flex-wrap:wrap;gap:5px}
+.hud-tr .show-menu .btn{padding:2px 8px;font-size:12px}
+.show-presets{border-top:1px solid var(--line);padding-top:7px}
+.hud-tr .show-presets .btn[aria-pressed]{color:inherit}
 .view-box{pointer-events:auto;display:flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--panel) 82%,transparent);border:1px solid var(--line);border-radius:8px;padding:4px 6px 4px 4px}
 #triad{width:76px;height:76px;display:block;touch-action:none}
 .view-btns{display:flex;flex-direction:column;gap:5px;align-items:stretch}
