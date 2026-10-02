@@ -57,7 +57,15 @@ let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
 const flyMode = () => learn.holdServos ? 'tilt' : mode;
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
-const envr = { wind: 0, windDir: 0, texture: 0.8, light: 1, ambient: 25 };   // texture and light matter to optical flow
+const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25 };   // texture and light matter to optical flow
+// No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
+// (a few percent, its own every time, fixed by its id). The controller and supervisor aren't told.
+const spreadCache = new Map();
+function spreadOf(c) {
+  const k = envr.spread ?? 1, hit = spreadCache.get(c.id); if (hit && hit.k === k) return hit;
+  const R = mulberry32(c.id * 7919 + 104729), n = () => clamp(Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()), -2.5, 2.5);
+  const sp = { k, kT: 1 + 0.03 * k * n(), kQ: 1 + 0.05 * k * n(), J: 1 + 0.1 * k * n() }; spreadCache.set(c.id, sp); return sp;
+}
 
 /* ───────── state ───────── */
 // p, v: the frame's centre (the hub) in the world; q, w: its attitude and body rates. Joints carry their own angles (jst).
@@ -296,7 +304,13 @@ function washParts() {   // parts the downwash can push: the hub plate and rigid
   return parts;
 }
 function crash(why) { if (S.crashed) return; S.crashed = why; for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } onCrash(); }
-function windVec() { return [envr.wind * cosd(envr.windDir), envr.wind * sind(envr.windDir), 0]; }
+function windVec() { const g = S.gust || [0, 0, 0]; return [envr.wind * cosd(envr.windDir) + g[0], envr.wind * sind(envr.windDir) + g[1], g[2]]; }
+// Turbulence: gusts on top of the steady wind, random and correlated over about 2 s (stronger in stronger wind,
+// weaker vertically).
+function stepGusts(dt) {
+  const tg = 2, sg = (envr.turb ?? 0) * (0.5 + 0.15 * envr.wind), k = sg * Math.sqrt(2 * dt / tg);
+  S.gust = (S.gust || [0, 0, 0]).map((g, i) => g - g * dt / tg + k * (i === 2 ? 0.4 : 1) * randn());
+}
 
 /* ───────── motors ───────── */
 // Every motor is a brushless motor, ESC and prop sized from its card: max thrust at V_NOM with the tips at
@@ -338,12 +352,18 @@ function rotorStep(c, st, mp, V, dt) {
 }
 
 // The air each rotor meets (wind, its own motion, the other rotors' wash) and what that does to its thrust.
-function rotorAir(rotors, K, R, RT, wv) {
+// Each disc also meets churned air of its own: small eddies (a tenth of a second) from turbulence and from its own
+// wash curling back, much stronger close to the ground or a roof. That's what makes a real hover twitch.
+function rotorAir(rotors, K, R, RT, wv, dt) {
   for (const ro of rotors) ro.va = sub(m3v(RT, wv), mbPointVel(K, ro.b, ro.p));   // oncoming air at each disc
   for (const ro of rotors) {
     const u = add(ro.va, run('wakeVelocity', ro.p, rotors.filter(o => o !== ro)));   // plus the other rotors' wash
-    const ua = dot(u, ro.d);
     const pw = add(S.p, m3v(R, ro.p)), h = pw[2] - (terrain.boxes.length ? surfaceBelow(pw) : 0);   // height above the ground or the roof below
+    if (dt) {
+      const tr = 0.1, sr = (0.15 + (envr.turb ?? 0)) * 1.3 * (1 + 2.5 * Math.exp(-Math.max(0, h) / (6 * ro.R))) * Math.min(1, ro.T / 0.2);
+      ro.st.gz = (ro.st.gz || 0) * (1 - dt / tr) + sr * Math.sqrt(2 * dt / tr) * randn();
+    }
+    const ua = dot(u, ro.d) + (ro.st.gz || 0);
     ro.ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h);
     ro.st.k = ro.T > 1e-6 ? ro.ae.T / ro.T : 1; ro.st.Teff = ro.ae.T;
   }
@@ -367,6 +387,7 @@ function dynamics(dt) {
     S.mb = { K, acc: mbAccHeld(K, cat6(al, sub(m3v(RT, a), crs(S.w, vb)))) };
     return;
   }
+  stepGusts(dt);
   const R = qmat(S.q), RT = m3T(R), wv = windVec(), acts = actuators(), N = MB.bodies.length;
   const K = mbKinematics(cat6(S.w, m3v(RT, S.v)));
   const posed = (b, rest) => add(K.ob[b], m3v(K.Rb[b], sub(rest, MB.bodies[b].pivot)));   // a rest point on body b, now (frame axes)
@@ -385,7 +406,8 @@ function dynamics(dt) {
   let Ibatt = 0.5;   // avionics
   const rotors = acts.map(c => {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
-    const mp = hsc.prop ? { ...mp0, kT: 0, kQ: 0.03 * mp0.kQ, J: 0.4 * mp0.J } : mp0;                   // a broken prop: a stub, no thrust, almost no drag
+    const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, J: mp0.J * sp.J };   // this particular motor and prop
+    const mp = hsc.prop ? { ...mpx, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
     const md = dead ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
     if (dead) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
@@ -406,7 +428,7 @@ function dynamics(dt) {
   heatBattery(Math.max(0, Ibatt), dt);
 
   // Rotors in the air: inflow, wake interaction, ground effect, then the loads on whatever carries them.
-  rotorAir(rotors, K, R, RT, wv);
+  rotorAir(rotors, K, R, RT, wv, dt);
   for (const ro of rotors) {
     const Tw = Math.max(ro.ae.T, 1e-6);
     const rw = run('rotorWrench', ro.d, [0, 0, 0], Tw, spinOf(ro.c), ro.tauM / Tw);   // thrust, and the stator pushed back by the motor torque
@@ -516,7 +538,7 @@ function resetSim() {
   }
   S.p = [setpoint.x, setpoint.y, setpoint.z];
   if (!actuators().length) { cPts = contactPoints(); S.p[2] = Math.max(...cPts.map(pt => (pt.r || 0) - pt.rest[2])) + 0.001; }   // nothing to lift it: it starts resting on the ground
-  S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
+  S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = {}; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };

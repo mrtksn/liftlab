@@ -628,6 +628,7 @@ function buildSp() {
   const b = $('#spFields'); b.textContent = '';
   b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
     spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
+    spSlider('turb', 'Turbulence (0 still air, 1 gusty)', 0, 1, 0.05, '', envr), spSlider('spread', 'Motor and prop differences (1 typical)', 0, 3, 0.1, '×', envr),
     spSlider('texture', 'Ground texture (0 water, 1 gravel)', 0, 1, 0.05, '', envr), spSlider('light', 'Light (0 dark, 1 daylight)', 0, 1, 0.05, '', envr), spSlider('ambient', 'Air temperature', -10, 45, 1, '°C', envr));
 }
 

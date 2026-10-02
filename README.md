@@ -149,6 +149,23 @@ The simulated world has effects the controller is never told about:
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
 
+### An imperfect world
+
+Real drones never hover perfectly still, even with a good controller. The simulator adds what disturbs them (Target & environment panel):
+- **Turbulence** (0 still air, 1 gusty; default 0.3, light). Gusts ride on the steady wind, random and lasting about 2 s, stronger in stronger wind and weaker vertically. They push the drone around and change what each rotor meets.
+- **Churned air at each rotor.** Each disc meets small eddies of its own, lasting about a tenth of a second, from the turbulence and from its own wash curling back. The eddies are about three times stronger near the ground or a roof. Each rotor's thrust wobbles by a few percent on its own, and that uneven push is what makes a real hover twitch. Even still air keeps a little of it.
+- **Motor and prop differences** (1 typical; 0 identical). No two motors and props are alike: each one's thrust differs from its card by about 3%, its drag by about 5% and its spin-up time by about 10%. Each motor's values stay fixed for that motor. The controller and supervisor aren't told; the firmware's integrators and the learning have to absorb it.
+
+Measured on the quad over 20 s of hover, with the firmware flying (angle mode, no position hold):
+
+| | Roll-rate jitter | Tilt | Drift |
+|---|---|---|---|
+| Still air, identical motors (before these existed) | 0.15°/s | 0.7 ± 0.17° | 5 m |
+| Defaults (turbulence 0.3, differences 1) | 2.9°/s | 1.0 ± 0.4° | 7 m |
+| Turbulence 1 | 8°/s | 2.0 ± 1.0° | 16 m |
+
+The simulator's own controller looks shakier: about 6°/s even in still air. That's not the world. It holds position on noisy GPS, and with **Keep learning in flight** on it also adds a small deliberate throttle wiggle (2%, a few Hz) so the learner always has something to learn from. The firmware does neither.
+
 ## Servo joints and rods
 
 A **servo joint** is a hinge mounted on the frame, on a rod or on another joint. A **rod / lever** is a rigid stick with a mass; whatever you attach to it rides at its far end. Anything can be attached to either: motors, rigid masses, cable payloads, sensors, rods and further joints. Chaining them builds an arm: shoulder servo → upper-arm rod → elbow servo → forearm rod → hand and camera. **+ Motor on servo** adds a joint with a motor at the same point, the usual tilt-rotor.
