@@ -76,7 +76,8 @@ int gnd_step(gnd_state *G, const gnd_input *in, double t, float dt, uint8_t *out
   int shaped = 1;
   for (int a = 0; a < GND_AXES; a++) {
     int analog = (in->has_axis >> a) & 1;
-    float dig = (float)(((on >> plus[a]) & 1) - (int)((on >> minus[a]) & 1)), raw = analog ? clampf_(in->axis[a], -1, 1) : dig;
+    int up = (int)((on >> plus[a]) & 1u), down = (int)((on >> minus[a]) & 1u);   /* (as ints: unsigned 0 − 1 is not −1) */
+    float dig = (float)(up - down), raw = analog ? clampf_(in->axis[a], -1, 1) : dig;
     float x[5] = { (float)a, analog ? 1.0f : 0.0f, analog ? in->axis[a] : 0, dig, dt }, y = raw;
     if (!(G->ok && !rn_host_call(G->H, G->f_stick, a, x, &y) && fin(y))) { y = raw; shaped = 0; }
     G->stick[a] = clampf_(y, -1, 1);

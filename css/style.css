@@ -585,6 +585,14 @@ select.break{font-size:12px;padding:1px 2px;max-width:78px}
 .lbl.has-src{flex-wrap:wrap}
 .hint.warn{color:var(--warn)}
 .gs-filters{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px}
-.gs-linklog{max-height:320px;font-size:12px}
-.gs-linklog .gs-dir{font-family:var(--f-mono);font-weight:600;color:var(--src-tlm);margin:0 4px 0 2px}
+.gs-linklog{max-height:360px;font-family:var(--f-mono);font-size:11.5px}
+.gs-linklog li{display:grid;grid-template-columns:3.6em 1.2em 3.6em 1fr auto;column-gap:6px;align-items:baseline;padding:2px 0}
+.gs-linklog li.muted{display:block;font-family:var(--f-body)}
+.gs-linklog li b{margin:0;text-align:right}
+.gs-linklog .gs-dir{font-weight:600;color:var(--src-tlm)}
+.gs-linklog .gs-kind{font-size:10px;letter-spacing:.04em;color:var(--muted)}
+.gs-linklog .gs-data{color:var(--ink);overflow-wrap:anywhere}
+.gs-linklog .gs-meta{color:var(--muted);font-size:10.5px;text-align:right;white-space:nowrap}
+.gs-linklog li[data-tone="bad"] .gs-data{color:var(--bad)} .gs-linklog li[data-tone="warn"] .gs-data{color:var(--warn)} .gs-linklog li[data-tone="good"] .gs-data{color:var(--good)}
+.gs-linklog li[data-tone]{color:inherit}
 .w-log li[data-tone="good"]{color:var(--good)} .w-log li.muted{color:var(--muted)}

@@ -44,8 +44,8 @@ function buildGs() {
 
   // inside the link (the simulator's view: a real ground station can't see this)
   const lg = sec('Link log', 'inside the simulated radio', 'sim');
-  lg.append(el('p', { class: 'hint', text: 'What passes through the two ExpressLRS modules and the air: ↑ from the command module to the drone, ↓ from the drone to the command module. A real ground station can\'t see this; the simulator watches it happen.' }));
-  const kinds = [['cmd', 'Commands'], ['switch', 'Switches'], ['msg', 'Messages and flight mode'], ['link', 'Link events and drops'], ['all', 'Every frame (busy)']];
+  lg.append(el('p', { class: 'hint', text: '↑ reached the drone\'s receiver, ↓ reached the command module, with how long it took. The sticks and switches are channels, sent in every uplink packet; commands are one-off frames.' }));
+  const kinds = [['stick', 'Sticks and switches'], ['cmd', 'Commands'], ['msg', 'Messages, mode'], ['link', 'Link, drops'], ['all', 'Every frame']];
   const row = el('div', { class: 'gs-filters' });
   for (const [k, label] of kinds) {
     const id = 'gsLog-' + k, c = el('input', { type: 'checkbox', id }); c.checked = k === 'all' ? radioLogAll : GS_UI.logShow[k] !== false;
@@ -138,9 +138,12 @@ function renderGs(force) {
   W.log.set(gs.log);
   if (radio.logN !== GS_UI.logN) {                                   // the link log, when something new came
     GS_UI.logN = radio.logN; const show = GS_UI.logShow, box = GS_UI.linkLog; box.textContent = '';
-    const want = e => e.kind === 'frame' ? radioLogAll : e.kind === 'mode' || e.kind === 'msg' ? show.msg !== false : e.kind === 'drop' ? show.link !== false : show[e.kind] !== false;
-    const list = radio.log.filter(want).slice(0, 80);
-    for (const e of list) box.append(el('li', { 'data-tone': e.tone || '' }, el('b', { text: `${e.t.toFixed(2)} s` }), el('span', { class: 'gs-dir', text: e.dir }), ' ' + e.text));
+    const group = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
+    const want = e => e.kind === 'frame' ? radioLogAll : show[group[e.kind]] !== false;
+    const TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
+    const list = radio.log.filter(want).slice(0, 100);
+    for (const e of list) box.append(el('li', { 'data-tone': e.tone || '' }, el('b', { text: e.t.toFixed(2) }), el('span', { class: 'gs-dir', text: e.dir }),
+      el('span', { class: 'gs-kind', text: TAG[e.kind] || e.kind }), el('span', { class: 'gs-data', text: e.data }), el('span', { class: 'gs-meta', text: e.meta })));
     if (!list.length) box.append(el('li', { class: 'muted', text: has ? 'Nothing yet.' : 'The drone has no radio.' }));
   }
   for (const w of Object.values(W)) w.age(t);

@@ -38,6 +38,17 @@ int main(void) {
   in.held = 0; double back = -1, t0 = t;
   for (int k = 0; k < 60; k++) { t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); if (back < 0 && G.stick[GND_PITCH] == 0) back = t - t0; }
   CHECK(back > 0.08 && back < 0.13, "released, back to the centre in %.2f s", back);
+  { /* every stick button, both ways */
+    static const int bt[8] = { GB_RIGHT, GB_LEFT, GB_FWD, GB_BACK, GB_UP, GB_DOWN, GB_YAWR, GB_YAWL };
+    static const int ax[8] = { GND_ROLL, GND_ROLL, GND_PITCH, GND_PITCH, GND_THR, GND_THR, GND_YAW, GND_YAW }; float got[8]; int ok = 1;
+    for (int b = 0; b < 8; b++) {
+      in.held = GB(bt[b]); for (int k = 0; k < 80; k++) { t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); }
+      got[b] = G.ch[ax[b]]; ok &= fabsf(got[b] - (b % 2 ? -1.0f : 1.0f)) < 1e-3f;
+      in.held = 0; for (int k = 0; k < 40; k++) { t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); }
+    }
+    CHECK(ok, "each stick button, each way: right %+.0f left %+.0f fwd %+.0f back %+.0f up %+.0f down %+.0f yaw right %+.0f yaw left %+.0f",
+          got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7]);
+  }
   in.has_axis = 1u << GND_ROLL; in.axis[GND_ROLL] = 0.02f; t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); float d0 = G.stick[GND_ROLL];
   in.axis[GND_ROLL] = 0.5f; t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); float d5 = G.stick[GND_ROLL];
   in.axis[GND_ROLL] = -1; t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); float d1 = G.stick[GND_ROLL];
