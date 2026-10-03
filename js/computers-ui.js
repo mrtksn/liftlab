@@ -84,7 +84,7 @@ function renderRunner() {
   if (!P) st.textContent = 'The flight formulas didn\'t compile: ' + RN.buildErr;
   else {
     const n = Object.keys(P.fns).length, kb = x => (x * 4 / 1024).toFixed(0) + ' KB';
-    st.textContent = `${n} flight formulas compiled into one program: ${kb(P.code.length + P.constEnd)} of steps and constants, ${kb(P.arenaSize)} of working memory. Every board loads this same program; each runs the formulas of its tasks.`;
+    st.textContent = `${n} formulas compile (${kb(P.code.length + P.constEnd)} of steps and constants, ${kb(P.arenaSize)} of working memory, all together). Each board loads a program with the formulas of its tasks, and the command module one with its own.`;
   }
   const log = $('#rnLog'); log.textContent = '';
   for (const l of RN.log.slice(0, 5)) log.append(el('li', { class: l.tone }, el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
@@ -159,6 +159,9 @@ function buildComputers() {
         if (C.boards.length >= BOARD_MAX) return;
         C.boards.push({ id: 99, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
       } }))),
+    el('section', { class: 'sec', id: 'groundSec' }, el('h2', { text: 'On the ground', 'data-src': 'you' }),
+      el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module. Here it runs on the far side of the simulated link: your keys are its buttons.' }),
+      el('div', { class: 'boards', id: 'groundCard' })),
     el('section', { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
     el('div', { id: 'taskLaws' }),
     el('section', { class: 'sec', id: 'rnBox' },
@@ -209,7 +212,7 @@ function renderComputers(full) {
       const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = allSensors().filter(c => wiredTo(c) === b);
       const name = el('input', { type: 'text', class: 'board-name', value: b.name, maxlength: 24, 'aria-label': 'Board name' });
       name.addEventListener('change', () => { const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).name = name.value.trim() || K.label; setComputers(C2, 'name'); });
-      const kind = el('select', { 'aria-label': 'Board' }, ...Object.entries(BOARD_KINDS).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
+      const kind = el('select', { 'aria-label': 'Board' }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
       kind.addEventListener('change', () => { const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = kind.value; setComputers(C2, 'kind'); });
       const only = b.tasks.includes('core') && C.boards.filter(x => BOARD_KINDS[x.kind].mcu).length < 2;
       const del = el('button', { class: 'icon-btn', type: 'button', text: '×', title: only ? 'The flight core needs a microcontroller: add another before removing this one' : 'Remove this board', 'aria-label': 'Remove ' + b.name, disabled: only || C.boards.length < 2 ? 'disabled' : null });
@@ -238,6 +241,7 @@ function renderComputers(full) {
         ex.childElementCount ? ex : el('span')));
     }
     $('#boardAdd').disabled = C.boards.length >= BOARD_MAX;
+    renderGroundCard(C);
     // tasks: which board
     const rows = $('#taskRows'); rows.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {
@@ -260,10 +264,36 @@ function renderComputers(full) {
       const b = boardOf(t); if (!b) continue;
       box.append(lawSection('laws-' + t, T.label, `${T.hz} times a second.`, T.formulas, 'on ' + b.name));
     }
+    box.append(lawSection('laws-ground', GROUND.label, `${GROUND.hz} times a second, on the ground.`, GROUND.formulas, hasTask('tlm') ? 'on ' + C.ground.name : 'not used: the drone has no radio'));
     const off = Object.entries(TASKS).filter(([t]) => !boardOf(t));
     if (off.length) box.append(lawSection('laws-off', 'Not on any board', 'These formulas belong to tasks no board runs: they don\'t fly. ' + off.map(([, T]) => T.label).join(', ') + '.', off.flatMap(([, T]) => T.formulas)));
   }
   renderRunner();
+}
+// The command module's card: which computer it is, what it does, its load.
+function renderGroundCard(C) {
+  const g = C.ground, K = BOARD_KINDS[g.kind], tlmB = boardOf('tlm'), bud = groundBudget();
+  const set = (k, v) => { const C2 = JSON.parse(JSON.stringify(C)); C2.ground[k] = v; setComputers(C2, 'ground'); };
+  const name = el('input', { type: 'text', class: 'board-name', value: g.name, maxlength: 24, 'aria-label': 'Command module name' });
+  name.addEventListener('change', () => set('name', name.value.trim() || 'Command module'));
+  const kind = el('select', { 'aria-label': 'Command module computer' }, ...Object.entries(BOARD_KINDS).filter(([k]) => k !== 'c3').map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
+  kind.addEventListener('change', () => set('kind', kind.value));
+  const prog = el('button', { class: 'btn', type: 'button', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: groundDownload });
+  const box = $('#groundCard'); box.textContent = '';
+  box.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : '') },
+    el('div', { class: 'board-head' }, name, kind),
+    el('p', { class: 'board-note', text: K.note }),
+    el('dl', { class: 'kv board-kv' },
+      el('dt', { text: 'Runs' }), el('dd', { text: 'Command module: sticks and switches, commands, telemetry, alerts' }),
+      el('dt', { text: 'Wired to it' }), el('dd', { text: K.mcu ? 'buttons and sticks, a buzzer, the ExpressLRS transmitter module' : 'a gamepad, keys or your own code (UDP), the ExpressLRS transmitter module (USB serial)' }),
+      el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `ExpressLRS radio to the receiver on ${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
+      el('dt', {}, srcDot('calc'), 'Load'), el('dd', { text: `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(1)} KB of ${K.ramKB} KB` : ''}` })),
+    el('div', { class: 'board-ex' }, prog)));
+}
+function groundDownload() {
+  let img; try { img = boardImage({ tasks: ['ground'] }); } catch (e) { rnEvent('Can\'t make the command module\'s program: ' + e.message, 'bad'); renderRunner(); return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([img], { type: 'application/octet-stream' })); a.download = 'command-module.rnp';
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 // Files for the drone: the airframe for the flight core, the config for the navigation.
 function boardsExport(what) {

@@ -14,6 +14,8 @@ int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c) {
   return 0;
 }
 
+float rc_cmd_scale(int cmd, int k) { return cmd == RC_CMD_GOTO ? (k < 3 ? 100.0f : k == 3 ? 1000.0f : 1.0f) : 1.0f; }
+
 void rc_pilot_init(rc_pilot *P) { char *p = (char *)P; for (unsigned i = 0; i < sizeof *P; i++) p[i] = 0; }
 
 /* the speed levels, as the simulator's keys: horizontal [m/s], vertical [m/s], turn [rad/s] */
@@ -51,7 +53,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
         P->target[0] = clampf_(in->cmd_v[0], -BOX_XY, BOX_XY); P->target[1] = clampf_(in->cmd_v[1], -BOX_XY, BOX_XY);
         P->target[2] = clampf_(in->cmd_v[2], BOX_ZLO, BOX_ZHI); P->heading = in->cmd_v[3]; P->have_target = 1;
         for (int k = 0; k < 3; k++) P->vref[k] = 0;
-      }
+      } else if (in->cmd == RC_CMD_LEARN) P->learn_req = (int)in->cmd_v[0];
     }
     int hold = in->ch[RC_HOLD] > 0.5f, home = in->ch[RC_HOME] > 0.5f;
     if (hold && !P->hold_was && o->have_home) { for (int k = 0; k < 3; k++) { P->target[k] = o->p[k]; P->vref[k] = 0; } P->target[2] = clampf_(P->target[2], BOX_ZLO, BOX_ZHI); }

@@ -54,6 +54,10 @@ const RN_SIGS = (() => {
       rec({ mode: POLICY, lim: rec({ speed: num, lean: num, accel: num }), why: num, rpBad: num, vBad: num })),
     liftMargin: S(['cols', 'lo', 'hi'], [list(V6, RN_MOT + RN_JNT), list(num, RN_MOT + RN_JNT), list(num, RN_MOT + RN_JNT)], rec({ margin: num, rpOk: num, yawOk: num })),
     thermalModel: S(['T', 'P', 'G', 'C', 'Tamb', 'dt'], [num, num, num, num, num, num], num),
+    // The command module (on the ground: runner/ground).
+    stickInput: S(['st', 'axis', 'analog', 'digital', 'dt'], [state(), num, opt(num), num, num], num),
+    groundAlerts: S(['st', 's', 'dt'], [state(), rec({ age: num, lq: opt(num), soc: opt(num), vcell: opt(num), failsafe: num, crashed: num, returning: num, landing: num, radioLost: num }), num],
+      rec({ level: num, why: num })),
     rotorWrench: S(['d', 'r', 'T', 'spin', 'kappa'], [V3, V3, num, num, num], rec({ F: V3, tau: V3 })),
     jointRotation: S(['axis', 'theta'], [V3, num], M3),
   };
@@ -64,6 +68,7 @@ const RN_TASK_FORMULAS = {
   nav: ['positionEstimator', 'flowVelocity', 'positionControl'],
   learn: ['identifyEffectiveness', 'identifyMotorResponse', 'identifyServoResponse', 'identifyThrow'],
   super: ['actuatorHealth', 'faultDecision', 'flightPolicy', 'liftMargin', 'thermalModel'],
+  ground: ['stickInput', 'groundAlerts'],   // the command module, on the pilot's side of the radio
 };
 const rnTaskFormulas = tasks => { const out = []; for (const t of tasks) for (const k of RN_TASK_FORMULAS[t] || []) if (!out.includes(k)) out.push(k); return out; };
 if (typeof module !== 'undefined') module.exports = { RN_SIGS, RN_IN, RN_MOT, RN_JNT, RN_THROW_IN, RN_WIN, RN_TASK_FORMULAS, rnTaskFormulas };

@@ -11,11 +11,15 @@ const GS_UI = { built: false, w: {}, next: 0 };
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
   const sec = (title, small, src) => { const s = el('section', { class: 'sec gs-sec' }); s.append(el('h2', { 'data-src': src || 'tlm' }, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
-  pane.append(srcLegend(['tlm', 'sim', 'you']));
+  pane.append(srcLegend(['tlm', 'gnd', 'sim', 'you']));
   const grid = (...kids) => el('div', { class: 'gs-grid' }, ...kids);
 
+  // the command module's alerts (groundAlerts)
+  const al = sec('Alerts', 'from the command module', 'gnd');
+  W.alert = GSW.badge(); al.append(el('div', { class: 'gs-moderow' }, W.alert.el), el('p', { class: 'hint', id: 'gsCmdNote' }));
+
   // the radio
-  const r = sec('Radio link', 'ExpressLRS 2.4 GHz', 'tlm sim you');
+  const r = sec('Radio link', 'ExpressLRS 2.4 GHz', 'tlm gnd sim you');
   const sel = (id, label, opts, get, set) => {
     const s = el('select', { id }); for (const [v, t] of opts) { const o = el('option', { value: String(v), text: t }); if (String(get()) === String(v)) o.selected = true; s.append(o); }
     s.addEventListener('change', () => { set(s.value); save(); boardsRadioCfg(); });
@@ -33,9 +37,9 @@ function buildGs() {
   W.thru = GSW.value('Telemetry', { unit: 'B/s', dp: 0 }); W.budget = GSW.value('Room', { unit: 'B/s', dp: 0 });
   W.age = GSW.value('Last frame', { unit: 's ago', dp: 1, tone: v => v > 1.5 ? 'bad' : v > 0.5 ? 'warn' : '' });
   W.budget.el.firstChild.prepend(srcDot('calc'));   // (what the settings allow, worked out on the ground)
-  r.append(el('p', { class: 'hint' }, srcDot('tlm'), 'Link quality, RSSI and SNR as the transmitter module reports them; the rest decoded from the frames that came down.'),
+  r.append(el('p', { class: 'hint' }, srcDot('tlm'), 'Link quality, RSSI and SNR as the transmitter module reports them to the command module; the rest decoded by it from the frames that came down.'),
     W.linkUp.el, W.linkDown.el, grid(W.rssi.el, W.snr.el, W.thru.el, W.budget.el, W.age.el));
-  W.chans = GSW.columns('Handset channels sent (1–9)'); W.chans.el.firstChild.prepend(srcDot('you'));
+  W.chans = GSW.columns('Channels the command module sends (1–9)'); W.chans.el.firstChild.prepend(srcDot('gnd'));
   r.append(W.chans.el, el('p', { class: 'hint', id: 'gsRadioNote' }));
 
   // flight
@@ -80,8 +84,11 @@ function renderGs(force) {
   const now = performance.now(); if (!force && now < GS_UI.next) return; GS_UI.next = now + 200;
   if (!GS_UI.built) buildGs();
   const W = GS_UI.w, t = brt.t, has = hasTask('tlm');
+  const gk = computers().ground, gname = `${gk.name === 'Command module' ? '' : gk.name + ', '}${BOARD_KINDS[gk.kind].label}`;
   $('#gsRadioNote').textContent = has ? `The receiver is on ${boardOf('tlm').name}. Its channels fly the drone${hasTask('nav') ? ' (the sticks move its target; arm, take off, hold and home are switches)' : ' (angle mode)'}; everything below came down the link.`
     : 'No board runs the Telemetry & radio task (Computers tab): the drone has no radio, so nothing comes down and the simulator\'s pilot reaches the boards directly.';
+  $('#gsCmdNote').textContent = !has ? '' : brt.gndErr ? brt.gndErr : `Your keys and the simulator's pilot are the buttons of the command module (${gname}): it shapes them (stickInput${gs.shaped === false ? ', not answering: the raw sticks go up' : ''}), sends the channels and commands to the transmitter module, decodes what comes back and warns (groundAlerts).`;
+  if (has && gs.alert) W.alert.set(gs.alert.level ? gs.alert.text.charAt(0).toUpperCase() + gs.alert.text.slice(1) : 'All fine', t, gs.alert.level >= 2 ? 'bad' : gs.alert.level === 1 ? 'warn' : 'good');
   const rf = radio.rf;
   $('#gsEquiv').textContent = rf ? `Now ${rf.d.toFixed(0)} m from the handset${rf.walls ? `, ${rf.walls} building${rf.walls > 1 ? 's' : ''} in the way` : ''}; with the extra loss that is like ${fmtDist(rf.d * Math.pow(10, radioCfg.extra / 20))} in the open. Signal ${rf.rssi.toFixed(0)} dBm, the receiver needs ${ELRS_RATES[radioCfg.rate]} dBm at ${radioCfg.rate} Hz.` : '';
   const L = gs.link;
@@ -91,7 +98,7 @@ function renderGs(force) {
   const dt = gs.rate.length > 1 ? t - gs.rate[0][0] : 0;
   if (has) { W.thru.set(dt > 0 ? (gs.bytes - gs.rate[0][1]) / dt : 0, t); W.budget.set(radioCfg.rate / radioCfg.ratio * 5, t); }
   const last = Math.max(-1e9, ...Object.values(gs.at)); if (has) W.age.set(isFinite(last) ? Math.max(0, t - last) : null, isFinite(last) ? t : null);
-  if (radio.ch) W.chans.set(radio.ch.slice(0, 9).map(v => (v + 1) / 2), t, ['Ail', 'Ele', 'Thr', 'Rud', 'Arm', 'Spd', 'Fly', 'Hold', 'Home']);
+  if (has && gs.sent) W.chans.set(gs.sent.slice(0, 9).map(v => (v + 1) / 2), t, ['Ail', 'Ele', 'Thr', 'Rud', 'Arm', 'Spd', 'Fly', 'Hold', 'Home']);
 
   const v = gs.v, at = gs.at;
   if (v.mode) W.mode.set(v.mode.mode, at.mode, /FS|CRASH|LOST/.test(v.mode.mode) ? 'bad' : /RTH|LAND|\*/.test(v.mode.mode) ? 'warn' : v.mode.mode === 'DISARMED' ? '' : 'good');

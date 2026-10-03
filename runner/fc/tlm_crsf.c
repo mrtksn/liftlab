@@ -66,19 +66,19 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
         in->cmd = cmd; in->cmd_seq = (uint32_t)seq;
         for (int k = 0; k < 6; k++) {
           int16_t q = k < m ? (int16_t)((p[3 + 2 * k] << 8) | p[4 + 2 * k]) : 0;
-          in->cmd_v[k] = cmd == RC_CMD_GOTO && k == 3 ? q / 1000.0f : cmd == RC_CMD_GOTO ? q / 100.0f : (float)q;
+          in->cmd_v[k] = q / rc_cmd_scale(cmd, k);
         }
       }
       return CRSF_EXT;
   }
   return 0;
 }
-/* A ground-station command frame (what the ground sends up): GOTO x y z [m] yaw [rad]; LEARN code. */
+/* A ground-station command frame (what the ground sends up): rc_core.h's commands, values scaled by rc_cmd_scale. */
 int tlm_crsf_cmd(uint8_t *out, int cmd, int seq, const float *v, int nv) {
   uint8_t p[3 + 12]; int n = 0;
   p[n++] = CRSF_EXT_CMD; p[n++] = (uint8_t)cmd; p[n++] = (uint8_t)seq;
   for (int k = 0; k < nv && k < 6; k++) {
-    float x = cmd == RC_CMD_GOTO ? v[k] * (k == 3 ? 1000 : 100) : v[k]; long q = (long)(x < 0 ? x - 0.5f : x + 0.5f);
+    float x = v[k] * rc_cmd_scale(cmd, k); long q = (long)(x < 0 ? x - 0.5f : x + 0.5f);
     q = q > 32767 ? 32767 : q < -32768 ? -32768 : q;
     p[n++] = (uint8_t)((q >> 8) & 0xFF); p[n++] = (uint8_t)(q & 0xFF);
   }

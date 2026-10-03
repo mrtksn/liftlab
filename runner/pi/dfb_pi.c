@@ -287,7 +287,8 @@ int main(int argc, char **argv) {
       P.sp.fly = P.fly;
       /* the radio's channels fly it while they come (the text commands are for when there is no radio) */
       int radio = rc_link_ok(&RCI, t) || RP.lost, radio_arm = 0; nav_sp rsp = P.sp;
-      if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); } }
+      if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
+        if (RP.learn_req) { int c = RP.learn_req; RP.learn_req = 0; if (have_learn) { learn_command(&LS, c); printf("radio: learning command %d\n", c); } } }
       if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; }
       if (nav_step(&N, &in, &P.sp, dt, &o)) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; continue; }
       { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }

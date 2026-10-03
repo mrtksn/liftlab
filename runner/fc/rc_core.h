@@ -21,7 +21,11 @@
 #include "nav_core.h"
 
 enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD, RC_HOME };
+/* Ground-station commands (CRSF 0x80/0xD1: command, sequence 1–255, up to 6 values as 16-bit integers × rc_cmd_scale):
+ *   GOTO   x y z [m from home], heading [rad]: fly there
+ *   LEARN  code: a learning command (learn_core.h: 1 calibrate, 2 stop, 3 fly on the description, 4 on the learned) */
 enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2 };
+float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 
 typedef struct rc_input {
@@ -38,6 +42,7 @@ typedef struct {
   float target[3], vref[3], heading;     /* the navigation's target, from home [m]; its velocity; heading [rad] */
   int have_target, fly, arm, level;
   int hold_was, home_was; uint32_t cmd_seen;
+  int learn_req;                          /* a LEARN command came: its code, for the learning (the board passes it on) */
   int lost;                               /* the link is lost (flying home if it was flying) */
   char msg[64]; int said;                 /* something to tell the pilot (said: new since last read) */
 } rc_pilot;

@@ -1,15 +1,16 @@
 'use strict';
-// CRSF on the ground: what the handset or a ground-station app does with the frames the transmitter module hands it
-// (runner/fc/crsf.h is the drone's side). Frames: address, length, type, payload, CRC-8 (polynomial 0xD5) over type
-// and payload; big-endian fields.
+// CRSF as the simulated ExpressLRS modules handle it (elrs.js): splitting the byte streams into frames, the channel
+// frames the receiver writes to the drone, the link statistics both modules report. The code on either end is C:
+// the drone's (runner/fc/crsf.h, tlm_crsf.c) and the command module's (runner/ground/ground_core.c).
+// Frames: address, length, type, payload, CRC-8 (polynomial 0xD5) over type and payload; big-endian fields.
 
 const CRSF = {
   GPS: 0x02, VARIO: 0x07, BATTERY: 0x08, BARO_ALT: 0x09, LINK_STATS: 0x14, RC: 0x16, ATTITUDE: 0x1E, FLIGHT_MODE: 0x21, EXT: 0x80,
   EXT_TEXT: 0xF1, EXT_ITEM: 0xD0, EXT_CMD: 0xD1,
   ADDR_FC: 0xC8, ADDR_HANDSET: 0xEA, ADDR_RX: 0xEC, ADDR_TX: 0xEE,
 };
-// The telemetry items that travel as 0x80/0xD0 frames (runner/fc/tlm_core.h): names, fields and the scale each
-// value was multiplied by (tlm_scale).
+// The drone's telemetry items (runner/fc/tlm_core.h), by number: what the Ground station calls each value. The
+// command module decodes them (runner/ground/ground_core.c); these are only the names for the screen.
 const TLM_ITEMS = {
   5: { key: 'state', fields: ['state', 'flags'] },
   6: { key: 'motors', list: true },
@@ -20,17 +21,6 @@ const TLM_ITEMS = {
   11: { key: 'parts', list: true },
   12: { key: 'link', fields: ['rssi', 'lq', 'snr', 'lost'] },
 };
-function tlmScale(id, k) {   // as tlm_scale in tlm_core.c
-  switch (id) {
-    case 6: case 11: return k === 0 ? 1 : 1000;
-    case 7: return 100;
-    case 8: return k < 3 ? 100 : k === 3 ? 1000 : 1;
-    case 9: return k === 1 || k >= 5 ? 1000 : 1;
-    case 10: return k === 2 ? 100 : k === 3 ? 1000 : k === 5 ? 10 : 1;
-    case 12: return 1;
-    default: return 100;
-  }
-}
 
 function crsfCrc8(b, from, to) {
   let c = 0;
@@ -56,15 +46,6 @@ function crsfLinkStatsFrame(L) {
   const u8 = x => clamp(Math.round(x), 0, 255), s8 = x => (clamp(Math.round(x), -128, 127) + 256) & 0xFF;
   return crsfFrame(CRSF.ADDR_FC, CRSF.LINK_STATS, [u8(-L.upRssi), u8(-L.upRssi), u8(L.upLq), s8(L.upSnr), 0, L.rfMode, pw, u8(-L.downRssi), u8(L.downLq), s8(L.downSnr)]);
 }
-// A ground-station command (0x80/0xD1): GOTO x y z [m from home] yaw [rad]
-let crsfCmdSeq = 0;
-function crsfCmdFrame(cmd, values) {
-  crsfCmdSeq = crsfCmdSeq % 255 + 1;
-  const p = [CRSF.EXT_CMD, cmd, crsfCmdSeq];
-  values.forEach((x, k) => { const q = clamp(Math.round(cmd === 1 ? x * (k === 3 ? 1000 : 100) : x), -32768, 32767) & 0xFFFF; p.push(q >> 8, q & 0xFF); });
-  return crsfFrame(CRSF.ADDR_FC, CRSF.EXT, p);
-}
-
 // A byte-stream parser: feed bytes, get whole frames back (with a good CRC).
 function crsfParser() {
   const buf = new Uint8Array(64); let n = 0;
@@ -83,29 +64,9 @@ function crsfParser() {
     },
   };
 }
-const be16 = (p, i) => (p[i] << 8) | p[i + 1], sbe16 = (p, i) => { const v = be16(p, i); return v & 0x8000 ? v - 0x10000 : v; };
-const sbe32 = (p, i) => ((p[i] << 24) | (p[i + 1] << 16) | (p[i + 2] << 8) | p[i + 3]);
-const cstrAt = (p, i) => { let s = ''; for (; i < p.length - 1 && p[i]; i++) s += String.fromCharCode(p[i]); return s; };
-// One frame → { kind, …values } as a ground station reads it (null if not one we know).
-function crsfDecode(f) {
-  const type = f[2], p = f.subarray(3, f.length - 1);
-  switch (type) {
-    case CRSF.ATTITUDE: return { kind: 'attitude', pitch: sbe16(p, 0) / 1e4, roll: sbe16(p, 2) / 1e4, yaw: sbe16(p, 4) / 1e4 };
-    case CRSF.BATTERY: return { kind: 'battery', volts: be16(p, 0) / 10, amps: be16(p, 2) / 10, mah: (p[4] << 16) | (p[5] << 8) | p[6], pct: p[7] };
-    case CRSF.GPS: return { kind: 'gps', lat: sbe32(p, 0) * 1e-7, lon: sbe32(p, 4) * 1e-7, speed: be16(p, 8) / 36, course: be16(p, 10) / 100, alt: be16(p, 12) - 1000, sats: p[14] };
-    case CRSF.BARO_ALT: { const a = be16(p, 0); return { kind: 'baro', alt: a & 0x8000 ? a & 0x7FFF : (a - 10000) / 10, vz: p.length >= 4 ? sbe16(p, 2) / 100 : null }; }
-    case CRSF.VARIO: return { kind: 'vario', vz: sbe16(p, 0) / 100 };
-    case CRSF.FLIGHT_MODE: return { kind: 'mode', mode: cstrAt(p, 0) };
-    case CRSF.LINK_STATS: return { kind: 'link', upRssi: -Math.min(p[0], p[1] || p[0]), upLq: p[2], upSnr: (p[3] << 24) >> 24, rfMode: p[5], downRssi: -p[7], downLq: p[8], downSnr: (p[9] << 24) >> 24 };
-    case CRSF.EXT:
-      if (p[0] === CRSF.EXT_TEXT) return { kind: 'text', sev: p[1], text: cstrAt(p, 2) };
-      if (p[0] === CRSF.EXT_ITEM) {
-        const id = p[1], n = p[2], d = TLM_ITEMS[id]; if (!d) return null;
-        const v = []; for (let k = 0; k < n; k++) v.push(sbe16(p, 3 + 2 * k) / tlmScale(id, k));
-        if (d.list) return { kind: d.key, n: v[0], values: v.slice(1) };
-        const o = { kind: d.key }; d.fields.forEach((f, k) => { o[f] = v[k]; }); return o;
-      }
-      return null;
-  }
-  return null;
+// RC channels back from a frame's payload: 16 values −1…1 (what the transmitter module reads from the command module).
+function crsfRcRead(p) {
+  const ch = []; let bit = 0;
+  for (let i = 0; i < 16; i++) { let v = 0; for (let b = 0; b < 11; b++, bit++) if (p[bit >> 3] & (1 << (bit & 7))) v |= 1 << b; ch.push(clamp((v - 992) / (1811 - 992), -1, 1)); }
+  return ch;
 }

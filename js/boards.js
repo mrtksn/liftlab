@@ -22,6 +22,11 @@
 //          Without it the simulator's pilot reaches the boards directly, as over a cable.
 // Without navigation the pilot flies the flight core directly, in angle mode (the sticks lean the drone).
 // Each board loads a program with the formulas of its tasks.
+//
+// On the ground: the command module (runner/ground/ground_core.c), the pilot's side of the radio, when the drone has
+// one. An ESP32 with buttons, a Pi or a Mac, wired to the ExpressLRS transmitter module; here another instance of the
+// same WebAssembly with the ground program (its formulas: stickInput, groundAlerts). Your keys are its buttons; it
+// sends the channels and commands up, and decodes what comes down for the Ground station.
 
 const BOARD_KINDS = {
   esp32: { label: 'ESP32', mcu: true, mops: 60, cores: 2, ramKB: 300, note: 'microcontroller, 2 cores at 240 MHz' },
@@ -30,7 +35,11 @@ const BOARD_KINDS = {
   pizero: { label: 'Raspberry Pi Zero', mcu: false, mops: 150, cores: 1, ramKB: 512 * 1024, note: 'Linux computer, 1 core at 1 GHz' },
   pizero2: { label: 'Raspberry Pi Zero 2 W', mcu: false, mops: 600, cores: 4, ramKB: 512 * 1024, note: 'Linux computer, 4 cores at 1 GHz' },
   pi4: { label: 'Raspberry Pi 4', mcu: false, mops: 2000, cores: 4, ramKB: 4096 * 1024, note: 'Linux computer, 4 cores at 1.8 GHz' },
+  mac: { label: 'Mac or PC', mcu: false, mops: 5000, cores: 8, ramKB: 8192 * 1024, note: 'a laptop or desktop (macOS or Linux) with a USB serial adapter', groundOnly: true },
 };
+// The command module: the pilot's side of the radio (not on the drone, so not in TASKS: it has one board of its own).
+const GROUND = { label: 'Command module', hz: 250, formulas: RN_TASK_FORMULAS.ground,
+  what: 'The pilot\'s side of the radio, wired to the ExpressLRS transmitter module: buttons, sticks or your own code in, channels and commands up (through its stickInput formula), the telemetry decoded and checked (groundAlerts).' };
 const TASKS = {
   core: { label: 'Flight core', hz: 1000, mcuOnly: true, formulas: RN_TASK_FORMULAS.core,
     what: 'Attitude, control and mixing 1000 times a second, arming and the failsafes. It needs exact timing, so it runs on a microcontroller.' },
@@ -49,7 +58,7 @@ const BOARD_MAX = 4, LINK_DELAY = 0.006;   // serial link (921600 baud): frame t
 const defaultComputers = () => ({ boards: [
   { id: 1, kind: 'esp32', name: 'Flight controller', tasks: ['core', 'tlm'] },
   { id: 2, kind: 'pizero', name: 'Pi Zero', tasks: ['nav', 'learn', 'super'] },
-], radio: 1 });
+], radio: 1, ground: { kind: 'esp32', name: 'Command module' } });
 function computers() {
   if (!cfg.computers || !Array.isArray(cfg.computers.boards) || !cfg.computers.boards.length) cfg.computers = defaultComputers();
   return cfg.computers;
@@ -57,7 +66,9 @@ function computers() {
 // Keep it valid: known kinds, one flight core on a microcontroller, the Pi's tasks on Linux computers, each task on one board.
 function fixComputers(C) {
   C = C && Array.isArray(C.boards) ? JSON.parse(JSON.stringify(C)) : defaultComputers();
-  C.boards = C.boards.filter(b => BOARD_KINDS[b.kind]).slice(0, BOARD_MAX);
+  C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
+  const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
+  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] });
   let id = 1; for (const b of C.boards) { b.id = id++; b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
@@ -102,7 +113,13 @@ function taskCost(task) {
   if (task === 'learn') { const k = 2 * inputs; return 5 * k * k + 30 * k + 40 * inputs + 150 + 300; }   // the in-flight learning, every frame
   if (task === 'super') return 5 * m * 40 + 2 * (30 * n + 60 * n * n + 200) + 800;   // the health check, the margins (two solves), the decisions
   if (task === 'tlm') return 400;   // parsing the receiver's bytes, packing and scheduling the telemetry
+  if (task === 'ground') return 4 * FLIGHT_COST.stickInput() + FLIGHT_COST.groundAlerts() / 25 + 300;   // the sticks every step, the alerts 10 times a second, the frames
   return 0;
+}
+function groundBudget() {
+  const K = BOARD_KINDS[computers().ground.kind], ops = taskCost('ground') * GROUND.hz;
+  let memKB = 0; try { const P = boardProgram(['ground']); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
+  return { ops, load: ops / (K.mops * 1e6) * (K.mcu ? 1 : 1.5), memKB, ramKB: K.ramKB };
 }
 // A board's program: the formulas of its tasks (sizes from the compiled image, cached by task set).
 const boardProgCache = new Map();
@@ -130,7 +147,8 @@ function boardBudget(b) {
 const brt = {
   module: null, err: '', inst: new Map(), sig: null, ready: false,
   toCore: [], toNav: [], q: [], tel: null, navOut: null, navReady: false, home: null,
-  t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0,
+  t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0,
+  gnd: null, gndErr: '',   // the command module's instance (while the drone has a radio)
   pilot: { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 },
   fcState: 0, fcWhy: '', navWhy: '', out: null, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
 };
@@ -152,6 +170,7 @@ function boardImage(b, srcs) {
   if (!RN.P && !srcs) throw new Error('the flight formulas don\'t compile' + (RN.buildErr ? ': ' + RN.buildErr : ''));
   const P = boardProgram(b.tasks, srcs);
   const samples = []; for (const k of Object.keys(RN.samples || {})) if (P.fns[k]) for (const s of RN.samples[k]) samples.push(s);
+  for (const k of Object.keys(P.fns)) if (!(RN.samples || {})[k]) { const d = LAW_DEFS.find(d => d.key === k); if (d && d.sample) samples.push({ key: k, args: d.sample() }); }   // (not called here yet: its own sample)
   return rnImage(P, { tests: rnMakeTests(P, samples, 600) });
 }
 // The navigation's config (nav_core.h): mass, where the barometer, GPS antenna and flow camera sit, which it has.
@@ -182,7 +201,7 @@ function f32Blob(magic, vals) {
 function boardsStart() {
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
-  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; gsSet.x = null; gsSet.pending = null; radioReset();
+  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; gsSet.x = null; gsSet.pending = null; radioReset();
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
   learn.view = null; learn.msg = '';
@@ -216,7 +235,23 @@ function boardsStart() {
       if (b.tasks.includes('super') && w.super_setup(af.length, pc.length)) brt.err = 'Supervisor: ' + cstr(w, w.super_why_ptr(), 96);
     }
   }
+  groundStart();
   brt.ready = true;
+}
+// The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
+function groundStart() {
+  brt.gndErr = '';
+  if (!hasTask('tlm')) { brt.gnd = null; return; }
+  if (!brt.gndInst) brt.gndInst = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports;
+  const g = brt.gndInst, G = { name: computers().ground.name, tasks: ['ground'] };
+  let img; try { img = boardImage(G); } catch (e) { brt.gndErr = `${G.name}: ${e.message}`; }
+  if (img && img.length <= g.img_cap()) {
+    new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img);
+    if (g.host_setup(img.length)) brt.gndErr = `${G.name}: its program didn't load`;
+    brt.srcs.set('ground', boardSrcKey(['ground'], rnSources()));
+  }
+  if (g.gnd_setup(0)) brt.gndErr = brt.gndErr || `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
+  brt.gnd = g;
 }
 const learnPrefs = { keep: true, holdPulses: true };
 const boardSrcKey = (tasks, srcs) => rnTaskFormulas(tasks).map(k => srcs[k]).join('\u0000');
@@ -234,16 +269,28 @@ function boardsStageProgram() {
     rnEvent(`${b.name}: ${e ? 'rejected the new program (error ' + e + ')' : 'self-tests passed; flying the new program in the background first'}`, e ? 'bad' : '');
     brt.staging = true;
   }
+  const g = brt.gnd, key = boardSrcKey(['ground'], srcs);
+  if (g && brt.srcs.get('ground') !== key) {                       // the command module, the same way
+    const nm = computers().ground.name;
+    let img; try { img = boardImage({ tasks: ['ground'] }, srcs); } catch (e) { rnEvent(`${nm}: the edit didn't compile for it: ${e.message}`, 'bad'); return; }
+    brt.srcs.set('ground', key);
+    new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img);
+    const e = g.stage(img.length);
+    rnEvent(`${nm}: ${e ? 'rejected the new program (error ' + e + ')' : 'self-tests passed; running the new program in the background first'}`, e ? 'bad' : '');
+    brt.staging = true;
+  }
 }
 // What the boards' loaders did since (shown in the Computers tab): swapped in, or fell back.
 function boardsHostEvents() {
   for (const b of computers().boards) {
     const w = brt.inst.get(b.id); if (!w || !b.tasks.some(t => t !== 'tlm')) continue;
     const e = w.host_event(); if (!e) continue;
-    const txt = { 1: 'loaded the new program, flying it in the background', 2: 'rejected the new program', 3: 'flies the new program now', 4: 'the new program stopped: back to the one before', 5: 'even the built-in program stopped' }[e] || 'event ' + e;
-    rnEvent(`${b.name}: ${txt}`, e === 3 ? 'good' : e === 1 ? '' : 'bad');
+    rnEvent(`${b.name}: ${HOST_EVENTS[e] || 'event ' + e}`, e === 3 ? 'good' : e === 1 ? '' : 'bad');
   }
+  const e = brt.gnd ? brt.gnd.host_event() : 0;
+  if (e) rnEvent(`${computers().ground.name}: ${(HOST_EVENTS[e] || 'event ' + e).replace('flies', 'runs').replace('flying', 'running')}`, e === 3 ? 'good' : e === 1 ? '' : 'bad');
 }
+const HOST_EVENTS = { 1: 'loaded the new program, flying it in the background', 2: 'rejected the new program', 3: 'flies the new program now', 4: 'the new program stopped: back to the one before', 5: 'even the built-in program stopped' };
 // The learning task's commands (on the drone: from the pilot's app over the Pi's network).
 function boardsLearnCmd(name) {
   const b = boardOf('learn'), w = b && brt.ready && brt.inst.get(b.id); if (!w) return -1;
@@ -392,7 +439,10 @@ function boardsControl(dt) {
     const err = tw ? nav.nav_tick_radio(brt.t) : nav.nav_tick();
     const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 7).subarray(41);
     brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err };
-    if (tw) { brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5 }; if (o[20] > 0.5) rnEvent(`${navB.name}: ${cstr(nav, nav.rc_msg_ptr())}`, 'warn'); gsSyncTarget(); }
+    if (tw) {
+      brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5 }; if (o[20] > 0.5) rnEvent(`${navB.name}: ${cstr(nav, nav.rc_msg_ptr())}`, 'warn'); gsSyncTarget();
+      const lr = nav.rc_learn_req(); if (lr) { const lname = Object.keys(LN_CMD).find(k => LN_CMD[k] === lr); if (lname) { boardsLearnCmd(lname); rnEvent(`${navB.name}: the radio asked the learning to ${lname === 'calibrate' ? 'calibrate' : lname}`, ''); } }   // (on the Pi, dfb_pi passes it on in-process)
+    }
     if (brt.navOut.haveHome && !brt.home) brt.home = S.p.slice();   // where it took off: the nav's home, in the world
     brt.navReady = brt.navOut.ready;
     if (S.steps % 400 === 0 || err) brt.navWhy = cstr(nav, nav.nav_why_ptr());
@@ -416,6 +466,21 @@ function boardsControl(dt) {
 // receiver's board makes the flight core's stick command.
 function radioTick(dt, tlmB, tw, coreB, navB) {
   radio.t = brt.t;
+  const g = brt.gnd;
+  if (g) {                                                           // the command module: its step, every 4 ms
+    g.host_tick(dt);
+    if (radio.toGround.length) {                                     // what the transmitter module handed it
+      const rb = new Uint8Array(g.memory.buffer, g.rbuf_ptr(), 2048); let n = 0;
+      for (const f of radio.toGround) { if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
+      radio.toGround = []; g.gnd_from_radio(n, brt.t);
+    }
+    if (brt.t >= brt.nextGnd - 1e-9) {
+      brt.nextGnd += 0.004;
+      const I = groundInputs(brt.t), n = g.gnd_tick(I.held, I.has, I.ax[0], I.ax[1], I.ax[2], I.ax[3], brt.t, 0.004);
+      if (n) radioFromGround(Uint8Array.from(new Uint8Array(g.memory.buffer, g.rbuf_ptr(), n)));
+    }
+    if (brt.t >= brt.nextGsRead - 1e-9) { brt.nextGsRead += 0.1; gsRead(); }
+  }
   radioStep(dt, brt.t);
   if (radio.toBoard.length) {
     const rb = new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), 2048); let n = 0;

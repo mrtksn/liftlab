@@ -1,0 +1,2 @@
+idf_component_register(SRCS "ground.c" INCLUDE_DIRS "."
+                       REQUIRES ground runner fc nvs_flash esp_driver_uart esp_driver_gpio esp_adc esp_timer esp_system vfs)

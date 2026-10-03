@@ -9,10 +9,20 @@
  * airframe in blob and/or nav_setup() with a navigation config in ncfg. Each control step: write the IMU sample in
  * io, call fc_tick(); each navigation step: write nio, call nav_tick(), read its outputs. Commands go through cmd
  * and fc_command().
+ * The telemetry task and the pilot's radio (tlm_core.h, rc_core.h): radio_in/radio_out pass the CRSF bytes of the
+ * receiver's UART; tlm_publish has the board's tasks put their items; tlm_pack/tlm_unpack and rc_pack/rc_unpack are
+ * the RN_LINK_TLM and RN_LINK_RC frames between boards; radio_stick gives the angle-mode stick command; nav_tick_radio
+ * runs a navigation step on the radio's set point (rc_pilot).
+ * The command module (runner/ground/ground_core.h), the pilot's side of the radio, is an instance of this too, with
+ * the ground program: gnd_setup, then gnd_tick with the pilot's inputs (its CRSF frames for the transmitter module
+ * come out in rbuf), gnd_from_radio with what the module hands back, gnd_view for the Ground station.
  * Built by fc/build_wasm.sh. */
 #include "fc_core.h"
 #include "nav_core.h"
 #include "super_core.h"
+#include "tlm_sources.h"
+#include "tlm_crsf.h"
+#include "ground/ground_core.h"
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -37,7 +47,7 @@ static float cmd[12];                /* arm roll pitch yaw throttle test_motor t
 /* nio: in q[4] w[3] acc[3] have_att | have_baro alt age | have_fix p[3] v[3] age | have_flow flow[2] range q age |
  *      target[3] vref[3] heading fly | dt   →   out acc[3] heading fly p[3] v[3] have_home ready landed */
 #define NIO_IN 41
-static float nio[NIO_IN + 14];
+static float nio[NIO_IN + 14 + 7];
 
 #define EXPORT(n) __attribute__((export_name(n)))
 EXPORT("img_ptr") uint8_t *img_ptr(void) { return img; }
@@ -147,7 +157,86 @@ EXPORT("fc_set") int fc_set_(int n) { return fc_set(&F, fr, n); }
 EXPORT("fc_ltel") int fc_ltel_(void) { return fc_ltel(&F, fr); }
 EXPORT("nav_set") void nav_set_(int n) { nav_set(&N, fr, n); }
 
-EXPORT("nav_tick") int nav_tick(void) {
+/* ── the telemetry task and the pilot's radio ── */
+static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
+static int tlm_local, elrs_rate = 250, elrs_ratio = 4;
+static nav_out last_o; static nav_sp last_sp; static int have_nav_out;
+static uint8_t rbuf[2048];                 /* the receiver's UART, both ways */
+EXPORT("rbuf_ptr") uint8_t *rbuf_ptr(void) { return rbuf; }
+/* local: this board has the radio receiver (runs the telemetry task); rate, ratio: the ExpressLRS link's */
+EXPORT("tlm_setup") void tlm_setup(int local, int rate, int ratio) {
+  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
+  char *p = (char *)&RCI; for (unsigned i = 0; i < sizeof RCI; i++) p[i] = 0;
+  p = (char *)&CP; for (unsigned i = 0; i < sizeof CP; i++) p[i] = 0;
+  tlm_local = local; elrs_rate = rate; elrs_ratio = ratio; have_nav_out = 0;
+}
+/* n bytes from the receiver, in rbuf */
+EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
+/* what goes to the receiver now (into rbuf): returns the bytes */
+EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget(elrs_rate, elrs_ratio), rbuf, (int)sizeof rbuf); }
+/* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor */
+EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {
+  if (tasks & 1) tlm_from_core(&TS, &TW, &F, t);
+  if ((tasks & 2) && have_nav_out) tlm_from_nav(&TS, &TW, &N, &last_o, &last_sp, RP.level, t);
+  if ((tasks & 4) && LS.ok) tlm_from_learn(&TS, &TW, &LS, t);
+  if ((tasks & 8) && SS.ok) tlm_from_super(&TS, &TW, &SS, t);
+  if (tlm_local) tlm_from_link(&TS, &RCI, t);
+}
+/* the GPS, as the navigation's board reads it */
+EXPORT("tlm_gps") void tlm_gps(double lat, double lon, float alt, float speed, float course, int sats, double t) { tlm_from_gps(&TS, lat, lon, alt, speed, course, sats, t); }
+EXPORT("tlm_pack") int tlm_pack_(void) { return tlm_pack(&TS, fr, (int)(sizeof fr / sizeof *fr)); }
+EXPORT("tlm_unpack") void tlm_unpack_(int n, double t) { tlm_unpack(&TS, fr, n, t); }
+EXPORT("tlm_stats") int tlm_stats(void) { fr[0] = (float)TS.bytes_sent; fr[1] = (float)TS.frames_sent; fr[2] = (float)TS.qn; return 3; }
+EXPORT("rc_pack") int rc_pack_(double t) { return rc_pack(&RCI, t, fr); }
+EXPORT("rc_unpack") void rc_unpack_(int n, double t) { rc_unpack(&RCI, fr, n, t); }
+EXPORT("rc_link_ok") int rc_link_ok_(double t) { return rc_link_ok(&RCI, t); }
+/* angle mode: the stick command into cmd (then fc_command, here or on the flight core's board). 0: there is one */
+EXPORT("radio_stick") int radio_stick(double t) {
+  fc_cmd c; if (rc_stick_cmd(&RCI, t, &c)) return -1;
+  cmd[0] = (float)c.arm; cmd[1] = c.roll; cmd[2] = c.pitch; cmd[3] = c.yaw; cmd[4] = c.throttle; cmd[5] = -1; cmd[6] = 0; cmd[7] = 0;
+  cmd[8] = cmd[9] = cmd[10] = 0; cmd[11] = 0;
+  return 0;
+}
+EXPORT("rc_msg_ptr") char *rc_msg_ptr(void) { return RP.msg; }
+/* a LEARN command came up the radio (its code, once): the board passes it to the learning */
+EXPORT("rc_learn_req") int rc_learn_req(void) { int r = RP.learn_req; RP.learn_req = 0; return r; }
+
+/* ── the command module ── */
+static gnd_state GND;
+/* latch: the buttons that toggle (GB bits). Uses the step runner set up by host_setup (with the ground program). */
+EXPORT("gnd_setup") int gnd_setup(int latch) { gnd_config c; gnd_config_default(&c); c.latch = (uint32_t)latch; return gnd_init(&GND, host_ok ? &H : 0, &c); }
+EXPORT("gnd_why_ptr") char *gnd_why_ptr(void) { return GND.why; }
+/* one step: the buttons held (GB bits), the analog sticks (has: a bit per axis); frames for the module into rbuf */
+EXPORT("gnd_tick") int gnd_tick(int held, int has, float roll, float pitch, float thr, float yaw, double t, float dt) {
+  gnd_input in; in.held = (uint32_t)held; in.has_axis = (uint32_t)has; in.axis[0] = roll; in.axis[1] = pitch; in.axis[2] = thr; in.axis[3] = yaw;
+  return gnd_step(&GND, &in, t, dt, rbuf, (int)sizeof rbuf);
+}
+EXPORT("gnd_from_radio") void gnd_from_radio_(int n, double t) { gnd_from_radio(&GND, rbuf, n, t); }
+EXPORT("gnd_goto") int gnd_goto_(float x, float y, float z, float h) { return gnd_goto(&GND, x, y, z, h); }
+EXPORT("gnd_command") int gnd_command_(int cmd, int n) { return gnd_command(&GND, cmd, fr, n); }   /* values in fr */
+EXPORT("gnd_view") int gnd_view_(double t) { return gnd_view_pack(&GND, t, fr, (int)(sizeof fr / sizeof *fr)); }
+EXPORT("gnd_mode_ptr") char *gnd_mode_ptr(void) { return GND.V.mode; }
+EXPORT("gnd_msg_text") char *gnd_msg_text(int i) { return GND.V.msg[i % GND_MSGS].s; }
+EXPORT("gnd_msg_sev") int gnd_msg_sev(int i) { return GND.V.msg[i % GND_MSGS].sev; }
+EXPORT("gnd_msg_t") double gnd_msg_t(int i) { return GND.V.msg[i % GND_MSGS].t; }
+EXPORT("gnd_why_text") const char *gnd_why_text_(int w) { return w >= 0 && w < GND_WHY_N ? gnd_why_text[w] : ""; }
+
+static int nav_run(nav_sp *sp_radio);
+EXPORT("nav_tick") int nav_tick(void) { return nav_run(0); }
+/* A navigation step on the radio's set point; nio's set point is not used. Then nio's outputs, and after them: the
+ * target (from home) x y z, heading, armed by the radio, the radio link up, a new message (rc_msg_ptr). */
+EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
+  nav_sp sp; float dt = nio[36];                 /* (the step size, as nav_run reads nio) */
+  sp.heading = RP.heading;
+  int arm = rc_pilot_step(&RP, &RCI, t, &N, &last_o, dt, &sp);
+  if (RP.said) { RP.said = 0; tlm_text(&TS, 4, RP.msg); nio[NIO_IN + 14 + 6] = 1; } else nio[NIO_IN + 14 + 6] = 0;
+  int e = nav_run(&sp);
+  float *p = nio + NIO_IN + 14;
+  for (int i = 0; i < 3; i++) *p++ = sp.target[i];
+  *p++ = sp.heading; *p++ = (float)arm; *p++ = (float)rc_link_ok(&RCI, t);
+  return e;
+}
+static int nav_run(nav_sp *sp_radio) {
   const float *a = nio; nav_in in; nav_sp sp; nav_out o; int k = 0;
   for (int i = 0; i < 4; i++) in.q[i] = a[k++];
   for (int i = 0; i < 3; i++) in.w[i] = a[k++];
@@ -160,7 +249,9 @@ EXPORT("nav_tick") int nav_tick(void) {
   for (int i = 0; i < 3; i++) sp.vref[i] = a[k++];
   sp.heading = a[k++]; sp.fly = a[k++] > 0.5f;
   float dt = a[k++];
+  if (sp_radio) sp = *sp_radio;
   int e = nav_step(&N, &in, &sp, dt, &o);
+  last_o = o; last_sp = sp; have_nav_out = 1;
   float *p = nio + NIO_IN;
   for (int i = 0; i < 3; i++) *p++ = o.acc[i];
   *p++ = o.heading; *p++ = (float)o.fly;

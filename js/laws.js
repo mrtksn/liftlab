@@ -726,6 +726,53 @@ function identifyThrow(st, u, f, w, vb, dt, solve, mot, budget) {
   return st.out ? st.out : empty();
 }
 
+// ═════════════ The command module (on the ground) ═════════════
+
+function stickInput(st, axis, analog, digital, dt) {
+  // One stick of the command module (runner/ground/ground_core.c), called for each of the four, every step.
+  // axis: 0 roll, 1 pitch, 2 throttle, 3 yaw. analog: a real stick's reading −1…1 (null when the axis has none);
+  // digital: +1, −1 or 0 from buttons or keys (up/down, left/right…).
+  // A real stick gets a small deadband (so a resting stick is exactly centred) and some expo on roll, pitch and yaw
+  // (finer near the centre, full at the ends). Buttons can only be on or off, so they ease the stick toward full
+  // deflection over a quarter of a second and let it back to the centre faster: a tap is a nudge, holding is full.
+  const dead = 0.04, expo = axis === 2 ? 0 : 0.3;
+  const rise = 4, fall = 10;                             // [full deflections per second]
+  if (analog != null) {
+    const m = Math.abs(analog);
+    const a = m < dead ? 0 : Math.sign(analog) * Math.min(1, (m - dead) / (1 - dead));
+    st.x = a;
+    return (1 - expo) * a + expo * a * a * a;
+  }
+  const x = st.x == null ? 0 : st.x;
+  const want = clamp(digital, -1, 1);
+  const rate = Math.abs(want) > Math.abs(x) && want * x >= 0 ? rise : fall;
+  const step = rate * dt;
+  st.x = Math.abs(want - x) <= step ? want : x + Math.sign(want - x) * step;
+  return st.x;
+}
+
+function groundAlerts(st, s, dt) {
+  // What the command module warns the pilot about, from the telemetry that came down (and how long ago it did).
+  // s: { age [s] since the last frame; lq: uplink quality [%]; soc: charge 0–1; vcell: cell voltage under load [V];
+  //      failsafe, crashed, returning, landing, radioLost: what the drone reports (1/0) }. Unknown values are null.
+  // level: 0 fine, 1 warning, 2 alarm (a command module can beep or light up); why: which (the list in the doc).
+  // The most serious wins. A warning stays up 2 s after it clears, so a value hovering at a limit doesn't flicker.
+  let level = 0, why = 0;
+  if (s.crashed > 0.5) { level = 2; why = 8; }
+  else if (s.age > 1.5) { level = 2; why = 1; }
+  else if (s.failsafe > 0.5) { level = 2; why = 7; }
+  else if (s.radioLost > 0.5) { level = 2; why = 9; }
+  else if ((s.soc != null && s.soc < 0.1) || (s.vcell != null && s.vcell < 3.3)) { level = 2; why = 4; }
+  else if (s.landing > 0.5) { level = 1; why = 6; }
+  else if (s.returning > 0.5) { level = 1; why = 5; }
+  else if ((s.soc != null && s.soc < 0.25) || (s.vcell != null && s.vcell < 3.5)) { level = 1; why = 3; }
+  else if (s.lq != null && s.lq < 60) { level = 1; why = 2; }
+  if (st.level == null) { st.level = 0; st.why = 0; st.t = 0; }
+  if (level >= st.level) { st.level = level; st.why = why; st.t = 0; }
+  else { st.t = st.t + dt; if (st.t > 2) { st.level = level; st.why = why; st.t = 0; } }
+  return { level: st.level, why: st.why };
+}
+
 // ═════════════ Controller ═════════════
 
 function positionControl(ep, v, ip, m, g, lim) {
@@ -1188,6 +1235,16 @@ const LAW_DEFS = [
     returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs, rotation from each rotor spinning up; r: IMU offset from the CoG [m]; taus: each motor\'s lag [s], tau: their mean; fitF, fitR: share of force and rotation explained; refined, progress }', shape: { B: 'rows', r: 3, tau: 1, fitF: 1, fitR: 1 },
     sample: () => [{}, [0.5, 0.2], [0.1, 0, 3], [1, 0.5, 0], [0, 0, 2], 0.004, 'catch', { v: [0.5, 0.2], phi: [1, 1], m: [0, 1], coll: [0, 0] }, 0] },
 
+  { key: 'stickInput', group: 'ground', fn: stickInput, title: 'Stick shaping',
+    math: [`stick: ${V('x')} = (1 − <i>e</i>)<i>a</i> + <i>e a</i>³, &nbsp;<i>a</i> = the reading past a 4% deadband, <i>e</i> = 0.3 (0 for the throttle)`, `buttons: ${V('x')} moves toward ±1 at 4 per second, back to 0 at 10 per second`],
+    doc: 'Runs on the command module, the pilot\'s side of the radio (an ESP32 with buttons, a Pi, or a Mac), for each of the four sticks every step. A real stick gets a deadband and expo; buttons or keys, which are only on or off, ease the stick in so a tap nudges and holding gives full. What it returns goes up the radio as the channel, and the drone decides what a stick position makes it do.',
+    args: [['st', 'the stick\'s memory'], ['axis', '0 roll, 1 pitch, 2 throttle, 3 yaw'], ['analog', 'a real stick −1…1, or null'], ['digital', '+1, −1 or 0 from buttons'], ['dt', 'step [s]']], returns: 'the channel −1…1',
+    shape: 'n', sample: () => [{}, 0, null, 1, 0.004] },
+  { key: 'groundAlerts', group: 'ground', fn: groundAlerts, title: 'Pilot alerts',
+    math: [`alarm: crashed, no telemetry for 1.5 s, failsafe, the drone hears no radio, battery &lt; 10% or &lt; 3.3 V/cell`, `warning: landing, returning home, battery &lt; 25% or &lt; 3.5 V/cell, uplink quality &lt; 60%`],
+    doc: 'Runs on the command module, on the telemetry that came down the radio: what to warn the pilot about. The most serious thing wins, and a warning stays up 2 s after it clears. Reasons: 1 no telemetry, 2 weak link, 3 battery low, 4 battery very low, 5 returning home, 6 landing, 7 failsafe, 8 crashed, 9 the drone hears no radio. A command module with a buzzer or an LED beeps or lights for it; the Ground station shows it.',
+    args: [['st', 'its memory'], ['s', '{ age, lq, soc, vcell, failsafe, crashed, returning, landing, radioLost }'], ['dt', 'step [s]']], returns: '{ level: 0 fine, 1 warning, 2 alarm; why }',
+    shape: 'obj', sample: () => [{}, { age: 0.1, lq: 100, soc: 0.8, vcell: 3.9, failsafe: 0, crashed: 0, returning: 0, landing: 0, radioLost: 0 }, 0.1] },
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>d</sub>(sat(<i>K</i><sub>p</sub>/<i>K</i><sub>d</sub> ${V('e')}<sub>p</sub>) − (${V('v')} − ${V('v')}<sub>cmd</sub>)) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `sat: sideways ≤ the speed limit, up ≤ 3 m/s, down ≤ 1.5 m/s`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',

@@ -1,8 +1,11 @@
 'use strict';
-// The pilot's radio link, simulated: an ExpressLRS transmitter module on the handset and a receiver on the drone,
-// wired by CRSF to the board that runs the telemetry task (runner/fc/tlm_core.h, rc_core.h). What the drone's code
-// sees is what a real receiver gives it: channel frames when uplink packets get through, link statistics ten times a
-// second, the ground station's commands; and what it sends the receiver goes down in the telemetry slots.
+// The pilot's radio link, simulated: an ExpressLRS transmitter module wired by CRSF to the command module (the
+// pilot's side: runner/ground/ground_core.c, an instance of its own, boards.js), and a receiver wired by CRSF to the
+// drone board that runs the telemetry task (runner/fc/tlm_core.h, rc_core.h). Both ends are real code; this is only
+// what the two modules and the air between them do. The drone gets what a real receiver gives: channel frames when
+// uplink packets get through, link statistics ten times a second, the command module's commands; what the drone
+// writes to its receiver goes down in the telemetry slots and comes out of the transmitter module to the command
+// module, with the module's own link statistics.
 //
 // The air link, as ExpressLRS does it:
 //   - a fixed packet rate (50, 150, 250 or 500 Hz); one packet in `ratio` goes down (telemetry), the rest go up
@@ -14,7 +17,7 @@
 //     (LoRa at 2.4 GHz: −105 dBm at 500 Hz to −115 dBm at 50 Hz). The signal: transmit power and 2 dBi antennas, free-
 //     space loss to the drone, 18 dB for each building in the way (the city worlds), and the "extra loss" setting,
 //     which stands in for distance, walls and interference the simulated world is too small to have.
-// The handset is you: the keys and the simulator's pilot (arm, take off) become stick positions and switches.
+// The command module's inputs are you: the keys and the simulator's pilot (arm, take off) are its buttons and sticks.
 
 const ELRS_RATES = { 50: -115, 150: -112, 250: -108, 500: -105 };   // receiver sensitivity [dBm]
 const ELRS_RATIOS = [2, 4, 8, 16, 32, 64, 128];
@@ -24,8 +27,8 @@ const radio = {};
 function radioReset() {
   Object.assign(radio, {
     t: 0, nextPkt: 0, k: 0, seed: 0x2545F491,
-    down: [], downBytes: 0, downFrames: 0, downDropped: 0, groundIn: crsfParser(), fromDrone: crsfParser(),
-    up: [], upSeq: 0, toBoard: [], nextStats: 0,
+    down: [], downBytes: 0, downFrames: 0, downDropped: 0, fromGround: crsfParser(), fromDrone: crsfParser(), txIn: crsfParser(),
+    up: [], txCh: null, toBoard: [], toGround: [], nextStats: 0, ch: null,
     upHist: [], downHist: [], rssiUp: -50, rssiDown: -50, snrUp: 10, snrDown: 10, rfAt: -1,
     downChunks: 0, downGot: 0, upGot: 0, rxLost: false, holdUntil: -1, homeUntil: -1,
   });
@@ -65,7 +68,7 @@ function radioStep(dt, t) {
     if (tlmSlot) {
       const ok = radioRand() < pDown;
       radio.downHist.push(ok ? 1 : 0); if (radio.downHist.length > 100) radio.downHist.shift();
-      if (radio.down.length) { radio.downChunks++; if (ok) { const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; gsBytes(c, t); } }
+      if (radio.down.length) { radio.downChunks++; if (ok) { const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; radio.txIn.feed(c, f => radio.toGround.push(f)); } }   // (the module hands on whole frames)
     } else {
       const ok = radioRand() < pUp;
       radio.upHist.push(ok ? 1 : 0); if (radio.upHist.length > 100) radio.upHist.shift();
@@ -74,7 +77,7 @@ function radioStep(dt, t) {
       if (radio.up.length && radio.k % 2) {                          // this packet carries 5 bytes of a command
         const c = radio.up[0]; c.got.push(...c.bytes.subarray(c.at, c.at + 5)); c.at += 5;
         if (c.at >= c.bytes.length) { radio.toBoard.push(Uint8Array.from(c.got)); radio.up.shift(); }
-      } else radio.toBoard.push(crsfRcFrame(handsetChannels(t)));
+      } else if (radio.txCh) radio.toBoard.push(crsfRcFrame(radio.txCh));   // (nothing from the command module yet: nothing to send)
     }
   }
   const lq = h => h.length ? 100 * h.reduce((a, b) => a + b, 0) / h.length : 0;
@@ -83,7 +86,8 @@ function radioStep(dt, t) {
   if (t >= radio.nextStats) {                                        // link statistics to the drone, 10 times a second
     radio.nextStats = t + 0.1;
     if (radio.lqUp > 0) radio.toBoard.push(crsfLinkStatsFrame({ upRssi: radio.rssiUp, upLq: radio.lqUp, upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, downSnr: r.snr - 1, rfMode: [50, 150, 250, 500].indexOf(radioCfg.rate), power: radioCfg.power }));
-    gs.link = { upRssi: radio.rssiUp, upLq: radio.lqUp, upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, d: r.d, walls: r.walls, t };
+    const ls = crsfLinkStatsFrame({ upRssi: radio.rssiUp, upLq: radio.lqUp, upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, downSnr: r.snr - 1, rfMode: [50, 150, 250, 500].indexOf(radioCfg.rate), power: radioCfg.power });
+    ls[0] = CRSF.ADDR_HANDSET; radio.toGround.push(ls);           // the transmitter module tells the command module too
   }
 }
 // What the drone's board wrote to the receiver: queued as 5-byte chunks for the telemetry slots.
@@ -97,35 +101,60 @@ function radioFromDrone(bytes) {
     for (let i = 0; i < f.length; i += 5) { const c = f.subarray(i, i + 5); c.frame = radio.downFrames; radio.down.push(c); radio.downBytes += c.length; }
   });
 }
-// A ground-station command, up the link.
-function radioCommand(cmd, values) { radio.up.push({ bytes: crsfCmdFrame(cmd, values), at: 0, got: [] }); }
+// What the command module wrote to the transmitter module: its channel frames (the latest goes up in each uplink
+// packet) and its commands (queued, and sent 5 bytes at a time in place of some channel packets).
+function radioFromGround(bytes) {
+  radio.fromGround.feed(bytes, f => {
+    if (f[2] === CRSF.RC) radio.txCh = crsfRcRead(f.subarray(3, f.length - 1));
+    else if (f[2] === CRSF.EXT) radio.up.push({ bytes: f, at: 0, got: [] });
+  });
+}
+// A ground-station command (go to, calibrate…): the command module queues it and sends it up.
+function radioCommand(cmd, values) { const g = brt.gnd; if (!g) return; if (cmd === 1) g.gnd_goto(...values); else { frIn(g, values); g.gnd_command(cmd, values.length); } }
 function radioHold() { radio.holdUntil = radio.t + 0.3; }
 function radioHome() { radio.homeUntil = radio.t + 0.3; }
 
-// The handset: 16 channels (rc_core.h's order), from the keys and the simulator's pilot.
-function handsetChannels(t) {
-  const P = brt.pilot, ch = new Array(16).fill(-1), k = c => isHeld(c) ? 1 : 0;
-  if (hasTask('nav')) {                                              // position mode: the sticks ask for velocity, centred
-    ch[0] = k('right') - k('left'); ch[1] = k('fwd') - k('back'); ch[2] = k('up') - k('down'); ch[3] = k('yawR') - k('yawL');
-  } else {                                                           // angle mode: the sticks as they are
-    const s = stickCommand(); ch[0] = s.roll; ch[1] = s.pitch; ch[2] = 2 * s.throttle - 1; ch[3] = -s.yaw;
-  }
-  ch[4] = P.arm ? 1 : -1; ch[5] = { gentle: -1, normal: 0, sport: 1 }[pilot.level] ?? 0; ch[6] = P.fly ? 1 : -1;
-  ch[7] = t < radio.holdUntil ? 1 : -1; ch[8] = t < radio.homeUntil ? 1 : -1;
-  radio.ch = ch;
-  return ch;
+// The command module's inputs (ground_core.h): the buttons held (GB bits) and the analog sticks. With navigation the
+// keys are its stick buttons (stickInput eases them in); in angle mode the simulator's pilot moves the sticks
+// (it opens the throttle for the take-off, then centres it). The arm and fly switches are the simulator's pilot's.
+const GB = { right: 0, left: 1, fwd: 2, back: 3, up: 4, down: 5, yawR: 6, yawL: 7, arm: 8, fly: 9, hold: 10, home: 11, gentle: 12, normal: 13, sport: 14, cal: 15 };
+function groundInputs(t) {
+  const P = brt.pilot, bit = k => 1 << GB[k];
+  let held = 0, has = 0, ax = [0, 0, 0, 0];
+  if (hasTask('nav')) { for (const k of ['right', 'left', 'fwd', 'back', 'up', 'down', 'yawR', 'yawL']) if (isHeld(k)) held |= bit(k); }
+  else { const s = stickCommand(); has = 15; ax = [s.roll, s.pitch, 2 * s.throttle - 1, -s.yaw]; }
+  if (P.arm) held |= bit('arm'); if (P.fly) held |= bit('fly');
+  if (t < radio.holdUntil) held |= bit('hold'); if (t < radio.homeUntil) held |= bit('home');
+  held |= bit(pilot.level === 'gentle' ? 'gentle' : pilot.level === 'sport' ? 'sport' : 'normal');
+  return { held, has, ax };
 }
 
-/* ───────── the ground station: what came down ───────── */
-const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, track: [], link: null };
-function gsReset() { Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, track: [], link: null, rate: [], lastRateT: 0, home: null }); }
-function gsBytes(bytes, t) {
-  gs.bytes += bytes.length;
-  radio.groundIn.feed(bytes, f => {
-    const d = crsfDecode(f); gs.frames++; if (!d) return;
-    if (d.kind === 'text') { gs.log.unshift({ t, sev: d.sev, text: d.text }); if (gs.log.length > 60) gs.log.length = 60; return; }
-    gs.v[d.kind] = d; gs.at[d.kind] = t;
-    if (d.kind === 'gps' && d.sats > 0) { gs.track.push([d.lat, d.lon]); if (gs.track.length > 400) gs.track.shift(); }
-    if (d.kind === 'pos') { gs.trackXY = gs.trackXY || []; gs.trackXY.push([d.x, d.y]); if (gs.trackXY.length > 400) gs.trackXY.shift(); }
-  });
+/* ───────── the ground station: what the command module decoded ───────── */
+// gs is the Ground station tab's copy of the command module's view (ground_core.c gnd_view_pack), read a few times a
+// second: values by kind with when each came (gs.at, simulator time), the messages, the alert, the channels it sent.
+const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null };
+function gsReset() { Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, posAt: -1 }); }
+function gsRead() {
+  const g = brt.gnd; if (!g) return;
+  const t = brt.t, n = g.gnd_view(t), o = new Float32Array(g.memory.buffer, g.fr_ptr(), n), at = a => a >= 0 ? t - a : null;
+  const put = (kind, age, v) => { const a = at(age); if (a == null) return; gs.v[kind] = v; gs.at[kind] = a; };
+  gs.alert = { level: o[0], why: o[1], text: cstr(g, g.gnd_why_text(o[1]), 40) };
+  gs.bytes = o[3]; gs.frames = o[4];
+  if (o[8] >= 0) gs.link = { upRssi: o[9], upLq: o[10], upSnr: o[11], downRssi: o[12], downLq: o[13], downSnr: o[14], power: o[15], t: t - o[8] };
+  put('attitude', o[16], { roll: o[17], pitch: o[18], yaw: o[19] });
+  put('battery', o[20], { volts: o[21], amps: o[22], mah: o[23], pct: o[24] });
+  put('gps', o[25], { lat: o[26] + o[27], lon: o[28] + o[29], speed: o[30], course: o[31], alt: o[32], sats: o[33] });
+  put('baro', o[34], { alt: o[35], vz: o[36] });
+  put('mode', o[37], { mode: cstr(g, g.gnd_mode_ptr(), 16) });
+  gs.sent = Array.from(o.subarray(38, 54)); gs.shaped = o[54] > 0.5;
+  for (let k = 55; k < n && o[k];) {
+    const id = o[k], age = o[k + 1], m = o[k + 2], vals = Array.from(o.subarray(k + 3, k + 3 + m)); k += 3 + m;
+    const d = TLM_ITEMS[id]; if (!d) continue;
+    if (d.list) put(d.key, age, { n: vals[0], values: vals.slice(1) });
+    else { const v = {}; d.fields.forEach((f, i) => { v[f] = vals[i]; }); put(d.key, age, v); }
+  }
+  if (gs.v.pos && gs.at.pos !== gs.posAt) { gs.posAt = gs.at.pos; gs.trackXY.push([gs.v.pos.x, gs.v.pos.y]); if (gs.trackXY.length > 400) gs.trackXY.shift(); }
+  const nm = o[6];
+  for (let i = Math.max(gs.nmsg, nm - 16); i < nm; i++) { gs.log.unshift({ t: g.gnd_msg_t(i), sev: g.gnd_msg_sev(i), text: cstr(g, g.gnd_msg_text(i), 60) }); if (gs.log.length > 60) gs.log.length = 60; }
+  gs.nmsg = nm;
 }

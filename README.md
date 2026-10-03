@@ -57,6 +57,7 @@ What flies the drone is its own flight code, the same C that runs on the ESP32 a
   - **Learning** (`runner/fc/learn_core.c`), on the flight core's telemetry 200 times a second: what each motor and servo really does, in flight, in a hover calibration, or from a throw (below). It asks the flight core for test moves and tells it which model to fly on. It runs only on a Linux computer (a Pi): the throw's fit alone keeps about 300 KB. Without it, the boards fly on the airframe's description, and the learning panel and the throw start are hidden.
   - **Health supervisor** (`runner/fc/super_core.c`), 10 times a second: failing, weakened or hot parts, and how to fly on what's left (see Heat, failures and the supervisor). Also Pi only. Without it, nothing watches for failures and its parts of the Health panel are hidden.
   - **Telemetry & radio** (`runner/fc/tlm_core.c`, `tlm_crsf.c`, `rc_core.c`), 200 times a second: the ExpressLRS receiver is wired to this board. Its channels fly the drone, and the other tasks' telemetry comes here and goes down the radio (see Telemetry and the radio). It runs on either kind of board. Without it the drone has no radio: the simulator's pilot reaches the boards directly, as before, and the Ground station tab stays empty.
+- **On the ground:** the command module, the pilot's side of the radio, when the drone has one (see The command module): an ESP32, a Pi, or a Mac or PC.
 - **Default:** the ESP32 runs the flight core and the radio; the Pi Zero runs the navigation, the learning and the supervisor. Take any of the Pi's tasks off to fly without it.
 - **Programs:** each board loads a program with the formulas of its tasks only. The ESP32's is small (about 14 KB of steps); the Pi's, with the throw's fit, about 170 KB.
 - **Wiring:** the IMU, compass and barometer (the GY-87 is all three) go to the flight core's board; the GPS and the flow camera to the board that navigates; the health sensors (motor temperatures, ESC telemetry, the battery's voltage, current and temperature) to the supervisor's board; the ExpressLRS receiver to the radio's board.
@@ -441,7 +442,7 @@ The pads on the 3D view and the keyboard steer the drone. With navigation they m
 | K | Pause / run |
 | R | Reset |
 
-With a radio (the Telemetry & radio task), the keys and pads are the handset: they become channels that go up the simulated link, so a weak link makes the drone slow to answer and a lost one makes it fly home (see Telemetry and the radio).
+With a radio (the Telemetry & radio task), the keys and pads are the buttons of the command module, the pilot's side of the radio (see The command module): its code turns them into channels that go up the simulated link, so a weak link makes the drone slow to answer and a lost one makes it fly home. Held keys ease the sticks in over a quarter of a second (its stickInput formula).
 
 Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
 
@@ -452,7 +453,8 @@ A simulator shows much that no drone could know, next to what the drone's own co
 - **Simulated:** the simulated world itself: the true position, thrust, temperatures, battery charge. The 3D view and its readouts are this.
 - **Sensor:** what the drone's simulated sensors report, with their noise, delay and limits.
 - **On board:** what the drone's flight code worked out (its state, its commands, the supervisor's and the learning's decisions), read straight from the boards as with a cable, not over the radio.
-- **Telemetry:** what came down the radio link (the Ground station tab).
+- **Telemetry:** what came down the radio link, as the command module decoded it (the Ground station tab).
+- **Command module:** what the command module's own code worked out: the channels it sends, its alerts.
 - **Vs truth:** the drone's belief against the truth (the state estimate's errors, how close the learned model is).
 - **Calculated:** the simulator's analysis of the design (the airframe check, control headroom, mass properties, board loads).
 - **You:** settings, targets and the sticks.
@@ -499,7 +501,34 @@ With navigation the sticks move the target at the chosen speed, ramped and kept 
 
 **The simulated link** (`js/elrs.js`). Packets go at the radio's rate (50, 150, 250 or 500 Hz); one in `ratio` comes down carrying 5 bytes of the receiver's queued frames, the rest go up with the channels (now and then 5 bytes of a ground-station command instead). Whether a packet gets through depends on the margin over the receiver's sensitivity at that rate (−115 dBm at 50 Hz to −105 dBm at 500 Hz): transmit power, free-space loss from the handset at the launch point, 18 dB for each building in the line of sight in the city worlds, and an **extra loss** setting for the distance and walls the small world can't have. A lost telemetry chunk is sent again (ExpressLRS's "stubborn sender"), so frames arrive whole but late on a weak link; the receiver's queue holds 512 bytes and drops the oldest frames beyond that. The receiver reports link statistics to the drone ten times a second. At the default 250 Hz and 1:4 that's about 310 bytes a second, which the scheduler fills with roughly 280.
 
-**The Ground station tab** shows what came down with a small set of displays (`js/gs-widgets.js`: value, bar, badge, artificial horizon, map, columns, message log, sparkline), each greyed once its data is 1.5 s old and struck through at 5 s: the link (quality up and down, RSSI, SNR, throughput against the room it has, the channels being sent, and what the extra loss is equivalent to), the flight (mode, horizon, height, climb, speed, distance from home, GPS), the battery, a map of the track from home, the motors and the Pi's tasks, and the messages. The radio's settings are there too; the boards take them at the next reset (on a real drone they're set on both ends).
+**The Ground station tab** shows what the command module decoded (below) with a small set of displays (`js/gs-widgets.js`: value, bar, badge, artificial horizon, map, columns, message log, sparkline), each greyed once its data is 1.5 s old and struck through at 5 s: the link (quality up and down, RSSI, SNR, throughput against the room it has, the channels being sent, and what the extra loss is equivalent to), the flight (mode, horizon, height, climb, speed, distance from home, GPS), the battery, a map of the track from home, the motors and the Pi's tasks, and the messages; at the top, the command module's alert. The radio's settings are there too; the boards take them at the next reset (on a real drone they're set on both ends). To show a new telemetry item, add it on the drone (tlm_core.h, tlm_sources.c) and give its values names in `js/crsf.js` for the tab: the command module decodes any item with the drone's own table, so there is no second copy of its scaling.
+
+## The command module
+
+The pilot's side of the radio is real code too: `runner/ground/ground_core.c`, the command module, wired to an ExpressLRS transmitter module by CRSF. The same C runs:
+- **in the simulator**, built into the same WebAssembly as the drone's boards, as its own instance on the far side of the simulated link. Your keys and the simulator's pilot (arm, take off) are its buttons;
+- **on an ESP32** with buttons, sticks, a buzzer and an LED wired to it (`runner/ground/esp32`);
+- **on a Mac, a Pi or any Linux computer** (`runner/ground/dfb_ground.c`), with the terminal's keys, a gamepad, or your own code over UDP.
+
+It sends **intent, not control**. What goes up is stick positions and switches, every 4 ms, and one-off commands (go to, calibrate); what a stick position makes the drone do, its limits, the 25 m box, and what happens if the link drops all stay on the drone, so it's safe whatever is on this side.
+
+Each step it:
+1. **Shapes the sticks** with its `stickInput` formula: a real stick gets a 4% deadband and expo on roll, pitch and yaw; a button or key, which is only on or off, eases the stick to full over a quarter of a second and back faster, so a tap nudges and holding is full. Buttons can **latch** (a push button as the arm or fly switch: press on, press off).
+2. **Sends the channels** (rc_core.h's order) as CRSF frames for the transmitter module, and **commands** from a small queue, one every 0.15 s, so the drone (which keeps the latest) acts on each. The calibrate button sends a learning command; the drone's navigation passes it to the learning.
+3. **Decodes what comes back**: the drone's telemetry (standard frames, its own items with the drone's scale table, messages) and the transmitter module's link statistics, into the view the Ground station shows.
+4. **Warns** with its `groundAlerts` formula, ten times a second: an alarm when it crashed, telemetry stopped for 1.5 s, a failsafe, the drone hears no radio, or the battery is under 10% (3.3 V a cell); a warning when it lands or returns home, the battery is under 25% (3.5 V), or the uplink is under 60%. A warning stays up 2 s after it clears. The ESP32 beeps and blinks for it; `dfb_ground` prints it and rings the terminal's bell.
+
+If its formulas fail and even its built-in program can't answer, the raw sticks go up unshaped: the pilot keeps control. Its formulas are in the Computers tab under **On the ground**, editable like the drone's: an edit goes through the command module's own loader (checks, a second in the background, then the swap). **Download its program** gives `dfb_ground --program FILE.rnp`. Which computer it is (ESP32, a Pi, a Mac or PC) only sets the load shown; its built-in program is `runner/ground/rn_builtin_ground.c` (`node tools/export_program.js --tasks ground --sym rn_builtin_ground --c runner/ground/rn_builtin_ground.c`).
+
+**On a Mac or a Pi:** `sh runner/ground/build.sh`, then
+- `./runner/ground/dfb_ground --tx /dev/tty.usbserial-XXXX --keys` flies from the terminal: W/S climb and sink, A/D turn, the arrows move, Space holds, H flies home, 1/2/3 set the speed, R arms, T takes off and lands, C calibrates. (A terminal reports presses but not releases, so a key counts as held until half a second after its last repeat.)
+- `--joystick /dev/input/js0` (Linux) reads a gamepad, Mode 2 by default (`--axes`, `--buttons` to change it). On a Mac, `runner/ground/examples/gamepad.py` (pygame) sends a pad's sticks over UDP.
+- Your own code sends text commands over UDP (port 14561) or on the terminal: `press`/`release`/`tap NAME` (right left fwd back up down yawr yawl arm fly hold home gentle normal sport cal), `stick roll|pitch|throttle|yaw V`, `goto X Y Z [HEADING]`, `calibrate`, `cmd ID V…`, `status`, `messages`. Sticks and stick buttons sent this way lapse a second after they were last sent, like a radio's channels: if a script stops, the sticks centre. `examples/fly_square.py` flies a square; `examples/buttons_pi.py` turns push buttons on a Pi's GPIO into presses.
+- `--baud` sets the CRSF speed (400000 by default). macOS takes non-standard speeds through IOSSIOSPEED, Linux through termios2.
+
+**On an ESP32:** flash `firmware/dfb_command_module_esp32_v1.bin` at offset 0 (or build `runner/ground/esp32` with ESP-IDF), then over USB at 115200 baud: `set tx=17,16` (to the module's CRSF input, from its output; one pin for a module bay's single wire: `set tx=17,17`, driven open-drain with a pull-up), `set arm=25` and so on for each button (to ground), `set roll=34` for an analog stick on an ADC pin (centred at power-on; `34i` inverts), `set buzzer=26`, `set led=2`, `set latch=arm,fly`, then `save` and `reboot`. The same text commands work on that port.
+
+**What's untested:** this has run against the simulator and, on a PC, end to end against the drone's code through pseudo-terminals, not yet against real ExpressLRS hardware. Check, with the props off: the speed your transmitter module expects on its CRSF input (400000 here; modules differ and some detect it), the one-wire wiring of a module bay, and that the module passes the command frames up (the channels always go; the custom 0x80 frames depend on the ExpressLRS version, and MSP over CRSF would be the fallback).
 
 **Where to run it.** Measured on the ESP32 firmware build: the radio task adds 8.1 KB of static memory, a 6 KB task stack and 2 KB of UART buffers (about 16 KB of RAM), and 13 KB of flash, and costs well under 1% of a core. That fits beside the flight core with room to spare, and the receiver then flies the drone even if the Pi stops, so the default puts it on the ESP32. On the Pi it works the same (`dfb_pi --crsf`); the flight core's items then come over the serial link.
 
@@ -521,9 +550,9 @@ With navigation the sticks move the target at the chosen speed, ramped and kept 
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and the drivers' part: readings in body axes for the boards |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
-| `js/sources.js` | The tags that say where each readout comes from (simulated, sensor, on board, telemetry, vs truth, calculated, you) |
-| `js/crsf.js` | CRSF on the ground: frames, the parser, decoding the drone's telemetry, the handset's channels and commands |
-| `js/elrs.js` | The simulated ExpressLRS link (packets, signal, telemetry slots) and what the ground station received |
+| `js/sources.js` | The tags that say where each readout comes from (simulated, sensor, on board, telemetry, command module, vs truth, calculated, you) |
+| `js/crsf.js` | CRSF as the simulated radio modules handle it: frames, the parser, channel and link-statistics frames; the names of the drone's telemetry items |
+| `js/elrs.js` | The simulated ExpressLRS link (packets, signal, telemetry slots, the two modules), the command module's inputs, and the Ground station's copy of its view |
 | `js/gs-widgets.js` | The data displays: value, bar, badge, horizon, map, columns, log, sparkline |
 | `js/gs-ui.js` | The Ground station tab |
 | `js/editor.js` | Edit mode: picking parts and the move and rotate handles |
@@ -538,9 +567,10 @@ With navigation the sticks move the target at the chosen speed, ramped and kept 
 | `js/rn-wasm.js` | The C runner built to WebAssembly (generated by `runner/build_wasm.sh`) |
 | `js/rn-bridge.js` | Compiling the flight formulas into the program every board loads |
 | `js/boards.js` | The flight computers: boards, tasks, wiring, links; one WebAssembly instance of the flight code per board; the simulator's pilot (arm, take off) |
-| `js/board-wasm.js` | The flight code (`fc_core.c`, `nav_core.c`, the runner) built to WebAssembly by `runner/fc/build_wasm.sh` |
+| `js/board-wasm.js` | The flight code (`fc_core.c`, `nav_core.c`, …, the runner) and the command module (`ground_core.c`) built to WebAssembly by `runner/fc/build_wasm.sh` |
 | `js/fc-export.js` | The airframe file for the flight core (`.dfa`) |
 | `runner/fc/` | The flight code: the flight core (`fc_core.c`), the navigation (`nav_core.c`), the learning (`learn_core.c`), the health supervisor (`super_core.c`), the telemetry store and scheduler (`tlm_core.c`, `tlm_sources.c`), CRSF (`crsf.c`, `tlm_crsf.c`) and the radio pilot (`rc_core.c`), their tests, the WebAssembly build, and the ESP32 flight firmware (`esp32/`) |
+| `runner/ground/` | The command module: its core (`ground_core.c`), its text commands (`ground_text.c`), the program for a Mac or a Pi (`dfb_ground.c`, `build.sh`), the ESP32 firmware (`esp32/`), its built-in program, examples, its tests (`test_ground.c`, and `test_ground_e2e.c` with `dfb_pi`) |
 | `runner/pi/` | The Pi's side: `dfb_pi.c` (the navigation, the learning and the supervisor, with GPS and the serial link; `build.sh`), its built-in program (`rn_builtin_pi.c`), its end-to-end test, `fly.py` |
 | `runner/` | The runner in C (`rn.c`), the drone's program slots (`rn_host.c`), the Pi link (`rn_link.c`, `pi/send_program.py`), the built-in program, the ESP-IDF example (`esp32/`) and the tests |
 | `tools/` | Node tools: program export, the formula check against recorded flights, test data |
@@ -769,6 +799,7 @@ It's tested end to end on a PC: `runner/pi/test_dfb_pi.c` puts a fake ESP32 (the
   - servo steering;
   - biased sensors.
 - **`runner/fc/test_tlm.c`** checks CRSF (round trips, the CRC), the telemetry scheduler within its budget, the GPS's precision, the battery frame put together from two tasks, items packed on one board and sent from another, and the radio pilot: angle-mode sticks, the go-to, the speed along the heading, the link lost (it flies home) and back (it holds).
+- **`runner/ground/test_ground.c`** checks the command module: buttons easing the sticks in, a real stick's deadband and expo, latching switches, commands one at a time, the drone's telemetry decoded (GPS to 1e-7°, the battery, the flight mode, items unscaled, messages), the alerts and their 2 s hold, and the raw sticks when the formulas can't answer. **`test_ground_e2e.c`** runs the real `dfb_ground` and the real `dfb_pi` (with a fake ESP32 and GPS) on a PC with pseudo-terminals, playing the two radio modules between them, and flies them with a script over UDP: arm, take off, go to, the stick, a calibration started from the radio, telemetry back, and the radio going quiet (the drone flies home and lands; the command module raises its alarm).
 - **`runner/test.sh`** runs these with the rest, `test_nav.c` and the Pi's end-to-end test.
 
 **Known limit: drift after fast flight.** The default attitude estimator trusts the accelerometer's "up", and while the drone speeds up or slows down that "up" is off. Two effects follow:

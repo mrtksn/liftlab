@@ -8,12 +8,13 @@ const SRC = {
   sim: ['Simulated', 'The simulated world itself: what really happens (true position, thrust, temperatures). A real drone can\'t know this.'],
   sensor: ['Sensor', 'What the drone\'s simulated sensors report: the truth with each sensor\'s noise, delay and limits. This is all the drone gets.'],
   board: ['On board', 'Worked out by the drone\'s own flight code, read straight from its boards, as if a cable were plugged in. Nothing here went over the radio.'],
-  tlm: ['Telemetry', 'Received from the drone over the radio link: late, partial or missing when the link is weak.'],
+  tlm: ['Telemetry', 'Received from the drone over the radio link (decoded by the command module): late, partial or missing when the link is weak.'],
+  gnd: ['Command module', 'Worked out by the command module\'s code, the pilot\'s side of the radio (the same C as on an ESP32, a Pi or a Mac).'],
   cmp: ['Vs truth', 'The drone\'s belief compared with the simulated truth. Only a simulator can show this.'],
   calc: ['Calculated', 'The simulator\'s analysis of your design. The drone never works this out.'],
   you: ['You', 'What you set or do: settings, targets, the sticks.'],
 };
-const SRC_ORDER = ['sim', 'sensor', 'board', 'tlm', 'cmp', 'calc', 'you'];
+const SRC_ORDER = ['sim', 'sensor', 'board', 'tlm', 'gnd', 'cmp', 'calc', 'you'];
 
 function srcTag(k) {
   const d = SRC[k]; if (!d) return document.createTextNode('');

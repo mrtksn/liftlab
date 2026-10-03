@@ -18,3 +18,9 @@ runner/fc/esp32/sdkconfig.old
 runner/fc/test_fc
 runner/fc/test_nav
 runner/fc/test_tlm
+runner/ground/dfb_ground
+runner/ground/test_ground
+runner/ground/test_ground_e2e
+runner/ground/esp32/build/
+runner/ground/esp32/sdkconfig
+runner/ground/esp32/sdkconfig.old
