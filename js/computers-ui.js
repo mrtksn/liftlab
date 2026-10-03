@@ -149,7 +149,7 @@ function buildComputers() {
   const pane = $('#paneForm'); pane.textContent = '';
   for (const d of LAW_DEFS) if (!lawCards.has(d.key)) lawCard(d.key);
   pane.append(el('section', { class: 'sec' },
-    el('h2', { text: 'Flight computers' }),
+    el('h2', { text: 'Flight computers', 'data-src': 'you' }),
     el('p', { class: 'hint', text: 'The boards on the drone and what each one runs. They are what flies: each is the drone\'s real flight code (the same C as on the ESP32 and the Pi) running here, fed by the simulated sensors, with the link between boards delaying what they send each other.' }),
     el('div', { class: 'boards', id: 'boardList' }),
     el('div', { class: 'board-add' }, el('label', { class: 'lbl', for: 'boardKind', text: 'Add a board' }),
@@ -159,10 +159,10 @@ function buildComputers() {
         if (C.boards.length >= BOARD_MAX) return;
         C.boards.push({ id: 99, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
       } }))),
-    el('section', { class: 'sec' }, el('h2', { text: 'Tasks' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
+    el('section', { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
     el('div', { id: 'taskLaws' }),
     el('section', { class: 'sec', id: 'rnBox' },
-      el('h2', { text: 'The flight program' }),
+      el('h2', { text: 'The flight program', 'data-src': 'board' }),
       el('p', { class: 'hint', text: 'The flight formulas are compiled into steps for a small runner: the heavy math (matrices, quaternions, the least-squares allocation) is built into the runner in C, and the formulas are the steps between. Every board has the same runner and loads a program with the formulas of its tasks, so a formula edited here flies unchanged on the drone. An edit applied in flight reaches each board the way it would on the drone: the loader\'s checks, self-tests, a second of flying in the background beside the current version, then a short blend; if the new version stops in flight, the one before takes over again.' }),
       el('p', { class: 'rn-status', id: 'rnStatus', role: 'status' }),
       el('ol', { class: 'rn-log', id: 'rnLog', hidden: true }),
@@ -170,6 +170,7 @@ function buildComputers() {
       el('div', { class: 'law-actions' }, el('button', { class: 'btn', type: 'button', id: 'rnDownload', text: 'Download the program (.rnp)', onclick: rnDownload }))));
   // the world's formulas, then the edit tools
   pane.append(lawSection('worldLaws', 'The world', 'Not flight code: what actually happens to the airframe (physics) and what the hardware reports (sensor models). Edits here change the world the flight computers have to cope with.', LAW_DEFS.filter(d => d.group === 'plant' || d.group === 'sensor').map(d => d.key), 'simulator only'));
+  pane.querySelector('#worldLaws h2').dataset.src = 'sim';
   const copyBtn = el('button', { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
   const revertAll = el('button', { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
   const copyOut = el('textarea', { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
@@ -192,6 +193,7 @@ function buildComputers() {
   pane.append(tools, el('section', { class: 'sec' }, el('h2', { text: 'Available inside formulas' }),
     el('p', { class: 'hint', html: 'Vectors are <code>[x, y, z]</code> arrays; 3×3 matrices are 9 numbers, row by row. Helpers: <code>add sub scl dot crs nrm unit clamp</code>, <code>m3v m3m m3T m3inv</code>, <code>qmat qmul qnorm matToQuat</code>, <code>randn</code> (standard normal, seeded so each reset replays the same noise), <code>bls(cols, lo, hi, w, W)</code>, and constants <code>G D2R R2D</code>. Anything in <code>Math</code> works too. A formula that throws or returns a wrong shape is switched off and the default takes over.' })));
   COMP.built = true;
+  applySrcTags(pane);
   renderComputers(true);
   for (const d of LAW_DEFS) refreshLaw(d.key);
 }
@@ -232,7 +234,7 @@ function renderComputers(full) {
           el('dt', { text: 'Runs' }), el('dd', { text: runs }),
           el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
-          ...(load ? [el('dt', { text: 'Load' }), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
+          ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
         ex.childElementCount ? ex : el('span')));
     }
     $('#boardAdd').disabled = C.boards.length >= BOARD_MAX;

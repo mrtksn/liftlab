@@ -439,19 +439,20 @@ function renderMass() {
   const dl = $('#massKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
 }
 function updateLive() {
-  const chips = $('#liveChips'); chips.textContent = ''; const chip = (t, c, onclick) => chips.append(el(onclick ? 'button' : 'span', { class: 'chip ' + (c || ''), text: t, type: onclick ? 'button' : null, onclick }));
-  if (S.crashed) chip('Crashed', 'bad'); else {
+  const chips = $('#liveChips'); chips.textContent = '';
+  const chip = (src, t, c, onclick) => chips.append(el(onclick ? 'button' : 'span', { class: 'chip ' + (c || ''), type: onclick ? 'button' : null, onclick }, srcDot(src), t));
+  if (S.crashed) chip('sim', 'Crashed', 'bad'); else {
     const last = hist.err.length ? hist.err[hist.err.length - 1] : 0;
-    if (hasTask('nav') && brt.pilot.phase === 'flying') chip(last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
-    if (brt.out && brt.out.sat) chip('Motor at limit', 'warn');
-    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('Cable slack', 'warn');
+    if (hasTask('nav') && brt.pilot.phase === 'flying') chip('sim', last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
+    if (brt.out && brt.out.sat) chip('board', 'Motor at limit', 'warn');
+    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('sim', 'Cable slack', 'warn');
   }
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
-  if (bad.length) chip(`${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
-  else if (ed.length) chip(`${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
-  const soc = Math.max(0, S.batt.soc ?? 1); chip(`Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
-  if (brt.err && !brt.ready) chip(brt.err, 'bad', () => showTab('form'));
-  else chip(`${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
+  if (bad.length) chip('you', `${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
+  else if (ed.length) chip('you', `${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
+  const soc = Math.max(0, S.batt.soc ?? 1); chip('sim', `Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
+  if (brt.err && !brt.ready) chip('board', brt.err, 'bad', () => showTab('form'));
+  else chip('board', `${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
   const R = qmat(S.q); const { hub } = hubState(R);
   $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
   $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
@@ -469,18 +470,18 @@ function updateLive() {
 /* ───────── state estimate ───────── */
 function setSensing(m) { sensing = 'sensors'; }   // the flight computers always fly on their sensors
 function renderEst() {
-  const chips = $('#senseChips'); chips.textContent = ''; const chip = (t, c) => chips.append(el('span', { class: 'chip ' + (c || ''), text: t }));
+  const chips = $('#senseChips'); chips.textContent = ''; const chip = (t, c, src) => chips.append(el('span', { class: 'chip ' + (c || '') }, srcDot(src || 'calc'), t));
   const has = k => sensorsOf(k).length > 0, fixOk = sensorsOf('fix').some(c => !c.dropout);
   const core = boardOf('core'), nav = boardOf('nav');
   if (!has('imu')) chip('No IMU: attitude is unknown', 'bad');
   if (!has('mag')) chip('No compass: heading drifts', 'warn');
   const fs = est.flowState;
-  if (fs === 'tracking') chip('Optical flow tracking', 'good');
-  else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn');
-  else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn');
+  if (fs === 'tracking') chip('Optical flow tracking', 'good', 'sensor');
+  else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn', 'sensor');
+  else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn', 'sensor');
   if (!nav) chip('No navigation: angle mode, no position hold', 'warn');
   else {
-    if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn');
+    if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn', has('fix') ? 'sensor' : 'calc');
     if (!has('baro') && !fixOk && !(fs === 'tracking' || fs === 'range only')) chip('No altitude reference', 'warn');
     if (has('imu') && has('mag') && fixOk) chip('All references present', 'good');
   }
@@ -602,14 +603,16 @@ function drawChart() {
   cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, W, H);
   const acc = tok('--accent'), muted = tok('--muted'), ink = tok('--ink'), line = tok('--line'), lineS = tok('--line-strong');
   const t1 = S.t, t0 = t1 - 10; const xOf = t => (t - t0) / 10 * W;
-  const bands = [{ k: 'tilt', lab: 'Tilt', u: '°', min: 10, dp: 1 }, { k: 'err', lab: 'Position error', u: 'cm', min: 10, dp: 1 }, { k: 'est', lab: 'Attitude estimate error', u: '°', min: 2, dp: 2 }, { k: 'util', lab: 'Peak motor load', u: '%', min: 100, dp: 0, fix: true }];
+  const bands = [{ k: 'tilt', lab: 'Tilt', u: '°', min: 10, dp: 1, src: 'sim' }, { k: 'err', lab: 'Position error (from the target)', u: 'cm', min: 10, dp: 1, src: 'sim' },
+    { k: 'est', lab: 'Attitude estimate error', u: '°', min: 2, dp: 2, src: 'cmp' }, { k: 'util', lab: 'Peak motor command', u: '%', min: 100, dp: 0, fix: true, src: 'board' }];
   const gap = 10, bh = (H - gap * (bands.length - 1)) / bands.length; let hi = -1;
   if (hoverX != null && hist.t.length) { const th = t0 + hoverX / W * 10; let best = 1e9; hist.t.forEach((t, i) => { const d = Math.abs(t - th); if (d < best) { best = d; hi = i; } }); }
   bands.forEach((b, bi) => {
     const y0 = bi * (bh + gap), top = y0 + 14, bot = y0 + bh; const data = hist[b.k];
     const mx = b.fix ? 100 : Math.max(b.min, ...data) * 1.1; const yOf = v => bot - (clamp(v, 0, mx) / mx) * (bot - top);
     cx.strokeStyle = line; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(0, bot + .5); cx.lineTo(W, bot + .5); cx.moveTo(0, Math.round((top + bot) / 2) + .5); cx.lineTo(W, Math.round((top + bot) / 2) + .5); cx.stroke();
-    cx.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif'; cx.fillStyle = muted; cx.textBaseline = 'top'; cx.fillText(b.lab.toUpperCase(), 0, y0);
+    cx.beginPath(); cx.arc(3.5, y0 + 6, 3.5, 0, Math.PI * 2); cx.fillStyle = tok('--src-' + b.src); cx.fill();   // where it comes from (sources.js)
+    cx.font = '600 11px "Barlow Condensed", "Arial Narrow", sans-serif'; cx.fillStyle = muted; cx.textBaseline = 'top'; cx.fillText(b.lab.toUpperCase(), 11, y0);
     cx.font = '10px "JetBrains Mono", monospace'; cx.textAlign = 'right'; cx.fillText(`max ${mx.toFixed(0)} ${b.u}`, W, y0); cx.textAlign = 'left';
     if (data.length > 1) {
       cx.beginPath(); data.forEach((v, i) => { const x = xOf(hist.t[i]), y = yOf(v); i ? cx.lineTo(x, y) : cx.moveTo(x, y); });

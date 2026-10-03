@@ -138,6 +138,7 @@
     <section class="view" aria-label="3D view">
       <div id="viewport"></div>
       <div class="hud hud-tl">
+        <span class="hud-src" data-src="sim"></span>
         <span id="hudTime">t 0.0 s</span>
         <span id="hudPos" data-layer="readouts"></span>
         <span id="hudCmd" data-layer="readouts"></span>
@@ -150,9 +151,9 @@
           <span class="key" data-layer="torque"><i class="sw" style="background:var(--torque)"></i>torque</span>
           <span class="key" data-layer="wind"><i class="sw" style="background:var(--wind)"></i>wind</span>
           <span class="key" data-layer="cog"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
-          <span class="key" data-layer="cog"><i class="ring"></i>controller's CoG</span>
+          <span class="key" data-layer="cog"><i class="ring"></i>controller's CoG <i class="src-dot src-board" title="On board: what the flight code believes"></i></span>
           <span class="key"><i class="sq" style="background:var(--sensor)"></i>sensor</span>
-          <span class="key" data-layer="est"><i class="sw ghost"></i>estimated pose</span>
+          <span class="key" data-layer="est"><i class="sw ghost"></i>estimated pose <i class="src-dot src-board" title="On board: where the flight code thinks it is"></i></span>
         </div>
       </div>
       <div class="hud hud-tr">
@@ -238,24 +239,24 @@
       </dialog>
     </section>
 
-    <aside class="panel" id="telemetry" aria-label="Telemetry">
+    <aside class="panel" id="telemetry" aria-label="Simulation readouts">
       <section class="sec status">
-        <h2>Airframe check <small id="envSpace"></small></h2>
+        <h2 data-src="calc">Airframe check <small id="envSpace"></small></h2>
         <span class="pill good" id="verdict"><i></i><span>Flyable</span></span>
         <p id="verdictWhy"></p>
         <div class="chips" id="liveChips"></div>
       </section>
       <section class="sec" id="healthSec">
-        <h2>Health <small id="healthSmall">supervisor</small></h2>
+        <h2 data-src="sim sensor board">Health <small id="healthSmall">supervisor</small></h2>
         <div id="healthBody"></div>
       </section>
       <section class="sec">
-        <h2>State estimate <small id="estMode"></small></h2>
+        <h2 data-src="cmp">State estimate <small id="estMode"></small></h2>
         <div class="chips" id="senseChips"></div>
         <dl class="kv" id="estKv"></dl>
       </section>
       <section class="sec" id="learnSec">
-        <h2>Learning <small id="learnSmall"></small></h2>
+        <h2 data-src="board">Learning <small id="learnSmall"></small></h2>
         <p class="hint" id="learnWhere"></p>
         <div class="field-row">
           <span class="lbl" id="modelLbl">The flight core flies on</span>
@@ -277,35 +278,36 @@
           <label class="check" for="thenCal"><input type="checkbox" id="thenCal" checked> Refine with a hover calibration after the catch</label>
           <p class="hint" id="throwHint"></p>
         </div>
-        <span class="lbl">How close each learned effect is to the truth</span>
+        <span class="lbl has-src" data-src="cmp">How close each learned effect is to the truth</span>
         <div class="match" id="matchRows"></div>
-        <span class="lbl">Actuator response (from the tests)</span>
+        <span class="lbl has-src" data-src="board">Actuator response (from the tests)</span>
         <div id="respRows"></div>
       </section>
       <section class="sec">
-        <h2>Actuator commands <small>bar = throttle, tick = thrust</small></h2>
+        <h2 data-src="board sim">Actuator commands</h2>
+        <p class="hint"><i class="src-dot src-board" title="On board: the drone's command"></i>bar: the throttle the drone commands &nbsp; <i class="src-dot src-sim" title="Simulated: what really happens"></i>tick: the real thrust; servos: real angle → commanded</p>
         <div class="acts" id="acts"></div>
       </section>
       <section class="sec">
-        <h2>Allocation <small id="allocSmall"></small></h2>
+        <h2 data-src="you">Allocation <small id="allocSmall"></small></h2>
         <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself.</p>
         <div id="allocFields"></div>
       </section>
       <section class="sec">
-        <h2>Control headroom <small>beyond hover</small></h2>
+        <h2 data-src="calc">Control headroom <small>beyond hover</small></h2>
         <div class="ehead"><span></span><span>− direction</span><span>+ direction</span></div>
         <div class="env" id="env"></div>
       </section>
       <section class="sec">
-        <h2>Traces <small>last 10 s</small></h2>
+        <h2 data-src="sim cmp board">Traces <small>last 10 s</small></h2>
         <canvas id="chart" aria-label="Tilt, position error, attitude estimate error and peak motor load over the last 10 seconds"></canvas>
       </section>
       <section class="sec">
-        <h2>Mass properties</h2>
+        <h2 data-src="calc">Mass properties</h2>
         <dl class="kv" id="massKv"></dl>
       </section>
       <section class="sec">
-        <h2>Target &amp; environment</h2>
+        <h2 data-src="you">Target &amp; environment</h2>
         <div class="sp" id="spFields"></div>
       </section>
     </aside>
@@ -314,6 +316,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/math.js"></script>
+<script src="js/sources.js"></script>
 <script src="js/terrain.js"></script>
 <script src="js/laws.js"></script>
 <script src="js/runtime.js"></script>

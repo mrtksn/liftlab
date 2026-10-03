@@ -445,6 +445,20 @@ With a radio (the Telemetry & radio task), the keys and pads are the handset: th
 
 Keys are ignored while you type in a text field or the formula editor. In the published page, click the 3D view first so the page receives the keys.
 
+## Where each number comes from
+
+A simulator shows much that no drone could know, next to what the drone's own code works out, so every panel is tagged with where its numbers come from (open **Where it comes from** at the top of the right panel for the key; hover a tag or dot for its meaning):
+
+- **Simulated:** the simulated world itself: the true position, thrust, temperatures, battery charge. The 3D view and its readouts are this.
+- **Sensor:** what the drone's simulated sensors report, with their noise, delay and limits.
+- **On board:** what the drone's flight code worked out (its state, its commands, the supervisor's and the learning's decisions), read straight from the boards as with a cable, not over the radio.
+- **Telemetry:** what came down the radio link (the Ground station tab).
+- **Vs truth:** the drone's belief against the truth (the state estimate's errors, how close the learned model is).
+- **Calculated:** the simulator's analysis of the design (the airframe check, control headroom, mass properties, board loads).
+- **You:** settings, targets and the sticks.
+
+Sections with more than one kind tag each line with a coloured dot: in Health, a part's true state is simulated, the line under it shows the sensor reading and what the supervisor did.
+
 ## Telemetry and the radio
 
 The drone has a pilot's radio: an ExpressLRS 2.4 GHz receiver, wired by CRSF to the board that runs the **Telemetry & radio** task. Everything the pilot does goes up it as channels, and everything the **Ground station** tab shows came down it. Nothing on that tab reads the simulator or the boards directly: if the link can't carry it, it isn't there. (The right-hand panels are the simulator's view and stay as they are.)
@@ -507,6 +521,7 @@ With navigation the sticks move the target at the chosen speed, ramped and kept 
 | `js/sensors.js` | Sensor parts, sampling at each sensor's rate with delay, vibration and magnetic interference, and the drivers' part: readings in body axes for the boards |
 | `js/view3d.js` | three.js scene and camera |
 | `js/pilot.js` | Keyboard and on-screen flight controls |
+| `js/sources.js` | The tags that say where each readout comes from (simulated, sensor, on board, telemetry, vs truth, calculated, you) |
 | `js/crsf.js` | CRSF on the ground: frames, the parser, decoding the drone's telemetry, the handset's channels and commands |
 | `js/elrs.js` | The simulated ExpressLRS link (packets, signal, telemetry slots) and what the ground station received |
 | `js/gs-widgets.js` | The data displays: value, bar, badge, horizon, map, columns, log, sparkline |

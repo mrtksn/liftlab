@@ -41,7 +41,7 @@ function breakMenu(options, onPick, label) {
 }
 function healthRow(key, name, menu) {
   const bar = el('i'), temp = el('span', { class: 'h-temp' }), state = el('span', { class: 'h-state' }), sub = el('span', { class: 'h-sub' });
-  const row = el('div', { class: 'h-row' }, el('span', { class: 'h-name', text: name }), el('span', { class: 'h-bar' }, bar), temp, state, menu || el('span'), sub);
+  const row = el('div', { class: 'h-row' }, el('span', { class: 'h-name', title: 'Its true temperature and state (simulated)' }, srcDot('sim'), name), el('span', { class: 'h-bar' }, bar), temp, state, menu || el('span'), sub);
   HEALTH.rows.set(key, { row, bar, temp, state, sub });
   return row;
 }
@@ -53,7 +53,7 @@ function buildHealth() {
   const sb = typeof boardOf === 'function' ? boardOf('super') : null;
   mode.hidden = !sb;
   box.append(el('div', { class: 'h-top' }, el('span', { class: 'lbl', text: sb ? 'Supervisor' : '' }), mode, repair),
-    sb ? el('p', { class: 'hint', id: 'supWhy', text: `The health supervisor runs on ${sb.name} at 10 Hz, on the flight core's data stream over the link and the health sensors wired to it. Each part: its true temperature and state, then what the drone can sense and what the supervisor did.` }) : el('p', { class: 'hint', text: 'Each part: its true temperature and state, and what the drone can sense. Break any of them to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
+    sb ? el('p', { class: 'hint', id: 'supWhy', text: `The health supervisor runs on ${sb.name} at 10 Hz, on the flight core's data stream over the link and the health sensors wired to it. Each part: its true temperature and state (simulated), then what the drone's sensors say and what the supervisor did (on board).` }) : el('p', { class: 'hint', text: 'Each part: its true temperature and state (simulated), and what the drone\'s sensors say. Break any of them to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
   const list = el('div', { class: 'h-list' });
   for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name)));
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name)));
@@ -74,33 +74,39 @@ function renderHealth(force) {
   const put = (key, frac, tempTxt, stateTxt, tone, subTxt) => {
     const r = HEALTH.rows.get(key); if (!r) return;
     r.bar.style.width = (clamp(frac, 0, 1.2) / 1.2 * 100).toFixed(1) + '%'; r.bar.style.background = tempColor(frac);
-    r.temp.textContent = tempTxt; r.state.textContent = stateTxt; r.state.className = 'h-state ' + (tone || ''); r.sub.textContent = subTxt;
+    r.temp.textContent = tempTxt; r.state.textContent = stateTxt; r.state.className = 'h-state ' + (tone || '');
+    // the line under: [source, text] parts, each with its dot (sources.js); rebuilt only when it changes
+    const sk = JSON.stringify(subTxt); if (r.subKey === sk) return; r.subKey = sk; r.sub.textContent = '';
+    for (const [src, t] of subTxt) if (t) r.sub.append(el('span', { class: 'src-part' }, srcDot(src), t));
   };
   const sv = brt.superView;
   actuators().forEach((c, i) => {
     const s = hs.get(c.id) || { T: ambient(), loss: 0 }, lim = c.tmaxC ?? 120, r = hread.m.get(c.id) || {}, e = sv && sv.motors[i];
     const truth = s.prop ? ['prop broken', 'bad'] : s.dead ? ['stopped', 'bad'] : s.loss > 0.004 ? [`−${Math.round(s.loss * 100)}% thrust${s.cause === 'burned out' || s.T > lim ? ' (heat)' : ''}`, 'warn'] : ['working', ''];
-    const seen = r.T != null ? `sensor ${Math.round(r.T)}°` : e && e.temp != null && r.I != null ? `est. ${Math.round(e.temp)}° from ESC current` : 'temperature not measured';
+    const seen = r.T != null ? ['sensor', `sensor ${Math.round(r.T)}°`] : e && e.temp != null && r.I != null ? ['board', `est. ${Math.round(e.temp)}° from ESC current`] : ['calc', 'temperature not measured'];
     const did = !e ? '' : !e.on ? 'removed from the table' : [e.eff < 0.99 || e.eff > 1.01 ? `table ×${e.eff.toFixed(2)}` : '', e.cap < 0.995 ? `capped at ${Math.round(e.cap * 100)}%` : ''].filter(Boolean).join(', ') || 'OK';
-    put(c.id, (s.T - ambient()) / Math.max(10, lim - ambient()), `${Math.round(s.T)} °C`, truth[0], truth[1], `${seen}${did ? ' · supervisor: ' + did : ''}`);
+    put(c.id, (s.T - ambient()) / Math.max(10, lim - ambient()), `${Math.round(s.T)} °C`, truth[0], truth[1], [seen, ['board', did ? 'supervisor: ' + did : '']]);
   });
   joints().forEach((j, k) => {
     const s = hs.get(j.id) || {}, d = sv && sv.joints[k], bad = s.limp || s.jam != null;
-    put(j.id, 0, '', s.limp ? 'limp' : s.jam != null ? 'jammed' : 'working', bad ? 'bad' : '', !sv ? '' : !d || !d.off ? (bad ? 'supervisor: not spotted yet' : '') : `supervisor: left out of the steering, believed at ${Math.round(d.angle * R2D)}° (really ${Math.round((jst.get(j.id) || {}).th * R2D || 0)}°)`);
+    put(j.id, 0, '', s.limp ? 'limp' : s.jam != null ? 'jammed' : 'working', bad ? 'bad' : '', !sv ? [] : !d || !d.off ? [['board', bad ? 'supervisor: not spotted yet' : '']]
+      : [['board', `supervisor: left out of the steering, believed at ${Math.round(d.angle * R2D)}°`], ['sim', `really ${Math.round((jst.get(j.id) || {}).th * R2D || 0)}°`]]);
   });
   {
     const b = battCfg(), r = hread.b, soc = S.batt && S.batt.soc != null ? S.batt.soc : 1;
     const truth = hb.cut ? ['cut out', 'bad'] : hb.lvc ? ['ESCs cut (low voltage)', 'bad'] : hb.cellsLost ? [`${hb.cellsLost} cell${hb.cellsLost > 1 ? 's' : ''} lost`, 'bad'] : hb.fade > 0.005 ? [`worn ${Math.round(hb.fade * 100)}%`, 'warn'] : ['working', ''];
     const seen = [r.V != null ? `${r.V.toFixed(1)} V` : 'no voltage sensor', r.I != null ? `${r.I.toFixed(0)} A` : '', r.T != null ? `${Math.round(r.T)}°` : ''].filter(Boolean).join(' · ');
-    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)} °C`, truth[0], truth[1], `${Math.round(Math.max(0, soc) * 100)}% charge · sensors: ${seen}${sv && sv.cells < b.cells ? ` · supervisor: counts ${sv.cells} cells` : ''}`);
+    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)} °C`, truth[0], truth[1],
+      [['sim', `${Math.round(Math.max(0, soc) * 100)}% charge`], ['sensor', `sensors: ${seen}`], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
   pill.className = 'pill ' + m[1]; pill.querySelector('span').textContent = sv ? m[0] : 'Off';
   const why = sv && mode ? sv.modeWhy : '', landed = brt.navOut && brt.navOut.landed;
-  const hud = $('#hudSup'); hud.hidden = !mode && !landed; hud.textContent = landed ? 'supervisor: landed' : `supervisor: ${m[0].toLowerCase()}${why ? ' · ' + why : ''}`;
+  const hud = $('#hudSup'), hudTxt = landed ? 'supervisor: landed' : `supervisor: ${m[0].toLowerCase()}${why ? ' · ' + why : ''}`;
+  hud.hidden = !mode && !landed; if (hud.dataset.txt !== hudTxt) { hud.dataset.txt = hudTxt; hud.textContent = ''; hud.append(srcDot('board'), hudTxt); }
   const log = $('#supLog'); log.textContent = '';
-  const all = [...sup.log, ...(sv ? sv.log : [])].sort((a, b) => b.t - a.t).slice(0, 8);
-  for (const l of all) log.append(el('li', { class: l.tone }, el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
+  const all = [...sup.log.map(l => ({ ...l, src: 'sim' })), ...(sv ? sv.log.map(l => ({ ...l, src: 'board' })) : [])].sort((a, b) => b.t - a.t).slice(0, 8);
+  for (const l of all) log.append(el('li', { class: l.tone }, srcDot(l.src), el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
   if (!all.length) log.append(el('li', { class: 'muted', text: 'Nothing yet.' }));
   $('#healthSmall').textContent = sv ? (mode ? m[0].toLowerCase() : 'all normal') : 'the parts';
 }

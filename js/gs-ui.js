@@ -10,11 +10,12 @@ const GS_UI = { built: false, w: {}, next: 0 };
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
-  const sec = (title, small) => { const s = el('section', { class: 'sec gs-sec' }); s.append(el('h2', {}, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
+  const sec = (title, small, src) => { const s = el('section', { class: 'sec gs-sec' }); s.append(el('h2', { 'data-src': src || 'tlm' }, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
+  pane.append(srcLegend(['tlm', 'sim', 'you']));
   const grid = (...kids) => el('div', { class: 'gs-grid' }, ...kids);
 
   // the radio
-  const r = sec('Radio link', 'ExpressLRS 2.4 GHz');
+  const r = sec('Radio link', 'ExpressLRS 2.4 GHz', 'tlm sim you');
   const sel = (id, label, opts, get, set) => {
     const s = el('select', { id }); for (const [v, t] of opts) { const o = el('option', { value: String(v), text: t }); if (String(get()) === String(v)) o.selected = true; s.append(o); }
     s.addEventListener('change', () => { set(s.value); save(); boardsRadioCfg(); });
@@ -25,14 +26,16 @@ function buildGs() {
     sel('gsRatio', 'Telemetry', ELRS_RATIOS.map(k => [k, '1:' + k]), () => radioCfg.ratio, v => { radioCfg.ratio = +v; }),
     sel('gsPower', 'Power', ELRS_POWERS.map(k => [k, k + ' mW']), () => radioCfg.power, v => { radioCfg.power = +v; })));
   const extra = numField('gsExtra', { label: 'Extra path loss (distance, walls, interference)', min: 0, max: 120, step: 1, u: 'dB', dp: 0 }, () => radioCfg.extra, v => { radioCfg.extra = v; save(); });
-  r.append(extra.node, el('p', { class: 'hint', id: 'gsEquiv' }));
+  r.append(extra.node, el('p', { class: 'hint' }, srcDot('sim'), el('span', { id: 'gsEquiv' })));
   W.linkUp = GSW.bar('Uplink LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
   W.linkDown = GSW.bar('Telemetry LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
   W.rssi = GSW.value('RSSI', { unit: 'dBm', dp: 0 }); W.snr = GSW.value('SNR', { unit: 'dB', dp: 0 });
   W.thru = GSW.value('Telemetry', { unit: 'B/s', dp: 0 }); W.budget = GSW.value('Room', { unit: 'B/s', dp: 0 });
   W.age = GSW.value('Last frame', { unit: 's ago', dp: 1, tone: v => v > 1.5 ? 'bad' : v > 0.5 ? 'warn' : '' });
-  r.append(W.linkUp.el, W.linkDown.el, grid(W.rssi.el, W.snr.el, W.thru.el, W.budget.el, W.age.el));
-  W.chans = GSW.columns('Handset channels sent (1–9)');
+  W.budget.el.firstChild.prepend(srcDot('calc'));   // (what the settings allow, worked out on the ground)
+  r.append(el('p', { class: 'hint' }, srcDot('tlm'), 'Link quality, RSSI and SNR as the transmitter module reports them; the rest decoded from the frames that came down.'),
+    W.linkUp.el, W.linkDown.el, grid(W.rssi.el, W.snr.el, W.thru.el, W.budget.el, W.age.el));
+  W.chans = GSW.columns('Handset channels sent (1–9)'); W.chans.el.firstChild.prepend(srcDot('you'));
   r.append(W.chans.el, el('p', { class: 'hint', id: 'gsRadioNote' }));
 
   // flight
@@ -65,6 +68,7 @@ function buildGs() {
   // messages
   const l = sec('Messages');
   W.log = GSW.log(40); l.append(W.log.el);
+  applySrcTags(pane);
   GS_UI.built = true;
 }
 function boardsRadioCfg() {   // the radio's settings changed: the boards hear of it at the next reset (as on a real drone, set on both ends)
