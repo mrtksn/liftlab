@@ -753,19 +753,24 @@ function stickInput(st, axis, analog, digital, dt) {
 
 function groundAlerts(st, s, dt) {
   // What the command module warns the pilot about, from the telemetry that came down (and how long ago it did).
-  // s: { age [s] since the last frame; lq: uplink quality [%]; soc: charge 0–1; vcell: cell voltage under load [V];
+  // s: { age [s] since the last frame; lq: uplink quality [%]; downLq: telemetry link quality [%], from the
+  //      transmitter module; soc: charge 0–1; vcell: cell voltage under load [V];
   //      failsafe, crashed, returning, landing, radioLost: what the drone reports (1/0) }. Unknown values are null.
   // level: 0 fine, 1 warning, 2 alarm (a command module can beep or light up); why: which (the list in the doc).
   // The most serious wins. A warning stays up 2 s after it clears, so a value hovering at a limit doesn't flicker.
+  // Telemetry that comes seldom while the module still hears the drone's telemetry packets well is the link's
+  // settings (a slow packet rate, a high ratio: little room down), not a lost drone: a warning, unless nothing at all
+  // has come for 15 s.
   let level = 0, why = 0;
   if (s.crashed > 0.5) { level = 2; why = 8; }
-  else if (s.age > 1.5) { level = 2; why = 1; }
+  else if (s.age > 15 || (s.age > 1.5 && !(s.downLq != null && s.downLq >= 50))) { level = 2; why = 1; }
   else if (s.failsafe > 0.5) { level = 2; why = 7; }
   else if (s.radioLost > 0.5) { level = 2; why = 9; }
   else if ((s.soc != null && s.soc < 0.1) || (s.vcell != null && s.vcell < 3.3)) { level = 2; why = 4; }
   else if (s.landing > 0.5) { level = 1; why = 6; }
   else if (s.returning > 0.5) { level = 1; why = 5; }
   else if ((s.soc != null && s.soc < 0.25) || (s.vcell != null && s.vcell < 3.5)) { level = 1; why = 3; }
+  else if (s.age > 1.5) { level = 1; why = 10; }
   else if (s.lq != null && s.lq < 60) { level = 1; why = 2; }
   if (st.level == null) { st.level = 0; st.why = 0; st.t = 0; }
   if (level >= st.level) { st.level = level; st.why = why; st.t = 0; }
@@ -1241,10 +1246,10 @@ const LAW_DEFS = [
     args: [['st', 'the stick\'s memory'], ['axis', '0 roll, 1 pitch, 2 throttle, 3 yaw'], ['analog', 'a real stick −1…1, or null'], ['digital', '+1, −1 or 0 from buttons'], ['dt', 'step [s]']], returns: 'the channel −1…1',
     shape: 'n', sample: () => [{}, 0, null, 1, 0.004] },
   { key: 'groundAlerts', group: 'ground', fn: groundAlerts, title: 'Pilot alerts',
-    math: [`alarm: crashed, no telemetry for 1.5 s, failsafe, the drone hears no radio, battery &lt; 10% or &lt; 3.3 V/cell`, `warning: landing, returning home, battery &lt; 25% or &lt; 3.5 V/cell, uplink quality &lt; 60%`],
-    doc: 'Runs on the command module, on the telemetry that came down the radio: what to warn the pilot about. The most serious thing wins, and a warning stays up 2 s after it clears. Reasons: 1 no telemetry, 2 weak link, 3 battery low, 4 battery very low, 5 returning home, 6 landing, 7 failsafe, 8 crashed, 9 the drone hears no radio. A command module with a buzzer or an LED beeps or lights for it; the Ground station shows it.',
-    args: [['st', 'its memory'], ['s', '{ age, lq, soc, vcell, failsafe, crashed, returning, landing, radioLost }'], ['dt', 'step [s]']], returns: '{ level: 0 fine, 1 warning, 2 alarm; why }',
-    shape: 'obj', sample: () => [{}, { age: 0.1, lq: 100, soc: 0.8, vcell: 3.9, failsafe: 0, crashed: 0, returning: 0, landing: 0, radioLost: 0 }, 0.1] },
+    math: [`alarm: crashed, no telemetry for 1.5 s (15 s while the telemetry link quality is ≥ 50%), failsafe, the drone hears no radio, battery &lt; 10% or &lt; 3.3 V/cell`, `warning: landing, returning home, battery &lt; 25% or &lt; 3.5 V/cell, telemetry slow (the link has little room), uplink quality &lt; 60%`],
+    doc: 'Runs on the command module, on the telemetry that came down the radio: what to warn the pilot about. The most serious thing wins, and a warning stays up 2 s after it clears. Reasons: 1 no telemetry, 2 weak link, 3 battery low, 4 battery very low, 5 returning home, 6 landing, 7 failsafe, 8 crashed, 9 the drone hears no radio, 10 telemetry slow (frames seldom, but the module hears the drone\'s telemetry packets well: the packet rate and ratio leave little room). A command module with a buzzer or an LED beeps or lights for it; the Ground station shows it.',
+    args: [['st', 'its memory'], ['s', '{ age, lq, downLq, soc, vcell, failsafe, crashed, returning, landing, radioLost }'], ['dt', 'step [s]']], returns: '{ level: 0 fine, 1 warning, 2 alarm; why }',
+    shape: 'obj', sample: () => [{}, { age: 0.1, lq: 100, downLq: 100, soc: 0.8, vcell: 3.9, failsafe: 0, crashed: 0, returning: 0, landing: 0, radioLost: 0 }, 0.1] },
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>d</sub>(sat(<i>K</i><sub>p</sub>/<i>K</i><sub>d</sub> ${V('e')}<sub>p</sub>) − (${V('v')} − ${V('v')}<sub>cmd</sub>)) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `sat: sideways ≤ the speed limit, up ≤ 3 m/s, down ≤ 1.5 m/s`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',

@@ -30,7 +30,7 @@ function buildGs() {
     sel('gsRatio', 'Telemetry', ELRS_RATIOS.map(k => [k, '1:' + k]), () => radioCfg.ratio, v => { radioCfg.ratio = +v; }),
     sel('gsPower', 'Power', ELRS_POWERS.map(k => [k, k + ' mW']), () => radioCfg.power, v => { radioCfg.power = +v; })));
   const extra = numField('gsExtra', { label: 'Extra path loss (distance, walls, interference)', min: 0, max: 120, step: 1, u: 'dB', dp: 0 }, () => radioCfg.extra, v => { radioCfg.extra = v; save(); });
-  r.append(extra.node, el('p', { class: 'hint' }, srcDot('sim'), el('span', { id: 'gsEquiv' })));
+  r.append(el('p', { class: 'hint warn' }, srcDot('calc'), el('span', { id: 'gsRoom' })), extra.node, el('p', { class: 'hint' }, srcDot('sim'), el('span', { id: 'gsEquiv' })));
   W.linkUp = GSW.bar('Uplink LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
   W.linkDown = GSW.bar('Telemetry LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
   W.rssi = GSW.value('RSSI', { unit: 'dBm', dp: 0 }); W.snr = GSW.value('SNR', { unit: 'dB', dp: 0 });
@@ -90,6 +90,9 @@ function renderGs(force) {
   $('#gsCmdNote').textContent = !has ? '' : brt.gndErr ? brt.gndErr : `Your keys and the simulator's pilot are the buttons of the command module (${gname}): it shapes them (stickInput${gs.shaped === false ? ', not answering: the raw sticks go up' : ''}), sends the channels and commands to the transmitter module, decodes what comes back and warns (groundAlerts).`;
   if (has && gs.alert) W.alert.set(gs.alert.level ? gs.alert.text.charAt(0).toUpperCase() + gs.alert.text.slice(1) : 'All fine', t, gs.alert.level >= 2 ? 'bad' : gs.alert.level === 1 ? 'warn' : 'good');
   const rf = radio.rf;
+  const room = radioCfg.rate / radioCfg.ratio * 5;
+  $('#gsRoom').textContent = room < 40 ? `At ${radioCfg.rate} Hz with telemetry 1:${radioCfg.ratio}, only ${room < 10 ? room.toFixed(1) : Math.round(room)} bytes a second can come down (one packet in ${radioCfg.ratio}, 5 bytes each); a frame is 10–40 bytes, so values arrive seconds apart. The channels and commands go up in the other packets, so control isn't affected. 1:2 to 1:8 leaves the Ground station enough.` : '';
+  $('#gsRoom').parentNode.hidden = room >= 40;
   $('#gsEquiv').textContent = rf ? `Now ${rf.d.toFixed(0)} m from the handset${rf.walls ? `, ${rf.walls} building${rf.walls > 1 ? 's' : ''} in the way` : ''}; with the extra loss that is like ${fmtDist(rf.d * Math.pow(10, radioCfg.extra / 20))} in the open. Signal ${rf.rssi.toFixed(0)} dBm, the receiver needs ${ELRS_RATES[radioCfg.rate]} dBm at ${radioCfg.rate} Hz.` : '';
   const L = gs.link;
   if (has && L) { W.linkUp.set(L.upLq, L.t); W.linkDown.set(L.downLq, L.t); W.rssi.set(L.upRssi, L.t); W.snr.set(L.upSnr, L.t); }

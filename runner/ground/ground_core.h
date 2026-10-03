@@ -51,7 +51,7 @@ void gnd_config_default(gnd_config *c);
 
 #define GND_QN 8             /* commands waiting */
 #define GND_MSGS 16          /* messages kept */
-enum { GND_WHY_N = 10 };
+enum { GND_WHY_N = 11 };
 extern const char *const gnd_why_text[GND_WHY_N];   /* groundAlerts' reasons, as words */
 
 /* The drone as the telemetry shows it. t_*: when each last came (−1: never). */

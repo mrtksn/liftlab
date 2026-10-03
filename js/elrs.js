@@ -138,7 +138,7 @@ function gsRead() {
   const g = brt.gnd; if (!g) return;
   const t = brt.t, n = g.gnd_view(t), o = new Float32Array(g.memory.buffer, g.fr_ptr(), n), at = a => a >= 0 ? t - a : null;
   const put = (kind, age, v) => { const a = at(age); if (a == null) return; gs.v[kind] = v; gs.at[kind] = a; };
-  gs.alert = { level: o[0], why: o[1], text: cstr(g, g.gnd_why_text(o[1]), 40) };
+  gs.alert = { level: o[0], why: o[1], text: cstr(g, g.gnd_why_text(o[1]), 80) };
   gs.bytes = o[3]; gs.frames = o[4];
   if (o[8] >= 0) gs.link = { upRssi: o[9], upLq: o[10], upSnr: o[11], downRssi: o[12], downLq: o[13], downSnr: o[14], power: o[15], t: t - o[8] };
   put('attitude', o[16], { roll: o[17], pitch: o[18], yaw: o[19] });

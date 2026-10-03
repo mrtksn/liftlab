@@ -4,7 +4,7 @@
 #include "tlm_crsf.h"
 
 const char *const gnd_why_text[GND_WHY_N] = { "", "no telemetry", "weak link", "battery low", "battery very low", "returning home", "landing",
-  "failsafe", "crashed", "the drone hears no radio" };
+  "failsafe", "crashed", "the drone hears no radio", "telemetry slow (the link has little room for it)" };
 
 static float clampf_(float x, float a, float b) { return x < a ? a : x > b ? b : x; }
 static int fin(float x) { return x == x && x < 3e38f && x > -3e38f; }
@@ -25,7 +25,7 @@ int gnd_init(gnd_state *G, rn_host *H, const gnd_config *c) {
   /* what this code passes and expects back, in floats (js/rn-sigs.js) */
   G->f_stick = rn_host_find(H, "stickInput"); G->f_alert = rn_host_find(H, "groundAlerts");
   if (G->f_stick < 0 || rn_host_in_size(H, G->f_stick) != 5 || rn_host_out_size(H, G->f_stick) != 1 ||
-      G->f_alert < 0 || rn_host_in_size(H, G->f_alert) != 13 || rn_host_out_size(H, G->f_alert) != 2) { say(G, "the ground program's formulas aren't what this code expects: the sticks go up unshaped"); return -1; }
+      G->f_alert < 0 || rn_host_in_size(H, G->f_alert) != 15 || rn_host_out_size(H, G->f_alert) != 2) { say(G, "the ground program's formulas aren't what this code expects: the sticks go up unshaped"); return -1; }
   if (rn_host_instances(H, "stickInput", GND_AXES)) { say(G, "can't give stickInput a memory per stick"); return -1; }
   G->ok = 1; say(G, "command module ready");
   return 0;
@@ -46,9 +46,10 @@ static void alerts(gnd_state *G, double t, float dt) {
   const gnd_view *V = &G->V;
   const float *st = item(V, TLM_STATE, 1), *nav = item(V, TLM_NAV, 5), *sup = item(V, TLM_SUPER, 5), *lk = item(V, TLM_LINK, 4);
   int navb = nav ? (int)nav[4] : 0, sm = sup ? (int)sup[0] : 0;
-  float in[13]; int k = 0;
+  float in[15]; int k = 0;
   in[k++] = V->t_any >= 0 ? (float)(t - V->t_any) : 1e3f;
   int lq = V->t_link >= 0 && t - V->t_link < 2; in[k++] = lq ? 1.0f : 0.0f; in[k++] = lq ? V->link.up_lq : 0;
+  in[k++] = lq ? 1.0f : 0.0f; in[k++] = lq ? V->link.down_lq : 0;
   int soc = sup && sup[3] >= 0; in[k++] = soc ? 1.0f : 0.0f; in[k++] = soc ? sup[3] : 0;
   int vc = sup && sup[4] > 0 && V->t_batt >= 0 && V->volts > 0; in[k++] = vc ? 1.0f : 0.0f; in[k++] = vc ? V->volts / sup[4] : 0;
   in[k++] = st && (int)st[0] == 2 ? 1.0f : 0.0f;                                     /* failsafe */

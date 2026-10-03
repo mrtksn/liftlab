@@ -56,7 +56,7 @@ const RN_SIGS = (() => {
     thermalModel: S(['T', 'P', 'G', 'C', 'Tamb', 'dt'], [num, num, num, num, num, num], num),
     // The command module (on the ground: runner/ground).
     stickInput: S(['st', 'axis', 'analog', 'digital', 'dt'], [state(), num, opt(num), num, num], num),
-    groundAlerts: S(['st', 's', 'dt'], [state(), rec({ age: num, lq: opt(num), soc: opt(num), vcell: opt(num), failsafe: num, crashed: num, returning: num, landing: num, radioLost: num }), num],
+    groundAlerts: S(['st', 's', 'dt'], [state(), rec({ age: num, lq: opt(num), downLq: opt(num), soc: opt(num), vcell: opt(num), failsafe: num, crashed: num, returning: num, landing: num, radioLost: num }), num],
       rec({ level: num, why: num })),
     rotorWrench: S(['d', 'r', 'T', 'spin', 'kappa'], [V3, V3, num, num, num], rec({ F: V3, tau: V3 })),
     jointRotation: S(['axis', 'theta'], [V3, num], M3),

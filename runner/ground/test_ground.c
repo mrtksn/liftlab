@@ -99,6 +99,15 @@ int main(void) {
   for (int k = 0; k < 30; k++) { tt += 0.1; gnd_step(&G, &in, tt, 0.1f, out, sizeof out); }
   lvl = gnd_alert(&G, &why);
   CHECK(lvl == 2 && why == 1, "nothing comes down for 3 s: alarm (%s)", gnd_why_text[why]);
+  /* the same, but the module still hears the drone's telemetry packets well: the link's settings leave little room */
+  { uint8_t ls[64]; crsf_link Lk = { -50, 100, 9, -51, 100, 8, 0, 10, 0 };
+    for (int k = 0; k < 40; k++) { tt += 0.1; int nl = crsf_link_stats(ls, CRSF_ADDR_HANDSET, &Lk); gnd_from_radio(&G, ls, nl, tt); gnd_step(&G, &in, tt, 0.1f, out, sizeof out); } }
+  lvl = gnd_alert(&G, &why);
+  CHECK(lvl == 1, "telemetry 7 s apart while its packets come through: a warning, not an alarm (%s, the last report outranking 'telemetry slow')", gnd_why_text[why]);
+  { uint8_t ls[64]; crsf_link Lk = { -50, 100, 9, -51, 100, 8, 0, 10, 0 };
+    for (int k = 0; k < 100; k++) { tt += 0.1; int nl = crsf_link_stats(ls, CRSF_ADDR_HANDSET, &Lk); gnd_from_radio(&G, ls, nl, tt); gnd_step(&G, &in, tt, 0.1f, out, sizeof out); } }
+  lvl = gnd_alert(&G, &why);
+  CHECK(lvl == 2 && why == 1, "nothing at all for 17 s: an alarm again (%s)", gnd_why_text[why]);
   /* battery low only: a warning, which outlasts its cause by 2 s */
   host(); gnd_init(&G, &H, NULL); tlm_init(&T); tt = 0;
   float sup2[7] = { 0, 0, 2.5f, 0.2f, 4, 10, 100 }, nav2[6] = { 0, 0, 1.5f, 0, 2 | 4, 1 };
