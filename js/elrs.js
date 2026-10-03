@@ -31,6 +31,7 @@ function radioReset() {
     up: [], txCh: null, toBoard: [], toGround: [], nextStats: 0, ch: null,
     upHist: [], downHist: [], rssiUp: -50, rssiDown: -50, snrUp: 10, snrDown: 10, rfAt: -1,
     downChunks: 0, downGot: 0, upGot: 0, rxLost: false, holdUntil: -1, homeUntil: -1,
+    log: [], logN: 0, downMeta: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
   });
   gsReset();
 }
@@ -68,18 +69,40 @@ function radioStep(dt, t) {
     if (tlmSlot) {
       const ok = radioRand() < pDown;
       radio.downHist.push(ok ? 1 : 0); if (radio.downHist.length > 100) radio.downHist.shift();
-      if (radio.down.length) { radio.downChunks++; if (ok) { const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; radio.txIn.feed(c, f => radio.toGround.push(f)); } }   // (the module hands on whole frames)
+      if (radio.down.length) {
+        radio.downChunks++; if (radio.down[0].frame === radio.downMeta[0]?.id) radio.downMeta[0].tries++;
+        if (ok) {
+          const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; radio.inFlight = radio.down.length && radio.down[0].frame === c.frame ? c.frame : -1;
+          radio.txIn.feed(c, f => { radio.toGround.push(f); linkDown(f, t); });   // (the module hands on whole frames)
+        }
+      }
+      if (ok) { if (radio.downGap) linkLog('↓', 'link', `telemetry packets get through again after ${(t - radio.lastDownOk).toFixed(1)} s`, 'good'); radio.lastDownOk = t; radio.downGap = false; }
+      else if (!radio.downGap && t - radio.lastDownOk > 1) { radio.downGap = true; linkLog('↓', 'link', 'no telemetry packet has got through for 1 s', 'bad'); }
     } else {
       const ok = radioRand() < pUp;
       radio.upHist.push(ok ? 1 : 0); if (radio.upHist.length > 100) radio.upHist.shift();
-      if (!ok) continue;
+      const cmdSlot = radio.up.length && radio.k % 2;
+      if (!ok) {
+        if (cmdSlot) radio.up[0].lost++;
+        if (!radio.upGap && t - radio.lastUpOk > 0.5) { radio.upGap = true; linkLog('↑', 'link', 'no uplink packet has got through for 0.5 s: the drone gets no channels', 'bad'); }
+        continue;
+      }
       radio.upGot++;
-      if (radio.up.length && radio.k % 2) {                          // this packet carries 5 bytes of a command
-        const c = radio.up[0]; c.got.push(...c.bytes.subarray(c.at, c.at + 5)); c.at += 5;
-        if (c.at >= c.bytes.length) { radio.toBoard.push(Uint8Array.from(c.got)); radio.up.shift(); }
-      } else if (radio.txCh) radio.toBoard.push(crsfRcFrame(radio.txCh));   // (nothing from the command module yet: nothing to send)
+      if (radio.upGap) linkLog('↑', 'link', `uplink packets get through again after ${(t - radio.lastUpOk).toFixed(1)} s`, 'good');
+      radio.upGap = false; radio.lastUpOk = t;
+      if (cmdSlot) {                                                 // this packet carries 5 bytes of a command
+        const c = radio.up[0]; c.got.push(...c.bytes.subarray(c.at, c.at + 5)); c.at += 5; c.pk++;
+        if (c.at >= c.bytes.length) {
+          radio.toBoard.push(Uint8Array.from(c.got)); radio.up.shift();
+          linkLog('↑', 'cmd', `${c.desc}: reached the drone's receiver after ${Math.round((t - c.t0) * 1000)} ms (${c.pk} packets${c.lost ? `, ${c.lost} lost and sent again` : ''})`, 'good');
+        }
+      } else if (radio.txCh) { radio.toBoard.push(crsfRcFrame(radio.txCh)); linkSwitches(radio.txCh, t); }   // (nothing from the command module yet: nothing to send)
+      if (radioLogAll && !cmdSlot && radio.txCh && (radio.k % 50 === 1)) linkLog('↑', 'frame', `channels ${radio.txCh.slice(0, 4).map(v => v.toFixed(2)).join(' ')} … (one in 50 shown)`, '');
     }
   }
+  const D = radio.dropRun;
+  if (D && D.n && t - D.last > 0.5) { linkLog('↓', 'drop', `${D.n} frames dropped in ${(D.last - D.t0).toFixed(1)} s (${[...D.kinds].slice(0, 6).join(', ')}${D.kinds.size > 6 ? '…' : ''}); the newest values go down again`, 'warn'); radio.dropRun = null; }
+  if (radio.lqUp < 50 !== radio.lqLow && radio.upHist.length >= 50) { radio.lqLow = radio.lqUp < 50; linkLog('↑', 'link', radio.lqLow ? `uplink quality down to ${Math.round(radio.lqUp)}%` : `uplink quality back up to ${Math.round(radio.lqUp)}%`, radio.lqLow ? 'warn' : 'good'); }
   const lq = h => h.length ? 100 * h.reduce((a, b) => a + b, 0) / h.length : 0;
   radio.lqUp = lq(radio.upHist); radio.lqDown = lq(radio.downHist);
   radio.rssiUp = r.rssi + (radioRand() - 0.5) * 2; radio.rssiDown = r.rssi - 1 + (radioRand() - 0.5) * 2;
@@ -93,11 +116,20 @@ function radioStep(dt, t) {
 // What the drone's board wrote to the receiver: queued as 5-byte chunks for the telemetry slots.
 function radioFromDrone(bytes) {
   radio.fromDrone.feed(bytes, f => {
-    while (radio.downBytes + f.length > 512 && radio.down.length) {   // the receiver's queue is full: the oldest frame goes
-      let n = 0; const first = radio.down[0].frame; while (radio.down.length && radio.down[0].frame === first) { n += radio.down[0].length; radio.down.shift(); }
+    while (radio.downBytes + f.length > 512 && radio.down.length) {   // the receiver's queue is full: the oldest frame not being sent goes
+      const first = radio.down.find(c => c.frame !== radio.inFlight); if (!first) break;
+      const id = first.frame; let n = 0; radio.down = radio.down.filter(c => { if (c.frame !== id) return true; n += c.length; return false; });
       radio.downBytes -= n; radio.downDropped++;
+      const k = radio.downMeta.findIndex(m => m.id === id), m = k >= 0 ? radio.downMeta.splice(k, 1)[0] : null;
+      if (m && m.kind === 'msg') linkLog('↓', 'drop', `${m.desc}: dropped by the drone's receiver, its queue full`, 'bad');
+      else if (m) {                                                  // the rest: one line when it starts, one when it ends
+        const D = radio.dropRun || (radio.dropRun = { n: 0, t0: radio.t, kinds: new Set() });
+        if (!D.n) linkLog('↓', 'drop', 'the drone\'s receiver is dropping frames: its queue is full (512 bytes waiting to go down)', 'warn');
+        D.n++; D.last = radio.t; D.kinds.add(m.desc.replace(/ \(.*\)$/, ''));
+      }
     }
     radio.downFrames++;
+    radio.downMeta.push({ id: radio.downFrames, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0 });
     for (let i = 0; i < f.length; i += 5) { const c = f.subarray(i, i + 5); c.frame = radio.downFrames; radio.down.push(c); radio.downBytes += c.length; }
   });
 }
@@ -106,7 +138,10 @@ function radioFromDrone(bytes) {
 function radioFromGround(bytes) {
   radio.fromGround.feed(bytes, f => {
     if (f[2] === CRSF.RC) radio.txCh = crsfRcRead(f.subarray(3, f.length - 1));
-    else if (f[2] === CRSF.EXT) radio.up.push({ bytes: f, at: 0, got: [] });
+    else if (f[2] === CRSF.EXT) {
+      const desc = cmdDesc(f); radio.up.push({ bytes: f, at: 0, got: [], t0: radio.t, pk: 0, lost: 0, desc });
+      linkLog('↑', 'cmd', `${desc}: from the command module to the transmitter module (${f.length} bytes, ${Math.ceil(f.length / 5)} packets)`, '');
+    }
   });
 }
 // A ground-station command (go to, calibrate…): the command module queues it and sends it up.
@@ -127,6 +162,55 @@ function groundInputs(t) {
   if (t < radio.holdUntil) held |= bit('hold'); if (t < radio.homeUntil) held |= bit('home');
   held |= bit(pilot.level === 'gentle' ? 'gentle' : pilot.level === 'sport' ? 'sport' : 'normal');
   return { held, has, ax };
+}
+
+/* ───────── the link log: what passes through the simulated radio (only a simulator can watch this) ───────── */
+let radioLogAll = false;   // every frame (busy), or only commands, switches, messages, the flight mode and link events
+function linkLog(dir, kind, text, tone) {
+  radio.log.unshift({ t: radio.t, dir, kind, text, tone }); radio.logN++;
+  if (radio.log.length > 300) radio.log.length = 300;
+}
+const be16s = (p, i) => { const v = (p[i] << 8) | p[i + 1]; return v & 0x8000 ? v - 0x10000 : v; };
+const cstrBytes = (p, i) => { let s = ''; for (; i < p.length && p[i]; i++) s += String.fromCharCode(p[i]); return s; };
+function cmdDesc(f) {   // a command frame, in words (the command module's scaling: rc_core.h rc_cmd_scale)
+  const p = f.subarray(3, f.length - 1);
+  if (p[0] !== CRSF.EXT_CMD) return `extended frame 0x${p[0].toString(16)}`;
+  const cmd = p[1], seq = p[2], v = []; for (let i = 3; i + 1 < p.length; i += 2) v.push(be16s(p, i));
+  if (cmd === 1) return `go to ${(v[0] / 100).toFixed(1)}, ${(v[1] / 100).toFixed(1)}, ${(v[2] / 100).toFixed(1)} m, heading ${Math.round(v[3] / 1000 * R2D)}° (#${seq})`;
+  if (cmd === 2) return `learning: ${{ 1: 'calibrate', 2: 'stop', 3: 'fly on the description', 4: 'fly on the learned model' }[v[0]] || 'command ' + v[0]} (#${seq})`;
+  return `command ${cmd} ${v.join(' ')} (#${seq})`;
+}
+function frameKind(f) { const p = f.subarray(3, f.length - 1); return f[2] === CRSF.FLIGHT_MODE ? 'mode' : f[2] === CRSF.EXT && p[0] === CRSF.EXT_TEXT ? 'msg' : 'frame'; }
+function frameDesc(f) {   // a telemetry frame, in words
+  const p = f.subarray(3, f.length - 1);
+  switch (f[2]) {
+    case CRSF.ATTITUDE: return `attitude (roll ${(be16s(p, 2) / 1e4 * R2D).toFixed(0)}°)`;
+    case CRSF.BATTERY: return `battery (${(((p[0] << 8) | p[1]) / 10).toFixed(1)} V)`;
+    case CRSF.GPS: return 'GPS';
+    case CRSF.BARO_ALT: return 'height';
+    case CRSF.FLIGHT_MODE: return `flight mode ${cstrBytes(p, 0)}`;
+    case CRSF.EXT:
+      if (p[0] === CRSF.EXT_TEXT) return `message "${cstrBytes(p, 2)}"`;
+      if (p[0] === CRSF.EXT_ITEM) return `${(TLM_ITEMS[p[1]] || { key: 'item ' + p[1] }).key} item`;
+      return 'extended frame';
+  }
+  return `frame 0x${f[2].toString(16)}`;
+}
+function linkDown(f, t) {   // a whole frame out of the transmitter module, to the command module
+  const m = radio.downMeta.shift(); if (!m) return;
+  const lat = Math.round((t - m.t0) * 1000), extra = m.tries > Math.ceil(f.length / 5) ? `, ${m.tries - Math.ceil(f.length / 5)} packets lost and sent again` : '';
+  if (m.kind === 'mode') { const mode = cstrBytes(f.subarray(3, f.length - 1), 0); if (mode === radio.modeSeen && !radioLogAll) return; radio.modeSeen = mode; }
+  if (m.kind === 'msg' || m.kind === 'mode' || radioLogAll) linkLog('↓', m.kind, `${m.desc}: from the drone to the command module in ${lat} ms${extra}`, '');
+}
+const SWITCHES = [[4, 'arm'], [5, 'speed level'], [6, 'fly (take off / land)'], [7, 'hold'], [8, 'home']];
+function linkSwitches(ch, t) {   // a switch's new position, the first time the drone's receiver passes it on
+  const d = radio.delivered; radio.delivered = ch.slice();
+  if (!d) return;
+  for (const [i, name] of SWITCHES) {
+    const a = Math.round(d[i] * 2) / 2, b = Math.round(ch[i] * 2) / 2; if (a === b) continue;
+    const pos = i === 5 ? ['gentle', 'normal', 'sport'][Math.round(b) + 1] : b > 0 ? 'on' : 'off';
+    linkLog('↑', 'switch', `${name} ${pos} (channel ${i + 1}): reached the drone's receiver`, '');
+  }
 }
 
 /* ───────── the ground station: what the command module decoded ───────── */

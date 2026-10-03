@@ -6,7 +6,7 @@
 const SUP_WHY = ['', 'a motor is running hot', 'the battery is hot', 'lift margin low', 'a motor has failed', 'lift margin very low', 'a battery cell has failed',
   'battery below 20%', 'battery voltage low', 'roll and pitch can no longer be held', 'not enough lift to stay up', 'battery nearly empty', 'battery overheating'];
 const SUP_MODE = ['normal', 'careful', 'returning home', 'landing'];
-const GS_UI = { built: false, w: {}, next: 0 };
+const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1 };
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
@@ -41,6 +41,19 @@ function buildGs() {
     W.linkUp.el, W.linkDown.el, grid(W.rssi.el, W.snr.el, W.thru.el, W.budget.el, W.age.el));
   W.chans = GSW.columns('Channels the command module sends (1–9)'); W.chans.el.firstChild.prepend(srcDot('gnd'));
   r.append(W.chans.el, el('p', { class: 'hint', id: 'gsRadioNote' }));
+
+  // inside the link (the simulator's view: a real ground station can't see this)
+  const lg = sec('Link log', 'inside the simulated radio', 'sim');
+  lg.append(el('p', { class: 'hint', text: 'What passes through the two ExpressLRS modules and the air: ↑ from the command module to the drone, ↓ from the drone to the command module. A real ground station can\'t see this; the simulator watches it happen.' }));
+  const kinds = [['cmd', 'Commands'], ['switch', 'Switches'], ['msg', 'Messages and flight mode'], ['link', 'Link events and drops'], ['all', 'Every frame (busy)']];
+  const row = el('div', { class: 'gs-filters' });
+  for (const [k, label] of kinds) {
+    const id = 'gsLog-' + k, c = el('input', { type: 'checkbox', id }); c.checked = k === 'all' ? radioLogAll : GS_UI.logShow[k] !== false;
+    c.addEventListener('change', () => { if (k === 'all') radioLogAll = c.checked; else GS_UI.logShow[k] = c.checked; GS_UI.logN = -1; renderGs(true); });
+    row.append(el('label', { class: 'check', for: id }, c, label));
+  }
+  GS_UI.linkLog = el('ol', { class: 'w-log gs-linklog' }); GS_UI.logN = -1;
+  lg.append(row, GS_UI.linkLog);
 
   // flight
   const f = sec('Flight', 'from the drone');
@@ -123,6 +136,13 @@ function renderGs(force) {
     W.cal.set(lv.cal ? lv.progress * 100 : 0, at.learn);
   }
   W.log.set(gs.log);
+  if (radio.logN !== GS_UI.logN) {                                   // the link log, when something new came
+    GS_UI.logN = radio.logN; const show = GS_UI.logShow, box = GS_UI.linkLog; box.textContent = '';
+    const want = e => e.kind === 'frame' ? radioLogAll : e.kind === 'mode' || e.kind === 'msg' ? show.msg !== false : e.kind === 'drop' ? show.link !== false : show[e.kind] !== false;
+    const list = radio.log.filter(want).slice(0, 80);
+    for (const e of list) box.append(el('li', { 'data-tone': e.tone || '' }, el('b', { text: `${e.t.toFixed(2)} s` }), el('span', { class: 'gs-dir', text: e.dir }), ' ' + e.text));
+    if (!list.length) box.append(el('li', { class: 'muted', text: has ? 'Nothing yet.' : 'The drone has no radio.' }));
+  }
   for (const w of Object.values(W)) w.age(t);
 }
 const fmtDist = m => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;

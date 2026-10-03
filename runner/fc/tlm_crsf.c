@@ -87,3 +87,13 @@ int tlm_crsf_cmd(uint8_t *out, int cmd, int seq, const float *v, int nv) {
 /* The telemetry budget of an ExpressLRS link [bytes/s]: each telemetry packet carries 5 bytes of a frame (the
  * stubborn sender's chunks); one packet in `ratio` is telemetry. */
 float tlm_crsf_budget(int rate_hz, int ratio) { return ratio > 0 ? (float)rate_hz / ratio * 5 * 0.9f : 0; }
+/* The budget as the link is now: scaled by the telemetry link quality the receiver reports (a lost chunk is sent
+ * again, so half the packets through is half the room), and nothing while it reports nothing for a second. A
+ * receiver has no flow control: written into a link that can't carry it, telemetry only fills its queue, and it
+ * drops frames, the newest messages among them. Held back here, messages wait in the store and go first when the
+ * link is back. */
+float tlm_crsf_budget_now(int rate_hz, int ratio, const rc_input *in, double t) {
+  if (!(in->t_link > 0 && t - in->t_link < 1.0)) return 0;
+  float q = in->down_lq / 100; q = q < 0.05f ? 0.05f : q > 1 ? 1 : q;
+  return tlm_crsf_budget(rate_hz, ratio) * q;
+}

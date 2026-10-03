@@ -173,7 +173,7 @@ EXPORT("tlm_setup") void tlm_setup(int local, int rate, int ratio) {
 /* n bytes from the receiver, in rbuf */
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
-EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget(elrs_rate, elrs_ratio), rbuf, (int)sizeof rbuf); }
+EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(elrs_rate, elrs_ratio, &RCI, t), rbuf, (int)sizeof rbuf); }
 /* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor */
 EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {
   if (tasks & 1) tlm_from_core(&TS, &TW, &F, t);

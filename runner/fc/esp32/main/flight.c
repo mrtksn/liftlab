@@ -327,7 +327,6 @@ static void radio_task(void *arg) {
   static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[256];
   tlm_init(&TS); tlm_watch_init(&TW);
   int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0;
-  float budget = tlm_crsf_budget(HW.elrs_rate, HW.elrs_ratio);
   for (;;) {
     int n = radio ? uart_read_bytes(RADIO, rx, sizeof rx, pdMS_TO_TICKS(2)) : (vTaskDelay(pdMS_TO_TICKS(5)), 0);
     int64_t now = esp_timer_get_time(); double t = now * 1e-6;
@@ -340,7 +339,7 @@ static void radio_task(void *arg) {
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
     if (now >= next_pub) { next_pub = now + 10000; tlm_from_core(&TS, &TW, &F, t); if (radio) tlm_from_link(&TS, &RCI, t); }
     if (radio) {
-      int m = tlm_service(&TS, &tlm_crsf, t, budget, out, sizeof out); if (m) uart_write_bytes(RADIO, out, m);
+      int m = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(HW.elrs_rate, HW.elrs_ratio, &RCI, t), out, sizeof out); if (m) uart_write_bytes(RADIO, out, m);
       if (now >= next_want) { next_want = now + 500000; float w = 2; link_send2(RN_LINK_WANT, &w, 4); }   /* the Pi's items, please */
     } else if (now - tlm_want_us < 1000000 && now >= next_pack) {   /* the Pi runs the telemetry: our items go there */
       next_pack = now + 50000; int k = tlm_pack(&TS, pk, 256); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);

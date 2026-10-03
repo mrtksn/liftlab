@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
     }
     if (crsf >= 0 && t >= next_radio) {
       next_radio = t + 0.005; static uint8_t out[512];
-      int n = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget(elrs_rate, elrs_ratio), out, sizeof out);
+      int n = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(elrs_rate, elrs_ratio, &RCI, t), out, sizeof out);
       if (n && write(crsf, out, (size_t)n) < 0 && errno != EAGAIN) perror("crsf");
     } else if (crsf < 0 && t - tlm_want < 1 && t >= next_pack) {
       next_pack = t + 0.05; static float pk[512]; int n = tlm_pack(&TS, pk, 512); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
