@@ -5,6 +5,7 @@
 // can't pass for a drone that holds still.
 const GSW = (() => {
   const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+  const txt = (n, s) => { if (n.textContent !== s) n.textContent = s; };   // (only what changed: a reading stays selectable)
   const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const staleness = (el, t, now) => { const a = t == null ? Infinity : now - t; el.classList.toggle('w-old', a > 1.5 && a <= 5); el.classList.toggle('w-stale', a > 5); return a; };
   const fit = cv => {   // a canvas at the device's pixel ratio, sized by its CSS box
@@ -20,25 +21,25 @@ const GSW = (() => {
     let t = null, last = null;
     return {
       el,
-      set(x, at) { last = x; t = at; v.textContent = x == null || !isFinite(x) && typeof x === 'number' ? '—' : opts.fmt ? opts.fmt(x) : (+x).toFixed(opts.dp ?? 1); el.dataset.tone = opts.tone ? opts.tone(x) : ''; },
-      age(now) { if (staleness(el, t, now) > 5) v.textContent = '—'; else if (last != null && opts.fmt) v.textContent = opts.fmt(last); },
+      set(x, at) { last = x; t = at; txt(v, x == null || !isFinite(x) && typeof x === 'number' ? '—' : opts.fmt ? opts.fmt(x) : (+x).toFixed(opts.dp ?? 1)); el.dataset.tone = opts.tone ? opts.tone(x) : ''; },
+      age(now) { if (staleness(el, t, now) > 5) txt(v, '—'); else if (last != null && opts.fmt) txt(v, opts.fmt(last)); },
     };
   }
   // A horizontal bar: opts { min, max, unit, dp, tone(v) }
   function bar(label, opts = {}) {
-    const el = mk('div', 'w-bar'), fill = mk('i'), txt = mk('span', 'w-num', '—'), track = mk('span', 'w-track');
-    track.append(fill); el.append(mk('span', 'w-label', label), track, txt);
+    const el = mk('div', 'w-bar'), fill = mk('i'), num = mk('span', 'w-num', '—'), track = mk('span', 'w-track');
+    track.append(fill); el.append(mk('span', 'w-label', label), track, num);
     let t = null; const lo = opts.min ?? 0, hi = opts.max ?? 1;
     return {
       el,
-      set(x, at) { t = at; const f = clamp((x - lo) / (hi - lo), 0, 1); fill.style.width = (f * 100).toFixed(1) + '%'; txt.textContent = opts.fmt ? opts.fmt(x) : `${(+x).toFixed(opts.dp ?? 0)}${opts.unit || ''}`; el.dataset.tone = opts.tone ? opts.tone(x) : ''; },
-      age(now) { if (staleness(el, t, now) > 5) { txt.textContent = '—'; fill.style.width = '0'; } },
+      set(x, at) { t = at; const f = clamp((x - lo) / (hi - lo), 0, 1); fill.style.width = (f * 100).toFixed(1) + '%'; txt(num, opts.fmt ? opts.fmt(x) : `${(+x).toFixed(opts.dp ?? 0)}${opts.unit || ''}`); el.dataset.tone = opts.tone ? opts.tone(x) : ''; },
+      age(now) { if (staleness(el, t, now) > 5) { txt(num, '—'); fill.style.width = '0'; } },
     };
   }
   // A word in a pill (the flight mode).
   function badge() {
     const el = mk('span', 'w-badge', '—'); let t = null;
-    return { el, set(text, at, tone) { t = at; el.textContent = text; el.dataset.tone = tone || ''; }, age(now) { if (staleness(el, t, now) > 5) el.textContent = 'NO DATA'; } };
+    return { el, set(text, at, tone) { t = at; txt(el, text); el.dataset.tone = tone || ''; }, age(now) { if (staleness(el, t, now) > 5) txt(el, 'NO DATA'); } };
   }
   // An artificial horizon: roll and pitch move the horizon, the heading in the corner.
   function horizon() {
@@ -117,20 +118,22 @@ const GSW = (() => {
       age() {},
     };
   }
-  // A short line chart of the last n values.
+  // A short line chart of the last n values: push one, or set them all (a history kept elsewhere).
   function sparkline(label, opts = {}) {
-    const el = mk('div', 'w-spark'), cv = mk('canvas'), txt = mk('span', 'w-num', '—'); el.append(mk('span', 'w-label', label), cv, txt);
-    const vals = []; let t = null;
+    const el = mk('div', 'w-spark'), cv = mk('canvas'), num = mk('span', 'w-num', '—'); el.append(mk('span', 'w-label', label), cv, num);
+    let vals = [], t = null;
+    const draw = () => {
+      const v = vals[vals.length - 1]; if (v == null) return; txt(num, opts.fmt ? opts.fmt(v) : v.toFixed(opts.dp ?? 0));
+      const { c, W, H } = fit(cv); if (!W) return;
+      const val = x => typeof x === 'function' ? x() : x, lo = val(opts.min) ?? Math.min(...vals), hi = val(opts.max) ?? Math.max(...vals, lo + 1e-6);
+      c.strokeStyle = tok('--accent'); c.lineWidth = 1.5; c.beginPath();
+      vals.forEach((x, i) => { const px = i / Math.max(1, (opts.n || 60) - 1) * W, py = H - 2 - clamp((x - lo) / (hi - lo || 1), 0, 1) * (H - 4); i ? c.lineTo(px, py) : c.moveTo(px, py); }); c.stroke();
+    };
     return {
       el,
-      push(v, at) {
-        t = at; vals.push(v); if (vals.length > (opts.n || 60)) vals.shift(); txt.textContent = opts.fmt ? opts.fmt(v) : v.toFixed(opts.dp ?? 0);
-        const { c, W, H } = fit(cv); if (!W) return;
-        const val = x => typeof x === 'function' ? x() : x, lo = val(opts.min) ?? Math.min(...vals), hi = val(opts.max) ?? Math.max(...vals, lo + 1e-6);
-        c.strokeStyle = tok('--accent'); c.lineWidth = 1.5; c.beginPath();
-        vals.forEach((x, i) => { const px = i / Math.max(1, (opts.n || 60) - 1) * W, py = H - 2 - clamp((x - lo) / (hi - lo || 1), 0, 1) * (H - 4); i ? c.lineTo(px, py) : c.moveTo(px, py); }); c.stroke();
-      },
-      age(now) { if (staleness(el, t, now) > 5) txt.textContent = '—'; },
+      push(v, at) { t = at; vals.push(v); if (vals.length > (opts.n || 60)) vals.shift(); draw(); },
+      set(list, at) { t = at; vals = list.slice(-(opts.n || 60)); draw(); },
+      age(now) { if (staleness(el, t, now) > 5) txt(num, '—'); },
     };
   }
   return { value, bar, badge, horizon, map, columns, log, sparkline };

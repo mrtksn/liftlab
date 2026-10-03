@@ -11,8 +11,13 @@
 //   - a fixed packet rate (50, 150, 250 or 500 Hz); one packet in `ratio` goes down (telemetry), the rest go up
 //     (the 16 channels, and now and then 5 bytes of a ground-station command instead);
 //   - each telemetry packet carries 5 bytes of the receiver's queued CRSF frames; a "stubborn sender" repeats a lost
-//     chunk until it gets through, so frames arrive whole and in order, just later on a bad link. The receiver
-//     queues at most 512 bytes; past that it drops the oldest frames;
+//     chunk until it gets through, so frames arrive whole and in order, just later on a bad link. The receiver's
+//     queue (RXOTAConnector) holds 512 bytes, a length byte and the frame each; a frame of a type below 0x28, or a
+//     status text, replaces the one of its kind still waiting (newest wins, in its place); when the queue is full the
+//     oldest frames go. The frame being sent has already left the queue;
+//   - the transmitter module passes the command module's frames other than the channels (commands) only while its
+//     link is connected: a telemetry packet heard within the last 5 telemetry slots (at least 0.512 s); else it
+//     drops them (TXOTAConnector);
 //   - each packet gets through with a probability set by the margin over the receiver's sensitivity for its rate
 //     (LoRa at 2.4 GHz: −105 dBm at 500 Hz to −115 dBm at 50 Hz). The signal: transmit power and 2 dBi antennas, free-
 //     space loss to the drone, 18 dB for each building in the way (the city worlds), and the "extra loss" setting,
@@ -28,11 +33,13 @@ const radio = {};
 function radioReset() {
   Object.assign(radio, {
     t: 0, nextPkt: 0, k: 0, upK: 0, seed: 0x2545F491,
-    down: [], downBytes: 0, downFrames: 0, downDropped: 0, fromGround: crsfParser(), fromDrone: crsfParser(), txIn: crsfParser(),
+    fifo: [], fifoBytes: 0, cur: null, downFrames: 0, downDropped: 0, fromGround: crsfParser(), fromDrone: crsfParser(), txIn: crsfParser(),
     up: [], txCh: null, toBoard: [], toGround: [], nextStats: 0, ch: null,
     upHist: [], downHist: [], rssiUp: -50, rssiDown: -50, snrUp: 10, snrDown: 10, rfAt: -1,
     downChunks: 0, downGot: 0, upGot: 0, rxLost: false, holdUntil: -1, homeUntil: -1,
-    log: [], logN: 0, downMeta: [], ev: {}, stickLogged: null, dropRun: null, lqUp: 0, lqDown: 0, rf: null, txChT: 0, air: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
+    log: [], logN: 0, meta: new Map(), ev: {}, stickLogged: null, dropRun: null, lqUp: 0, lqDown: 0, rf: null, txChT: 0, air: [], delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
+    tlmHeard: -1,   // when the transmitter module last heard a telemetry packet (−1: never: not connected)
+    txConn: false, txLostAt: -1, txLostLq: 0,   // its connection, and when and at what uplink LQ it was last lost
   });
   gsReset();
 }
@@ -72,13 +79,17 @@ function radioStep(dt, t) {
       const ok = radioRand() < pDown;
       radio.downHist.push(ok ? 1 : 0); if (radio.downHist.length > 100) radio.downHist.shift();
       linkEv(ok ? 'downOk' : 'downLost', t);
-      if (radio.down.length) {
-        radio.downChunks++; { const m = radio.downMeta.find(m => m.id === radio.down[0].frame); if (m) m.tries++; }
+      if (!radio.cur) radio.cur = fifoPop();                        // the sender is free: the queue's oldest frame leaves it
+      const c = radio.cur;
+      if (c) {
+        radio.downChunks++; { const m = radio.meta.get(c.id); if (m) m.tries++; }
         if (ok) {
-          const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; radio.inFlight = radio.down.length && radio.down[0].frame === c.frame ? c.frame : -1;
-          radio.air.push({ at: tp + air, down: c });                // (the module then hands on whole frames)
+          const chunk = c.f.subarray(c.at, c.at + 5); c.at += 5; radio.downGot++;
+          if (c.at >= c.f.length) radio.cur = null;
+          radio.air.push({ at: tp + air, down: chunk, id: c.id });  // (the module then hands on whole frames)
         }
       }
+      if (ok) radio.tlmHeard = t;
       if (ok) { if (radio.downGap) linkLog('↓', 'link', 'telemetry back', `after ${(t - radio.lastDownOk).toFixed(1)} s`, 'good'); radio.lastDownOk = t; radio.downGap = false; }
       else if (!radio.downGap && t - radio.lastDownOk > 1) { radio.downGap = true; linkLog('↓', 'link', 'telemetry lost', 'nothing for 1 s', 'bad'); }
     } else {
@@ -111,7 +122,7 @@ function radioStep(dt, t) {
   // what has finished its time on air arrives
   while (radio.air.length && radio.air[0].at <= t + 1e-9) {
     const a = radio.air.shift();
-    if (a.down) radio.txIn.feed(a.down, f => { radio.toGround.push(f); linkDown(f, t); });
+    if (a.down) radio.txIn.feed(a.down, f => { radio.toGround.push(f); linkDown(f, t, a.id); });
     else if (a.cmd) {
       const c = a.cmd, got = Uint8Array.from(c.got); radio.toBoard.push(got); linkEv('cmdOut', t, (t - c.t0) * 1000);
       linkLog('↑', 'cmd', c.desc, `${Math.round((t - c.t0) * 1000)} ms · ${c.pk} pk${c.lost ? ` · ${c.lost} resent` : ''}`, '', got);
@@ -126,39 +137,74 @@ function radioStep(dt, t) {
   if (t >= radio.nextStats) {                                        // link statistics to the drone, 10 times a second
     radio.nextStats = t + 0.1;
     if (radio.lqUp > 0) radio.toBoard.push(crsfLinkStatsFrame({ upRssi: radio.rssiUp, upLq: radio.lqUp, upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, downSnr: r.snr - 1, rfMode: [50, 150, 250, 500].indexOf(radioCfg.rate), power: radioCfg.power }));
-    const ls = crsfLinkStatsFrame({ upRssi: radio.rssiUp, upLq: radio.lqUp, upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, downSnr: r.snr - 1, rfMode: [50, 150, 250, 500].indexOf(radioCfg.rate), power: radioCfg.power });
-    ls[0] = CRSF.ADDR_HANDSET; radio.toGround.push(ls);           // the transmitter module tells the command module too
+    const ls = crsfLinkStatsFrame({ upRssi: radio.rssiUp, upLq: radioTxLq(t), upSnr: r.snr, downRssi: radio.rssiDown, downLq: radio.lqDown, downSnr: r.snr - 1, rfMode: [50, 150, 250, 500].indexOf(radioCfg.rate), power: radioCfg.power });
+    ls[0] = CRSF.ADDR_HANDSET; radio.toGround.push(ls);   // the transmitter module tells the command module too, connected or not (LQ 0 until it connects, as a real one does)
   }
 }
-// What the drone's board wrote to the receiver: queued as 5-byte chunks for the telemetry slots.
+// What the drone's board wrote to the receiver: into its telemetry queue, as ExpressLRS's RXOTAConnector keeps it
+// (512 bytes, a length byte and the frame each; entries {id, f, cap: the room it holds, del}). The telemetry slots
+// take the frames from its head (fifoPop) and send them 5 bytes at a time.
+const RX_FIFO = 512;
 function radioFromDrone(bytes) {
   radio.fromDrone.feed(bytes, f => {
-    while (radio.downBytes + f.length > 512 && radio.down.length) {   // the receiver's queue is full: the oldest frame not being sent goes
-      const first = radio.down.find(c => c.frame !== radio.inFlight); if (!first) break;
-      const id = first.frame; let n = 0; radio.down = radio.down.filter(c => { if (c.frame !== id) return true; n += c.length; return false; });
-      radio.downBytes -= n; radio.downDropped++;
-      const k = radio.downMeta.findIndex(m => m.id === id), m = k >= 0 ? radio.downMeta.splice(k, 1)[0] : null;
-      if (m) linkEv('tlmDrop', radio.t);
-      if (m && m.kind === 'msg') linkLog('↓', 'drop', m.desc, 'dropped · receiver queue full', 'bad', m.bytes);
-      else if (m) {                                                  // the rest: one line when it starts, one when it ends
-        const D = radio.dropRun || (radio.dropRun = { n: 0, t0: radio.t, kinds: new Set() });
-        if (!D.n) linkLog('↓', 'drop', 'dropping frames', 'receiver queue full (512 B)', 'warn');
-        D.n++; D.last = radio.t; D.kinds.add(m.desc.replace(/ \(.*\)$/, ''));
-      }
-    }
-    radio.downFrames++;
-    radio.downMeta.push({ id: radio.downFrames, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0, sig: f.length * 256 + f[f.length - 1], type: f[2], bytes: f.slice() });
+    const id = ++radio.downFrames, text = f[2] === CRSF.EXT && f[3] === CRSF.EXT_TEXT;
+    radio.meta.set(id, { id, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0, bytes: f });
+    if (radio.meta.size > 600) radio.meta.delete(radio.meta.keys().next().value);   // (only waiting frames have one: never this many)
     linkEv('tlmIn', radio.t);
-    if (radio.downMeta.length > 400) radio.downMeta.shift();
-    for (let i = 0; i < f.length; i += 5) { const c = f.subarray(i, i + 5); c.frame = radio.downFrames; radio.down.push(c); radio.downBytes += c.length; }
+    // a frame of a type below 0x28 (a "broadcast" one), or a status text, replaces the one of its kind still waiting
+    const q = f[2] < 0x28 || text ? radio.fifo.find(e => !e.del && e.f[2] === f[2] && (!text || e.f[3] === CRSF.EXT_TEXT)) : null;
+    if (q) {
+      fifoGone(q.id, 'replaced');
+      if (q.cap >= f.length) { q.f = f; q.id = id; return; }       // newest wins, in the old one's place
+      q.del = true;                                                  // too big for its room: the old one is marked gone (its room comes free at the head), the new one goes to the end
+    }
+    while (radio.fifoBytes + f.length + 1 > RX_FIFO && radio.fifo.length) {   // full: the oldest go until there's room
+      const e = radio.fifo.shift(); radio.fifoBytes -= e.cap + 1;
+      if (!e.del) fifoGone(e.id, 'full');
+    }
+    radio.fifo.push({ id, f, cap: f.length, del: false }); radio.fifoBytes += f.length + 1;
   });
 }
+// The sender takes the next frame from the queue's head (skipping the ones marked gone): {id, f, at: bytes sent}.
+function fifoPop() {
+  while (radio.fifo.length) {
+    const e = radio.fifo.shift(); radio.fifoBytes -= e.cap + 1;
+    if (!e.del) return { id: e.id, f: e.f, at: 0 };
+  }
+  return null;
+}
+// A queued frame that won't go down: replaced by a newer one of its kind (normal for telemetry: superseded; a status
+// text lost that way is a drop), or pushed out of a full queue (a drop).
+function fifoGone(id, why) {
+  const m = radio.meta.get(id); if (!m) return; radio.meta.delete(id);
+  if (why === 'replaced' && m.kind !== 'msg') { linkEv('tlmSuper', radio.t); return; }
+  radio.downDropped++; linkEv('tlmDrop', radio.t);
+  if (m.kind === 'msg') linkLog('↓', 'drop', m.desc, why === 'replaced' ? 'replaced by a newer message · receiver queue' : 'dropped · receiver queue full', 'bad', m.bytes);
+  else {                                                             // the rest: one line when it starts, one when it ends
+    const D = radio.dropRun || (radio.dropRun = { n: 0, t0: radio.t, kinds: new Set() });
+    if (!D.n) linkLog('↓', 'drop', 'dropping frames', `receiver queue full (${RX_FIFO} B)`, 'warn');
+    D.n++; D.last = radio.t; D.kinds.add(m.desc.replace(/ \(.*\)$/, ''));
+  }
+}
+// The uplink LQ the transmitter module reports to the command module (its link statistics go every 0.1 s, connected or
+// not): the receiver's, which it learns from the telemetry (so 0 before the link first connects); when it's lost, the
+// last one for a while (up to 3 s, shorter the worse it was), then 0 (tx_main.cpp checkSendLinkStatsToHandset).
+function radioTxLq(t) {
+  const c = radioConnected();
+  if (c !== radio.txConn) { radio.txConn = c; if (!c) { radio.txLostAt = t; radio.txLostLq = radio.lqUp; } }
+  if (c) return radio.lqUp;
+  return radio.txLostAt >= 0 && t - radio.txLostAt <= (clamp(radio.txLostLq, 50, 100) - 50) / 50 * 3 ? radio.txLostLq : 0;
+}
+// The transmitter module's link is connected while it hears telemetry packets: within 5 telemetry slots, at least
+// 0.512 s (ExpressLRS tx_main.cpp UpdateConnectDisconnectStatus).
+const radioConnected = () => radio.tlmHeard >= 0 && radio.t - radio.tlmHeard <= Math.max(0.512, 5 * radioCfg.ratio / radioCfg.rate) + 0.002;
 // What the command module wrote to the transmitter module: its channel frames (the latest goes up in each uplink
 // packet) and its commands (queued, and sent 5 bytes at a time in place of some channel packets).
 function radioFromGround(bytes) {
   radio.fromGround.feed(bytes, f => {
     if (f[2] === CRSF.RC) { radio.txCh = crsfRcRead(f.subarray(3, f.length - 1)); radio.txChT = radio.t; linkEv('chMade', radio.t); }
     else if (f[2] === CRSF.EXT) {
+      if (!radioConnected()) { linkEv('cmdDrop', radio.t); linkLog('↑', 'cmd', cmdDesc(f), 'dropped · link down', 'bad', f); return; }   // (the module passes them on only while connected)
       radio.up.push({ bytes: f, at: 0, got: [], t0: radio.t, pk: 0, lost: 0, desc: cmdDesc(f) });   // (logged when it reaches the drone)
     }
   });
@@ -168,7 +214,7 @@ function radioFromGround(bytes) {
 function radioCommand(cmd, values) {
   const g = brt.gnd; if (!g) return -1;
   let r; if (cmd === 1) r = g.gnd_goto(...values); else { frIn(g, values); r = g.gnd_command(cmd, values.length); }
-  if (r) linkLog('↑', 'cmd', `${cmd === 1 ? 'GOTO' : 'command ' + cmd} not sent`, 'the command module has too many waiting', 'bad');
+  if (r) linkLog('↑', 'cmd', `${cmd === 1 ? 'GOTO' : 'command ' + cmd} not sent`, r === -2 ? 'a value out of range' : 'the command module has too many waiting', 'bad');
   return r ? -1 : 0;
 }
 function radioHold() { radio.holdUntil = radio.t + 0.3; }
@@ -207,8 +253,8 @@ function linkStats(t) {
   return {
     chMade: n('chMade') / span, chSent: n('chSent') / span, chLat: lat('chSent'), upLostPct: pct(n('upLost'), n('upOk')),
     cmds: n('cmdOut'), cmdLat: lat('cmdOut'),
-    tlmIn: n('tlmIn') / span, tlmOut: n('tlmOut') / span, tlmLat: lat('tlmOut'), tlmDrop: n('tlmDrop'), downLostPct: pct(n('downLost'), n('downOk')),
-    queued: radio.downBytes, upQueued: radio.up.length,
+    tlmIn: n('tlmIn') / span, tlmOut: n('tlmOut') / span, tlmLat: lat('tlmOut'), tlmDrop: n('tlmDrop'), tlmSuper: n('tlmSuper') / span, downLostPct: pct(n('downLost'), n('downOk')),
+    queued: radio.fifoBytes, upQueued: radio.up.length, cmdDrop: n('cmdDrop'),
   };
 }
 // A frame's bytes, field by field (the raw view of a log line).
@@ -223,8 +269,9 @@ function frameFields(f) {
       let bit = 0; const raw = [];
       for (let i = 0; i < 16; i++) { let v = 0; for (let b = 0; b < 11; b++, bit++) if (p[bit >> 3] & (1 << (bit & 7))) v |= 1 << b; raw.push(v); }
       const names = ['roll', 'pitch', 'throttle', 'yaw', 'arm', 'speed', 'fly', 'hold', 'home'];
-      raw.forEach((v, i) => { if (i < 9 || v !== 172) out.push([`ch${i + 1}${names[i] ? ' ' + names[i] : ''}`, `${v} → ${sgn((v - 992) / 819)}`]); });
-      if (raw.slice(9).every(v => v === 172)) out.push(['ch10–16', '172 (unused: −1)']);
+      const UNUSED = 173;   // −1 as both encoders write it: round(992 − 819)
+      raw.forEach((v, i) => { if (i < 9 || v !== UNUSED) out.push([`ch${i + 1}${names[i] ? ' ' + names[i] : ''}`, `${v} → ${sgn((v - 992) / 819)}`]); });
+      if (raw.slice(9).every(v => v === UNUSED)) out.push(['ch10–16', `${UNUSED} (unused: −1)`]);
       break;
     }
     case CRSF.ATTITUDE: out.push(['pitch', `${be16s(p, 0)} → ${(be16s(p, 0) / 1e4 * R2D).toFixed(1)}°`], ['roll', `${be16s(p, 2)} → ${(be16s(p, 2) / 1e4 * R2D).toFixed(1)}°`], ['yaw', `${be16s(p, 4)} → ${(be16s(p, 4) / 1e4 * R2D).toFixed(1)}°`]); break;
@@ -272,11 +319,9 @@ function frameDesc(f) {   // a telemetry frame as data
   }
   return `0x${f[2].toString(16)}`;
 }
-function linkDown(f, t) {   // a whole frame out of the transmitter module, to the command module
-  // its record: the first one that matches it (frames come out in order; earlier unmatched records were lost)
-  const sig = f.length * 256 + f[f.length - 1], k = radio.downMeta.findIndex(m => m.sig === sig && m.type === f[2]);
-  if (k < 0) return;
-  const m = radio.downMeta[k]; radio.downMeta.splice(0, k + 1);
+function linkDown(f, t, id) {   // a whole frame out of the transmitter module, to the command module (id: the frame the receiver sent)
+  const m = radio.meta.get(id); if (!m) return;
+  radio.meta.delete(id);
   const lat = `${Math.round((t - m.t0) * 1000)} ms`, resent = m.tries - Math.ceil(f.length / 5), meta = resent > 0 ? `${lat} · ${resent} resent` : lat;
   if (m.kind === 'mode') { if (m.desc === radio.modeSeen && !radioLogAll) { linkEv('tlmOut', t, (t - m.t0) * 1000); return; } radio.modeSeen = m.desc; }
   linkEv('tlmOut', t, t - m.t0 > 0 ? (t - m.t0) * 1000 : 0);
@@ -304,19 +349,25 @@ function linkChannels(ch, t, fr, lat) {
 /* ───────── the ground station: what the command module decoded ───────── */
 // gs is the Ground station tab's copy of the command module's view (ground_core.c gnd_view_pack), read a few times a
 // second: values by kind with when each came (gs.at, simulator time), the messages, the alert, the channels it sent.
-const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null };
+// The battery voltage of each battery frame (vHist, vN of them so far) and the track of each position frame are kept
+// here, on the data path, whether the tab is open or not.
+const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null, rate: [], vHist: [], vN: 0 };
 function gsReset() {
-  Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, posAt: -1 });
-  if (typeof GS_UI !== 'undefined') Object.assign(GS_UI, { built: false, paused: null, clearId: 0, logN: -1 });   // (the widgets hold the old run's values: built again; the log starts again)
+  Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, vHist: [], vN: 0 });
+  if (typeof GS_UI !== 'undefined') Object.assign(GS_UI, { built: false, paused: null, clearId: 0, logN: -1, cfgNote: '' });   // (the widgets hold the old run's values: built again; the log starts again)
   if (typeof GS_UI !== 'undefined') GS_UI.open.clear();
 }
 function gsRead() {
   const g = brt.gnd; if (!g) return;
-  const t = brt.t, n = g.gnd_view(t), o = new Float32Array(g.memory.buffer, g.fr_ptr(), n), at = a => a >= 0 ? t - a : null;
+  // when each value came: now − its age, to the millisecond (the age is a float32 from the C, so the same frame's time
+  // would come out a little different at each read; frames arrive on whole 1 ms steps)
+  const t = brt.t, n = g.gnd_view(t), o = new Float32Array(g.memory.buffer, g.fr_ptr(), n), at = a => a >= 0 ? Math.round((t - a) * 1000) / 1000 : null;
   const put = (kind, age, v) => { const a = at(age); if (a == null) return; gs.v[kind] = v; gs.at[kind] = a; };
+  const battAt = gs.at.battery, posAt = gs.at.pos;
   gs.alert = { level: o[0], why: o[1], text: cstr(g, g.gnd_why_text(o[1]), 80) };
+  if (gs.alert.level && !gs.alert.text) gs.alert.text = `alert ${o[1]}`;   // (a reason this build has no words for)
   gs.bytes = o[3]; gs.frames = o[4]; gs.lastAge = o[7];
-  if (o[8] >= 0) gs.link = { upRssi: o[9], upLq: o[10], upSnr: o[11], downRssi: o[12], downLq: o[13], downSnr: o[14], power: o[15], t: t - o[8] };
+  if (o[8] >= 0) gs.link = { upRssi: o[9], upLq: o[10], upSnr: o[11], downRssi: o[12], downLq: o[13], downSnr: o[14], power: o[15], t: at(o[8]) };
   put('attitude', o[16], { roll: o[17], pitch: o[18], yaw: o[19] });
   put('battery', o[20], { volts: o[21], amps: o[22], mah: o[23], pct: o[24] });
   put('gps', o[25], { lat: o[26] + o[27], lon: o[28] + o[29], speed: o[30], course: o[31], alt: o[32], sats: o[33] });
@@ -329,7 +380,8 @@ function gsRead() {
     if (d.list) put(d.key, age, { n: vals[0], values: vals.slice(1) });
     else { const v = {}; d.fields.forEach((f, i) => { v[f] = vals[i]; }); put(d.key, age, v); }
   }
-  if (gs.v.pos && gs.at.pos !== gs.posAt) { gs.posAt = gs.at.pos; gs.trackXY.push([gs.v.pos.x, gs.v.pos.y]); if (gs.trackXY.length > 400) gs.trackXY.shift(); }
+  if (gs.v.pos && gs.at.pos !== posAt) { gs.trackXY.push([gs.v.pos.x, gs.v.pos.y]); if (gs.trackXY.length > 400) gs.trackXY.shift(); }   // a new position frame: a point
+  if (gs.v.battery && gs.at.battery !== battAt) { gs.vHist.push(gs.v.battery.volts); if (gs.vHist.length > 120) gs.vHist.shift(); gs.vN++; }   // a new battery frame
   const nm = o[6];
   for (let i = Math.max(gs.nmsg, nm - 16); i < nm; i++) { gs.log.unshift({ t: g.gnd_msg_t(i), sev: g.gnd_msg_sev(i), text: cstr(g, g.gnd_msg_text(i), 60) }); if (gs.log.length > 60) gs.log.length = 60; }
   gs.nmsg = nm;

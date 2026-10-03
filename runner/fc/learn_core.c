@@ -535,7 +535,7 @@ void learn_ltel(learn_state *L, const float *p, int n) {
   L->nsub = (int)p[base]; L->sub = p + base + 1;
   if (L->nsub < 0 || L->nsub > FC_SUB || n != base + 1 + L->nsub * (7 + nm)) return;
   for (int k = 0; k < n; k++) if (!fin(p[k])) return;
-  double t = p[0]; L->dt = L->got ? (float)(t - L->t_last) : 0.005f; L->t_last = t; L->got = 1; L->t = (float)t;
+  double t = fc_ltel_unwrap(L->t_last, L->got, p[0]); L->dt = L->got ? (float)(t - L->t_last) : 0.005f; L->t_last = t; L->got = 1; L->t = (float)t;
   if (!(L->dt > 0) || L->dt > 0.05f) L->dt = 0.005f;
   L->state = (int)p[1]; L->flags = (int)p[2];
   float qn = 0; for (int k = 0; k < 4; k++) { L->q[k] = p[3 + k]; qn += L->q[k] * L->q[k]; }

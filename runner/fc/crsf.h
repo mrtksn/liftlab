@@ -53,7 +53,7 @@ typedef struct {
 int crsf_link_stats(uint8_t *out, uint8_t addr, const crsf_link *L);
 void crsf_link_stats_read(const uint8_t *payload, int n, crsf_link *L);
 
-/* RC channels: 16 values, −1…1 (clamped), packed 11 bits each, LSB first. */
+/* RC channels: 16 values, −1…1 (clamped; not a number goes as the centre), packed 11 bits each, LSB first. */
 int crsf_rc(uint8_t *out, uint8_t addr, const float ch[16]);
 void crsf_rc_read(const uint8_t *payload, float ch[16]);
 

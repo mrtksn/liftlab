@@ -39,6 +39,7 @@ static void write_pi_config(const char *path, int nm) {   /* as pi/test_dfb_pi.c
   uint32_t crc = rn_crc32(b, 8 + (uint32_t)n * 4); memcpy(b + 8 + n * 4, &crc, 4);
   write_file(path, b, 12 + (size_t)n * 4);
 }
+static void nmea(char *out, size_t n, const char *body) { int x = 0; for (const char *p = body; *p; p++) x ^= (unsigned char)*p; snprintf(out, n, "$%s*%02X\r\n", body, x); }   /* (as pi/test_dfb_pi.c: dfb_pi checks the checksum) */
 static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[8192]; uint32_t len = rn_link_frame(fr, sizeof fr, type, (const uint8_t *)p, n); if (len) (void)!write(fd, fr, len);
 }
@@ -116,10 +117,10 @@ int main(void) {
     if (el >= next_gps) {
       next_gps += 0.2;
       double lat = 41.0 + (B.p[0] + 0.2 * gauss()) / 6371000.0 * 180 / M_PI, lon = 29.0 - (B.p[1] + 0.2 * gauss()) / (6371000.0 * cos(41.0 * M_PI / 180)) * 180 / M_PI;
-      int la = (int)lat, lo = (int)lon; char g[200], rm[200];
-      snprintf(g, sizeof g, "$GPGGA,120000.00,%02d%08.5f,N,%03d%08.5f,E,1,08,1.0,%.1f,M,0,M,,*00\r\n", la, (lat - la) * 60, lo, (lon - lo) * 60, 100 + B.p[2]);
+      int la = (int)lat, lo = (int)lon; char b[200], g[210], rm[210];
+      snprintf(b, sizeof b, "GPGGA,120000.00,%02d%08.5f,N,%03d%08.5f,E,1,08,1.0,%.1f,M,0,M,,", la, (lat - la) * 60, lo, (lon - lo) * 60, 100 + B.p[2]); nmea(g, sizeof g, b);
       double sp = hypot(B.v[0], B.v[1]) / 0.514444, crs = atan2(-B.v[1], B.v[0]) * 180 / M_PI; if (crs < 0) crs += 360;
-      snprintf(rm, sizeof rm, "$GPRMC,120000.00,A,%02d%08.5f,N,%03d%08.5f,E,%.3f,%.1f,021026,,,A*00\r\n", la, (lat - la) * 60, lo, (lon - lo) * 60, sp, crs);
+      snprintf(b, sizeof b, "GPRMC,120000.00,A,%02d%08.5f,N,%03d%08.5f,E,%.3f,%.1f,021026,,,A", la, (lat - la) * 60, lo, (lon - lo) * 60, sp, crs); nmea(rm, sizeof rm, b);
       (void)!write(gm, g, strlen(g)); (void)!write(gm, rm, strlen(rm));
     }
     /* the two radio modules and the air between them */

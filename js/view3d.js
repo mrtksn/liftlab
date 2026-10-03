@@ -542,7 +542,7 @@ document.getElementById('projOrtho')?.addEventListener('click', () => setProject
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => snapView(b.dataset.view)));
 const V_CYCLE = ['top', 'front', 'right', 'iso']; let vCycle = -1;
 window.addEventListener('keydown', e => {
-  if (e.metaKey || e.altKey || typingIn(e.target)) return;
+  if (e.defaultPrevented || e.metaKey || e.altKey || typingIn(e.target)) return;
   const ctl = e.ctrlKey, map = { Numpad1: ctl ? 'back' : 'front', Numpad3: ctl ? 'left' : 'right', Numpad7: ctl ? 'bottom' : 'top', Numpad0: 'iso' };
   if (map[e.code]) { snapView(map[e.code]); e.preventDefault(); return; }
   if (ctl) return;

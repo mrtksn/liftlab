@@ -56,6 +56,8 @@ typedef struct {
   tlm_msg q[TLM_QN]; int qh, qn;         /* messages for the radio */
   tlm_msg fq[TLM_QN]; int fh, fn;        /* messages to forward over the board link */
   double tokens, t_service;
+  double rx_q, rx_text;                  /* the receiver's queue as it would drain at the budget: bytes in it, and bytes
+                                          * up to the end of the last message written (0: that one has gone) */
   uint32_t bytes_sent, frames_sent, dropped;
   char mode[16], sent_mode[16]; double t_mode;   /* the flight mode as last composed, and as last sent */
 } tlm_store;
@@ -84,7 +86,10 @@ typedef struct tlm_transport {
 } tlm_transport;
 extern const tlm_transport tlm_crsf;
 
-/* What to send now: frames into out (cap bytes), within budget [bytes/s] averaged over time. Returns the bytes. */
+/* What to send now: frames into out (cap bytes), within budget [bytes/s] averaged over time. Returns the bytes.
+ * A message is written only once the one before it has left the receiver's queue: an ExpressLRS receiver replaces a
+ * status text still waiting there by the next one (as it does any standard frame by a newer one of its type), so two
+ * written close together would lose the first. The next waits in the store meanwhile. */
 int tlm_service(tlm_store *T, const tlm_transport *X, double t, float budget, uint8_t *out, int cap);
 
 #endif

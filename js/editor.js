@@ -81,7 +81,7 @@ function selectComp(id) {
   if (id != null) {
     openSet.add(id);
     const card = document.querySelector(`[data-id="${id}"]`);
-    if (card) { const fresh = compCard(compById(id)); card.replaceWith(fresh); fresh.classList.add('sel'); fresh.scrollIntoView({ block: 'nearest' }); }
+    if (card) { const fresh = compCard(compById(id)); keepFocus(() => card.replaceWith(fresh)); fresh.classList.add('sel'); fresh.scrollIntoView({ block: 'nearest' }); }
   }
   if (prev !== id) updateEditMsg();
 }
@@ -332,7 +332,7 @@ function updateEditView() {
 $('#tEdit').addEventListener('click', () => setEditMode(!editMode));
 $('#editDone').addEventListener('click', () => setEditMode(false));
 window.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
   if (e.code === 'KeyE' && !e.repeat) { setEditMode(!editMode); e.preventDefault(); }
   else if (e.code === 'Escape' && editMode) { if (edit.sel != null) selectComp(null); else setEditMode(false); }
 });

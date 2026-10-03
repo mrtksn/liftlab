@@ -69,12 +69,27 @@ function flashCtl(id) { const b = document.querySelector(`[data-act="${id}"]`); 
 // Keys. Ignored while typing in a text field or the formula editor, and when ⌘/Ctrl/Alt is held.
 const typingIn = t => t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' ||
   (t.tagName === 'INPUT' && !['range', 'checkbox', 'radio', 'button'].includes(t.type)));
+// Does the focused control use this key itself? Then the flight keys leave it alone: the arrows move a slider or
+// the tabs, Space and Enter press a button or tick a box. Letters still fly from a button, so a click on one
+// doesn't take the keyboard away.
+function ownsKey(t, e) {
+  if (!t || t === document.body || t === document.documentElement || !t.tagName) return false;
+  if (typingIn(t)) return true;
+  const k = e.key, nav = /^(Arrow|Page)/.test(k) || k === 'Home' || k === 'End', act = k === ' ' || k === 'Enter' || k === 'Spacebar';
+  const role = t.getAttribute('role');
+  if (t.tagName === 'INPUT') return t.type === 'range' ? nav : t.type === 'radio' ? nav || act : act;
+  if (role === 'tab' || role === 'menuitem' || role === 'option' || role === 'slider' || role === 'radio') return nav || act;
+  if (t.tagName === 'BUTTON' || t.tagName === 'SUMMARY' || role === 'button' || (t.tagName === 'A' && t.hasAttribute('href'))) return act;
+  if (t.hasAttribute('tabindex') && t.tabIndex >= 0 && t.tagName !== 'CANVAS') return act || nav;
+  return false;
+}
+let spaceHold = false;   // Space went to Hold, not to a control: its keyup mustn't click anything
 window.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || ownsKey(e.target, e) || document.querySelector('dialog[open]')) return;
   const c = KEYMAP[e.code];
   if (c) { e.preventDefault(); if (!e.repeat) press(c, 'key:' + e.code); return; }
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
-  if (e.code === 'Space') { e.preventDefault(); pilotHold(); }
+  if (e.code === 'Space') { e.preventDefault(); spaceHold = true; pilotHold(); }
   else if (e.code === 'KeyH') pilotHome();
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
@@ -87,7 +102,7 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => {
   const c = KEYMAP[e.code]; if (c) release(c, 'key:' + e.code);
-  if (e.code === 'Space' && !typingIn(e.target)) e.preventDefault();   // stop a focused button from clicking
+  if (e.code === 'Space' && spaceHold) { spaceHold = false; e.preventDefault(); }
 });
 window.addEventListener('blur', releaseAll);
 document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
@@ -100,7 +115,14 @@ function bindPads() {
     const up = e => release(c, 'ptr:' + e.pointerId);
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
     b.addEventListener('contextmenu', e => e.preventDefault());
+    // from the keyboard: Enter or Space holds it down like a press
+    const isAct = e => e.key === 'Enter' || e.key === ' ';
+    b.addEventListener('keydown', e => { if (!isAct(e)) return; e.preventDefault(); if (!e.repeat) press(c, 'kbd'); });
+    b.addEventListener('keyup', e => { if (!isAct(e)) return; e.preventDefault(); release(c, 'kbd'); });
+    b.addEventListener('blur', () => release(c, 'kbd'));
   });
+  // A mouse click on the flight buttons leaves the keyboard where it was (Space still holds, not presses them again).
+  document.querySelectorAll('.pilot-mid button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));
   document.querySelector('[data-act="hold"]').addEventListener('click', pilotHold);
   document.querySelector('[data-act="home"]').addEventListener('click', pilotHome);
   document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => setPilotLevel(b.dataset.level)));

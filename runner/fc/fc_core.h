@@ -27,7 +27,8 @@
  *     the barometer also measures the accelerometer's bias, so the speed is right. Without one it always asks for a
  *     little downward acceleration on the thrust it learned hovers (drag sets the speed), disarms after the bump of
  *     touching down, and in any case after 120 s;
- *   - IMU data missing for 0.2 s while flying: motors off (there is nothing to fly on);
+ *   - IMU data missing for 0.2 s while flying: motors off (there is nothing to fly on); a sample or two missed
+ *     changes nothing (the attitude counts as settled until 50 ms pass without one);
  *   - tilted past FC_CRASH_DEG while flying (failsafe included), or the formulas failing: motors off (crashed);
  *   - arming needs the arm switch seen off first, so nothing re-arms by itself after a disarm;
  *   - disarmed, the motors get throttle 0 (the ESC's minimum pulse); a motor test spins one motor at a set
@@ -103,10 +104,13 @@ typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_ou
  *          servo tests (0: the description's); per motor the throttle-curve bend to linearize with (−1: the
  *          description's).
  * From the health supervisor (super_core.h):
- *   SET    mode (0 normal, 1 careful, 2 return home, 3 land), lean limit [deg], acceleration limit [m/s²], speed
- *          limit [m/s] (0: none; the navigation's), nm, nj; per motor on (0/1), effectiveness (its columns ×),
- *          throttle ceiling; per joint out of the steering (0/1) and the angle it is really at [rad].
- * To both (fc_ltel), 200 times a second: LTEL  t, state, flags (1 flying, 2 open loop, 4 on the learned model,
+ *   SET    mode (0 normal, 1 careful, 2 return home, 3 land; in the air it only steps up, disarmed it is as sent,
+ *          and a disarm ends it), lean limit [deg], acceleration limit [m/s²], speed limit [m/s] (0: none; the
+ *          navigation's), nm, nj; per motor on (0/1), effectiveness (its columns ×), throttle ceiling; per joint out of
+ *          the steering (0/1) and the angle it is really at [rad].
+ * To both (fc_ltel), 200 times a second: LTEL  t (the time modulo FC_LTEL_WRAP: a float keeps that exact for its 5 ms
+ *          steps, where the time since power-on would be rounded to a millisecond after a few hours; the reader unwraps
+ *          it), state, flags (1 flying, 2 open loop, 4 on the learned model,
  *          8 motors held), attitude q (4), specific force (3) and body rates (3) averaged since the last one (body
  *          axes), battery volts, height and vertical speed (barometer and accelerometer), have height, nm, nj,
  *          throttles sent u[nm], believed thrusts v[nm], servo commands[nj], servo
@@ -114,6 +118,7 @@ typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_ou
  *          (3), believed thrusts v[nm]): every step's, while in open loop (the throw's fit needs them all), else none.
  *          Flag 16: the open-loop pulse was cut (below). */
 #define FC_EXC_TIMEOUT 0.1f
+#define FC_LTEL_WRAP 256.0              /* [s] */
 #define FC_SUB 8                        /* IMU samples an LTEL frame carries in open loop */
 #define FC_LTEL_MAX (19 + 2 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS + 1 + FC_SUB * (7 + FC_MAX_MOTORS))
 #define FC_LT_N 19                      /* where the per-motor values start in LTEL */
@@ -186,6 +191,12 @@ int fc_model(fc_state *F, const float *p, int n);
 int fc_set(fc_state *F, const float *p, int n);
 /* The LTEL frame since the last call (out: FC_LTEL_MAX floats). Returns its length. */
 int fc_ltel(fc_state *F, float *out);
+/* The reader's side: an LTEL frame's time, unwrapped, from the last one (got: there was one). */
+static inline double fc_ltel_unwrap(double last, int got, double raw) {
+  if (!got) return raw;
+  double d = raw - (last - FC_LTEL_WRAP * (double)(long long)(last / FC_LTEL_WRAP));
+  return last + (d < -FC_LTEL_WRAP / 2 ? d + FC_LTEL_WRAP : d);
+}
 /* learn.js basisVals / dBasisVals: products of (1, cos θ, sin θ) over k joint angles (dm ≥ 0: the derivative with
  * respect to joint dm). Returns 3^k. For the Pi's tasks too. */
 int fc_basis(float *v, const float *ang, int k, int dm);

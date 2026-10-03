@@ -69,14 +69,10 @@ static int call(nav_state *N, int fn, const float *in, float *out) {
   return e;
 }
 
-int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out) {
-  memset(out, 0, sizeof *out);
-  out->heading = sp->heading;
-  if (!N->ok || !N->have_config || !in->have_att || !(dt > 0)) return 0;
+static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, float qn, nav_out *out) {
   const nav_config *C = &N->C;
-  float R[9], q[4]; float n = sqrtf(in->q[0] * in->q[0] + in->q[1] * in->q[1] + in->q[2] * in->q[2] + in->q[3] * in->q[3]);
-  if (!(n > 0.5f)) return 0;
-  for (int k = 0; k < 4; k++) q[k] = in->q[k] / n;
+  float R[9], q[4];
+  for (int k = 0; k < 4; k++) q[k] = in->q[k] / qn;
   qmat(R, q);
   float b[64]; int k = 0, e;
 
@@ -121,13 +117,17 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   N->steps++;
 
   if (N->landed) { out->landed = 1; return 0; }                    /* the supervisor landed it: it stays down */
-  if (!sp->fly || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
+  /* "fly" off in the air: it lands where it is first (idling there it would drop); back on, it flies on */
+  if (!sp->fly && N->last.fly && !N->fly_land) { N->fly_land = 1; say(N, "fly off in the air: landing"); }
+  if (sp->fly && N->fly_land) { N->fly_land = 0; if (N->sup_mode < 2 && !N->rc_rth) { N->auto_on = 0; N->auto_land = 0; } }
+  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
 
-  /* the supervisor's return home and landing: it moves the target itself, as the pilot would, within the limits */
+  /* the supervisor's return home and landing, and the landing for "fly" off: it moves the target itself, as the
+   * pilot would, within the limits */
   const float *target = sp->target, *vref = sp->vref;
-  if ((N->sup_mode >= 2 || N->rc_rth) && N->have_home) {
+  if ((N->sup_mode >= 2 || N->rc_rth || N->fly_land) && N->have_home) {
     if (!N->auto_on) { N->auto_on = 1; memcpy(N->auto_t, N->p, sizeof N->auto_t); memset(N->auto_v, 0, sizeof N->auto_v); N->land_t = 0; }
-    if (N->sup_mode == 3) N->auto_land = 1;
+    if (N->sup_mode == 3 || N->fly_land) N->auto_land = 1;
     float spd = N->lim_speed > 0 ? N->lim_speed : 1, want[3] = { 0, 0, 0 };
     if (!N->auto_land) {
       float dx = -N->auto_t[0], dy = -N->auto_t[1], d = sqrtf(dx * dx + dy * dy);
@@ -140,7 +140,10 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
     if (N->auto_land) {                  /* down: settled low and slow for half a second */
       float vv = sqrtf(N->v[0] * N->v[0] + N->v[1] * N->v[1] + N->v[2] * N->v[2]);
       N->land_t = N->p[2] < 0.2f && vv < 0.3f ? N->land_t + dt : 0;
-      if (N->land_t > 0.5f) { N->landed = 1; out->landed = 1; say(N, "the supervisor landed it"); return 0; }
+      if (N->land_t > 0.5f && N->fly_land && N->sup_mode < 2 && !N->rc_rth) {   /* down for "fly" off: it idles there */
+        N->fly_land = 0; N->auto_on = 0; N->auto_land = 0; memset(N->iPos, 0, sizeof N->iPos); say(N, "landed"); return 0;
+      }
+      if (N->land_t > 0.5f) { N->landed = 1; N->fly_land = 0; out->landed = 1; say(N, "the supervisor landed it"); return 0; }
     }
   }
 
@@ -169,10 +172,22 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   return 0;
 }
 
+int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out) {
+  memset(out, 0, sizeof *out);
+  out->heading = sp->heading;
+  if (!N->ok || !N->have_config) return 0;
+  float qn = sqrtf(in->q[0] * in->q[0] + in->q[1] * in->q[1] + in->q[2] * in->q[2] + in->q[3] * in->q[3]);
+  /* nothing to step on (a missed IMU sample, two frames at once): the last output stands, flying or not */
+  if (!in->have_att || !(dt > 0) || !(qn > 0.5f)) { *out = N->last; return 1; }
+  int e = step(N, in, sp, dt, qn, out);
+  N->last = *out;
+  return e;
+}
+
 void nav_set(nav_state *N, const float *p, int n) {
   if (n < 6) return;
   for (int k = 0; k < 4; k++) if (!fin(p[k])) return;
   int mode = (int)p[0]; if (mode < 0 || mode > 3) return;
-  if (mode > N->sup_mode) N->sup_mode = mode;                       /* it only steps up */
+  if (mode > N->sup_mode || (!N->last.fly && !N->landed)) N->sup_mode = mode;   /* in the air it only steps up */
   N->lim_lean = p[1]; N->lim_accel = p[2]; N->lim_speed = p[3];
 }

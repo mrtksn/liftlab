@@ -43,7 +43,8 @@ typedef struct {
   float target[3];                       /* where to be, relative to home [m] */
   float vref[3];                         /* velocity to move the target at (fed forward) [m/s] */
   float heading;                         /* [rad] */
-  int fly;                               /* 0: stay on the ground (idle); 1: fly to the target */
+  int fly;                               /* 0: stay on the ground (idle; turned to 0 in the air, it lands where it is
+                                          * first); 1: fly to the target */
 } nav_sp;
 
 typedef struct {
@@ -65,7 +66,9 @@ typedef struct {
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
   int sup_mode; float lim_speed, lim_accel, lim_lean;
   int rc_rth;                            /* the pilot's radio link is lost in flight: it flies home and lands (rc_core.h) */
+  int fly_land;                          /* "fly" went off in the air: it lands where it is, then idles */
   int auto_on, auto_land, landed; float auto_t[3], auto_v[3], land_t;
+  nav_out last;                          /* the last step's output (held while a step can't be made) */
   char why[64];
   uint32_t steps;
 } nav_state;
@@ -74,10 +77,19 @@ typedef struct {
 int nav_config_load(nav_state *N, const uint8_t *blob, uint32_t len);
 /* Set up on a host that has the flight program. Checks the formulas' sizes. */
 int nav_init(nav_state *N, rn_host *H);
-/* One step of dt seconds. Returns 0, or −1 if a formula failed (then out->fly is 0: the flight core's failsafe
- * takes over when the guided commands stop making sense... the caller stops sending them). */
+/* One step of dt seconds. Returns 0; 1 if there was nothing to step on (no attitude, or no time since the last step):
+ * out is then the last step's output, and the caller sends no new command (the flight core flies on the last one for
+ * a moment, and a gap that lasts ends in its failsafe); or −1 if a formula failed (then out->fly is 0: the caller
+ * stops sending commands, and the flight core's failsafe lands it). */
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out);
-/* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. */
+/* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. In the
+ * air the mode only steps up; on the ground it is as sent. */
 void nav_set(nav_state *N, const float *p, int n);
+/* It landed by itself (nav_out.landed) and has been disarmed: it may fly again. The supervisor's mode goes with it
+ * (its next SET raises it again if it still holds). */
+static inline void nav_land_reset(nav_state *N) {
+  N->landed = 0; N->auto_on = 0; N->auto_land = 0; N->land_t = 0; N->rc_rth = 0; N->fly_land = 0; N->sup_mode = 0;
+  for (int i = 0; i < 3; i++) N->iPos[i] = 0;
+}
 
 #endif

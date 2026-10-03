@@ -2,7 +2,8 @@
 """Flies a square with the command module, as a script: dfb_ground (on this computer, or another one on the
 network) takes text commands over UDP and sends them up the radio as channels and commands.
 
-  ./dfb_ground --tx /dev/tty.usbserial-XXXX          (in another terminal)
+  ./dfb_ground --tx /dev/tty.usbserial-XXXX          (in another terminal; add --listen-all if this script runs on
+                                                      another computer: dfb_ground takes UDP from its own only)
   python3 fly_square.py [HOST] [SIDE_METRES]
 
 The drone does the flying: the go-tos are targets for its navigation, within its own limits and failsafes.

@@ -68,7 +68,7 @@ function fixComputers(C) {
   C = C && Array.isArray(C.boards) ? JSON.parse(JSON.stringify(C)) : defaultComputers();
   C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
-  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
+  C.ground = { kind: g.kind === 'c3' ? 'esp32' : g.kind, name: String(g.name || 'Command module').slice(0, 24) };   // (a command module is an ESP32, a Pi or a Mac or PC: the C3 isn't offered)
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   let id = 1; for (const b of C.boards) { b.id = id++; b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
@@ -148,7 +148,7 @@ const brt = {
   module: null, err: '', inst: new Map(), sig: null, ready: false,
   toCore: [], toNav: [], q: [], tel: null, navOut: null, navReady: false, home: null,
   t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0,
-  gnd: null, gndErr: '',   // the command module's instance (while the drone has a radio)
+  gnd: null, gndErr: '', gndOk: false,   // the command module's instance (while the drone has a radio); gndOk: its program runs (stickInput, groundAlerts)
   pilot: { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 },
   fcState: 0, fcWhy: '', navWhy: '', out: null, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
 };
@@ -199,6 +199,7 @@ function f32Blob(magic, vals) {
 }
 // (Re)start every board: at each reset, as if powered on with the program, the airframe and the configs.
 function boardsStart() {
+  brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; gsSet.x = null; gsSet.pending = null; radioReset();
@@ -239,18 +240,24 @@ function boardsStart() {
   brt.ready = true;
 }
 // The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
+// A program that doesn't compile, fit or load leaves it with none (not the last run's): it sends the raw sticks
+// unshaped and groundAlerts doesn't run, and the message says so.
 function groundStart() {
-  brt.gndErr = '';
+  brt.gndErr = ''; brt.gndOk = false;
   if (!hasTask('tlm')) { brt.gnd = null; return; }
   if (!brt.gndInst) brt.gndInst = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports;
   const g = brt.gndInst, G = { name: computers().ground.name, tasks: ['ground'] };
-  let img; try { img = boardImage(G); } catch (e) { brt.gndErr = `${G.name}: ${e.message}`; }
-  if (img && img.length <= g.img_cap()) {
+  let img = null, why = '';
+  try { img = boardImage(G); } catch (e) { why = `its program didn't compile (${e.message})`; }
+  if (img && img.length > g.img_cap()) { why = `its program (${img.length} bytes) is bigger than its memory (${g.img_cap()})`; img = null; }
+  if (img) {
     new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img);
-    if (g.host_setup(img.length)) brt.gndErr = `${G.name}: its program didn't load`;
-    brt.srcs.set('ground', boardSrcKey(['ground'], rnSources()));
-  } else if (img) brt.gndErr = `${G.name}: its program (${img.length} bytes) is bigger than its memory (${g.img_cap()})`;
-  if (g.gnd_setup(0)) brt.gndErr = brt.gndErr || `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
+    const e = g.host_setup(img.length); if (e) why = `its program didn't load (error ${e})`;
+  } else g.host_setup(0);                                            // (an empty image: no program at all)
+  brt.srcs.set('ground', boardSrcKey(['ground'], rnSources()));      // (an edit is compared with what it was started with)
+  const e = g.gnd_setup(0, 0); brt.gndOk = !e;
+  if (why) brt.gndErr = `${G.name}: ${why}: the raw sticks go up unshaped, and groundAlerts doesn't run`;
+  else if (e) brt.gndErr = `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
   brt.gnd = g;
 }
 const learnPrefs = { keep: true, holdPulses: true };
@@ -271,7 +278,9 @@ function boardsStageProgram() {
     brt.staging = true;
   }
   const g = brt.gnd, key = boardSrcKey(['ground'], srcs);
-  if (g && brt.srcs.get('ground') !== key) {                       // the command module, the same way
+  if (g && brt.srcs.get('ground') !== key && !brt.gndOk) {          // no program running there to hand over from: it takes it as it starts
+    brt.srcs.set('ground', key); rnEvent(`${computers().ground.name}: its program isn't running; it loads the edited one at the next reset`, 'warn');
+  } else if (g && brt.srcs.get('ground') !== key) {                // the command module, the same way
     const nm = computers().ground.name;
     let img; try { img = boardImage({ tasks: ['ground'] }, srcs); } catch (e) { rnEvent(`${nm}: the edit didn't compile for it: ${e.message}`, 'bad'); return; }
     brt.srcs.set('ground', key);
@@ -479,8 +488,8 @@ function radioTick(dt, tlmB, tw, coreB, navB) {
     g.host_tick(dt);
     if (radio.toGround.length) {                                     // what the transmitter module handed it
       const rb = new Uint8Array(g.memory.buffer, g.rbuf_ptr(), 2048); let n = 0;
-      for (const f of radio.toGround) { if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
-      radio.toGround = []; g.gnd_from_radio(n, brt.t);
+      let k = 0; for (; k < radio.toGround.length; k++) { const f = radio.toGround[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
+      radio.toGround = radio.toGround.slice(k); g.gnd_from_radio(n, brt.t);   // (what didn't fit goes next step)
     }
     if (brt.t >= brt.nextGnd - 1e-9) {
       brt.nextGnd += 0.004;
@@ -492,8 +501,8 @@ function radioTick(dt, tlmB, tw, coreB, navB) {
   radioStep(dt, brt.t);
   if (radio.toBoard.length) {
     const rb = new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), 2048); let n = 0;
-    for (const f of radio.toBoard) { if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
-    radio.toBoard = []; tw.radio_in(n, brt.t);
+    let k = 0; for (; k < radio.toBoard.length; k++) { const f = radio.toBoard[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
+    radio.toBoard = radio.toBoard.slice(k); tw.radio_in(n, brt.t);   // (what didn't fit goes next step)
   }
   if (brt.t >= brt.nextPub - 1e-9) {
     brt.nextPub += 0.01;

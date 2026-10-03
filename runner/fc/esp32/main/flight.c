@@ -170,11 +170,13 @@ static void flight_task(void *arg) {
     if (af_new) {                                     /* a new airframe: only while disarmed */
       if (F.state != FC_DISARMED) { af_result = -2; }
       else {
-        fc_state G = F; int e = fc_airframe_load(&G, af_box, af_len);
+        /* loaded into a copy, which then is the state: just what fc_airframe_load makes of it, as in the simulator
+         * (the old airframe's learned model and the supervisor's settings go with it); refused, nothing changes */
+        static fc_state G; G = F; int e = fc_airframe_load(&G, af_box, af_len);
         if (!e) {
           char why[64];
           if (!hw_outputs_ok(G.A.n_motors, G.A.n_joints, why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
-          else { F.A = G.A; F.have_airframe = 1; memcpy(F.th_cmd, G.th_cmd, sizeof F.th_cmd); memcpy(F.th_hat, G.th_hat, sizeof F.th_hat); strcpy(F.why, G.why); outputs_ok = 1; }
+          else { F = G; outputs_ok = 1; }
         } else strcpy(F.why, G.why);
         af_result = e;
       }

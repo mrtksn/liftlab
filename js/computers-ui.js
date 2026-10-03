@@ -12,7 +12,7 @@ function mathBlock(lines) { const m = el('div', { class: 'math' }); for (const l
 function lawCard(key) {
   const L = LAWS[key], d = L.def, open = lawOpen.has(key);
   const status = el('span', { class: 'lst' });
-  const head = el('button', { class: 'law-head', type: 'button', 'aria-expanded': String(open), 'aria-controls': 'law-' + key },
+  const head = el('button', { class: 'law-head', type: 'button', 'aria-expanded': String(open), 'aria-controls': 'law-' + key, 'data-focus-key': 'lawhead-' + key },
     el('span', { class: 'law-title', text: d.title }), el('code', { class: 'law-key', text: d.key + '()' }), status);
   const body = el('div', { class: 'law-body', id: 'law-' + key }); body.hidden = !open;
   head.addEventListener('click', () => { const o = body.hidden; body.hidden = !o; head.setAttribute('aria-expanded', String(o)); o ? lawOpen.add(key) : lawOpen.delete(key); if (o) fitTa(ta); });
@@ -201,7 +201,22 @@ function buildComputers() {
   for (const d of LAW_DEFS) refreshLaw(d.key);
 }
 const pct = x => x < 0.01 ? '<1%' : Math.round(x * 100) + '%';
-function renderComputers(full) {
+// A name typed in: saved as it is, without resetting the flight (nothing that flies depends on it).
+function renameComputer(apply) {
+  apply(computers()); undoKey = 'computers:name'; save();
+  renderComputers(true); if (typeof renderHealth === 'function') renderHealth(true);
+}
+// A name you can type in, with a pencil to say so.
+function nameBox(value, label, id, onName) {
+  const i = el('input', { type: 'text', class: 'board-name', value, maxlength: 24, 'aria-label': label, id, title: 'Click to rename', autocomplete: 'off', spellcheck: 'false' });
+  i.addEventListener('change', () => onName(i.value.trim()));
+  i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); else if (e.key === 'Escape') { i.value = value; i.blur(); } });
+  const pen = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); pen.setAttribute('viewBox', '0 0 16 16'); pen.setAttribute('aria-hidden', 'true');
+  const pth = document.createElementNS('http://www.w3.org/2000/svg', 'path'); pth.setAttribute('d', 'M10.5 2.5l3 3L6 13H3v-3zM9 4l3 3'); pth.setAttribute('stroke-linejoin', 'round'); pen.append(pth);
+  return el('span', { class: 'name-edit' }, i, pen);
+}
+function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
+function renderComputers1(full) {
   if (!COMP.built) return;
   const C = computers(), core = boardOf('core');
   const sig = JSON.stringify(C) + '|' + actuators().length + '|' + allSensors().map(c => c.kind).join(',');
@@ -210,12 +225,11 @@ function renderComputers(full) {
     const list = $('#boardList'); list.textContent = '';
     for (const b of C.boards) {
       const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = allSensors().filter(c => wiredTo(c) === b);
-      const name = el('input', { type: 'text', class: 'board-name', value: b.name, maxlength: 24, 'aria-label': 'Board name' });
-      name.addEventListener('change', () => { const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).name = name.value.trim() || K.label; setComputers(C2, 'name'); });
-      const kind = el('select', { 'aria-label': 'Board' }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
-      kind.addEventListener('change', () => { const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = kind.value; setComputers(C2, 'kind'); });
+      const name = nameBox(b.name, 'Board name', 'bname-' + b.id, v => renameComputer(C2 => { const x = C2.boards.find(y => y.id === b.id); if (x) x.name = (v || K.label).slice(0, 24); }));
+      const kind = el('select', { 'aria-label': 'Board', id: 'bkind-' + b.id }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
+      commitSelect(kind, v => { if (v === b.kind) return; const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = v; setComputers(C2, 'kind'); }, 'Press Enter to change the board: it starts the flight again');
       const only = b.tasks.includes('core') && C.boards.filter(x => BOARD_KINDS[x.kind].mcu).length < 2;
-      const del = el('button', { class: 'icon-btn', type: 'button', text: '×', title: only ? 'The flight core needs a microcontroller: add another before removing this one' : 'Remove this board', 'aria-label': 'Remove ' + b.name, disabled: only || C.boards.length < 2 ? 'disabled' : null });
+      const del = el('button', { class: 'icon-btn', type: 'button', text: '×', id: 'bdel-' + b.id, title: only ? 'The flight core needs a microcontroller: add another before removing this one' : 'Remove this board', 'aria-label': 'Remove ' + b.name, disabled: only || C.boards.length < 2 ? 'disabled' : null });
       del.addEventListener('click', () => {
         const C2 = JSON.parse(JSON.stringify(C)); C2.boards = C2.boards.filter(x => x.id !== b.id);
         if (b.tasks.includes('core')) C2.boards.find(x => BOARD_KINDS[x.kind].mcu).tasks.unshift('core');   // the flight core moves to another microcontroller
@@ -225,12 +239,13 @@ function renderComputers(full) {
       const link = core && core.id !== b.id ? `Serial link to ${core.name}: ${(LINK_DELAY * 1000).toFixed(0)} ms each way` : C.boards.length > 1 ? 'The other boards talk to it over serial links' : '';
       const load = b.tasks.length ? `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(0)} KB of ${K.ramKB} KB` : ''}` : '';
       const ex = el('div', { class: 'board-ex' });
-      if (b.tasks.includes('core')) ex.append(el('button', { class: 'btn', type: 'button', text: 'Export the airframe (.dfa)', title: 'What the flight core flies on: send it with fly.py airframe FILE.dfa', onclick: () => boardsExport('airframe') }));
-      if (b.tasks.includes('nav')) ex.append(el('button', { class: 'btn', type: 'button', text: 'Export the navigation config (.dnc)', title: K.mcu ? 'For the navigation on this board' : 'For dfb_pi on this Pi: ./dfb_pi --nav FILE.dnc', onclick: () => boardsExport('nav') }));
+      const xb = (what, text, title) => el('button', { class: 'btn', type: 'button', text, title, id: `bex-${b.id}-${what}`, onclick: e => boardsExport(what, e.currentTarget) });
+      if (b.tasks.includes('core')) ex.append(xb('airframe', 'Export the airframe (.dfa)', 'What the flight core flies on: send it with fly.py airframe FILE.dfa'));
+      if (b.tasks.includes('nav')) ex.append(xb('nav', 'Export the navigation config (.dnc)', K.mcu ? 'For the navigation on this board' : 'For dfb_pi on this Pi: ./dfb_pi --nav FILE.dnc'));
       if (!K.mcu && (b.tasks.includes('learn') || b.tasks.includes('super'))) ex.append(
-        el('button', { class: 'btn', type: 'button', text: 'Export the airframe (.dfa)', title: 'The learning and the supervisor start from the same airframe as the flight core: ./dfb_pi --airframe FILE.dfa', onclick: () => boardsExport('airframe') }),
-        el('button', { class: 'btn', type: 'button', text: 'Export the Pi config (.dlc)', title: 'Where the IMU sits, the motors\' heat and the battery, for the learning and the supervisor: ./dfb_pi --pi FILE.dlc', onclick: () => boardsExport('pi') }));
-      list.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : '') },
+        xb('airframe', 'Export the airframe (.dfa)', 'The learning and the supervisor start from the same airframe as the flight core: ./dfb_pi --airframe FILE.dfa'),
+        xb('pi', 'Export the Pi config (.dlc)', 'Where the IMU sits, the motors\' heat and the battery, for the learning and the supervisor: ./dfb_pi --pi FILE.dlc'));
+      list.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': b.id },
         el('div', { class: 'board-head' }, name, kind, del),
         el('p', { class: 'board-note', text: K.note }),
         el('dl', { class: 'kv board-kv' },
@@ -238,22 +253,23 @@ function renderComputers(full) {
           el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
           ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
-        ex.childElementCount ? ex : el('span')));
+        ex.childElementCount ? ex : el('span'), ex.childElementCount ? errLine(b.id) : null));
     }
     $('#boardAdd').disabled = C.boards.length >= BOARD_MAX;
     renderGroundCard(C);
     // tasks: which board
     const rows = $('#taskRows'); rows.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {
-      const cur = boardOf(t), sel = el('select', { 'aria-label': T.label + ' runs on' });
+      const cur = boardOf(t), sel = el('select', { 'aria-label': T.label + ' runs on', id: 'task-' + t });
       if (!T.mcuOnly) sel.append(el('option', { value: '', text: 'No board (off)' }));
       for (const b of C.boards) if ((!T.mcuOnly || BOARD_KINDS[b.kind].mcu) && (!T.piOnly || !BOARD_KINDS[b.kind].mcu)) sel.append(el('option', { value: String(b.id), text: b.name, selected: cur && cur.id === b.id ? 'selected' : null }));
       if (!cur) sel.value = '';
-      sel.addEventListener('change', () => {
+      commitSelect(sel, v => {
+        if (v === (cur ? String(cur.id) : '')) return;
         const C2 = JSON.parse(JSON.stringify(C)); for (const b of C2.boards) b.tasks = b.tasks.filter(x => x !== t);
-        if (sel.value) C2.boards.find(b => String(b.id) === sel.value).tasks.push(t);
+        if (v) C2.boards.find(b => String(b.id) === v).tasks.push(t);
         setComputers(C2, 'task');
-      });
+      }, 'Press Enter to move it: it starts the flight again');
       const noPi = T.piOnly && !C.boards.some(b => !BOARD_KINDS[b.kind].mcu);
       if (noPi) sel.disabled = true;
       rows.append(el('div', { class: 'task-row' }, el('div', {}, el('b', { text: T.label }), el('span', { class: 'hint', text: ' ' + T.what + (noPi ? ' Add a Raspberry Pi to run it.' : '') })), sel));
@@ -274,13 +290,13 @@ function renderComputers(full) {
 function renderGroundCard(C) {
   const g = C.ground, K = BOARD_KINDS[g.kind], tlmB = boardOf('tlm'), bud = groundBudget();
   const set = (k, v) => { const C2 = JSON.parse(JSON.stringify(C)); C2.ground[k] = v; setComputers(C2, 'ground'); };
-  const name = el('input', { type: 'text', class: 'board-name', value: g.name, maxlength: 24, 'aria-label': 'Command module name' });
-  name.addEventListener('change', () => set('name', name.value.trim() || 'Command module'));
-  const kind = el('select', { 'aria-label': 'Command module computer' }, ...Object.entries(BOARD_KINDS).filter(([k]) => k !== 'c3').map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
-  kind.addEventListener('change', () => set('kind', kind.value));
-  const prog = el('button', { class: 'btn', type: 'button', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: groundDownload });
+  const name = nameBox(g.name, 'Command module name', 'gname', v => renameComputer(C2 => { C2.ground.name = (v || 'Command module').slice(0, 24); }));
+  // (the ESP32-C3 isn't offered for it; shown only if a saved design already has one, so the list says what it is)
+  const kind = el('select', { 'aria-label': 'Command module computer', id: 'gkind' }, ...Object.entries(BOARD_KINDS).filter(([k]) => k !== 'c3' || g.kind === 'c3').map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
+  commitSelect(kind, v => { if (v !== g.kind) set('kind', v); }, 'Press Enter to change it: it starts the flight again');
+  const prog = el('button', { class: 'btn', type: 'button', id: 'gprog', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: e => groundDownload(e.currentTarget) });
   const box = $('#groundCard'); box.textContent = '';
-  box.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : '') },
+  box.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': 'g' },
     el('div', { class: 'board-head' }, name, kind),
     el('p', { class: 'board-note', text: K.note }),
     el('dl', { class: 'kv board-kv' },
@@ -288,18 +304,28 @@ function renderGroundCard(C) {
       el('dt', { text: 'Wired to it' }), el('dd', { text: K.mcu ? 'buttons and sticks, a buzzer, the ExpressLRS transmitter module' : 'a gamepad, keys or your own code (UDP), the ExpressLRS transmitter module (USB serial)' }),
       el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `ExpressLRS radio to the receiver on ${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
       el('dt', {}, srcDot('calc'), 'Load'), el('dd', { text: `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(1)} KB of ${K.ramKB} KB` : ''}` })),
-    el('div', { class: 'board-ex' }, prog)));
+    el('div', { class: 'board-ex' }, prog), errLine('g')));
 }
-function groundDownload() {
-  let img; try { img = boardImage({ tasks: ['ground'] }); } catch (e) { rnEvent('Can\'t make the command module\'s program: ' + e.message, 'bad'); renderRunner(); return; }
+// An export that failed says why under its button (kept across a re-render of the cards).
+const errLine = key => { const e = COMP.exErr && String(COMP.exErr.key) === String(key) ? COMP.exErr.msg : ''; return el('p', { class: 'law-err board-err' + (e ? ' on' : ''), role: 'status', text: e }); };
+function exportErr(btn, msg) {
+  const card = btn && btn.closest('.board'), p = card && card.querySelector('.board-err');
+  if (!p) { if (msg) { rnEvent(msg, 'bad'); renderRunner(); } return; }
+  COMP.exErr = msg ? { key: card.dataset.board, msg } : null;
+  p.textContent = msg; p.classList.toggle('on', !!msg);
+}
+function groundDownload(btn) {
+  let img; try { img = boardImage({ tasks: ['ground'] }); } catch (e) { exportErr(btn, 'Can\'t make the command module\'s program: ' + e.message); return; }
+  exportErr(btn, '');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([img], { type: 'application/octet-stream' })); a.download = 'command-module.rnp';
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 // Files for the drone: the airframe for the flight core, the config for the navigation.
-function boardsExport(what) {
+function boardsExport(what, btn) {
   let data, ext;
   try { if (what === 'airframe') { data = fcAirframeBlob(); ext = '.dfa'; } else if (what === 'pi') { data = piConfigBlob(); ext = '.dlc'; } else { data = navConfigBlob(); ext = '.dnc'; } }
-  catch (e) { rnEvent('Can\'t export: ' + e.message, 'bad'); renderRunner(); return; }
+  catch (e) { exportErr(btn, 'Can\'t export: ' + e.message); return; }
+  exportErr(btn, '');
   const nm = ((typeof designs !== 'undefined' && designs.name) || 'drone').replace(/[^\w.-]+/g, '-');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }));

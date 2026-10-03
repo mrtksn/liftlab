@@ -7,8 +7,8 @@
  *   - navigation (--nav): the ESP32 sends RN_LINK_NAV 100 times a second while guided commands come; for each one this
  *     runs a navigation step and sends a guided command (RN_LINK_CMD, 12 floats): the acceleration wanted and the
  *     heading. If they stop (this program stops, the cable comes out), the ESP32 goes to its failsafe within 0.5 s
- *     and lands. A GPS on its own serial port (NMEA: GGA and RMC, as the NEO-6M sends) gives position and velocity;
- *     home is where it took off;
+ *     and lands. A GPS on its own serial port (NMEA: GGA and RMC, as the NEO-6M sends; a sentence whose checksum
+ *     doesn't match is dropped) gives position and velocity; home is where it took off;
  *   - learning and supervisor (--airframe and --pi): it asks for the ESP32's LTEL telemetry (RN_LINK_WANT, twice a
  *     second) and answers with the learning's excitation and model (RN_LINK_EXC, RN_LINK_MODEL) and the
  *     supervisor's settings (RN_LINK_SET). The supervisor's settings also reach the navigation here (it flies home or
@@ -79,7 +79,16 @@ static double nmea_deg(const char *f, const char *hemi) {   /* ddmm.mmmm or dddm
   return (*hemi == 'S' || *hemi == 'W') ? -v : v;
 }
 static int split(char *s, char **f, int max) { int n = 0; f[n++] = s; for (; *s && n < max; s++) if (*s == ',' || *s == '*') { *s = 0; f[n++] = s + 1; } return n; }
+static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
+/* the sentence's checksum (after '*', two hex digits: the XOR of what lies between '$' and '*'); one without is refused */
+static int nmea_ok(const char *s) {
+  int x = 0; const char *p = s; for (; *p && *p != '*'; p++) x ^= (unsigned char)*p;
+  if (*p != '*') return 0;
+  int h = hexv(p[1]), l = h < 0 ? -1 : hexv(p[2]);
+  return l >= 0 && (p[3] == 0 || p[3] == '\r' || p[3] == '\n') && (h << 4 | l) == x;
+}
 static void gps_line(gps_t *G, char *s) {
+  if (!nmea_ok(s)) return;                                    /* (a damaged sentence: a position off by kilometres) */
   char *f[24]; int n = split(s, f, 24);
   if (n > 9 && !strcmp(f[0] + 2, "GGA")) {                   /* time, lat, N/S, lon, E/W, quality, sats, hdop, altitude */
     if (atoi(f[6]) < 1 || !*f[2] || !*f[4]) { G->fix = 0; return; }
@@ -105,9 +114,12 @@ static void gps_read(gps_t *G, int fd) {
 
 /* ── the pilot ── */
 typedef struct { int arm, fly, landing; nav_sp sp; } pilot_t;
-static void pilot_line(pilot_t *P, const nav_out *o, char *s, char *reply, size_t rn) {
+static void pilot_line(pilot_t *P, nav_state *N, const nav_out *o, char *s, char *reply, size_t rn) {
   float a, b, c; reply[0] = 0;
-  if (!strncmp(s, "arm", 3)) { P->arm = 1; snprintf(reply, rn, "arming"); }
+  if (!strncmp(s, "arm", 3)) {
+    if (N->landed) { nav_land_reset(N); P->fly = 0; P->landing = 0; P->sp.fly = 0; }   /* it landed by itself, and is disarmed: it may fly again */
+    P->arm = 1; snprintf(reply, rn, "arming");
+  }
   else if (!strncmp(s, "disarm", 6)) { P->arm = 0; P->fly = 0; snprintf(reply, rn, "disarmed"); }
   else if (!strncmp(s, "takeoff", 7)) {
     float h = 1.5f; sscanf(s + 7, "%f", &h);
@@ -221,9 +233,11 @@ int main(int argc, char **argv) {
   gps_t G; memset(&G, 0, sizeof G);
   pilot_t P; memset(&P, 0, sizeof P);
   nav_out o; memset(&o, 0, sizeof o);
-  double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0; float fc_state = 0; uint32_t seen_log = 0;
+  double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0, fc_state_t = 0, t_start = now_s(); float fc_state = 0;
+  int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
+  int in_fd = 0, nav_got = 0; float nav_v[16];
   for (;;) {
-    struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { 0, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
+    struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
     if (crsf >= 0 && (pf[4].revents & POLLIN)) { uint8_t b[256]; ssize_t n = read(crsf, b, sizeof b); for (ssize_t i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t); }
@@ -232,6 +246,7 @@ int main(int argc, char **argv) {
       static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
       char *buf = k == 2 ? in : dg; int have = k == 2 ? in_n : 0, cap = k == 2 ? (int)sizeof in : (int)sizeof dg;
       if (k == 2) n = read(0, buf + have, (size_t)(cap - 1 - have)); else n = recvfrom(udp, buf, (size_t)cap - 1, 0, (struct sockaddr *)&from, &fl);
+      if (n == 0 && k == 2) in_fd = -1;                                 /* the end of standard input (a service, /dev/null): no more of it */
       if (n <= 0) continue;
       have += (int)n; buf[have] = 0;
       if (k == 3 && buf[have - 1] != '\n') buf[have++] = '\n';            /* a datagram is a whole line (or several) */
@@ -239,7 +254,7 @@ int main(int argc, char **argv) {
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
-          char reply[600]; if (!task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) pilot_line(&P, &o, s, reply, sizeof reply);
+          char reply[600]; if (!task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; }
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
         s = nl + 1;
@@ -253,6 +268,7 @@ int main(int argc, char **argv) {
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
       if (type == RN_LINK_TLM && crsf >= 0) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
       if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
+      if ((type == RN_LINK_TELEM && L.len == 144) || (type == RN_LINK_LTEL && L.len >= 8)) { memcpy(&fc_state, L.buf + 4, 4); fc_state_t = t; }   /* the flight core's state */
       if (type == RN_LINK_LTEL && (have_learn || have_super)) {   /* the learning and the supervisor, on every frame */
         static float lt[FC_LTEL_MAX], fo[FC_MODEL_MAX]; int n = (int)(L.len / 4); if (n > FC_LTEL_MAX) continue;
         memcpy(lt, L.buf, (size_t)n * 4);
@@ -275,8 +291,12 @@ int main(int argc, char **argv) {
         }
         continue;
       }
-      if (type != RN_LINK_NAV || L.len != 64) continue;
-      float v[16]; memcpy(v, L.buf, 64); fc_state = v[1];
+      if (type == RN_LINK_NAV && L.len == 64) { memcpy(nav_v, L.buf, 64); nav_got = 1; fc_state = nav_v[1]; fc_state_t = t; }
+    }
+    /* the navigation: a step on the newest NAV frame (two in one read: the older is passed over, so no step is made of
+     * no time), and a guided command from it */
+    if (nav_got) {
+      nav_got = 0; const float *v = nav_v;
       nav_in in; memset(&in, 0, sizeof in);
       memcpy(in.q, v + 2, 16); memcpy(in.w, v + 6, 12); memcpy(in.acc, v + 9, 12); in.have_att = v[14] > 0.5f;
       in.have_baro = v[13] > 0.5f; in.baro_alt = v[12]; in.baro_age = 0.005f;
@@ -290,16 +310,27 @@ int main(int argc, char **argv) {
       if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
         if (RP.learn_req) { int c = RP.learn_req; RP.learn_req = 0; if (have_learn) { learn_command(&LS, c); printf("radio: learning command %d\n", c); } } }
       if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; }
-      if (nav_step(&N, &in, &P.sp, dt, &o)) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; continue; }
-      { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
-      if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
-      if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
-      if (!radio) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
-      last_sp = P.sp;
-      float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
-      uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
-      if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
-      last_send = t;
+      int e = nav_step(&N, &in, &P.sp, dt, &o);
+      if (e < 0) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; }
+      else {
+        { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
+        if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
+        if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
+        if (!radio) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
+        last_sp = P.sp;
+        /* nothing to step on (no attitude in this frame): in the air no new command, the ESP32 flies on the last one */
+        /* started (again) while the drone flies: our pilot knows nothing yet (disarmed), and a command from it would
+         * disarm it in the air. Silent until the radio's channels or a text command come; meanwhile its failsafe lands it. */
+        int core_flying = fc_state == FC_ARMED || fc_state == FC_FAILSAFE;
+        if (!in_control && (!core_flying || (radio && RCI.frames))) in_control = 1;
+        if (!in_control) { static int said; if (!said) { said = 1; printf("the drone is flying and this program just started: not commanding it until the radio's channels or a command come (its failsafe lands it meanwhile)\n"); } }
+        else if (!(e > 0 && o.fly)) {
+          float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
+          uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+          if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
+          last_send = t;
+        }
+      }
     }
     if ((have_learn || have_super || crsf >= 0) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (crsf >= 0 ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
     /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
@@ -318,14 +349,18 @@ int main(int argc, char **argv) {
     } else if (crsf < 0 && t - tlm_want < 1 && t >= next_pack) {
       next_pack = t + 0.05; static float pk[TLM_PACK_MAX]; int n = tlm_pack(&TS, pk, TLM_PACK_MAX); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
     }
-    /* no navigation telemetry yet (the ESP32 sends it once guided commands come): announce ourselves, disarmed */
-    if (t - last_send > 0.1) {
+    if (P.arm && t - last_nav > 0.3) P.arm = P.fly = 0;   /* lost the drone's telemetry: nothing to fly on */
+    /* No navigation telemetry (the ESP32 sends it while guided commands come): announce ourselves, disarmed. Never
+     * while it may be flying: commands that stop land it (its failsafe), a disarm would drop it. Every frame it sends
+     * says its state (NAV, LTEL, its telemetry); with none for longer than its failsafe takes to land, or none at all
+     * 2 s after starting, it counts as on the ground. */
+    int flying = (fc_state == FC_ARMED || fc_state == FC_FAILSAFE) && fc_state_t > 0 && t - fc_state_t < 150;
+    if (t - last_send > 0.1 && t - last_nav > 0.1 && !flying && (fc_state_t > 0 || t - t_start > 2)) {
       float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };
-      if (P.arm && t - last_nav > 0.3) P.arm = P.fly = 0;   /* lost the drone's telemetry: nothing to fly on */
       uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
       if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
       last_send = t;
     }
-    (void)fc_state; (void)last_fix_t;
+    (void)last_fix_t;
   }
 }

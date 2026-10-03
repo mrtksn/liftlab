@@ -15,7 +15,7 @@ function renderBattery() {
   for (const [v, t] of [['cell', 'It loses a cell'], ['cut', 'It cuts out']]) { const o = el('option', { value: v, text: t }); if (b.failMode === v) o.selected = true; sel.append(o); }
   sel.addEventListener('change', () => { battCfg().failMode = sel.value; battEdited(); });
   box.append(
-    num('cells', { label: 'Cells in series', min: 2, max: 8, step: 1, u: 'S', dp: 0 }),
+    num('cells', { label: 'Cells in series', min: 2, max: 8, step: 1, u: 'S', dp: 0, int: true }),
     num('capacity', { label: 'Capacity', min: 0.3, max: 10, hmax: 50, step: 0.1, u: 'Ah', dp: 1 }),
     num('rInt', { label: 'Internal resistance (at 25 °C)', min: 0.005, max: 0.2, step: 0.005, u: 'mΩ', dp: 0, k: 1000 }),
     num('tmaxC', { label: 'Temperature limit', min: 40, max: 90, step: 1, u: '°C', dp: 0 }),
@@ -32,32 +32,32 @@ function renderBattery() {
 const HEALTH = { sig: '', rows: new Map() };
 const MODE_TXT = [['Normal', 'good'], ['Careful', 'warn'], ['Returning home', 'bad'], ['Landing', 'bad']];
 function tempColor(f) { return f < 0.75 ? 'var(--good)' : f < 1 ? 'var(--warn)' : 'var(--bad)'; }
-function breakMenu(options, onPick, label) {
-  const s = el('select', { class: 'break', 'aria-label': label, title: label });
-  s.append(el('option', { value: '', text: 'Break…' }));
-  for (const [v, t] of options) s.append(el('option', { value: v, text: t }));
-  s.addEventListener('change', () => { const v = s.value; s.value = ''; if (v) { onPick(v); renderHealth(true); } });
-  return s;
+function breakMenu(options, onPick, label, key) {   // a menu: nothing breaks until you pick what
+  return menuButton({ text: 'Break', label, title: label, key: 'break-' + key, items: () => options.map(([value, text]) => ({ value, label: text })),
+    onPick: v => { onPick(v); renderHealth(true); } }).node;
 }
+// Anything broken or damaged (what Repair all undoes)?
+const anyBroken = () => [...hs.values()].some(s => s.loss > 0.004 || s.dead || s.prop || s.jam != null || s.limp) || hb.fade > 0.005 || hb.cellsLost > 0 || hb.cut;
 function healthRow(key, name, menu) {
   const bar = el('i'), temp = el('span', { class: 'h-temp' }), state = el('span', { class: 'h-state' }), sub = el('span', { class: 'h-sub' });
   const row = el('div', { class: 'h-row' }, el('span', { class: 'h-name', title: 'Its true temperature and state (simulated)' }, srcDot('sim'), name), el('span', { class: 'h-bar' }, bar), temp, state, menu || el('span'), sub);
   HEALTH.rows.set(key, { row, bar, temp, state, sub });
   return row;
 }
-function buildHealth() {
-  const box = $('#healthBody'); box.textContent = ''; HEALTH.rows.clear();
+function buildHealth() { keepFocus(buildHealth1); }
+function buildHealth1() {
+  const box = $('#healthBody'); box.textContent = ''; HEALTH.rows.clear(); HEALTH.logSig = null;
   const mode = el('span', { class: 'pill good', id: 'supMode' }, el('i'), el('span', { text: 'Normal' }));
-  const repair = el('button', { class: 'btn', type: 'button', text: 'Repair all', title: 'Undo every failure and damage, without resetting the flight (the flight computers keep what they decided until the next reset)' });
-  repair.addEventListener('click', () => { repairAll(); renderHealth(true); });
+  const repair = HEALTH.repair = el('button', { class: 'btn', type: 'button', id: 'repairAll', text: 'Repair all' });
+  repair.addEventListener('click', () => { if (repair.getAttribute('aria-disabled') === 'true') return; repairAll(); renderHealth(true); });
   const sb = typeof boardOf === 'function' ? boardOf('super') : null;
   mode.hidden = !sb;
   box.append(el('div', { class: 'h-top' }, el('span', { class: 'lbl', text: sb ? 'Supervisor' : '' }), mode, repair),
     sb ? el('p', { class: 'hint', id: 'supWhy', text: `The health supervisor runs on ${sb.name} at 10 Hz, on the flight core's data stream over the link and the health sensors wired to it. Each part: its true temperature and state (simulated), then what the drone's sensors say and what the supervisor did (on board).` }) : el('p', { class: 'hint', text: 'Each part: its true temperature and state (simulated), and what the drone\'s sensors say. Break any of them to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
   const list = el('div', { class: 'h-list' });
-  for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name)));
-  for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name)));
-  list.append(healthRow('batt', 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery')));
+  for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name, c.id)));
+  for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name, j.id)));
+  list.append(healthRow('batt', 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
   box.append(list, el('span', { class: 'lbl', text: 'What happened' }), el('ol', { class: 'h-log', id: 'supLog' }));
   HEALTH.sig = healthSig();
 }
@@ -74,7 +74,7 @@ function renderHealth(force) {
   const put = (key, frac, tempTxt, stateTxt, tone, subTxt) => {
     const r = HEALTH.rows.get(key); if (!r) return;
     r.bar.style.width = (clamp(frac, 0, 1.2) / 1.2 * 100).toFixed(1) + '%'; r.bar.style.background = tempColor(frac);
-    r.temp.textContent = tempTxt; r.state.textContent = stateTxt; r.state.className = 'h-state ' + (tone || '');
+    setText(r.temp, tempTxt); setText(r.state, stateTxt); const sc = 'h-state ' + (tone || ''); if (r.state.className !== sc) r.state.className = sc;
     // the line under: [source, text] parts, each with its dot (sources.js); rebuilt only when it changes
     const sk = JSON.stringify(subTxt); if (r.subKey === sk) return; r.subKey = sk; r.sub.textContent = '';
     for (const [src, t] of subTxt) if (t) r.sub.append(el('span', { class: 'src-part' }, srcDot(src), t));
@@ -100,14 +100,22 @@ function renderHealth(force) {
       [['sim', `${Math.round(Math.max(0, soc) * 100)}% charge`], ['sensor', `sensors: ${seen}`], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
-  pill.className = 'pill ' + m[1]; pill.querySelector('span').textContent = sv ? m[0] : 'Off';
+  if (pill.className !== 'pill ' + m[1]) pill.className = 'pill ' + m[1]; setText(pill.querySelector('span'), sv ? m[0] : 'Off');
+  {   // Repair all: only when something is broken (aria-disabled, so it keeps the focus after a repair)
+    const b = HEALTH.repair, off = !anyBroken();
+    if (b && b.getAttribute('aria-disabled') !== String(off)) { b.setAttribute('aria-disabled', String(off)); b.title = off ? 'Nothing is broken or damaged' : 'Undo every failure and damage, without resetting the flight (the flight computers keep what they decided until the next reset)'; }
+  }
   const why = sv && mode ? sv.modeWhy : '', landed = brt.navOut && brt.navOut.landed;
   const hud = $('#hudSup'), hudTxt = landed ? 'supervisor: landed' : `supervisor: ${m[0].toLowerCase()}${why ? ' · ' + why : ''}`;
   hud.hidden = !mode && !landed; if (hud.dataset.txt !== hudTxt) { hud.dataset.txt = hudTxt; hud.textContent = ''; hud.append(srcDot('board'), hudTxt); }
-  const log = $('#supLog'); log.textContent = '';
+  const log = $('#supLog');
   const all = [...sup.log.map(l => ({ ...l, src: 'sim' })), ...(sv ? sv.log.map(l => ({ ...l, src: 'board' })) : [])].sort((a, b) => b.t - a.t).slice(0, 8);
-  for (const l of all) log.append(el('li', { class: l.tone }, srcDot(l.src), el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
-  if (!all.length) log.append(el('li', { class: 'muted', text: 'Nothing yet.' }));
-  $('#healthSmall').textContent = sv ? (mode ? m[0].toLowerCase() : 'all normal') : 'the parts';
+  const lsig = all.map(l => l.src + l.t + l.msg + l.tone).join('|');
+  if (HEALTH.logSig !== lsig) {   // rebuilt only when it changes (so a line can be selected)
+    HEALTH.logSig = lsig; log.textContent = '';
+    for (const l of all) log.append(el('li', { class: l.tone }, srcDot(l.src), el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
+    if (!all.length) log.append(el('li', { class: 'muted', text: 'Nothing yet.' }));
+  }
+  setText($('#healthSmall'), sv ? (mode ? m[0].toLowerCase() : 'all normal') : 'the parts');
 }
 renderBattery();

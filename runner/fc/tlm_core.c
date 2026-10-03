@@ -122,8 +122,11 @@ static int prio_due(const tlm_store *T, int id, double t, double *score) {
 static int changed(const tlm_slot *s) { for (int k = 0; k < s->n; k++) if (s->v[k] != s->sent[k]) return 1; return 0; }
 int tlm_service(tlm_store *T, const tlm_transport *X, double t, float budget, uint8_t *out, int cap) {
   double dt = T->t_service > 0 ? t - T->t_service : 0; T->t_service = t;
+  if (dt > 1) T->rx_q = T->rx_text = 0;                      /* (a second and more: the receiver's queue has emptied) */
   if (dt < 0 || dt > 1) dt = 0;
   if (!(budget > 0 && budget < 1e6f)) budget = 0;            /* (NaN, negative: nothing) */
+  double drain = dt * budget;                                 /* the receiver's queue, sent on at the budget */
+  T->rx_q = T->rx_q > drain ? T->rx_q - drain : 0; T->rx_text = T->rx_text > drain ? T->rx_text - drain : 0;
   if (!(T->tokens == T->tokens)) T->tokens = 0;
   T->tokens += dt * budget; if (T->tokens > budget * 0.25 + X->max_frame) T->tokens = budget * 0.25 + X->max_frame;   /* a quarter second's worth, at most */
   int k = 0;
@@ -132,8 +135,9 @@ int tlm_service(tlm_store *T, const tlm_transport *X, double t, float budget, ui
     /* the flight mode, when it changes and once a second */
     const char *m = tlm_mode(T); int same = 1; for (int i = 0; i < 16; i++) { if (m[i] != T->sent_mode[i]) { same = 0; break; } if (!m[i]) break; }
     if (!same || t - T->t_mode > 1.0) { n = X->mode(m, out + k); copy_text(T->sent_mode, m, 15); T->t_mode = t; }
-    /* messages */
-    if (!n && T->qn) { const tlm_msg *q = &T->q[T->qh]; n = X->text(q->sev, q->s, out + k); T->qh = (T->qh + 1) % TLM_QN; T->qn--; }
+    /* messages (one at a time through the receiver's queue: see tlm_core.h) */
+    int text = 0;
+    if (!n && T->qn && !(T->rx_text > 0)) { const tlm_msg *q = &T->q[T->qh]; n = X->text(q->sev, q->s, out + k); T->qh = (T->qh + 1) % TLM_QN; T->qn--; text = n > 0; }
     /* a state change */
     if (!n) for (int id = 1; id < TLM_ITEMS && !n; id++) {
       tlm_slot *s = &T->it[id];
@@ -150,6 +154,7 @@ int tlm_service(tlm_store *T, const tlm_transport *X, double t, float budget, ui
       if (!n) continue;                                              /* this radio doesn't carry it */
     }
     k += n; T->tokens -= n; T->bytes_sent += (uint32_t)n; T->frames_sent++;
+    T->rx_q += n; if (text) T->rx_text = T->rx_q;
   }
   return k;
 }

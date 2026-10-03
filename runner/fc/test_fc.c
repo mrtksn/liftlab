@@ -247,6 +247,27 @@ int main(int argc, char **argv) {
   /* hours of uptime: the timeouts still work */
   start(quad, lq); F.t = 400000; fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(1);
   link_up = 0; fly(0.6); CHECK(F.state == FC_FAILSAFE, "after 111 h: the command timeout still works (%s)", F.why);
+  /* the LTEL time after hours: modulo FC_LTEL_WRAP, so the 5 ms steps the learning measures stay 5 ms, across the wrap too */
+  { static float lt[FC_LTEL_MAX]; double last = 0, worst = 0, t0 = F.t; int got = 0, wrapped = 0;
+    F.t = 43 * FC_LTEL_WRAP - 0.05;                          /* (3 h, just before a wrap) */
+    for (int k = 0; k < 40; k++) { fly(0.005); fc_ltel(&F, lt); double u = fc_ltel_unwrap(last, got, lt[0]); if (got) worst = fmax(worst, fabs(u - last - 0.005)); if (lt[0] < 1) wrapped = 1; last = u; got = 1; }
+    CHECK(worst < 2e-5 && wrapped && lt[0] < FC_LTEL_WRAP, "3 h up: LTEL steps of 5 ms read back within %.1f µs, across the wrap", worst * 1e6);
+    F.t = t0; }
+  /* an IMU sample missed in flight (an I2C error, a late wake-up): the attitude stays settled; 60 ms of none: not */
+  start(quad, lq); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1.5); C.throttle = 0.5f; fly(1);
+  have_gyro = 0; fly(0.001); have_gyro = 1; int ok1 = F.att_ok; fly(0.01);
+  have_gyro = 0; fly(0.03); int ok30 = F.att_ok; fly(0.03); int ok60 = F.att_ok; have_gyro = 1; fly(0.01);
+  CHECK(ok1 && ok30 && !ok60 && F.state == FC_ARMED, "one sample missed: attitude settled %d; 30 ms: %d; 60 ms: %d (%s)", ok1, ok30, ok60, F.why);
+  /* the supervisor's mode: it only steps up in the air, a disarm ends it, and on the ground it is as sent */
+  { float set[6 + 3 * 4]; int n = 0; set[n++] = 3; set[n++] = 0; set[n++] = 0; set[n++] = 0; set[n++] = 4; set[n++] = 0;
+    for (int i = 0; i < 4; i++) { set[n++] = 1; set[n++] = 1; set[n++] = 1; }
+    fly(1); fc_set(&F, set, n); fly(0.1); CHECK(F.state == FC_FAILSAFE && F.sup_mode == 3, "the supervisor lands it (stick flying): %s", F.why);
+    set[0] = 0; fc_set(&F, set, n); CHECK(F.sup_mode == 3, "in the air, mode 0 doesn't stop the landing");
+    double tl = B.t; while (F.state == FC_FAILSAFE && B.t - tl < 30) fly(0.1);
+    CHECK(F.state == FC_DISARMED && F.sup_mode == 0, "landed and disarmed: its mode ended (%d)", F.sup_mode);
+    set[0] = 2; fc_set(&F, set, n); set[0] = 0; fc_set(&F, set, n);
+    C.arm = 0; C.throttle = 0; fly(0.1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(1);
+    CHECK(F.state == FC_ARMED && F.sup_mode == 0 && B.p[2] > 0.3, "on the ground mode 2, then 0: as sent; it flies again (%s, %.1f m)", F.why, B.p[2]); }
 
   printf("failsafe with an accelerometer bias that appears in flight\n");
   { const float biases[] = { -0.5f, -0.3f, 0.3f, 0.5f, -0.3f, -0.1f, 0.1f, 0.3f }; const int baros[] = { 1, 1, 1, 1, 0, 0, 0, 0 };

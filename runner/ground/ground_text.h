@@ -4,13 +4,17 @@
  *   press NAME, release NAME, tap NAME     a button: right left fwd back up down yawr yawl arm fly hold home
  *                                          gentle normal sport cal
  *   stick roll|pitch|throttle|yaw V        an analog stick, −1…1 (off: back to its buttons)
- *   goto X Y Z [HEADING]                   fly to X north, Y west, Z up [m] from home, facing HEADING [°]
+ *   goto X Y Z [HEADING]                   fly to X north, Y west, Z up [m] from home (each within ±327 m: what the
+ *                                          command carries), facing HEADING [°]
  *   calibrate                              the learning's hover calibration
- *   cmd ID V1 V2 …                         any command (rc_core.h)
+ *   cmd ID V1 V2 …                         any command (rc_core.h): ID 1–255, up to 6 values
+ * A value that isn't a number (or is out of range) is refused with a reply saying why; nothing is sent.
  *   status, messages, quit
  * Sticks and the stick buttons set this way lapse a second after they were last sent, like a radio's channels: a
- * script keeps sending them while it holds them, so if it stops, the sticks centre. The arm, fly and speed switches
- * stay as set.
+ * script keeps sending them while it holds them, so if it stops, the sticks centre. Hold, home and cal are momentary
+ * (as on the drone): a press is a tap. The arm, fly and speed switches stay as set. A latching button (gnd_config.latch:
+ * a push button as the arm or fly switch) is set by press and release whatever the button last did, so a script can
+ * always disarm; tap toggles it, as a push would. Arm and fly reply with their state.
  * Not in the simulator's build (it has no C library); the simulator's own keys go straight to ground_core.
  */
 #ifndef GROUND_TEXT_H

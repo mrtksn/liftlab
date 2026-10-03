@@ -1,5 +1,5 @@
 /* End-to-end test of dfb_pi: a fake ESP32 (the real flight core with test_nav.c's plant, LTEL at 200 Hz while asked)
- * and a fake GPS (NMEA at 5 Hz) behind two pseudo-terminals, in real time. It starts ./dfb_pi on them with the
+ * and a fake GPS (NMEA at 5 Hz, and a damaged sentence once a second) behind two pseudo-terminals, in real time. It starts ./dfb_pi on them with the
  * navigation, the learning and the supervisor, types "arm", "takeoff 1.5", "calibrate" (and waits for it to finish),
  * "health" and "goto 2 1 2" on its input, checks the calibration ran on the link (EXC and MODEL frames; the plant is the
  * description 4% stronger, so it may well keep flying on the description), that the supervisor answers and that it
@@ -37,6 +37,8 @@ static void write_pi_config(const char *path, int nm) {
 static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[8192]; uint32_t len = rn_link_frame(fr, sizeof fr, type, (const uint8_t *)p, n); if (len) (void)!write(fd, fr, len);
 }
+/* an NMEA sentence from what lies between '$' and '*': the checksum after it */
+static void nmea(char *out, size_t n, const char *body) { int x = 0; for (const char *p = body; *p; p++) x ^= (unsigned char)*p; snprintf(out, n, "$%s*%02X\r\n", body, x); }
 static void step_ms(void) {
   fc_imu m; memset(&m, 0, sizeof m); for (int j = 0; j < 3; j++) { m.gyro[j] = (float)B.w[j]; m.acc[j] = (float)acc_b[j]; }
   if (B.t == 0) { m.acc[2] = 9.81f; }
@@ -106,11 +108,14 @@ int main(int argc, char **argv) {
     if (el >= next_gps) {   /* the GPS: 5 Hz NMEA, 0.2 m noise, around 41.0 N 29.0 E (x north, y west) */
       next_gps += 0.2;
       double lat = 41.0 + (B.p[0] + 0.2 * gauss()) / 6371000.0 * 180 / M_PI, lon = 29.0 - (B.p[1] + 0.2 * gauss()) / (6371000.0 * cos(41.0 * M_PI / 180)) * 180 / M_PI;
-      int la = (int)lat, lo = (int)lon; char g[200], rm[200];
-      snprintf(g, sizeof g, "$GPGGA,120000.00,%02d%08.5f,N,%03d%08.5f,E,1,08,1.0,%.1f,M,0,M,,*00\r\n", la, (lat - la) * 60, lo, (lon - lo) * 60, 100 + B.p[2]);
+      int la = (int)lat, lo = (int)lon; char b[200], g[200], rm[200], bad[200];
+      snprintf(b, sizeof b, "GPGGA,120000.00,%02d%08.5f,N,%03d%08.5f,E,1,08,1.0,%.1f,M,0,M,,", la, (lat - la) * 60, lo, (lon - lo) * 60, 100 + B.p[2]); nmea(g, sizeof g, b);
       double sp = hypot(B.v[0], B.v[1]) / 0.514444, crs = atan2(-B.v[1], B.v[0]) * 180 / M_PI; if (crs < 0) crs += 360;
-      snprintf(rm, sizeof rm, "$GPRMC,120000.00,A,%02d%08.5f,N,%03d%08.5f,E,%.3f,%.1f,021026,,,A*00\r\n", la, (lat - la) * 60, lo, (lon - lo) * 60, sp, crs);
-      (void)!write(gm, g, strlen(g)); (void)!write(gm, rm, strlen(rm));
+      snprintf(b, sizeof b, "GPRMC,120000.00,A,%02d%08.5f,N,%03d%08.5f,E,%.3f,%.1f,021026,,,A", la, (lat - la) * 60, lo, (lon - lo) * 60, sp, crs); nmea(rm, sizeof rm, b);
+      /* and now and then one damaged on the way (a digit changed, the checksum as it was): hundreds of metres off, if it were taken */
+      snprintf(b, sizeof b, "GPGGA,120000.00,%02d%08.5f,N,%03d%08.5f,E,1,08,1.0,%.1f,M,0,M,,", la, (lat - la) * 60, lo, (lon - lo) * 60, 100 + B.p[2]); nmea(bad, sizeof bad, b);
+      { char *c = strchr(bad, 'N') - 6; *c = *c == '9' ? '0' : *c + 1; }
+      (void)!write(gm, g, strlen(g)); (void)!write(gm, rm, strlen(rm)); if (lround(el * 5) % 5 == 2) (void)!write(gm, bad, strlen(bad));
     }
     if (el > 1.0 && !sent_arm) { (void)!write(inp[1], "arm\n", 4); sent_arm = 1; }
     if (el > 2.5 && !sent_to) { (void)!write(inp[1], "takeoff 1.5\n", 12); sent_to = 1; }

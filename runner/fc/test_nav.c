@@ -77,6 +77,8 @@ static cq_t cq[QN]; static int cq_n; static tq_t tq[QN]; static int tq_n;
 static double DELAY = 0.006;
 
 static body B; static fc_out O; static nav_sp SP; static int use_fix = 1, use_flow = 0, link_on = 1;
+static long drop_gyro_at = -1; static int drop_att = 0, idle_cmds = 0;   /* a missed IMU sample (that ms); NAV frames without the attitude; commands to idle */
+static nav_out NO;                                                    /* the navigation's last output */
 static nav_in latest; static int have_latest;
 /* GPS: 5 Hz, 150 ms late, 20 cm noise with a slow wander; barometer 25 Hz; flow 100 Hz with its rangefinder */
 static double gps_w[3]; static struct { double at, p[3], v[3]; } gq[8]; static int gq_n;
@@ -87,7 +89,7 @@ static void fly(double seconds) {
     while (cq_n && cq[0].at <= t) { fc_command(&F, &cq[0].c); memmove(cq, cq + 1, sizeof cq[0] * --cq_n); }
     fc_imu m; for (int k = 0; k < 3; k++) { m.gyro[k] = (float)(B.w[k] + 0.002 * gauss()); m.acc[k] = (float)(acc_b[k] + 0.03 * gauss()); }
     if (B.t == 0) { double R[9]; qm(R, B.q); for (int i = 0; i < 3; i++) m.acc[i] = (float)(R[6 + i] * 9.81); }
-    m.have_gyro = 1; m.have_mag = 0; m.have_baro = ms % 40 == 0; m.baro_alt = (float)(B.p[2] + 50 + 0.15 * gauss());
+    m.have_gyro = ms != drop_gyro_at; m.have_mag = 0; m.have_baro = ms % 40 == 0; m.baro_alt = (float)(B.p[2] + 50 + 0.15 * gauss());
     rn_host_tick(&HF, 0.001f);
     fc_step(&F, &m, 0.001f, 0, &O);
     plant_step(&B, &F.A, &O, 0.001);
@@ -117,10 +119,12 @@ static void fly(double seconds) {
         in.have_flow = 1; in.range = (float)(range + 0.01 * gauss()); in.flow_q = 1; in.flow_age = 0.02f;
         in.flow[0] = (float)(B.w[1] - vs[0] / range + 0.05 * gauss()); in.flow[1] = (float)(-B.w[0] - vs[1] / range + 0.05 * gauss());
       }
-      nav_step(&N, &in, &SP, 0.01f, &o);
+      if (drop_att > 0) { drop_att--; in.have_att = 0; }
+      int e = nav_step(&N, &in, &SP, 0.01f, &o); NO = o;
       fc_cmd c; memset(&c, 0, sizeof c); c.arm = 1; c.test_motor = -1;
       c.guided = 1; memcpy(c.acc, o.acc, sizeof c.acc); c.heading = o.heading; c.throttle = o.fly ? 1 : 0;
-      if (link_on && cq_n < QN) { cq[cq_n].at = t + DELAY; cq[cq_n].c = c; cq_n++; }
+      if (!o.fly) idle_cmds++;
+      if (link_on && cq_n < QN && !(e > 0 && o.fly)) { cq[cq_n].at = t + DELAY; cq[cq_n].c = c; cq_n++; }   /* (as dfb_pi: nothing to step on in the air, no command) */
     }
   }
 }
@@ -142,7 +146,7 @@ static void start(const uint8_t *blob, uint32_t len, int flow) {
   refs = flow ? 5 : 3; make_config(F.A.m);
   if (nav_init(&N, &HN) || nav_config_load(&N, cfg_blob, sizeof cfg_blob)) { printf("nav: %s\n", N.why); exit(1); }
   memset(&B, 0, sizeof B); B.q[0] = 1; cq_n = tq_n = gq_n = 0; have_latest = 0; memset(gps_w, 0, sizeof gps_w);
-  memset(&SP, 0, sizeof SP); use_fix = !flow; use_flow = flow; link_on = 1; srand(7);
+  memset(&SP, 0, sizeof SP); use_fix = !flow; use_flow = flow; link_on = 1; srand(7); drop_gyro_at = -1; drop_att = 0; idle_cmds = 0;
 }
 static double herr(void) { return hypot(B.p[0] - SP.target[0], B.p[1] - SP.target[1]); }
 /* arm on the ground: the arm switch off then on, with the motors idle */
@@ -179,6 +183,23 @@ int main(int argc, char **argv) {
   SP.vref[0] = 2; for (int k = 0; k < 150; k++) { SP.target[0] += 0.04f; fly(0.02); }
   CHECK(B.v[0] > 1.5, "follows a moving target at 2 m/s (%.2f m/s)", B.v[0]);
   SP.vref[0] = 0; fly(5);
+  printf("a missed IMU sample, NAV frames without the attitude\n");
+  { double z0 = B.p[2], zmin = z0; drop_gyro_at = lround(B.t * 1000) + 3; idle_cmds = 0;
+    for (int k = 0; k < 150; k++) { fly(0.01); if (B.p[2] < zmin) zmin = B.p[2]; }
+    CHECK(z0 - zmin < 0.15 && !idle_cmds && F.state == FC_ARMED, "one sample missed in a hover: the attitude stays settled, it flies on (lowest %.2f m below, %d idle commands)", z0 - zmin, idle_cmds);
+    drop_att = 3; zmin = z0 = B.p[2]; for (int k = 0; k < 150; k++) { fly(0.01); if (B.p[2] < zmin) zmin = B.p[2]; }
+    CHECK(z0 - zmin < 0.15 && !idle_cmds && NO.fly && F.state == FC_ARMED, "three NAV frames without the attitude: the last output holds, no command to idle (lowest %.2f m below)", z0 - zmin); }
+  printf("\"fly\" off in the air\n");
+  { double x0 = B.p[0], y0 = B.p[1], vmin = 0; SP.fly = 0;
+    for (int k = 0; k < 600 && (N.fly_land || NO.fly); k++) { fly(0.01); if (B.v[2] < vmin) vmin = B.v[2]; }
+    fly(0.5);
+    CHECK(B.p[2] < 0.05 && vmin > -1.2 && hypot(B.p[0] - x0, B.p[1] - y0) < 0.8 && F.state == FC_ARMED && !NO.fly && !N.fly_land && !N.landed,
+          "lands where it is (%.2f m off, fastest descent %.2f m/s), then idles, still armed (%s; %s)", hypot(B.p[0] - x0, B.p[1] - y0), -vmin, F.why, N.why);
+    fly(1); CHECK(B.p[2] < 0.05, "and stays on the ground (z %.2f)", B.p[2]);
+    SP.target[0] = (float)NO.p[0]; SP.target[1] = (float)NO.p[1]; SP.target[2] = 1.5f; SP.fly = 1; fly(6);
+    CHECK(fabs(B.p[2] - 1.5) < 0.3, "\"fly\" on again: takes off (z %.2f)", B.p[2]);
+    SP.fly = 0; fly(0.5); SP.fly = 1; fly(4);
+    CHECK(fabs(B.p[2] - 1.5) < 0.3 && !N.fly_land && NO.fly, "off and on again in the air: it lands for a moment, then flies on (z %.2f)", B.p[2]); }
   printf("link lost\n");
   link_on = 0; cq_n = 0; fly(1);
   CHECK(F.state == FC_FAILSAFE, "the flight core goes to its failsafe: %s", F.why);

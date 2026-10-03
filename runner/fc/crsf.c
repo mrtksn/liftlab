@@ -86,7 +86,7 @@ void crsf_link_stats_read(const uint8_t *p, int n, crsf_link *L) {
 int crsf_rc(uint8_t *out, uint8_t addr, const float ch[16]) {
   uint8_t p[22] = { 0 }; int bit = 0;
   for (int i = 0; i < 16; i++) {
-    float c = ch[i] < -1 ? -1 : ch[i] > 1 ? 1 : ch[i];
+    float c = ch[i] != ch[i] ? 0 : ch[i] < -1 ? -1 : ch[i] > 1 ? 1 : ch[i];   /* (not a number: the centre, not −1) */
     int v = (int)roundl_(CRSF_CH_MID + c * (CRSF_CH_MAX - CRSF_CH_MID));
     for (int b = 0; b < 11; b++, bit++) if (v & (1 << b)) p[bit >> 3] |= (uint8_t)(1 << (bit & 7));
   }

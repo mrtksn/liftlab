@@ -205,17 +205,24 @@ EXPORT("rc_learn_req") int rc_learn_req(void) { int r = RP.learn_req; RP.learn_r
 
 /* ── the command module ── */
 static gnd_state GND;
-/* latch: the buttons that toggle (GB bits). Uses the step runner set up by host_setup (with the ground program). */
-EXPORT("gnd_setup") int gnd_setup(int latch) { gnd_config c; gnd_config_default(&c); c.latch = (uint32_t)latch; return gnd_init(&GND, host_ok ? &H : 0, &c); }
+/* latch: the buttons that toggle (GB bits). resume (may be left out: 0): the buttons on before, for a command module
+ * set up again in flight (gnd_config.resume), so its switch warning doesn't turn arm and fly off. Uses the step runner
+ * set up by host_setup (with the ground program). */
+EXPORT("gnd_setup") int gnd_setup(int latch, int resume) { gnd_config c; gnd_config_default(&c); c.latch = (uint32_t)latch; c.resume = (uint32_t)resume; return gnd_init(&GND, host_ok ? &H : 0, &c); }
 EXPORT("gnd_why_ptr") char *gnd_why_ptr(void) { return GND.why; }
 /* one step: the buttons held (GB bits), the analog sticks (has: a bit per axis); frames for the module into rbuf */
 EXPORT("gnd_tick") int gnd_tick(int held, int has, float roll, float pitch, float thr, float yaw, double t, float dt) {
-  gnd_input in; in.held = (uint32_t)held; in.has_axis = (uint32_t)has; in.axis[0] = roll; in.axis[1] = pitch; in.axis[2] = thr; in.axis[3] = yaw;
+  gnd_input in = { .axis = { roll, pitch, thr, yaw }, .has_axis = (uint32_t)has, .held = (uint32_t)held };   /* (the rest, sw, zero) */
   return gnd_step(&GND, &in, t, dt, rbuf, (int)sizeof rbuf);
 }
 EXPORT("gnd_from_radio") void gnd_from_radio_(int n, double t) { gnd_from_radio(&GND, rbuf, n, t); }
+/* 0, −1 too many waiting, −2 out of range or not a number (nothing queued) */
 EXPORT("gnd_goto") int gnd_goto_(float x, float y, float z, float h) { return gnd_goto(&GND, x, y, z, h); }
 EXPORT("gnd_command") int gnd_command_(int cmd, int n) { return gnd_command(&GND, cmd, fr, n); }   /* values in fr */
+/* a latching button (gnd_setup's latch) set on or off, whatever its button last did: the state, or −1 */
+EXPORT("gnd_latch") int gnd_latch_(int b, int on) { return gnd_latch(&GND, b, on); }
+/* the buttons sent on in the last step (GB bits): what to pass back as gnd_setup's resume */
+EXPORT("gnd_on") int gnd_on(void) { return (int)GND.on; }
 EXPORT("gnd_view") int gnd_view_(double t) { return gnd_view_pack(&GND, t, fr, (int)(sizeof fr / sizeof *fr)); }
 EXPORT("gnd_mode_ptr") char *gnd_mode_ptr(void) { return GND.V.mode; }
 EXPORT("gnd_msg_text") char *gnd_msg_text(int i) { return GND.V.msg[i % GND_MSGS].s; }

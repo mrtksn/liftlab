@@ -223,13 +223,7 @@ function renderDesigns() {
   if (!designs.list.length) box.append(el('p', { class: 'hint', text: 'No saved designs yet.' }));
   const where = document.getElementById('designWhere');
   if (where) where.textContent = designs.where === 'account' ? 'Saved designs are kept in your account, private to you.' : 'Saved designs are kept in this browser only. Save to file for a copy you can keep anywhere.';
-  // Start from: presets, then your designs
-  const sel = document.getElementById('preset'); if (sel) {
-    sel.textContent = '';
-    sel.append(el('option', { value: '', text: 'Choose a layout…' }));
-    const g1 = el('optgroup', { label: 'Layouts' }); for (const [k, p] of Object.entries(PRESETS)) g1.append(el('option', { value: 'p:' + k, text: p.label })); sel.append(g1);
-    if (designs.list.length) { const g2 = el('optgroup', { label: 'My designs' }); for (const d of designs.list) g2.append(el('option', { value: 'd:' + d.id, text: d.name || 'Untitled design' })); sel.append(g2); }
-  }
+  // (the Layouts menu in the top bar lists these when it opens: ui.js presetMenu)
   renderDesignState();
 }
 function initDesigns(boot) {

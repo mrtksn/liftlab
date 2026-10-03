@@ -19,7 +19,7 @@
     <div class="hgroup" role="group" aria-labelledby="grpAir">
       <span class="lbl" id="grpAir">Airframe</span>
       <div class="hrow">
-        <select id="preset" aria-label="Start from a layout or a saved design" title="Start from a layout (Blank is a bare frame) or one of your saved designs"></select>
+        <span id="presetSlot"></span>
       </div>
     </div>
     <div class="hgroup" role="group" aria-labelledby="grpWorld">
@@ -45,9 +45,12 @@
         <button class="btn icon" id="resetBtn" type="button" aria-label="Reset" title="Reset the flight (R)">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <div class="seg" role="group" aria-label="Reset into" title="What Reset does" id="launchSeg">
-          <button type="button" id="launchHover" aria-pressed="true" title="Reset starts hovering at the target">Hover</button>
-          <button type="button" id="launchThrow" aria-pressed="false" title="Reset throws the drone with its motors off. It learns what it is while falling, then catches itself (T)">Throw</button>
+        <div class="launch" role="group" aria-labelledby="launchLbl" id="launchSeg">
+          <span class="mini-lbl" id="launchLbl">Reset into</span>
+          <div class="seg">
+            <button type="button" id="launchHover" aria-pressed="true" title="Reset now, and every reset starts hovering at the target">Hover</button>
+            <button type="button" id="launchThrow" aria-pressed="false" title="Reset now by throwing the drone with its motors off; it learns what it is while falling, then catches itself. Every reset does this until you pick Hover (T)">Throw</button>
+          </div>
         </div>
         <div class="seg seg-speed" role="group" aria-label="Simulation speed" id="speedSeg">
           <button type="button" data-speed="0.25" aria-pressed="false" title="Quarter speed">¼×</button>
@@ -59,21 +62,22 @@
     <div class="hgroup" role="group" aria-labelledby="modeLbl">
       <span class="lbl" id="modeLbl">Steering</span>
       <div class="hrow">
-        <div class="seg" role="group" aria-labelledby="modeLbl">
-          <button type="button" id="modeTilt" aria-pressed="true" title="Lean the whole body to move sideways; servos only help turn">Tilt body</button>
-          <button type="button" id="modeMixed" aria-pressed="false" title="Servos make part of the sideways force, the body leans for the rest">Mixed</button>
-          <button type="button" id="modeLevel" aria-pressed="false" title="Stay level; servos make all the sideways force">Stay level</button>
+        <div class="seg" role="group" aria-labelledby="modeLbl" aria-describedby="modeDesc">
+          <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
+          <button type="button" id="modeMixed" aria-pressed="false">Mixed</button>
+          <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
         </div>
       </div>
+      <p class="mode-desc" id="modeDesc"></p>
     </div>
   </header>
 
   <main class="work">
     <aside class="panel" id="airframe" aria-label="Airframe and flight computers">
       <div class="tabs" role="tablist" aria-label="Left panel">
-        <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true">Airframe</button>
-        <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false">Computers <span class="count" id="editedCount" hidden></span></button>
-        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false">Ground station</button>
+        <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true" tabindex="0">Airframe</button>
+        <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false" tabindex="-1">Computers <span class="count" id="editedCount" hidden></span></button>
+        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false" tabindex="-1" aria-label="Ground station" title="Ground station: what comes down the radio">Ground</button>
       </div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
@@ -158,12 +162,47 @@
       </div>
       <div class="hud hud-tr">
         <div class="tog-row">
-        <button class="btn edit-btn" type="button" id="tEdit" aria-pressed="false" title="Select parts and move or rotate them in the view (E)">Edit</button>
-        <button class="btn" type="button" id="tFollow" aria-pressed="true">Follow</button>
-        <button class="btn" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
+        <button class="btn tog edit-btn" type="button" id="tEdit" aria-pressed="false" title="Select parts and move or rotate them in the view (E)">Edit</button>
+        <button class="btn tog" type="button" id="tFollow" aria-pressed="true" title="Keep the camera on the drone as it flies. Off: it looks at the target">Follow drone</button>
+        <button class="btn tog" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
         <div class="show-wrap">
           <button class="btn" type="button" id="tShow" aria-expanded="false" aria-controls="showMenu" title="Choose what the view draws: forces, torque, trail, grid… (Q toggles torque)">Show <span aria-hidden="true">▾</span></button>
           <div class="show-menu" id="showMenu" role="group" aria-label="What the view shows" hidden></div>
+        </div>
+        <div class="show-wrap">
+          <button class="btn" type="button" id="tKeys" aria-expanded="false" aria-controls="keysPop" title="Keyboard shortcuts">Keys <span aria-hidden="true">?</span></button>
+          <div class="show-menu keys-pop" id="keysPop" role="dialog" aria-label="Keyboard shortcuts" hidden>
+            <p>The keys work while the cursor isn't in a field or on a control that uses the key itself: click the 3D view first.</p>
+            <div class="show-grp"><span class="lbl">Flying</span><dl>
+              <dt><kbd>W</kbd> <kbd>S</kbd></dt><dd>climb, descend</dd>
+              <dt><kbd>A</kbd> <kbd>D</kbd></dt><dd>turn left, right</dd>
+              <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>forward, back, left, right (from the heading)</dd>
+              <dt><kbd>Space</kbd></dt><dd>hold here</dd>
+              <dt><kbd>H</kbd></dt><dd>fly home</dd>
+              <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Gentle, Normal, Sport</dd>
+              <dt><kbd>P</kbd></dt><dd>poke: hold to charge, release to hit</dd>
+            </dl></div>
+            <div class="show-grp"><span class="lbl">Simulation</span><dl>
+              <dt><kbd>K</kbd></dt><dd>pause, run</dd>
+              <dt><kbd>R</kbd></dt><dd>reset</dd>
+              <dt><kbd>T</kbd></dt><dd>reset into a throw (when a board runs the learning)</dd>
+            </dl></div>
+            <div class="show-grp"><span class="lbl">View</span><dl>
+              <dt><kbd>C</kbd></dt><dd>chase camera on, off</dd>
+              <dt><kbd>Q</kbd></dt><dd>torque arrows on, off</dd>
+              <dt><kbd>O</kbd> or <kbd>Num 5</kbd></dt><dd>perspective, orthographic</dd>
+              <dt><kbd>V</kbd></dt><dd>step through Top, Front, Side, Iso</dd>
+              <dt><kbd>Num 7</kbd> <kbd>1</kbd> <kbd>3</kbd></dt><dd>from above, the front, the right (with <kbd>Ctrl</kbd>: the opposite side)</dd>
+              <dt><kbd>Num 0</kbd></dt><dd>isometric</dd>
+            </dl></div>
+            <div class="show-grp"><span class="lbl">Building</span><dl>
+              <dt><kbd>E</kbd></dt><dd>edit mode on, off</dd>
+              <dt><kbd>Esc</kbd></dt><dd>let go of the part, then leave edit mode</dd>
+              <dt><kbd>Ctrl</kbd> <kbd>Z</kbd></dt><dd>undo (<kbd>⌘</kbd> <kbd>Z</kbd> on a Mac)</dd>
+              <dt><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Z</kbd></dt><dd>redo (or <kbd>Ctrl</kbd> <kbd>Y</kbd>; <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd> on a Mac)</dd>
+              <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>in a formula's code: apply it (<kbd>⌘</kbd> <kbd>Enter</kbd> on a Mac)</dd>
+            </dl></div>
+          </div>
         </div>
         </div>
         <div class="view-box" role="group" aria-label="View">
@@ -264,6 +303,7 @@
             <button type="button" id="useDesc" aria-pressed="true">Description</button>
             <button type="button" id="useLearned" aria-pressed="false">Learned</button>
           </div>
+          <span class="field-note" id="learnedWhy">Learned: calibrate first</span>
         </div>
         <div class="learn-actions">
           <button class="btn primary" type="button" id="calBtn">Calibrate</button>
@@ -285,17 +325,17 @@
       </section>
       <section class="sec">
         <h2 data-src="board sim">Actuator commands</h2>
-        <p class="hint"><i class="src-dot src-board" title="On board: the drone's command"></i>bar: the throttle the drone commands &nbsp; <i class="src-dot src-sim" title="Simulated: what really happens"></i>tick: the real thrust; servos: real angle → commanded</p>
+        <p class="hint"><span class="nowrap"><i class="src-dot src-board" title="On board: the drone's command"></i>bar: the throttle the drone commands</span>; <span class="nowrap"><i class="src-dot src-sim" title="Simulated: what really happens"></i>tick: the real thrust</span>; servos: real angle → commanded</p>
         <div class="acts" id="acts"></div>
       </section>
       <section class="sec">
         <h2 data-src="you">Allocation <small id="allocSmall"></small></h2>
-        <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself.</p>
+        <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself. Each is a pull weighed against the others: 0 turns it off, 0.2 is the strongest (the defaults are 0.02, 0.02 and 0.01).</p>
         <div id="allocFields"></div>
       </section>
       <section class="sec">
         <h2 data-src="calc">Control headroom <small>beyond hover</small></h2>
-        <div class="ehead"><span></span><span>− direction</span><span>+ direction</span></div>
+        <div class="ehead"><span></span><span>− side</span><span>+ side</span></div>
         <div class="env" id="env"></div>
       </section>
       <section class="sec">

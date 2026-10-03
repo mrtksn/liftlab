@@ -84,7 +84,7 @@ void super_ltel(super_state *S, const float *p, int n) {
   const fc_airframe *A = &S->FA.A; int nm = A->n_motors, nj = A->n_joints;
   if (!S->ok || !S->FA.have_airframe || n < FC_LT_N + 2 * nm + 2 * nj + 1 || (int)p[FC_LT_N - 2] != nm) return;
   for (int k = 0; k < n; k++) if (!fin(p[k])) return;
-  double t = p[0]; S->dt = S->got ? (float)(t - S->t_last) : 0.005f; S->t_last = t; S->got = 1; S->t = t;
+  double t = fc_ltel_unwrap(S->t_last, S->got, p[0]); S->dt = S->got ? (float)(t - S->t_last) : 0.005f; S->t_last = t; S->got = 1; S->t = t;
   if (!(S->dt > 0) || S->dt > 0.05f) S->dt = 0.005f;
   S->state = (int)p[1]; int flags = (int)p[2];
   float qn = 0; for (int k = 0; k < 4; k++) { S->q[k] = p[3 + k]; qn += S->q[k] * S->q[k]; }

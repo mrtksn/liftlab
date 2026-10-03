@@ -30,6 +30,32 @@ static void ground_read(ground *G, const uint8_t *p, int n) {
   }
 }
 
+/* An ExpressLRS receiver's telemetry queue (lib/rx-crsf/RXOTAConnector.cpp), drained at `rate` bytes/s: a standard frame
+ * (type < 0x28) replaces a waiting one of its type, a status text (0x80, 0xF1) a waiting status text; the rest queue up.
+ * The frame being sent has left the queue. What it delivers, the ground reads. */
+typedef struct { uint8_t f[40][64]; int len[40], n; uint8_t cur[64]; int cur_len; double cur_left; ground G; int replaced; } elrs_fifo;
+static int is_text(const uint8_t *f) { return f[2] == CRSF_EXT && f[3] == CRSF_EXT_TEXT; }
+static void elrs_write(elrs_fifo *Q, const uint8_t *p, int n) {
+  for (int at = 0; at + 2 < n; ) {
+    int len = p[at + 1] + 2; const uint8_t *f = p + at; int k = -1;
+    for (int i = 0; i < Q->n; i++) if ((f[2] < 0x28 && Q->f[i][2] == f[2]) || (is_text(f) && is_text(Q->f[i]))) k = i;
+    if (k >= 0) { if (is_text(f)) Q->replaced++; memcpy(Q->f[k], f, (size_t)len); Q->len[k] = len; }
+    else if (Q->n < 40) { memcpy(Q->f[Q->n], f, (size_t)len); Q->len[Q->n++] = len; }
+    at += len;
+  }
+}
+static void elrs_drain(elrs_fifo *Q, double bytes) {
+  while (bytes > 0) {
+    if (Q->cur_left <= 0) {
+      if (Q->cur_len) { ground_read(&Q->G, Q->cur, Q->cur_len); Q->cur_len = 0; }
+      if (!Q->n) return;
+      memcpy(Q->cur, Q->f[0], (size_t)Q->len[0]); Q->cur_len = Q->len[0]; Q->cur_left = Q->len[0];
+      memmove(Q->f, Q->f + 1, sizeof Q->f[0] * (size_t)(Q->n - 1)); memmove(Q->len, Q->len + 1, sizeof Q->len[0] * (size_t)(Q->n - 1)); Q->n--;
+    }
+    double d = bytes < Q->cur_left ? bytes : Q->cur_left; Q->cur_left -= d; bytes -= d;
+  }
+}
+
 int main(void) {
   printf("CRSF frames\n");
   {
@@ -77,6 +103,24 @@ int main(void) {
     CHECK(s && s->n == 6 && s->v[1] == -2.5f && B.qn == 1 && !strcmp(B.q[B.qh].s, "from the Pi") && tlm_pack(&A, buf, 256) == 0, "packed on one board, unpacked on another (%d floats), sent once", n);
   }
 
+  printf("messages through an ExpressLRS receiver's queue\n");
+  {
+    static tlm_store T; tlm_init(&T); static elrs_fifo Q; memset(&Q, 0, sizeof Q);
+    float att[3] = { 0.1f, 0, 0 }, st[2] = { 1, 1 }; const float rate = 281;   /* 250 Hz, telemetry 1:4 */
+    const char *say[5] = { "one: radio link lost", "two: flying home to land", "three: battery low", "four: landed by itself", "five" };
+    int texts = 0; char got[5][64]; uint8_t out[512];
+    for (int k = 0; k <= 1600; k++) {                             /* 8 s, every 5 ms */
+      double t = k * 0.005;
+      if (k == 400) for (int i = 0; i < 5; i++) tlm_text(&T, 4, say[i]);   /* five at once, after a quiet second: the bucket is full */
+      if (k < 200 || k > 400) { att[0] = 0.1f + 0.001f * k; tlm_put(&T, TLM_ATT, att, 3, t); tlm_put(&T, TLM_STATE, st, 2, t); }
+      int n = tlm_service(&T, &tlm_crsf, t, rate, out, sizeof out); elrs_write(&Q, out, n);
+      int was = Q.G.text; elrs_drain(&Q, rate * 0.005);
+      if (Q.G.text != was && texts < 5) snprintf(got[texts++], 64, "%s", Q.G.text_s);
+    }
+    int order = texts == 5; for (int i = 0; i < texts; i++) if (strcmp(got[i], say[i])) order = 0;
+    CHECK(Q.replaced == 0 && order, "five messages at once: all five arrive, in order, none replaced in the queue (%d arrived, %d replaced)", texts, Q.replaced);
+  }
+
   printf("the pilot's radio\n");
   {
     rc_input in; memset(&in, 0, sizeof in); fc_cmd c;
@@ -102,7 +146,7 @@ int main(void) {
   }
   printf("the radio's small print\n");
   {
-    rc_input in; memset(&in, 0, sizeof in); uint8_t f[64]; crsf_parser P; memset(&P, 0, sizeof P);
+    rc_input in; memset(&in, 0, sizeof in); uint8_t f[64]; crsf_parser P; memset(&P, 0, sizeof P); fc_cmd c0;
     /* link statistics too short to be link statistics: ignored, not read as garbage */
     uint8_t ls[8] = { 0x20, 0x20, 77, 5, 0, 2 }; int n = crsf_frame(f, CRSF_ADDR_FC, CRSF_LINK_STATS, ls, 6);
     int took = 0; for (int i = 0; i < n; i++) took |= tlm_crsf_input(&P, f[i], &in, 1.0);
@@ -144,6 +188,30 @@ int main(void) {
     c[RC_FLY] = -1; for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
     o2.p[0] = -3; c[RC_FLY] = 1; for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
     CHECK(fabsf(sp.target[0] + 3) < 0.1f, "fly, land elsewhere, fly again: the target starts at the new spot (x %.2f)", sp.target[0]);
+    /* "fly" off in the air: the navigation lands it (nav_core: fly_land), the pilot is told; the link lost meanwhile,
+     * it lands on, armed */
+    o2.fly = 1; o2.p[2] = 2; c[RC_FLY] = -1; memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; RP.said = 0;
+    int armed = rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); t += 0.01;
+    CHECK(armed && !sp.fly && RP.said && strstr(RP.msg, "landing"), "fly switch off in the air: \"%s\" (the navigation lands it, then idles)", RP.msg);
+    N.fly_land = 1; for (int k2 = 0; k2 < 150; k2++, t += 0.01) armed = rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp);
+    CHECK(armed && N.rc_rth && RP.lost, "the link lost while it lands: it lands on, still armed (%s)", RP.msg);
+    /* landed by itself: disarmed until the arm switch goes off and on; the supervisor's mode goes with the landing */
+    N.landed = 1; N.sup_mode = 3; N.fly_land = 0; o2.fly = 0; o2.landed = 1; RP.said = 0;
+    for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; armed = rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
+    CHECK(!armed && N.landed && strstr(RP.msg, "arm switch off"), "landed by itself, the arm switch on: stays disarmed (\"%s\")", RP.msg);
+    c[RC_ARM] = -1; memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); t += 0.01;
+    c[RC_ARM] = 1; memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; armed = rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp);
+    CHECK(armed && !N.landed && !N.sup_mode && !N.rc_rth, "the arm switch off, then on: it may fly again");
+    /* a receiver that sends channels in its failsafe: its link statistics (uplink LQ 0) say the link is lost */
+    rc_input z2; memset(&z2, 0, sizeof z2); float ch0[16] = { 0 };
+    n = crsf_rc(f, CRSF_ADDR_FC, ch0); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.0);
+    L.up_lq = 0; L.up_rssi = -120; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.0);
+    n = crsf_rc(f, CRSF_ADDR_FC, ch0); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.01);
+    float pk2[RC_PACK_N]; rc_pack(&z2, 20.02, pk2);
+    CHECK(!rc_link_ok(&z2, 20.02) && rc_stick_cmd(&z2, 20.02, &c0) == -1 && pk2[16] > 100, "channels coming, uplink LQ 0: lost (no stick command; passed on as no channels)");
+    L.up_lq = 80; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.5);
+    n = crsf_rc(f, CRSF_ADDR_FC, ch0); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.5);
+    CHECK(rc_link_ok(&z2, 20.51), "LQ 80 again: the link is back");
   }
   printf(fails ? "%d FAILED\n" : "all passed\n", fails);
   return fails != 0;

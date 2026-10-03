@@ -14,6 +14,10 @@
  *   8 hold (momentary)  9 home (momentary)
  * With navigation the throttle stick is centred: up climbs, down sinks; without, it is the throttle.
  * Channels older than 0.1 s: the sticks count as centred (the throttle stays as it was); after 1 s, the link is lost.
+ * It is lost too while the receiver's link statistics say nothing comes through (uplink LQ 0): a receiver that keeps
+ * sending channels in its failsafe sends made-up ones (ExpressLRS by default stops sending them).
+ * "fly" off in the air: the navigation lands where it is, then idles (on the ground: it stays there). After it landed
+ * by itself (the supervisor, or the link lost), the arm switch off, then on, lets it fly again.
  */
 #ifndef RC_CORE_H
 #define RC_CORE_H
@@ -37,7 +41,8 @@ typedef struct rc_input {
   float up_rssi, up_lq, up_snr, down_rssi, down_lq; int rf_mode, tx_power; double t_link;
   int cmd; float cmd_v[6]; uint32_t cmd_seq; double t_cmd;   /* the latest ground-station command (cmd_seq counts them), and when it came */
 } rc_input;
-static inline int rc_link_ok(const rc_input *in, double t) { return in->frames > 0 && t - in->t_ch < RC_LOST_S; }
+static inline int rc_lq_lost(const rc_input *in, double t) { return in->t_link > 0 && t - in->t_link < RC_LOST_S && !(in->up_lq > 0); }
+static inline int rc_link_ok(const rc_input *in, double t) { return in->frames > 0 && t - in->t_ch < RC_LOST_S && !rc_lq_lost(in, t); }
 
 /* Angle mode: the stick command. Returns 0 (and fills c) while the channels come, −1 when they don't. */
 int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c);
@@ -48,6 +53,7 @@ typedef struct {
   int hold_was, home_was; uint32_t cmd_seen;
   int learn_req;                          /* a LEARN command came: its code, for the learning (the board passes it on) */
   int lost;                               /* the link is lost (flying home if it was flying) */
+  int landed_was;                         /* the navigation had landed by itself at the last step */
   char msg[64]; int said;                 /* something to tell the pilot (said: new since last read) */
 } rc_pilot;
 void rc_pilot_init(rc_pilot *P);
@@ -56,7 +62,7 @@ void rc_pilot_init(rc_pilot *P);
 int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const nav_out *o, float dt, nav_sp *sp);
 
 /* Between boards (RN_LINK_RC): the receiver's board sends what it got to the navigation's board, 50 times a second.
- * 16 channels, age of the channels [s], the link (up RSSI, LQ, SNR, down RSSI, LQ), the command (seq, cmd, 6 values,
+ * 16 channels, age of the channels [s] (1000 while the link statistics say the link is lost), the link (up RSSI, LQ, SNR, down RSSI, LQ), the command (seq, cmd, 6 values,
  * age [s]). A command older than RC_CMD_FRESH_S is not acted on: a board that restarts mustn't replay an old go-to. */
 #define RC_PACK_N (16 + 1 + 5 + 9)
 #define RC_CMD_FRESH_S 1.0

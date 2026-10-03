@@ -12,6 +12,107 @@ function el(tag, attrs = {}, ...kids) {
   for (const c of kids) if (c != null) e.append(c);
   return e;
 }
+// Readouts that tick: write only what changed, so a reading can be selected and copied while it runs.
+function setText(n, t) {
+  if (!n || n.textContent === t) return;
+  const s = getSelection(); if (s && s.rangeCount && !s.isCollapsed && s.containsNode(n, true)) return;   // being selected: hold still until let go
+  n.textContent = t;
+}
+function syncKv(dl, rows) {   // a <dl> of [name, value] rows, built once, values updated in place
+  const sig = rows.map(r => r[0]).join('|');
+  if (dl._sig !== sig) { dl.textContent = ''; dl._dd = rows.map(([k]) => { const dd = el('dd'); dl.append(el('dt', { text: k }), dd); return dd; }); dl._sig = sig; }
+  rows.forEach((r, i) => { setText(dl._dd[i], r[1]); const c = r[2] || ''; if (dl._dd[i].className !== c) dl._dd[i].className = c; });
+}
+// Chips kept in place by key: only what changed is touched, so a chip can be clicked or keep the focus while the
+// readouts tick. list: [{ key, src, text, tone, go }]; a chip with go (what clicking it does) is a button.
+function syncChips(box, list) {
+  const have = box._chips || (box._chips = new Map()), keys = new Set(list.map(c => c.key));
+  for (const [k, n] of have) if (!keys.has(k) || n.tagName !== (list.find(c => c.key === k).go ? 'BUTTON' : 'SPAN')) { n.remove(); have.delete(k); }
+  let at = box.firstChild;
+  for (const c of list) {
+    let n = have.get(c.key);
+    if (!n) {
+      n = el(c.go ? 'button' : 'span', { type: c.go ? 'button' : null, 'data-focus-key': 'chip-' + c.key }, srcDot(c.src), document.createTextNode(''));
+      if (c.go) n.addEventListener('click', () => n._go && n._go());
+      n._src = c.src; have.set(c.key, n);
+    }
+    n._go = c.go || null;
+    if (n._src !== c.src) { n.firstChild.replaceWith(srcDot(c.src)); n._src = c.src; }
+    const cls = 'chip' + (c.tone ? ' ' + c.tone : ''); if (n.className !== cls) n.className = cls;
+    if (n.lastChild.data !== c.text) n.lastChild.data = c.text;
+    if (n === at) at = at.nextSibling; else box.insertBefore(n, at);
+  }
+}
+// Re-renders replace nodes: put the keyboard focus back on the same control afterwards (found by its id or its
+// data-focus-key), instead of letting it drop to the page.
+function keepFocus(fn) {
+  const a = document.activeElement;
+  const sel = a && a !== document.body ? (a.dataset && a.dataset.focusKey ? `[data-focus-key="${CSS.escape(a.dataset.focusKey)}"]` : a.id ? '#' + CSS.escape(a.id) : null) : null;
+  try { return fn(); } finally {
+    if (sel && !a.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+      const n = document.querySelector(sel); if (n) n.focus({ preventScroll: true });
+    }
+  }
+}
+// A button that opens a short list of actions. (A select used for actions acts on a single arrow key.)
+// o: { text, label, title, key (data-focus-key), cls, align: 'left', items() -> [{ value, label, hint, group, disabled, cur }], onPick(value) }
+let openMenuClose = null;
+function menuButton(o) {
+  const btn = el('button', { type: 'button', class: 'btn mb-btn' + (o.cls ? ' ' + o.cls : ''), 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': o.label || null, title: o.title || null, 'data-focus-key': o.key || null },
+    el('span', { text: o.text }), el('span', { class: 'mb-caret', 'aria-hidden': 'true', text: '▾' }));
+  const menu = el('div', { class: 'mb-menu' + (o.align === 'left' ? ' left' : ''), role: 'menu', 'aria-label': o.label || o.text });
+  menu.hidden = true;
+  const wrap = el('span', { class: 'mb' }, btn, menu);
+  const live = () => [...menu.querySelectorAll('[role=menuitem]:not([aria-disabled="true"])')];
+  const close = back => {
+    if (menu.hidden) return; menu.hidden = true; btn.setAttribute('aria-expanded', 'false');
+    if (openMenuClose === close) openMenuClose = null;
+    if (back) btn.focus();
+  };
+  const open = which => {
+    if (openMenuClose && openMenuClose !== close) openMenuClose(false);
+    menu.textContent = ''; let grp = null;
+    for (const it of o.items()) {
+      if (it.group && it.group !== grp) { grp = it.group; menu.append(el('div', { class: 'mb-grp', role: 'presentation', text: grp })); }
+      const b = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'mb-item' + (it.cur ? ' cur' : '') }, el('span', { text: it.label }), it.hint ? el('span', { class: 'mb-hint', text: it.hint }) : null);
+      if (it.disabled) b.setAttribute('aria-disabled', 'true');
+      b.addEventListener('click', () => { if (it.disabled) return; close(true); o.onPick(it.value); });
+      menu.append(b);
+    }
+    menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); openMenuClose = close;
+    const l = live(); const f = which === 'last' ? l[l.length - 1] : l[0]; if (f) f.focus();
+  };
+  btn.addEventListener('click', () => { if (menu.hidden) open('first'); else close(false); });
+  btn.addEventListener('keydown', e => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); open(e.key === 'ArrowUp' ? 'last' : 'first'); } });
+  menu.addEventListener('keydown', e => {
+    const l = live(), i = l.indexOf(document.activeElement);
+    let j = null;
+    if (e.key === 'ArrowDown') j = (i + 1) % l.length; else if (e.key === 'ArrowUp') j = (i - 1 + l.length) % l.length;
+    else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = l.length - 1;
+    else if (e.key === 'Escape') { e.preventDefault(); close(true); return; }
+    else if (e.key === 'Tab') { close(false); return; }
+    else return;
+    e.preventDefault(); if (l[j]) l[j].focus();
+  });
+  wrap.addEventListener('focusout', e => { if (!menu.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) close(false); });
+  return { node: wrap, btn, close };
+}
+document.addEventListener('pointerdown', e => { if (openMenuClose && !e.target.closest('.mb')) openMenuClose(false); });
+// A select whose change is a big step (it resets the flight): a pick with the mouse applies at once; stepping
+// through it with the arrow keys only applies on Enter, or when you leave it.
+function commitSelect(sel, apply, hint = 'Press Enter to apply') {
+  let key = null, pending = false;
+  const go = () => { if (!pending) return; pending = false; sel.classList.remove('pending'); if (sel.dataset.title != null) sel.title = sel.dataset.title; apply(sel.value); };
+  sel.addEventListener('keydown', e => { if (e.key === 'Enter') { key = null; if (pending) { e.preventDefault(); go(); } } else key = e.key; });
+  sel.addEventListener('pointerdown', () => { key = null; });
+  sel.addEventListener('change', () => {
+    const stepping = key != null && (/^(Arrow|Page)/.test(key) || key === 'Home' || key === 'End' || (key.length === 1 && key !== ' '));
+    key = null; pending = true;
+    if (!stepping) { go(); return; }
+    sel.classList.add('pending'); if (sel.dataset.title == null) sel.dataset.title = sel.title || ''; sel.title = hint;
+  });
+  sel.addEventListener('blur', go);
+}
 let running = true, speed = 1;
 
 /* ───────── components ───────── */
@@ -117,16 +218,25 @@ function summary(c) {
 }
 // A labelled value with a slider and a box you can type into. The slider covers the usual range;
 // typed values may go further, up to hmin/hmax. `get`/`set` work in SI units, the box shows d.k × value.
+// A typed value outside the limits is clamped, and a note beside the box says so for a moment. d.ends: words
+// for the two ends of the slider (the scale), shown under it. d.int: whole numbers only.
 function numField(id, d, get, set) {
-  const k = d.k || 1, lo = d.hmin ?? d.min, hi = d.hmax ?? d.max;
-  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(d.step * k), 'aria-label': `${d.label} in ${d.u}`, inputmode: 'decimal' });
+  const k = d.k || 1, lo = d.hmin ?? d.min, hi = d.hmax ?? d.max, inK = x => +(x * k).toFixed(6);
+  const show1 = x => String(+(x * k).toFixed(d.dp));
+  const onGrid = x => Math.abs(x / d.step - Math.round(x / d.step)) < 1e-6;   // (a min off the step grid would move where the arrow keys step to)
+  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(inK(d.step)), min: onGrid(lo) ? String(inK(lo)) : null, max: String(inK(hi)), 'aria-label': `${d.label}${d.u ? ' in ' + d.u : ''}`, inputmode: 'decimal' });
   const rng = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step });
-  const show = v => { num.value = String(+(v * k).toFixed(d.dp)); rng.value = String(v); };
+  const note = el('span', { class: 'clampnote', role: 'status' }); let noteT = 0;
+  const say = t => { clearTimeout(noteT); note.textContent = t; if (t) noteT = setTimeout(() => { note.textContent = ''; }, 2500); };
+  const show = v => { num.value = show1(v); rng.value = String(v); };
   show(get());
-  rng.addEventListener('input', () => { const v = parseFloat(rng.value); num.value = String(+(v * k).toFixed(d.dp)); set(v); });
+  rng.addEventListener('input', () => { const v = parseFloat(rng.value); num.value = show1(v); set(v); });
   num.addEventListener('input', () => {
-    const t = num.value, v = parseFloat(t) / k; if (t === '' || !isFinite(v)) return;
-    const cv = clamp(v, lo, hi); rng.value = String(cv); set(cv);
+    const t = num.value; let v = parseFloat(t) / k; if (t === '' || !isFinite(v)) return;
+    let why = '';
+    if (v > hi) { v = hi; why = `max ${show1(hi)}`; } else if (v < lo) { v = lo; why = `min ${show1(lo)}`; }
+    if (d.int && Math.round(v) !== v) { v = Math.round(v); why = why || 'whole numbers'; }
+    say(why); rng.value = String(v); set(v);
   });
   num.addEventListener('change', () => show(get()));                       // tidy the box once typing is done
   num.addEventListener('keydown', e => {
@@ -134,15 +244,20 @@ function numField(id, d, get, set) {
     else if (e.key === 'Escape') { show(get()); num.blur(); }
   });
   const refresh = () => { if (document.activeElement !== num) show(get()); };
-  const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, num, el('span', { class: 'unit', text: d.u })), rng);
-  return { node, refresh };
+  const why = el('span', { class: 'field-why' });
+  const ends = d.ends ? el('div', { class: 'ends', id: id + '-ends' }, el('span', { text: d.ends[0] }), el('span', { text: d.ends[1] })) : null;
+  if (ends) rng.setAttribute('aria-describedby', id + '-ends');
+  const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, note, num, el('span', { class: 'unit', text: d.u })), rng, ends, why);
+  // switched off (not used here), with the reason under it
+  const setOff = (off, txt = '') => { off = !!off; if (num.disabled === off && why.textContent === (off ? txt : '')) return; node.classList.toggle('off', off); num.disabled = rng.disabled = off; setText(why, off ? txt : ''); };
+  return { node, refresh, setOff };
 }
 // A servo's swing, relative to what it's mounted on: quick picks, then the exact angle and lean.
 function hingeFields(c, rerender) {
   const pre = swingPresets(c), cur = swingPreset(c);
   const seg = el('div', { class: 'seg seg-sm seg-fill', role: 'group', 'aria-label': 'Swings' });
   for (const o of pre) {
-    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
+    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label, 'data-focus-key': `swing-${c.id}-${o.k}` });
     b.addEventListener('click', () => { setSwing(c, o.deg, 0); edited(c, 'swing'); rerender(); });
     seg.append(b);
   }
@@ -200,7 +315,7 @@ function compBody(c) {
   };
   const spinSel = () => selectF(c, 'spin', 'Spin, facing the prop', [[1, 'CCW'], [-1, 'CW']]);
   const pushSel = () => selectF(c, 'push', 'Prop', [['false', 'Pulls (tractor)'], ['true', 'Pushes (pusher)']], rerender);
-  const rerender = () => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); };
+  const rerender = () => keepFocus(() => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
   if (c.type === 'motor') {
     b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('span', { class: 'lbl', text: 'Heat, sensing and failure' }),
@@ -253,12 +368,12 @@ function compBody(c) {
 }
 function compCard(c) {
   const open = openSet.has(c.id);
-  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open) }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
+  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open), 'data-focus-key': 'head-' + c.id }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
   head.addEventListener('click', () => {
     if (typeof editMode !== 'undefined' && editMode && edit.sel !== c.id) { edit.refocus = true; selectComp(c.id); return; }   // in edit mode a card click selects the part
-    open ? openSet.delete(c.id) : openSet.add(c.id); document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c));
+    open ? openSet.delete(c.id) : openSet.add(c.id); keepFocus(() => document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)));
   });
-  const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×' });
+  const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×', 'data-focus-key': 'del-' + c.id });
   del.addEventListener('click', () => {   // parts on a removed joint move to what the joint was on
     for (const x of cfg.comps) if (x.parent === c.id) x.parent = c.parent ?? null;
     cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural();
@@ -268,7 +383,17 @@ function compCard(c) {
   const top = el('div', { class: 'comp-top', draggable: 'true' }, grip, head, del);
   top.addEventListener('dragstart', e => { dragId = c.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(c.id)); requestAnimationFrame(() => top.closest('.comp').classList.add('dragging')); });
   top.addEventListener('dragend', () => { dragId = null; document.querySelectorAll('.dragging,.drop-ok').forEach(x => x.classList.remove('dragging', 'drop-ok')); });
-  return el('div', { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, top, open ? compBody(c) : null);
+  const card = el('div', { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, top, open ? compBody(c) : null);
+  // a servo or rod: a drop target, and the twisty that folds what it carries (here, so a re-rendered card keeps them)
+  if (isHolder(c)) dropTarget(card, c);
+  const kids = childrenOf(c);
+  if (kids.length) {
+    const folded = foldSet.has(c.id);
+    const tw = el('button', { class: 'twisty', type: 'button', 'aria-expanded': String(!folded), title: folded ? 'Show what it carries' : 'Hide what it carries', 'aria-label': (folded ? 'Show what ' : 'Hide what ') + c.name + ' carries', text: folded ? `▸ ${kids.length}` : '▾', 'data-focus-key': 'tw-' + c.id });
+    tw.addEventListener('click', () => { folded ? foldSet.delete(c.id) : foldSet.add(c.id); renderComps(); });
+    top.prepend(tw);
+  }
+  return card;
 }
 const foldSet = new Set();
 let dragId = null;
@@ -282,7 +407,8 @@ function dropTarget(elm, holder) {   // accept a dragged part if it may be attac
     if (holder) foldSet.delete(holder.id); structural();
   });
 }
-function renderComps() {
+function renderComps() { keepFocus(renderComps1); }
+function renderComps1() {
   const L = $('#compList'); L.textContent = '';
   // The parts as a tree: the frame at the root, each servo or rod followed by what it carries. Drag a part
   // onto a servo or rod to attach it there, or onto Frame to take it off.
@@ -291,14 +417,7 @@ function renderComps() {
   const put = (c, box) => {
     const node = el('div', { class: 'node' }), card = compCard(c), kids = childrenOf(c);
     node.append(card); box.append(node);
-    if (isHolder(c)) dropTarget(card, c);
-    if (kids.length) {
-      const folded = foldSet.has(c.id);
-      const tw = el('button', { class: 'twisty', type: 'button', 'aria-expanded': String(!folded), title: folded ? 'Show what it carries' : 'Hide what it carries', text: folded ? `▸ ${kids.length}` : '▾' });
-      tw.addEventListener('click', () => { folded ? foldSet.delete(c.id) : foldSet.add(c.id); renderComps(); });
-      card.querySelector('.comp-top').prepend(tw);
-      if (!folded) { const kb = el('div', { class: 'kids' }); node.append(kb); for (const k of kids) put(k, kb); }
-    }
+    if (kids.length && !foldSet.has(c.id)) { const kb = el('div', { class: 'kids' }); node.append(kb); for (const k of kids) put(k, kb); }
   };
   const top = el('div', { class: 'kids root' }); L.append(top);
   for (const c of cfg.comps.filter(x => !parentOf(x))) put(c, top);
@@ -385,13 +504,18 @@ function updateActs() {
   }
 }
 // Allocation preference sliders, and a live readout of rotor power and the tightest allowance.
-const allocFieldRefs = [];
+const allocFieldRefs = [], allocOff = {};
 function buildAllocFields() {
   const box = $('#allocFields'); box.textContent = '';
-  const f = (key, label) => { const n = numField('ap-' + key, { label, min: 0, max: 0.2, step: 0.005, u: '', dp: 3 }, () => allocPrefs[key], v => { allocPrefs[key] = v; save(); }); allocFieldRefs.push(n.refresh); return n.node; };
+  const f = (key, label) => { const n = numField('ap-' + key, { label, min: 0, max: 0.2, step: 0.005, u: '', dp: 3, ends: ['0 off', '0.2 strongest'] }, () => allocPrefs[key], v => { allocPrefs[key] = v; save(); }); allocFieldRefs.push(n.refresh); allocOff[key] = n.setOff; return n.node; };
   box.append(f('allowance', 'Keep margin (allowance)'), f('efficiency', 'Save power (efficiency)'), f('servoMove', 'Servo move cost (uses speed and lag)'));
-  const m = numField('ap-mix', { label: 'Mixed steering: servos\' share of sideways force', min: 0, max: 1, step: 0.05, u: '', dp: 2 }, () => steerMix.share, v => { steerMix.share = v; steerMix.rho = 1; save(); });
-  allocFieldRefs.push(m.refresh); box.append(m.node);
+  const m = numField('ap-mix', { label: 'Mixed steering: servos\' share of sideways force', min: 0, max: 1, step: 0.05, u: '%', dp: 0, k: 100, ends: ['0: the body leans', '100: servos only'] }, () => steerMix.share, v => { steerMix.share = v; steerMix.rho = 1; save(); });
+  allocFieldRefs.push(m.refresh); allocOff.mix = m.setOff; box.append(m.node);
+}
+function syncAllocFields() {   // what doesn't apply to this airframe or steering is greyed out, with why
+  const nj = joints().length, steer = steerJoints().length;
+  allocOff.servoMove(!nj, 'No servos on this airframe.');
+  allocOff.mix(mode !== 'mixed' || !steer, mode !== 'mixed' ? 'Used only when Steering (top bar) is Mixed.' : 'No servos steer this airframe.');
 }
 function updateAllocInfo() {
   let P = (S.battV || 0) * (S.battI || 0), tight = null;   // electrical power from the pack
@@ -400,8 +524,8 @@ function updateAllocInfo() {
     const m = Math.min(st.u || 0, 1 - (st.u || 0)); if (!tight || m < tight.m) tight = { c, m };
   }
   for (const j of steerJoints()) { const st = jst.get(j.id); if (!st) continue; const ms = (j.range * D2R - Math.abs(st.th)) / (2 * j.range * D2R); if (!tight || ms < tight.m) tight = { c: j, m: ms, servo: true }; }
-  $('#allocSmall').textContent = (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name} ${Math.round(tight.m * 100)}%` : '') +
-    (mode === 'mixed' ? ` · servos take ${Math.round(mixShare() * 100)}% sideways` : '');
+  setText($('#allocSmall'), (tight ? `≈ ${Math.round(P)} W · tightest ${tight.c.name} ${Math.round(tight.m * 100)}%` : '') +
+    (mode === 'mixed' ? ` · servos take ${Math.round(mixShare() * 100)}% sideways` : ''));
 }
 // The check can take tens of milliseconds for a layout with several servo rotors, so a burst of edits (a
 // slider or handle drag) runs it once, after the burst settles, instead of on every step.
@@ -412,21 +536,30 @@ function refreshEnvelope() {
 }
 function renderEnvelope() {
   const r = envRes; if (!r) return;
-  const p = $('#verdict'); p.className = 'pill ' + r.verdict; p.querySelector('span').textContent = r.title; $('#verdictWhy').textContent = r.why;
-  $('#envSpace').textContent = r.k === 6 ? '6-axis (stay level)' : mode === 'mixed' ? '4-axis (mixed)' : '4-axis (tilt body)';
-  const box = $('#env'); box.textContent = '';
-  if (!r.head) { box.append(el('p', { class: 'hint', text: 'No headroom to show until every axis is controllable.' })); return; }
+  const p = $('#verdict'), pc = 'pill ' + r.verdict; if (p.className !== pc) p.className = pc; setText(p.querySelector('span'), r.title); setText($('#verdictWhy'), r.why);
+  setText($('#envSpace'), r.k === 6 ? '6-axis (stay level)' : mode === 'mixed' ? '4-axis (mixed)' : '4-axis (tilt body)');
+  const box = $('#env'), sig = r.head ? r.labels.join('|') : '-';
+  if (box._sig !== sig) {   // the rows are built once per set of axes; the bars and numbers update in place
+    box._sig = sig; box.textContent = ''; box._rows = [];
+    if (!r.head) box.append(el('p', { class: 'hint', text: 'No headroom to show until every axis is controllable.' }));
+    else for (const lab of r.labels) {
+      const mk = cls => { const b = el('div', { class: 'b' }), t = el('span', { class: 't' }); return { n: el('div', { class: 'ebar ' + cls }, b, t), b, t }; };
+      const neg = mk('eneg'), pos = mk('epos'); box._rows.push([neg, pos]);
+      box.append(el('div', { class: 'erow' }, el('span', { class: 'en', text: lab }), neg.n, pos.n));
+    }
+  }
+  if (!r.head) return;
   r.labels.forEach((lab, i) => {
     const u = r.units[i];
     const fmt = t => !isFinite(t) ? '—' : u === 'g' ? (t / G).toFixed(2) + ' g' : u === 'lin' ? t.toFixed(1) + ' m/s²' : t.toFixed(lab === 'Yaw' ? 1 : 0) + ' rad/s²';
     const scale = u === 'g' ? 2 * G : u === 'lin' ? 6 : lab === 'Yaw' ? 20 : 200;
     const lim = u === 'g' ? 0.15 * G : u === 'lin' ? 0.5 : lab === 'Yaw' ? 0.5 : 5;
-    const mk = (t, cls, isPos) => {
+    const put = (t, ref, isPos) => {
       const w = clamp(Math.abs(isFinite(t) ? t : 0) / scale, 0, 1) * 100; let st = '';
       if (t < 0) st = ' bad'; else if (t < lim && !(u === 'g' && !isPos)) st = ' warn';
-      return el('div', { class: 'ebar ' + cls }, el('div', { class: 'b' + st, style: `width:${w.toFixed(1)}%` }), el('span', { class: 't', text: fmt(t) }));
+      if (ref.b.className !== 'b' + st) ref.b.className = 'b' + st; ref.b.style.width = w.toFixed(1) + '%'; setText(ref.t, fmt(t));
     };
-    box.append(el('div', { class: 'erow' }, el('span', { class: 'en', text: lab }), mk(r.head[i][0], 'eneg', false), mk(r.head[i][1], 'epos', true)));
+    put(r.head[i][0], box._rows[i][0], false); put(r.head[i][1], box._rows[i][1], true);
   });
 }
 function renderMass() {
@@ -436,41 +569,42 @@ function renderMass() {
   const rows = [['Rigid mass', truth.m.toFixed(3) + ' kg'], ['On cables', mp.toFixed(3) + ' kg'], ['Thrust / weight', tw.toFixed(2)], ['True CoG from hub', `(${cm}) mm`],
     ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller mass error', ((model.m - truth.m - mp) * 1000).toFixed(0) + ' g'],
     ['Inertia Ixx / Iyy / Izz', `${(truth.J[0] * 1000).toFixed(1)} / ${(truth.J[4] * 1000).toFixed(1)} / ${(truth.J[8] * 1000).toFixed(1)} g·m²`]];
-  const dl = $('#massKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
+  syncKv($('#massKv'), rows);
 }
+const goForm = () => showTab('form');
 function updateLive() {
-  const chips = $('#liveChips'); chips.textContent = '';
-  const chip = (src, t, c, onclick) => chips.append(el(onclick ? 'button' : 'span', { class: 'chip ' + (c || ''), type: onclick ? 'button' : null, onclick }, srcDot(src), t));
-  if (S.crashed) chip('sim', 'Crashed', 'bad'); else {
+  const chips = [], chip = (key, src, text, tone, go) => chips.push({ key, src, text, tone, go });
+  if (S.crashed) chip('crash', 'sim', 'Crashed', 'bad'); else {
     const last = hist.err.length ? hist.err[hist.err.length - 1] : 0;
-    if (hasTask('nav') && brt.pilot.phase === 'flying') chip('sim', last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
-    if (brt.out && brt.out.sat) chip('board', 'Motor at limit', 'warn');
-    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('sim', 'Cable slack', 'warn');
+    if (hasTask('nav') && brt.pilot.phase === 'flying') chip('hold', 'sim', last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
+    if (brt.out && brt.out.sat) chip('sat', 'board', 'Motor at limit', 'warn');
+    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('slack', 'sim', 'Cable slack', 'warn');
   }
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
-  if (bad.length) chip('you', `${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', () => showTab('form'));
-  else if (ed.length) chip('you', `${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', () => showTab('form'));
-  const soc = Math.max(0, S.batt.soc ?? 1); chip('sim', `Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
-  if (brt.err && !brt.ready) chip('board', brt.err, 'bad', () => showTab('form'));
-  else chip('board', `${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
+  if (bad.length) chip('laws', 'you', `${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', goForm);
+  else if (ed.length) chip('laws', 'you', `${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', goForm);
+  const soc = Math.max(0, S.batt.soc ?? 1); chip('batt', 'sim', `Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
+  if (brt.err && !brt.ready) chip('board', 'board', brt.err, 'bad', goForm);
+  else chip('board', 'board', `${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
+  syncChips($('#liveChips'), chips);
   const R = qmat(S.q); const { hub } = hubState(R);
-  $('#hudTime').textContent = `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`;
-  $('#hudPos').textContent = `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`;
+  setText($('#hudTime'), `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`);
+  setText($('#hudPos'), `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`);
   const vh = hubState(R).vh, gs = Math.hypot(vh[0], vh[1]);
-  $('#hudCmd').textContent = `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`;
+  setText($('#hudCmd'), `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`);
   {   // the net torque on the drone about its centre of mass, in body axes (roll: X forward, pitch: Y left, yaw: Z up)
     const t = S.tq, f = x => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
-    $('#hudTq').textContent = view.readouts && (view.rtorque || view.ntorque || view.want) && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '';
+    setText($('#hudTq'), view.readouts && (view.rtorque || view.ntorque || view.want) && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '');
   }
   $('#kbdHint').hidden = document.hasFocus();
-  syncSp();
+  syncSp(); syncAllocFields();
   updateActs(); updateAllocInfo(); renderEst(); if (hasTask('learn')) renderLearn();
 }
 
 /* ───────── state estimate ───────── */
 function setSensing(m) { sensing = 'sensors'; }   // the flight computers always fly on their sensors
 function renderEst() {
-  const chips = $('#senseChips'); chips.textContent = ''; const chip = (t, c, src) => chips.append(el('span', { class: 'chip ' + (c || '') }, srcDot(src || 'calc'), t));
+  const chips = []; const chip = (t, c, src) => chips.push({ key: t, src: src || 'calc', text: t, tone: c });
   const has = k => sensorsOf(k).length > 0, fixOk = sensorsOf('fix').some(c => !c.dropout);
   const core = boardOf('core'), nav = boardOf('nav');
   if (!has('imu')) chip('No IMU: attitude is unknown', 'bad');
@@ -485,17 +619,18 @@ function renderEst() {
     if (!has('baro') && !fixOk && !(fs === 'tracking' || fs === 'range only')) chip('No altitude reference', 'warn');
     if (has('imu') && has('mag') && fixOk) chip('All references present', 'good');
   }
-  $('#estMode').textContent = `attitude: ${core ? core.name : '—'}${nav ? ' · position: ' + nav.name : ''}`;
+  syncChips($('#senseChips'), chips);
+  setText($('#estMode'), `attitude: ${core ? core.name : '—'}${nav ? ' · position: ' + nav.name : ''}`);
   const e = estimateErrors(); const f = (v, d, u) => (v == null ? '—' : v.toFixed(d) + ' ' + u);
   const rows = [['Attitude error', f(e.ang, 2, '°')], ['Tilt error', f(e.tilt, 2, '°')], ['Heading error', f(e.head, 1, '°')],
     ['Horizontal position error', f(e.pos, 1, 'cm')], ['Altitude error', f(e.alt, 1, 'cm')], ['Velocity error', f(e.vel, 1, 'cm/s')],
     ['Gyro turn-on bias (IMU 1)', e.gb == null ? '—' : `${e.gb.toFixed(2)} °/s`]];
-  const dl = $('#estKv'); dl.textContent = ''; for (const [k, v] of rows) dl.append(el('dt', { text: k }), el('dd', { text: v }));
+  syncKv($('#estKv'), rows);
 }
 
 /* ───────── the learning (a task on a board: boards.js) ───────── */
 $('#useDesc').addEventListener('click', () => { pilotLearnCmd('useDesc'); renderLearn(true); });
-$('#useLearned').addEventListener('click', () => { pilotLearnCmd('useLearned'); renderLearn(true); });
+$('#useLearned').addEventListener('click', e => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; pilotLearnCmd('useLearned'); renderLearn(true); });
 $('#keepLearn').addEventListener('change', e => { learnPrefs.keep = e.target.checked; pilotLearnCmd(e.target.checked ? 'keepOn' : 'keepOff'); save(); });
 $('#calBtn').addEventListener('click', () => {
   const v = learn.view;
@@ -553,7 +688,7 @@ function throwStageText() {
 const CAL_STAGE = ['Settling', 'Testing each motor', 'Testing each servo', 'Sweeping servos', 'Exciting everything together', 'Validating'];
 let matchT = 0, matchCache = [];
 function renderResponses() {
-  const box = $('#respRows'); if (!box) return; box.textContent = '';
+  const box = $('#respRows'); if (!box) return;
   const v = learn.view; let any = false;
   const tbl = el('table', { class: 'resp' });
   tbl.append(el('tr', {}, el('th', { text: '' }), el('th', { text: 'measured' }), el('th', { text: 'true' })));
@@ -562,35 +697,45 @@ function renderResponses() {
     actuators().forEach((c, i) => { const r = v.motors[i]; if (r && r.measured) { any = true; row(c.name, 'lag', `${Math.round(r.tau * 1000)} ms`, `${Math.round(c.tau * 1000)} ms near hover`); row(c.name, 'curve bend', r.curve.toFixed(2), trueBend(c).toFixed(2)); } });
     joints().forEach((j, k) => { const r = v.joints[k]; if (r && r.measured) { any = true; row(j.name, 'speed', `${Math.round(r.rate * R2D)}°/s`, `${Math.round(j.rate)}°/s no-load`); row(j.name, 'lag', `${Math.round(r.lag * 1000)} ms`, `${Math.round((j.lag || 0) * 1000)} ms`); } });
   }
+  const sig = any ? tbl.textContent : '-'; if (box._sig === sig) return; box._sig = sig; box.textContent = '';   // (rebuilt only when a number changed)
   if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag. The servos\' are sent to the flight core; the curve is only shown.' }));
 }
 function renderLearn(force) {
   const v = learn.view, b = boardOf('learn');
-  $('#learnWhere').textContent = b ? `On ${b.name}, on the flight core's telemetry (200 times a second). It asks the flight core for test moves and tells it which model to fly on.` : '';
+  setText($('#learnWhere'), b ? `On ${b.name}, on the flight core's telemetry (200 times a second). It asks the flight core for test moves and tells it which model to fly on.` : '');
   $('#useDesc').setAttribute('aria-pressed', String(!v || !v.useLearned)); $('#useLearned').setAttribute('aria-pressed', String(!!(v && v.useLearned)));
+  {   // Learned needs something learned first
+    const can = !!(v && (v.haveFit || v.useLearned)), ul = $('#useLearned');
+    if (ul.getAttribute('aria-disabled') !== String(!can)) { ul.setAttribute('aria-disabled', String(!can)); ul.title = can ? 'Fly on what the calibration or a throw learned' : 'Nothing learned yet: calibrate (or throw it) first'; $('#learnedWhy').hidden = can; }
+  }
   $('#keepLearn').checked = v ? v.keep : learnPrefs.keep;
   const cal = v && v.cal, busy = !!thr || (v && v.thr > 0 && v.thr < 4);
-  $('#calBtn').textContent = cal ? 'Stop' : v && v.haveFit ? 'Calibrate again' : 'Calibrate';
+  setText($('#calBtn'), cal ? 'Stop' : v && v.haveFit ? 'Calibrate again' : 'Calibrate');
   $('#calBtn').disabled = !!S.crashed || !actuators().length || busy || !v;
   $('#holdPulses').checked = v ? v.holdPulses : learnPrefs.holdPulses; $('#thenCal').checked = throwCfg.thenCalibrate;
-  if (force || performance.now() - (renderLearn.hintT || 0) > 2000) { renderLearn.hintT = performance.now(); $('#throwHint').textContent = throwHintText(); }
+  if (force || performance.now() - (renderLearn.hintT || 0) > 2000) { renderLearn.hintT = performance.now(); setText($('#throwHint'), throwHintText()); }
   const throwing = busy || (v && v.thr === 4);
   $('#calProg').hidden = !cal && !throwing;
-  if (throwing && !cal) { $('#calFill').style.width = (100 * (thr && thr.phase !== 'free' ? 0 : v ? v.thrProg : 0)).toFixed(1) + '%'; $('#calStage').textContent = throwStageText(); }
+  if (throwing && !cal) { $('#calFill').style.width = (100 * (thr && thr.phase !== 'free' ? 0 : v ? v.thrProg : 0)).toFixed(1) + '%'; setText($('#calStage'), throwStageText()); }
   if (cal) {
     const who = v.segKind === 1 ? actuators()[v.segWho] : v.segKind === 2 || v.segKind === 3 ? joints()[v.segWho] : null;
     $('#calFill').style.width = (100 * v.calProg).toFixed(1) + '%';
-    $('#calStage').textContent = v.held ? 'Paused until the drone settles…' : `${CAL_STAGE[v.segKind] || 'Starting'}${who ? ': ' + who.name : ''} · ${v.left.toFixed(1)} s left`;
+    setText($('#calStage'), v.held ? 'Paused until the drone settles…' : `${CAL_STAGE[v.segKind] || 'Starting'}${who ? ': ' + who.name : ''} · ${v.left.toFixed(1)} s left`);
   }
-  if (learn.msg) $('#learnMsg').textContent = learn.msg;
-  $('#learnSmall').textContent = !v ? '' : v.useLearned ? (v.keep ? 'learned · learning' : 'learned') : (v.keep ? 'description · learning' : 'description');
+  if (learn.msg) setText($('#learnMsg'), learn.msg);
+  setText($('#learnSmall'), !v ? '' : v.useLearned ? (v.keep ? 'learned · learning' : 'learned') : (v.keep ? 'description · learning' : 'description'));
   if (force || performance.now() - matchT > 400) { matchT = performance.now(); matchCache = matchScores(); }
-  const box = $('#matchRows'); box.textContent = '';
-  if (busy) { box.append(el('p', { class: 'hint', text: 'Shown once it has caught itself.' })); return; }
-  for (const m of matchCache) {
-    const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad';
-    box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, el('i', { class: cls, style: `width:${pc}%` })), el('span', { class: 'mv', text: pc + '%' })));
+  const box = $('#matchRows'), sig = busy ? 'busy' : matchCache.map(m => m.c.id + m.c.name).join('|');
+  if (box._sig !== sig) {   // rows built once per set of parts, the bars and numbers updated in place
+    box._sig = sig; box.textContent = ''; box._rows = [];
+    if (busy) box.append(el('p', { class: 'hint', text: 'Shown once it has caught itself.' }));
+    else for (const m of matchCache) { const i = el('i'), mv = el('span', { class: 'mv' }); box._rows.push({ i, mv }); box.append(el('div', { class: 'mrow' }, el('span', { class: 'an', text: m.c.name }), el('div', { class: 'mbar' }, i), mv)); }
   }
+  if (busy) return;
+  matchCache.forEach((m, k) => {
+    const pc = Math.round(m.match * 100), cls = pc >= 85 ? '' : pc >= 65 ? 'warn' : 'bad', r = box._rows[k];
+    if (r.i.className !== cls) r.i.className = cls; r.i.style.width = pc + '%'; setText(r.mv, pc + '%');
+  });
   renderResponses();
 }
 
@@ -632,8 +777,8 @@ function drawChart() {
 
 /* ───────── target & environment ───────── */
 const spRefs = [];
-function spSlider(key, label, min, max, step, u, obj) {
-  const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? 1 : 0 }, () => obj[key], v => {
+function spSlider(key, label, min, max, step, u, obj, ends) {
+  const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? (step < 0.1 ? 2 : 1) : 0, ends }, () => obj[key], v => {
     obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; }
   });
   spRefs.push(f.refresh);
@@ -644,17 +789,20 @@ function buildSp() {
   const b = $('#spFields'); b.textContent = '';
   b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
     spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
-    spSlider('turb', 'Turbulence (0 still air, 1 gusty)', 0, 1, 0.05, '', envr), spSlider('spread', 'Motor and prop differences (1 typical)', 0, 3, 0.1, '×', envr),
-    spSlider('texture', 'Ground texture (0 water, 1 gravel)', 0, 1, 0.05, '', envr), spSlider('light', 'Light (0 dark, 1 daylight)', 0, 1, 0.05, '', envr), spSlider('ambient', 'Air temperature', -10, 45, 1, '°C', envr));
+    spSlider('turb', 'Turbulence', 0, 1, 0.05, '', envr, ['0 still air', '1 gusty']), spSlider('spread', 'Motor and prop differences', 0, 3, 0.1, '× typical', envr, ['0 identical', '3× typical']),
+    spSlider('texture', 'Ground texture', 0, 1, 0.05, '', envr, ['0 water', '1 gravel']), spSlider('light', 'Light', 0, 1, 0.05, '', envr, ['0 dark', '1 daylight']), spSlider('ambient', 'Air temperature', -10, 45, 1, '°C', envr));
 }
 
 /* ───────── header ───────── */
-const presetSel = $('#preset');
-presetSel.addEventListener('change', () => {   // layouts and your saved designs (options built by designs.js)
-  const v = presetSel.value; presetSel.value = ''; if (!v) return;
-  if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
-  else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
-});
+// Start from a layout or one of your saved designs: a menu, so nothing loads until you pick one.
+const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left', title: 'Start from a layout (Blank is a bare frame) or one of your saved designs',
+  items: () => [...Object.entries(PRESETS).map(([k, p]) => ({ value: 'p:' + k, label: p.label, group: 'Layouts', hint: p.blank ? 'opens the editor' : null })),
+    ...(typeof designs !== 'undefined' ? designs.list : []).map(d => ({ value: 'd:' + d.id, label: d.name || 'Untitled design', group: 'My designs', cur: d.id === designs.cur }))],
+  onPick: v => {
+    if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
+    else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
+  } });
+$('#presetSlot').replaceWith(presetMenu.node); presetMenu.node.id = 'presetSlot';
 function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
@@ -665,9 +813,11 @@ function afterLoad() {
 const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
   v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
 $('#frameMassSlot').replaceWith(frameMassField.node);
+const MODE_DESC = { tilt: 'Leans to move; servos help turn.', mixed: 'Servos push part, leaning does the rest.', level: 'Stays level; servos push sideways.' };
 function setMode(m, recalc = true) {
   mode = m; steerMix.rho = 1;
   $('#modeTilt').setAttribute('aria-pressed', String(m === 'tilt')); $('#modeMixed').setAttribute('aria-pressed', String(m === 'mixed')); $('#modeLevel').setAttribute('aria-pressed', String(m === 'level'));
+  setText($('#modeDesc'), MODE_DESC[m] || '');
   ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
 }
 $('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeMixed').addEventListener('click', () => setMode('mixed')); $('#modeLevel').addEventListener('click', () => setMode('level'));
@@ -734,7 +884,7 @@ function applyTerrain(kind, seed) {
   setTerrain(kind, seed); syncTerrainUi(); cPts = contactPoints(); doReset(); save();
 }
 function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
-$('#terrainSel').addEventListener('change', e => applyTerrain(e.target.value, terrain.seed));
+commitSelect($('#terrainSel'), v => { if (v !== terrain.kind) applyTerrain(v, terrain.seed); }, 'Press Enter to switch: it starts the flight again');
 $('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + Math.floor(Math.random() * 1e9)));
 function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }
 document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
@@ -769,31 +919,42 @@ function toggleTorque() {   // Q: rotor and net torque together
   const menu = $('#showMenu'), btn = $('#tShow');
   const groups = [...new Set(LAYERS.map(L => L.group))];
   menu.innerHTML = groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
-    LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
+    LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn tog" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
     + `<div class="show-grp show-presets"><span class="lbl">Presets</span><div class="show-btns">${Object.keys(SHOW_PRESETS).map(p => `<button type="button" class="btn" data-preset="${p}">${p}</button>`).join('')}</div></div>`;
   menu.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.key) setLayers({ [b.dataset.key]: !view[b.dataset.key] });
     else if (b.dataset.preset) setLayers(SHOW_PRESETS[b.dataset.preset]());
   });
-  const open = on => { menu.hidden = !on; btn.setAttribute('aria-expanded', String(on)); btn.setAttribute('aria-pressed', String(on)); };
-  btn.addEventListener('click', e => { e.stopPropagation(); open(menu.hidden); });
-  document.addEventListener('pointerdown', e => { if (!menu.hidden && !e.target.closest('.show-wrap')) open(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { open(false); btn.focus(); } });
+  popover(btn, menu);
   showApply();
 })();
+// A button that shows a panel under it (the Show menu, the keys): Escape or a click elsewhere closes it.
+function popover(btn, pop) {
+  const open = on => { pop.hidden = !on; btn.setAttribute('aria-expanded', String(on)); };
+  btn.addEventListener('click', e => { e.stopPropagation(); open(pop.hidden); });
+  document.addEventListener('pointerdown', e => { if (!pop.hidden && !btn.parentElement.contains(e.target)) open(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) { e.preventDefault(); open(false); btn.focus(); } });
+}
+popover($('#tKeys'), $('#keysPop'));
 
 /* ───────── tabs ───────── */
+const TABS = [['tabAir', 'air'], ['tabForm', 'form'], ['tabGs', 'gs']];
 function showTab(which) {
   if (!['air', 'form', 'gs'].includes(which)) which = 'air';
   const form = which === 'form', gsT = which === 'gs';
-  $('#tabAir').setAttribute('aria-selected', String(which === 'air')); $('#tabForm').setAttribute('aria-selected', String(form)); $('#tabGs').setAttribute('aria-selected', String(gsT));
+  for (const [id, k] of TABS) { const t = $('#' + id); t.setAttribute('aria-selected', String(k === which)); t.tabIndex = k === which ? 0 : -1; }
   $('#paneAir').hidden = which !== 'air'; $('#paneForm').hidden = !form; $('#paneGs').hidden = !gsT;
   $('.work').classList.toggle('wide', form || gsT);
   if (gsT) renderGs(true);
   try { localStorage.setItem(LS + '-tab', which); } catch (e) {}
 }
-$('#tabAir').addEventListener('click', () => showTab('air')); $('#tabForm').addEventListener('click', () => showTab('form')); $('#tabGs').addEventListener('click', () => showTab('gs'));
+for (const [id, k] of TABS) $('#' + id).addEventListener('click', () => showTab(k));
+$('.tabs').addEventListener('keydown', e => {   // arrow keys move between the tabs (one tab stop for the row)
+  const i = TABS.findIndex(([id]) => id === e.target.id); if (i < 0) return;
+  const j = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
+  if (j < 0) return; e.preventDefault(); showTab(TABS[j][1]); $('#' + TABS[j][0]).focus();
+});
 
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';

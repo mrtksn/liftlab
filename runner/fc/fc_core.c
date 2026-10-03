@@ -224,7 +224,7 @@ void fc_command(fc_state *F, const fc_cmd *in) {
   if (c->test_motor < 0 || c->test_motor >= FC_MAX_MOTORS) c->test_motor = -1;
   int prev_test = F->cmd.test_motor;
   F->cmd = *c; F->cmd_t = F->t;
-  if (!c->arm) { F->arm_released = 1; if (F->state == FC_ARMED || F->state == FC_FAILSAFE || F->state == FC_CRASHED) { F->state = FC_DISARMED; fc_say(F, "disarmed"); } }
+  if (!c->arm) { F->arm_released = 1; if (F->state == FC_ARMED || F->state == FC_FAILSAFE || F->state == FC_CRASHED) { F->state = FC_DISARMED; fc_say(F, "disarmed"); F->sup_mode = 0; F->sup_landing = 0; } }
   if (c->test_motor < 0) F->test_released = 1;
   if (c->arm && F->state == FC_DISARMED) {   /* arming takes the switch going on: after any disarm it must be seen off first */
     float tilt = axis_tilt(F);
@@ -331,7 +331,9 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     if (still && F->att_ok) F->az_bias += (azm - F->az_bias) * fminf(1, dt / 1.0f);
     F->az_f += (azm - F->az_bias - F->az_f) * fminf(1, dt * 31.4f);
   } else {
-    F->have_imu = 0; F->att_ok = 0; F->att_t = 0; F->imu_gap += dt;
+    F->have_imu = 0; F->imu_gap += dt;
+    /* a missed sample or two (an I2C error, a late wake-up) isn't a lost IMU: the attitude holds for 50 ms */
+    if (F->imu_gap > 0.05f) { F->att_ok = 0; F->att_t = 0; }
     if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && F->imu_gap > 0.2f) { F->state = FC_CRASHED; fc_say(F, "IMU lost in flight: motors off"); }
   }
 
@@ -535,10 +537,15 @@ static void ltel_add(fc_state *F, const fc_out *o, float dt) {
   for (int j = 0; j < F->A.n_joints; j++) F->lt_tc[j] += o->servo[j];
   F->lt_n++;
 }
+/* Disarmed after a flight: the supervisor's landing is over (its next SET says what it wants now). */
+static void after_flight(fc_state *F, int was) {
+  if (F->state == FC_DISARMED && (was == FC_ARMED || was == FC_FAILSAFE || was == FC_CRASHED)) { F->sup_mode = 0; F->sup_landing = 0; }
+}
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
-  fc_out n;
+  fc_out n; int was = F->state;
   if (!fin(dt) || dt <= 0) dt = 0.001f;
   int e = step(F, imu, dt, vbatt, &n);
+  after_flight(F, was);
   ltel_add(F, e ? &F->last_out : &n, dt);
   int flying = F->state == FC_ARMED || F->state == FC_FAILSAFE;
   if (!e) { *o = n; F->err_t = 0; if (flying) F->last_out = n; return; }
@@ -609,7 +616,7 @@ int fc_set(fc_state *F, const float *p, int n) {
   if (nm != F->A.n_motors || nj != F->A.n_joints || n != 6 + 3 * nm + 2 * nj) return -1;
   for (int k = 0; k < n; k++) if (!fin(p[k])) return -1;
   int mode = (int)p[0]; if (mode < 0 || mode > 3) return -1;
-  if (mode > F->sup_mode) F->sup_mode = mode;           /* it only steps up (it may already be landing) */
+  if (mode > F->sup_mode || F->state == FC_DISARMED) F->sup_mode = mode;   /* in the air it only steps up (it may already be landing) */
   F->lim_lean = p[1] > 0 ? p[1] : 0; F->lim_accel = p[2] > 0 ? p[2] : 0;
   for (int i = 0; i < nm; i++) { F->m_on[i] = p[6 + 3 * i] > 0.5f; F->m_eff[i] = clampf(p[7 + 3 * i], 0.05f, 2); F->m_cap[i] = clampf(p[8 + 3 * i], 0, 1); }
   for (int j = 0; j < nj; j++) { F->j_off[j] = p[6 + 3 * nm + 2 * j] > 0.5f; F->j_ang[j] = clampf(p[7 + 3 * nm + 2 * j], -3.2f, 3.2f); }
@@ -619,7 +626,7 @@ int fc_set(fc_state *F, const float *p, int n) {
 int fc_ltel(fc_state *F, float *o) {
   const fc_airframe *A = &F->A; float k = F->lt_n ? 1.0f / (float)F->lt_n : 0; int n = 0;
   int flying = (F->state == FC_ARMED && F->cmd.throttle >= 0.05f) || F->state == FC_FAILSAFE;
-  o[n++] = (float)F->t; o[n++] = (float)F->state;
+  o[n++] = (float)(F->t - FC_LTEL_WRAP * (double)(long long)(F->t / FC_LTEL_WRAP)); o[n++] = (float)F->state;   /* (the time modulo FC_LTEL_WRAP: exact to 15 µs) */
   o[n++] = (float)(flying | (F->open_loop ? 2 : 0) | (F->use_learned ? 4 : 0) | (F->held_m ? 8 : 0) | (F->pulse_cut ? 16 : 0));
   for (int i = 0; i < 4; i++) o[n++] = F->q[i];
   for (int i = 0; i < 3; i++) o[n++] = F->lt_f[i] * k;
