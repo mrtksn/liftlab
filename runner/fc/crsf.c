@@ -69,7 +69,7 @@ int crsf_link_stats(uint8_t *out, uint8_t addr, const crsf_link *L) {
   uint8_t p[10];
   p[0] = p[1] = (uint8_t)clampi(roundl_(-L->up_rssi), 0, 255); p[2] = (uint8_t)clampi(roundl_(L->up_lq), 0, 100);
   p[3] = (uint8_t)(int8_t)clampi(roundl_(L->up_snr), -128, 127); p[4] = (uint8_t)L->antenna; p[5] = (uint8_t)L->rf_mode;
-  int pw = L->tx_power_mw, code = pw <= 0 ? 0 : pw <= 10 ? 1 : pw <= 25 ? 2 : pw <= 100 ? 3 : pw <= 250 ? 7 : pw <= 500 ? 4 : 5;   /* the CRSF power table */
+  int pw = L->tx_power_mw, code = pw <= 0 ? 0 : pw <= 10 ? 1 : pw <= 25 ? 2 : pw <= 50 ? 8 : pw <= 100 ? 3 : pw <= 250 ? 7 : pw <= 500 ? 4 : 5;   /* the CRSF power table */
   p[6] = (uint8_t)code;
   p[7] = (uint8_t)clampi(roundl_(-L->down_rssi), 0, 255); p[8] = (uint8_t)clampi(roundl_(L->down_lq), 0, 100);
   p[9] = (uint8_t)(int8_t)clampi(roundl_(L->down_snr), -128, 127);

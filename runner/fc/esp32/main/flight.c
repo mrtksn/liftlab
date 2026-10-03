@@ -131,7 +131,16 @@ static float ltel_box[FC_LTEL_MAX]; static volatile int ltel_n; static volatile 
 /* the telemetry task's store (the radio task and the link task), and the radio's input */
 static tlm_store TS; static tlm_watch TW; static rc_input RCI; static volatile int64_t tlm_want_us = -10000000;
 static portMUX_TYPE tlm_mux = portMUX_INITIALIZER_UNLOCKED;
-static float tlm_in[256]; static volatile int tlm_in_n;
+/* What the telemetry reads of the flight state, copied out by the flight task: the radio task runs on the other core,
+ * and reading F there while fc_step writes it tears the values (a quaternion half old, a "why" half written). */
+static fc_state F_tlm; static volatile int F_tlm_new; static portMUX_TYPE snap_mux = portMUX_INITIALIZER_UNLOCKED;
+static void snap_fields(fc_state *d, const fc_state *f) {   /* (just those fields: the whole state is kilobytes) */
+  memcpy(d->q, f->q, sizeof d->q); d->vbatt = f->vbatt; d->have_alt = f->have_alt; d->alt_e = f->alt_e; d->vz_e = f->vz_e;
+  d->state = f->state; d->att_ok = f->att_ok; d->cmd.guided = f->cmd.guided; d->open_loop = f->open_loop;
+  d->A.n_motors = f->A.n_motors; memcpy(d->last_out.motor, f->last_out.motor, sizeof d->last_out.motor); memcpy(d->why, f->why, sizeof d->why);
+}
+static void snap_put(const fc_state *f) { portENTER_CRITICAL(&snap_mux); snap_fields(&F_tlm, f); F_tlm_new = 1; portEXIT_CRITICAL(&snap_mux); }
+static float tlm_in[TLM_PACK_MAX]; static volatile int tlm_in_n;
 
 /* ── the control loop ── */
 static volatile int64_t loop_us, loop_max; static volatile int loop_late;
@@ -198,6 +207,7 @@ static void flight_task(void *arg) {
       char s[80]; snprintf(s, sizeof s, "%s: %s", fc_state_name(F.state), F.why); post(s);
       last_state = F.state; strcpy(last_why, F.why);
     }
+    if (!F_tlm_new) snap_put(&F);                     /* (taken by the radio task, at 100 Hz) */
     int64_t took = esp_timer_get_time() - t0;
     loop_us = took; if (took > loop_max) loop_max = took; if (took > 1000000 / HW.rate_hz) loop_late++;
   }
@@ -324,7 +334,7 @@ static void link_task(void *arg) {
 /* ── the pilot's radio and the telemetry task ── */
 static void radio_task(void *arg) {
   int radio = HW.crsf_rx >= 0;
-  static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[256];
+  static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[TLM_PACK_MAX]; static fc_state Fs;
   tlm_init(&TS); tlm_watch_init(&TW);
   int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0;
   for (;;) {
@@ -337,12 +347,12 @@ static void radio_task(void *arg) {
     }
     if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
-    if (now >= next_pub) { next_pub = now + 10000; tlm_from_core(&TS, &TW, &F, t); if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(&Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, &Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
     if (radio) {
       int m = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(HW.elrs_rate, HW.elrs_ratio, &RCI, t), out, sizeof out); if (m) uart_write_bytes(RADIO, out, m);
       if (now >= next_want) { next_want = now + 500000; float w = 2; link_send2(RN_LINK_WANT, &w, 4); }   /* the Pi's items, please */
     } else if (now - tlm_want_us < 1000000 && now >= next_pack) {   /* the Pi runs the telemetry: our items go there */
-      next_pack = now + 50000; int k = tlm_pack(&TS, pk, 256); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);
+      next_pack = now + 50000; int k = tlm_pack(&TS, pk, TLM_PACK_MAX); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);
     }
   }
 }

@@ -69,7 +69,7 @@ function fixComputers(C) {
   C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
   C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
-  if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] });
+  if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   let id = 1; for (const b of C.boards) { b.id = id++; b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
   if (!C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
@@ -249,7 +249,7 @@ function groundStart() {
     new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img);
     if (g.host_setup(img.length)) brt.gndErr = `${G.name}: its program didn't load`;
     brt.srcs.set('ground', boardSrcKey(['ground'], rnSources()));
-  }
+  } else if (img) brt.gndErr = `${G.name}: its program (${img.length} bytes) is bigger than its memory (${g.img_cap()})`;
   if (g.gnd_setup(0)) brt.gndErr = brt.gndErr || `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
   brt.gnd = g;
 }
@@ -264,6 +264,7 @@ function boardsStageProgram() {
     const key = boardSrcKey(b.tasks, srcs); if (brt.srcs.get(b.id) === key) continue;   // none of its formulas changed
     let img; try { img = boardImage(b, srcs); } catch (e) { rnEvent(`${b.name}: the edit didn't compile for it: ${e.message}`, 'bad'); continue; }
     brt.srcs.set(b.id, key);
+    if (img.length > w.img_cap()) { rnEvent(`${b.name}: the edited program is too big for the board`, 'bad'); continue; }
     new Uint8Array(w.memory.buffer, w.img_ptr(), img.length).set(img);
     const e = w.stage(img.length);
     rnEvent(`${b.name}: ${e ? 'rejected the new program (error ' + e + ')' : 'self-tests passed; flying the new program in the background first'}`, e ? 'bad' : '');
@@ -274,6 +275,7 @@ function boardsStageProgram() {
     const nm = computers().ground.name;
     let img; try { img = boardImage({ tasks: ['ground'] }, srcs); } catch (e) { rnEvent(`${nm}: the edit didn't compile for it: ${e.message}`, 'bad'); return; }
     brt.srcs.set('ground', key);
+    if (img.length > g.img_cap()) { rnEvent(`${nm}: the edited program is too big for it`, 'bad'); return; }
     new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img);
     const e = g.stage(img.length);
     rnEvent(`${nm}: ${e ? 'rejected the new program (error ' + e + ')' : 'self-tests passed; running the new program in the background first'}`, e ? 'bad' : '');
@@ -294,7 +296,7 @@ const HOST_EVENTS = { 1: 'loaded the new program, flying it in the background', 
 // What the pilot asks the learning (the Learning panel, the throw): with a radio and the navigation it goes up the
 // link as a command (the navigation passes it on, as dfb_pi does); otherwise straight to the learning's board.
 function pilotLearnCmd(name) {
-  if (brt.gnd && hasTask('nav') && hasTask('learn')) { radioCommand(2, [LN_CMD[name]]); return 0; }
+  if (brt.gnd && hasTask('nav') && hasTask('learn')) return radioCommand(2, [LN_CMD[name]]);
   return boardsLearnCmd(name);
 }
 // The learning task's commands, on its board.

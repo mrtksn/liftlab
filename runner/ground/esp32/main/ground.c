@@ -27,6 +27,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/uart.h"
@@ -50,7 +51,7 @@ typedef struct {
   int8_t ax[GND_AXES]; uint8_t ax_inv[GND_AXES]; int16_t span;
   int8_t buzzer, led; uint32_t latch;
 } gcfg;
-static gcfg C;
+static gcfg C, N;                  /* C: the wiring running now; N: as set since (saved, it runs after a reboot) */
 static void defaults(gcfg *c) {
   memset(c, 0, sizeof *c); c->version = CFG_VERSION; c->tx = 17; c->rx = 16; c->baud = 400000;
   for (int i = 0; i < GB_N; i++) c->btn[i] = -1;
@@ -58,41 +59,46 @@ static void defaults(gcfg *c) {
   c->span = 1800; c->buzzer = -1; c->led = 2; c->latch = GB(GB_ARM) | GB(GB_FLY);
 }
 static void cfg_load(void) {
-  defaults(&C); nvs_handle_t h; if (nvs_open("dfbg", NVS_READONLY, &h) != ESP_OK) return;
-  gcfg t; size_t n = sizeof t; if (nvs_get_blob(h, "cfg", &t, &n) == ESP_OK && n == sizeof t && t.version == CFG_VERSION) C = t;
-  nvs_close(h);
+  defaults(&C); nvs_handle_t h;
+  if (nvs_open("dfbg", NVS_READONLY, &h) == ESP_OK) {
+    gcfg t; size_t n = sizeof t; if (nvs_get_blob(h, "cfg", &t, &n) == ESP_OK && n == sizeof t && t.version == CFG_VERSION) C = t;
+    nvs_close(h);
+  }
+  N = C;
 }
 static int cfg_save(void) {
   nvs_handle_t h; if (nvs_open("dfbg", NVS_READWRITE, &h) != ESP_OK) return -1;
-  esp_err_t e = nvs_set_blob(h, "cfg", &C, sizeof C); if (e == ESP_OK) e = nvs_commit(h); nvs_close(h); return e == ESP_OK ? 0 : -1;
+  esp_err_t e = nvs_set_blob(h, "cfg", &N, sizeof N); if (e == ESP_OK) e = nvs_commit(h); nvs_close(h); return e == ESP_OK ? 0 : -1;
 }
 static int pin_in(int p) { return p == -1 || (p >= 0 && p <= 39 && !(p >= 6 && p <= 11) && p != 20 && p != 24 && !(p >= 28 && p <= 31)); }
 static int pin_out(int p) { return p == -1 || (pin_in(p) && p < 34); }
+/* The wiring as set (N); what runs (C) changes only at the next power-on, so a half-done rewiring never flies. */
 static void show(char *o, int n) {
-  int k = snprintf(o, (size_t)n, "tx=%d,%d baud=%ld span=%d buzzer=%d led=%d latch=", C.tx, C.rx, (long)C.baud, C.span, C.buzzer, C.led);
-  for (int b = 0; b < GB_N; b++) if (C.latch & GB(b)) k += snprintf(o + k, (size_t)(n - k), "%s,", gnd_button_names[b]);
-  for (int b = 0; b < GB_N; b++) if (C.btn[b] >= 0) k += snprintf(o + k, (size_t)(n - k), " %s=%d", gnd_button_names[b], C.btn[b]);
+  int k = memcmp(&N, &C, sizeof N) ? snprintf(o, (size_t)n, "(changed since power-on: runs after save and reboot) ") : 0;
+  k += snprintf(o + k, (size_t)(n - k), "tx=%d,%d baud=%ld span=%d buzzer=%d led=%d latch=", N.tx, N.rx, (long)N.baud, N.span, N.buzzer, N.led);
+  for (int b = 0; b < GB_N && k < n - 20; b++) if (N.latch & GB(b)) k += snprintf(o + k, (size_t)(n - k), "%s,", gnd_button_names[b]);
+  for (int b = 0; b < GB_N && k < n - 20; b++) if (N.btn[b] >= 0) k += snprintf(o + k, (size_t)(n - k), " %s=%d", gnd_button_names[b], N.btn[b]);
   static const char *const ax[4] = { "roll", "pitch", "throttle", "yaw" };
-  for (int a = 0; a < GND_AXES; a++) if (C.ax[a] >= 0) k += snprintf(o + k, (size_t)(n - k), " %s=%d%s", ax[a], C.ax[a], C.ax_inv[a] ? "i" : "");
+  for (int a = 0; a < GND_AXES && k < n - 20; a++) if (N.ax[a] >= 0) k += snprintf(o + k, (size_t)(n - k), " %s=%d%s", ax[a], N.ax[a], N.ax_inv[a] ? "i" : "");
 }
-/* "set key=value": 0, or −1 with why in err */
+/* "set key=value" into N: 0, or −1 with why in err */
 static int setting(char *kv, char *err, int en) {
   char *e = strchr(kv, '='); if (!e) { snprintf(err, (size_t)en, "set key=value"); return -1; }
   *e = 0; const char *k = kv, *v = e + 1; int x = atoi(v);
   static const char *const ax[4] = { "roll", "pitch", "throttle", "yaw" };
-  if (!strcmp(k, "tx")) { int a = -1, b = -1; if (sscanf(v, "%d,%d", &a, &b) != 2 || !pin_out(a) || !pin_in(b) || a < 0 || b < 0) { snprintf(err, (size_t)en, "tx=OUT,IN (one pin for both is fine: tx=17,17)"); return -1; } C.tx = (int8_t)a; C.rx = (int8_t)b; }
-  else if (!strcmp(k, "baud")) { if (x < 9600 || x > 5250000) { snprintf(err, (size_t)en, "baud: 9600 to 5250000"); return -1; } C.baud = x; }
-  else if (!strcmp(k, "span")) { if (x < 100 || x > 2047) { snprintf(err, (size_t)en, "span: 100 to 2047"); return -1; } C.span = (int16_t)x; }
-  else if (!strcmp(k, "buzzer") || !strcmp(k, "led")) { if (!pin_out(x)) { snprintf(err, (size_t)en, "%.20s: an output pin (below 34), or -1", k); return -1; } if (k[0] == 'b') C.buzzer = (int8_t)x; else C.led = (int8_t)x; }
-  else if (!strcmp(k, "latch")) { C.latch = 0; char buf[128]; snprintf(buf, sizeof buf, "%s", v); char *sv; for (char *p = strtok_r(buf, ",", &sv); p; p = strtok_r(0, ",", &sv)) { int b = gnd_button(p); if (b >= 0) C.latch |= GB(b); } }
+  if (!strcmp(k, "tx")) { int a = -1, b = -1; if (sscanf(v, "%d,%d", &a, &b) != 2 || !pin_out(a) || !pin_in(b) || a < 0 || b < 0) { snprintf(err, (size_t)en, "tx=OUT,IN (one pin for both is fine: tx=17,17)"); return -1; } N.tx = (int8_t)a; N.rx = (int8_t)b; }
+  else if (!strcmp(k, "baud")) { if (x < 9600 || x > 5250000) { snprintf(err, (size_t)en, "baud: 9600 to 5250000"); return -1; } N.baud = x; }
+  else if (!strcmp(k, "span")) { if (x < 100 || x > 2047) { snprintf(err, (size_t)en, "span: 100 to 2047"); return -1; } N.span = (int16_t)x; }
+  else if (!strcmp(k, "buzzer") || !strcmp(k, "led")) { if (!pin_out(x)) { snprintf(err, (size_t)en, "%.20s: an output pin (below 34), or -1", k); return -1; } if (k[0] == 'b') N.buzzer = (int8_t)x; else N.led = (int8_t)x; }
+  else if (!strcmp(k, "latch")) { N.latch = 0; char buf[128]; snprintf(buf, sizeof buf, "%s", v); char *sv; for (char *p = strtok_r(buf, ",", &sv); p; p = strtok_r(0, ",", &sv)) { int b = gnd_button(p); if (b >= 0) N.latch |= GB(b); } }
   else {
     for (int a = 0; a < GND_AXES; a++) if (!strcmp(k, ax[a])) {
       if (x != -1 && (x < 32 || x > 39)) { snprintf(err, (size_t)en, "%.20s: an ADC pin, 32–39 (or -1)", k); return -1; }
-      C.ax[a] = (int8_t)x; C.ax_inv[a] = strchr(v, 'i') != 0; return 0;
+      N.ax[a] = (int8_t)x; N.ax_inv[a] = strchr(v, 'i') != 0; return 0;
     }
     int b = gnd_button(k); if (b < 0) { snprintf(err, (size_t)en, "no setting %.20s", k); return -1; }
     if (!pin_in(x)) { snprintf(err, (size_t)en, "%.20s: not a usable pin", k); return -1; }
-    C.btn[b] = (int8_t)x;
+    N.btn[b] = (int8_t)x;
   }
   return 0;
 }
@@ -140,7 +146,7 @@ void app_main(void) {
   printf("\nDrone Force Bench command module (ESP32)\n");
   float *ar[3] = { arenas_[0], arenas_[1], arenas_[2] }, *po[3] = { pools_[0], pools_[1], pools_[2] }; int32_t *co[3] = { codes_[0], codes_[1], codes_[2] };
   int e = rn_host_init(&H, rn_builtin_ground_img, rn_builtin_ground_len, ar, 2048, co, 2048, po, 1024);
-  gnd_config gc; gnd_config_default(&gc); gc.latch = C.latch;
+  gnd_config gc; gnd_config_default(&gc); gc.latch = C.latch; gc.seq0 = (uint8_t)esp_random();   /* (gnd_config.seq0) */
   gnd_init(&G, e ? 0 : &H, &gc);
   printf("program: %s; %s\n", rn_error_text(e), G.why);
   hw_init();
@@ -156,7 +162,9 @@ void app_main(void) {
     /* the USB port: settings and text commands */
     uint8_t b[64]; int n = uart_read_bytes(CONSOLE, b, sizeof b, 0);
     for (int i = 0; i < n; i++) {
-      if (b[i] != '\n' && b[i] != '\r' && ln < (int)sizeof line - 1) { line[ln++] = (char)b[i]; continue; }
+      int eol = b[i] == '\n' || b[i] == '\r';
+      if (!eol && ln < (int)sizeof line - 1) { line[ln++] = (char)b[i]; continue; }
+      if (!eol) i--;                                                 /* (a too-long line: run what came, then this character starts the next) */
       if (!ln) continue;
       line[ln] = 0; ln = 0; char reply[700] = "";
       if (!strncmp(line, "set ", 4)) { char err[100]; if (setting(line + 4, err, sizeof err)) snprintf(reply, sizeof reply, "%s", err); else snprintf(reply, sizeof reply, "ok (save, then reboot)"); }

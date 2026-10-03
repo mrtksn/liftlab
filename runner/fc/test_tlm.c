@@ -100,6 +100,51 @@ int main(void) {
     for (int k = 0; k < 5; k++, t += 0.01) { in.t_ch = t; in.frames++; c2[RC_PITCH] = 0; memcpy(in.ch, c2, sizeof c2); rc_pilot_step(&RP, &in, t, &N, &o, 0.01f, &sp); }
     CHECK(!RP.lost && !N.rc_rth && fabsf(sp.target[2] - 2) < 0.01f, "back: holds where it is (%s)", RP.msg);
   }
+  printf("the radio's small print\n");
+  {
+    rc_input in; memset(&in, 0, sizeof in); uint8_t f[64]; crsf_parser P; memset(&P, 0, sizeof P);
+    /* link statistics too short to be link statistics: ignored, not read as garbage */
+    uint8_t ls[8] = { 0x20, 0x20, 77, 5, 0, 2 }; int n = crsf_frame(f, CRSF_ADDR_FC, CRSF_LINK_STATS, ls, 6);
+    int took = 0; for (int i = 0; i < n; i++) took |= tlm_crsf_input(&P, f[i], &in, 1.0);
+    CHECK(took == 0 && in.t_link == 0 && in.up_lq == 0, "6-byte link statistics: not taken");
+    /* 50 mW travels as the CRSF power code 8 */
+    crsf_link L; memset(&L, 0, sizeof L); L.up_lq = 90; L.down_lq = 80; L.up_rssi = -70; L.down_rssi = -72; L.tx_power_mw = 50;
+    n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 1.1);
+    CHECK(in.tx_power == 50, "50 mW: read back as %d mW", in.tx_power);
+    /* a receiver that leaves the downlink figures 0: the budget goes by the uplink */
+    L.down_lq = 0; L.down_rssi = 0; L.up_lq = 100; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 1.2);
+    float b = tlm_crsf_budget_now(250, 4, &in, 1.3), full = tlm_crsf_budget(250, 4);
+    CHECK(fabsf(b - full) < 1, "downlink LQ and RSSI 0 (not reported): budget %.0f B/s, the full %.0f", b, full);
+    L.down_lq = 0; L.down_rssi = -100; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 1.4);
+    b = tlm_crsf_budget_now(250, 4, &in, 1.5);
+    CHECK(b < full * 0.06f, "downlink LQ 0 with a downlink RSSI (really lost): budget %.0f B/s", b);
+    /* a NaN budget doesn't poison the token bucket */
+    static tlm_store T; tlm_init(&T); uint8_t o[256]; float att[3] = { 0.1f, 0, 0 }; tlm_put(&T, TLM_ATT, att, 3, 0);
+    tlm_service(&T, &tlm_crsf, 0.0, 1000, o, sizeof o); tlm_service(&T, &tlm_crsf, 0.1, NAN, o, sizeof o);
+    tlm_put(&T, TLM_ATT, att, 3, 0.5); int k = tlm_service(&T, &tlm_crsf, 0.6, 1000, o, sizeof o);
+    CHECK(T.tokens == T.tokens && k > 0, "a NaN budget once: the bucket recovers (%d bytes next)", k);
+    /* a command after a loss: the ground's numbering may have restarted */
+    float go[4] = { 1, 2, 3, 0 }; float ch[16] = { 0 };
+    n = crsf_rc(f, CRSF_ADDR_FC, ch); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 2.0);
+    n = tlm_crsf_cmd(f, RC_CMD_GOTO, 9, go, 4); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 2.0);
+    n = crsf_rc(f, CRSF_ADDR_FC, ch); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 5.0);   /* 3 s of nothing */
+    go[0] = 4; n = tlm_crsf_cmd(f, RC_CMD_GOTO, 9, go, 4); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 5.0);
+    CHECK(in.cmd_seq == 9 && fabsf(in.cmd_v[0] - 4) < 0.01f, "the link back, the ground restarted at the same number: its go-to taken (x %.1f)", in.cmd_v[0]);
+    /* between boards: a command packed long after it came isn't replayed */
+    rc_input a, z; memset(&z, 0, sizeof z); a = in; float pk[RC_PACK_N];
+    CHECK(rc_pack(&a, 5.2, pk) == RC_PACK_N, "the pack is RC_PACK_N (%d) floats", RC_PACK_N);
+    rc_unpack(&z, pk, RC_PACK_N, 100); CHECK(z.cmd == RC_CMD_GOTO && z.cmd_seq == 9, "a 0.2 s old command: passed on");
+    memset(&z, 0, sizeof z); rc_pack(&a, 8.0, pk); rc_unpack(&z, pk, RC_PACK_N, 100);
+    CHECK(z.cmd == 0 && z.cmd_seq == 9, "a 3 s old command (the board restarted): seen, not acted on");
+    /* "fly" off, then on: the new flight starts where the drone is */
+    static nav_state N; memset(&N, 0, sizeof N); nav_out o2; memset(&o2, 0, sizeof o2); o2.have_home = 1; o2.p[0] = 5; o2.p[2] = 0;
+    rc_pilot RP; rc_pilot_init(&RP); nav_sp sp; memset(&sp, 0, sizeof sp); rc_input r; memset(&r, 0, sizeof r);
+    float c[16] = { 0, 0, 0, 0, 1, 0, 1, -1, -1 }; double t = 10;
+    for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
+    c[RC_FLY] = -1; for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
+    o2.p[0] = -3; c[RC_FLY] = 1; for (int k2 = 0; k2 < 10; k2++, t += 0.01) { memcpy(r.ch, c, sizeof c); r.t_ch = t; r.frames++; rc_pilot_step(&RP, &r, t, &N, &o2, 0.01f, &sp); }
+    CHECK(fabsf(sp.target[0] + 3) < 0.1f, "fly, land elsewhere, fly again: the target starts at the new spot (x %.2f)", sp.target[0]);
+  }
   printf(fails ? "%d FAILED\n" : "all passed\n", fails);
   return fails != 0;
 }

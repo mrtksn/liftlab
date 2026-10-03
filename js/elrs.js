@@ -27,12 +27,12 @@ const radioCfg = { rate: 250, ratio: 4, power: 100, extra: 0 };
 const radio = {};
 function radioReset() {
   Object.assign(radio, {
-    t: 0, nextPkt: 0, k: 0, seed: 0x2545F491,
+    t: 0, nextPkt: 0, k: 0, upK: 0, seed: 0x2545F491,
     down: [], downBytes: 0, downFrames: 0, downDropped: 0, fromGround: crsfParser(), fromDrone: crsfParser(), txIn: crsfParser(),
     up: [], txCh: null, toBoard: [], toGround: [], nextStats: 0, ch: null,
     upHist: [], downHist: [], rssiUp: -50, rssiDown: -50, snrUp: 10, snrDown: 10, rfAt: -1,
     downChunks: 0, downGot: 0, upGot: 0, rxLost: false, holdUntil: -1, homeUntil: -1,
-    log: [], logN: 0, downMeta: [], ev: {}, txChT: 0, air: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
+    log: [], logN: 0, downMeta: [], ev: {}, stickLogged: null, dropRun: null, lqUp: 0, lqDown: 0, rf: null, txChT: 0, air: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
   });
   gsReset();
 }
@@ -84,7 +84,8 @@ function radioStep(dt, t) {
     } else {
       const ok = radioRand() < pUp;
       radio.upHist.push(ok ? 1 : 0); if (radio.upHist.length > 100) radio.upHist.shift();
-      const cmdSlot = radio.up.length && radio.k % 2;
+      radio.upK++;
+      const cmdSlot = radio.up.length && radio.upK % 2;             // (every other uplink packet: the uplink's own count, whatever the telemetry ratio)
       linkEv(ok ? 'upOk' : 'upLost', t);
       if (!ok) {
         if (cmdSlot) radio.up[0].lost++;
@@ -163,7 +164,13 @@ function radioFromGround(bytes) {
   });
 }
 // A ground-station command (go to, calibrate…): the command module queues it and sends it up.
-function radioCommand(cmd, values) { const g = brt.gnd; if (!g) return; if (cmd === 1) g.gnd_goto(...values); else { frIn(g, values); g.gnd_command(cmd, values.length); } }
+// A command for the command module to send. 0, or −1 if it has too many waiting (said in the log, not silently lost).
+function radioCommand(cmd, values) {
+  const g = brt.gnd; if (!g) return -1;
+  let r; if (cmd === 1) r = g.gnd_goto(...values); else { frIn(g, values); r = g.gnd_command(cmd, values.length); }
+  if (r) linkLog('↑', 'cmd', `${cmd === 1 ? 'GOTO' : 'command ' + cmd} not sent`, 'the command module has too many waiting', 'bad');
+  return r ? -1 : 0;
+}
 function radioHold() { radio.holdUntil = radio.t + 0.3; }
 function radioHome() { radio.homeUntil = radio.t + 0.3; }
 
@@ -298,13 +305,17 @@ function linkChannels(ch, t, fr, lat) {
 // gs is the Ground station tab's copy of the command module's view (ground_core.c gnd_view_pack), read a few times a
 // second: values by kind with when each came (gs.at, simulator time), the messages, the alert, the channels it sent.
 const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null };
-function gsReset() { Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, posAt: -1 }); }
+function gsReset() {
+  Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, posAt: -1 });
+  if (typeof GS_UI !== 'undefined') Object.assign(GS_UI, { built: false, paused: null, clearId: 0, logN: -1 });   // (the widgets hold the old run's values: built again; the log starts again)
+  if (typeof GS_UI !== 'undefined') GS_UI.open.clear();
+}
 function gsRead() {
   const g = brt.gnd; if (!g) return;
   const t = brt.t, n = g.gnd_view(t), o = new Float32Array(g.memory.buffer, g.fr_ptr(), n), at = a => a >= 0 ? t - a : null;
   const put = (kind, age, v) => { const a = at(age); if (a == null) return; gs.v[kind] = v; gs.at[kind] = a; };
   gs.alert = { level: o[0], why: o[1], text: cstr(g, g.gnd_why_text(o[1]), 80) };
-  gs.bytes = o[3]; gs.frames = o[4];
+  gs.bytes = o[3]; gs.frames = o[4]; gs.lastAge = o[7];
   if (o[8] >= 0) gs.link = { upRssi: o[9], upLq: o[10], upSnr: o[11], downRssi: o[12], downLq: o[13], downSnr: o[14], power: o[15], t: t - o[8] };
   put('attitude', o[16], { roll: o[17], pitch: o[18], yaw: o[19] });
   put('battery', o[20], { volts: o[21], amps: o[22], mah: o[23], pct: o[24] });

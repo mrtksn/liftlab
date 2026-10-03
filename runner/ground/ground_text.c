@@ -11,8 +11,8 @@ const char *const gnd_button_names[GB_N] = { "right", "left", "fwd", "back", "up
 int gnd_button(const char *s) { for (int i = 0; i < GB_N; i++) if (!strcmp(s, gnd_button_names[i])) return i; return -1; }
 
 void gnd_text_inputs(const gnd_text_in *I, double t, gnd_input *in) {
-  in->held |= I->held;
-  for (int b = 0; b < GB_N; b++) if (t < I->until[b]) in->held |= GB(b);
+  in->sw |= I->held;                                 /* (switch states as set: a button that latches in hardware doesn't here) */
+  for (int b = 0; b < GB_N; b++) if (t < I->until[b]) in->sw |= GB(b);
   for (int a = 0; a < GND_AXES; a++) if (((I->has >> a) & 1) && t < I->axis_until[a]) { in->axis[a] = I->axis[a]; in->has_axis |= 1u << a; }
 }
 
@@ -33,6 +33,7 @@ int gnd_text(gnd_state *G, gnd_text_in *I, char *s, double t, char *reply, int r
     if (w[0][0] == 'r') { I->held &= ~GB(b); I->until[b] = 0; }
     else if (w[0][0] == 't') I->until[b] = t + 0.25;
     else if (GB(b) & STICK_BUTTONS) I->until[b] = t + LAPSE;  /* (lapses unless sent again) */
+    else if (b == GB_GENTLE || b == GB_NORMAL || b == GB_SPORT) I->until[b] = t + 0.05;   /* (a speed level: a moment is enough) */
     else I->held |= GB(b);
   } else if (!strcmp(w[0], "stick") && n >= 3) {
     static const char *const ax[4] = { "roll", "pitch", "throttle", "yaw" }; int a = -1; for (int i = 0; i < 4; i++) if (!strcmp(w[1], ax[i])) a = i;

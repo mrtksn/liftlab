@@ -35,7 +35,7 @@ float rc_cmd_scale(int cmd, int k);
 typedef struct rc_input {
   float ch[16]; double t_ch; uint32_t frames;          /* the channels, and when they last came */
   float up_rssi, up_lq, up_snr, down_rssi, down_lq; int rf_mode, tx_power; double t_link;
-  int cmd; float cmd_v[6]; uint32_t cmd_seq;           /* the latest ground-station command (cmd_seq counts them) */
+  int cmd; float cmd_v[6]; uint32_t cmd_seq; double t_cmd;   /* the latest ground-station command (cmd_seq counts them), and when it came */
 } rc_input;
 static inline int rc_link_ok(const rc_input *in, double t) { return in->frames > 0 && t - in->t_ch < RC_LOST_S; }
 
@@ -56,8 +56,10 @@ void rc_pilot_init(rc_pilot *P);
 int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const nav_out *o, float dt, nav_sp *sp);
 
 /* Between boards (RN_LINK_RC): the receiver's board sends what it got to the navigation's board, 50 times a second.
- * 16 channels, age of the channels [s], the link (up RSSI, LQ, SNR, down RSSI, LQ), the command (seq, cmd, 6 values). */
-#define RC_PACK_N (16 + 1 + 5 + 8)
+ * 16 channels, age of the channels [s], the link (up RSSI, LQ, SNR, down RSSI, LQ), the command (seq, cmd, 6 values,
+ * age [s]). A command older than RC_CMD_FRESH_S is not acted on: a board that restarts mustn't replay an old go-to. */
+#define RC_PACK_N (16 + 1 + 5 + 9)
+#define RC_CMD_FRESH_S 1.0
 int rc_pack(const rc_input *in, double t, float *out);
 void rc_unpack(rc_input *in, const float *p, int n, double t);
 

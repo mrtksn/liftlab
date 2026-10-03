@@ -39,13 +39,16 @@ enum {
 typedef struct {
   float axis[GND_AXES];      /* analog sticks, −1…1: roll right, pitch forward, throttle up, yaw right are + */
   uint32_t has_axis;         /* bit per axis that has an analog stick (the others come from buttons) */
-  uint32_t held;             /* buttons held now (GB bits) */
+  uint32_t held;             /* buttons held now (GB bits): hardware buttons, which may latch (gnd_config.latch) */
+  uint32_t sw;               /* switch states already decided (text commands, a key that toggles): never latched */
 } gnd_input;
 
 typedef struct {
   uint32_t latch;            /* buttons that toggle on each press (push buttons used as the arm and fly switches) */
   float rc_period;           /* seconds between channel frames (0.004: 250 per second) */
   float cmd_gap;             /* seconds between commands (0.15): the drone keeps only the latest one */
+  uint8_t seq0;              /* the first command's sequence number − 1: something random, so a restarted command
+                                module's first command isn't taken by the drone for a repeat of its last one */
 } gnd_config;
 void gnd_config_default(gnd_config *c);
 
@@ -70,10 +73,10 @@ typedef struct {
 typedef struct {
   rn_host *H; int ok, f_stick, f_alert, shaped;
   gnd_config C;
-  uint32_t held_was, latched;
+  uint32_t held_was, all_was, latched;
   int level;                                           /* 0 gentle, 1 normal, 2 sport */
   float stick[GND_AXES], ch[16];
-  struct { int cmd, n; float v[6]; } q[GND_QN]; int qh, qn, seq; double t_cmd, t_rc;
+  struct { int cmd, n; float v[6]; } q[GND_QN]; int qh, qn, seq; double t_cmd, t_rc_next;
   int alert, alert_why; double t_alert_step;
   crsf_parser P; gnd_view V;
   char why[96];
@@ -89,6 +92,7 @@ int gnd_step(gnd_state *G, const gnd_input *in, double t, float dt, uint8_t *out
 void gnd_from_radio(gnd_state *G, const uint8_t *b, int n, double t);
 /* Queue a command (rc_core.h RC_CMD_*). Returns 0, or −1 when the queue is full. */
 int gnd_command(gnd_state *G, int cmd, const float *v, int n);
+/* A go-to replaces one still waiting to go (only the newest target matters). */
 int gnd_goto(gnd_state *G, float x, float y, float z, float heading);
 /* The latest alert: level 0 fine, 1 warning, 2 alarm; why (gnd_why_text). */
 static inline int gnd_alert(const gnd_state *G, int *why) { if (why) *why = G->alert_why; return G->alert; }

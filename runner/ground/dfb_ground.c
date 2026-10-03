@@ -138,7 +138,7 @@ int main(int argc, char **argv) {
   }
   if (!tx_dev && !test) { fprintf(stderr, "dfb_ground: say where the transmitter module is (--tx DEV), or --test to run without one\n"); return 2; }
   if (js_dev && !latch_set) latch = GB(GB_ARM) | GB(GB_FLY);          /* a gamepad's buttons are push buttons */
-  cfg.latch = latch;
+  cfg.latch = latch; cfg.seq0 = (uint8_t)(time(0) ^ getpid());   /* (see gnd_config.seq0) */
 
   /* the step runner with the built-in ground program, then the core */
   static float arenas_[3][16384], pools_[3][4096]; static int32_t codes_[3][16384]; static rn_host H;
@@ -183,7 +183,14 @@ int main(int argc, char **argv) {
     int wait = (int)((next - t) * 1000); if (wait < 0) wait = 0;
     poll(p, (nfds_t)np, wait);
     t = now_s();
-    if (itx >= 0 && (p[itx].revents & POLLIN)) { uint8_t b[512]; ssize_t n = read(tx, b, sizeof b); if (n > 0) gnd_from_radio(&G, b, (int)n, t - t0); }
+    if (itx >= 0 && (p[itx].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
+      uint8_t b[512]; ssize_t n = read(tx, b, sizeof b);
+      if (n > 0) gnd_from_radio(&G, b, (int)n, t - t0);
+      else if ((n == 0 && (p[itx].revents & POLLHUP)) || (n < 0 && errno != EAGAIN && errno != EINTR)) {   /* unplugged */
+        fprintf(stderr, "\rtransmitter module: gone (%s): nothing goes up any more; the drone will count the link lost\r\n", n < 0 ? strerror(errno) : "hung up");
+        close(tx); tx = -1;
+      }
+    }
     if (iudp >= 0 && (p[iudp].revents & POLLIN)) {
       char b[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n = recvfrom(udp, b, sizeof b - 1, 0, (struct sockaddr *)&from, &fl);
       if (n > 0) { b[n] = 0; char reply[1200]; for (char *s = strtok(b, "\n"), *nx; s; s = nx) { nx = strtok(0, "\n"); char cp[256]; snprintf(cp, sizeof cp, "%s", s); command(cp, reply, sizeof reply, t - t0); if (reply[0]) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl); } }
@@ -193,16 +200,21 @@ int main(int argc, char **argv) {
       if (n <= 0) stdin_open = 0;                                       /* (stdin closed: keep running on the other inputs) */
       for (ssize_t i = 0; i < n; i++) {
         if (keys) { key((unsigned char)b[i], t - t0, &esc); continue; }
-        if (b[i] == '\n' || ln == (int)sizeof line - 1) { line[ln] = 0; ln = 0; char reply[1200]; command(line, reply, sizeof reply, t - t0); if (reply[0]) printf("%s\n", reply); }
+        if (b[i] != '\n' && ln == (int)sizeof line - 1) { line[ln] = 0; ln = 0; char reply[1200]; command(line, reply, sizeof reply, t - t0); if (reply[0]) printf("%s\n", reply); }   /* (a too-long line: what came so far) */
+        if (b[i] == '\n') { line[ln] = 0; ln = 0; char reply[1200]; command(line, reply, sizeof reply, t - t0); if (reply[0]) printf("%s\n", reply); }
         else line[ln++] = b[i];
       }
     }
 #ifdef __linux__
-    if (ijs >= 0 && (p[ijs].revents & POLLIN)) {
-      struct js_event ev;
-      while (read(js, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+    if (ijs >= 0 && (p[ijs].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
+      struct js_event ev; ssize_t r;
+      while ((r = read(js, &ev, sizeof ev)) == (ssize_t)sizeof ev) {
         if ((ev.type & 0x7F) == JS_EVENT_AXIS) for (int a = 0; a < GND_AXES; a++) if (axmap[a] == ev.number) { js_axis[a] = (axinv[a] ? -1.0f : 1.0f) * ev.value / 32767.0f; js_has |= 1u << a; }
         if ((ev.type & 0x7F) == JS_EVENT_BUTTON) for (int b = 0; b < GB_N; b++) if (bmap[b] == ev.number) { if (ev.value) js_held |= GB(b); else js_held &= ~GB(b); }
+      }
+      if ((r < 0 && errno != EAGAIN && errno != EINTR) || (p[ijs].revents & (POLLERR | POLLHUP | POLLNVAL))) {   /* unplugged: its sticks centre, its buttons let go */
+        fprintf(stderr, "\rgamepad: gone: its sticks centre and its buttons are released\r\n");
+        close(js); js = -1; js_has = 0; js_held = 0; for (int a = 0; a < GND_AXES; a++) js_axis[a] = 0;
       }
     }
 #else
@@ -214,7 +226,7 @@ int main(int argc, char **argv) {
     rn_host_tick(&H, dt);
     gnd_input in; input_now(t - t0, &in);
     uint8_t out[256]; int n = gnd_step(&G, &in, t - t0, dt, out, sizeof out);
-    if (n && tx >= 0 && write(tx, out, (size_t)n) < 0 && errno != EAGAIN) perror("transmitter module");
+    if (n && tx >= 0 && write(tx, out, (size_t)n) < 0 && errno != EAGAIN && errno != EINTR) { perror("\rtransmitter module"); close(tx); tx = -1; }
     if (H.last_event) { int ev = H.last_event; H.last_event = 0; printf("\rprogram: %s\r\n", ev == RN_EV_SWAPPED ? "the new program runs now" : ev == RN_EV_REJECTED ? "the new program was rejected" : ev == RN_EV_FELL_BACK ? "the new program stopped: back to the one before" : ev == RN_EV_LOADED ? "checking the new program in the background" : "event"); }
     /* what to tell the pilot */
     for (; msgs_seen < G.V.nmsg; msgs_seen++) printf("\rdrone: %s\r\n", G.V.msg[msgs_seen % GND_MSGS].s);

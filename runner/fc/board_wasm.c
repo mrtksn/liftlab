@@ -170,6 +170,8 @@ EXPORT("tlm_setup") void tlm_setup(int local, int rate, int ratio) {
   p = (char *)&CP; for (unsigned i = 0; i < sizeof CP; i++) p[i] = 0;
   tlm_local = local; elrs_rate = rate; elrs_ratio = ratio; have_nav_out = 0;
 }
+/* the radio's rate and telemetry ratio changed, in flight: the budget follows, nothing else is touched */
+EXPORT("tlm_link") void tlm_link(int rate, int ratio) { elrs_rate = rate; elrs_ratio = ratio; }
 /* n bytes from the receiver, in rbuf */
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
@@ -184,7 +186,7 @@ EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {
 }
 /* the GPS, as the navigation's board reads it */
 EXPORT("tlm_gps") void tlm_gps(double lat, double lon, float alt, float speed, float course, int sats, double t) { tlm_from_gps(&TS, lat, lon, alt, speed, course, sats, t); }
-EXPORT("tlm_pack") int tlm_pack_(void) { return tlm_pack(&TS, fr, (int)(sizeof fr / sizeof *fr)); }
+EXPORT("tlm_pack") int tlm_pack_(void) { return tlm_pack(&TS, fr, TLM_PACK_MAX); }
 EXPORT("tlm_unpack") void tlm_unpack_(int n, double t) { tlm_unpack(&TS, fr, n, t); }
 EXPORT("tlm_stats") int tlm_stats(void) { fr[0] = (float)TS.bytes_sent; fr[1] = (float)TS.frames_sent; fr[2] = (float)TS.qn; return 3; }
 EXPORT("rc_pack") int rc_pack_(double t) { return rc_pack(&RCI, t, fr); }

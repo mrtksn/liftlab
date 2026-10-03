@@ -52,8 +52,14 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
   int len = crsf_feed(P, b); if (len <= 0) return 0;
   const uint8_t *p = crsf_payload(P); int n = crsf_payload_len(P);
   switch (crsf_type(P)) {
-    case CRSF_RC: if (n >= 22) { crsf_rc_read(p, in->ch); in->t_ch = t; in->frames++; } return CRSF_RC;
+    case CRSF_RC:
+      if (n >= 22) {
+        if (in->frames && t - in->t_ch > RC_LOST_S) { in->cmd_seq = 0; in->cmd = 0; }   /* back after a loss: the ground may have restarted its numbering */
+        crsf_rc_read(p, in->ch); in->t_ch = t; in->frames++;
+      }
+      return CRSF_RC;
     case CRSF_LINK_STATS: {
+      if (n < 10) return 0;                                       /* (short: not link statistics) */
       crsf_link L; crsf_link_stats_read(p, n, &L);
       in->up_rssi = L.up_rssi; in->up_lq = L.up_lq; in->up_snr = L.up_snr; in->down_rssi = L.down_rssi; in->down_lq = L.down_lq;
       in->rf_mode = L.rf_mode; in->tx_power = L.tx_power_mw; in->t_link = t;
@@ -63,7 +69,7 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
       if (n >= 3 && p[0] == CRSF_EXT_CMD) {                       /* a ground-station command: cmd, seq, values (16-bit, /100 or /1000) */
         int cmd = p[1], seq = p[2], m = (n - 3) / 2;
         if ((uint32_t)seq == in->cmd_seq) return CRSF_EXT;          /* (a repeat: the ground numbers them 1–255) */
-        in->cmd = cmd; in->cmd_seq = (uint32_t)seq;
+        in->cmd = cmd; in->cmd_seq = (uint32_t)seq; in->t_cmd = t;
         for (int k = 0; k < 6; k++) {
           int16_t q = k < m ? (int16_t)((p[3 + 2 * k] << 8) | p[4 + 2 * k]) : 0;
           in->cmd_v[k] = q / rc_cmd_scale(cmd, k);
@@ -94,6 +100,7 @@ float tlm_crsf_budget(int rate_hz, int ratio) { return ratio > 0 ? (float)rate_h
  * link is back. */
 float tlm_crsf_budget_now(int rate_hz, int ratio, const rc_input *in, double t) {
   if (!(in->t_link > 0 && t - in->t_link < 1.0)) return 0;
-  float q = in->down_lq / 100; q = q < 0.05f ? 0.05f : q > 1 ? 1 : q;
+  float lq = in->down_lq > 0 || in->down_rssi < 0 ? in->down_lq : in->up_lq;   /* (some receivers leave the downlink figures 0: go by the uplink) */
+  float q = lq / 100; q = q < 0.05f ? 0.05f : q > 1 ? 1 : q;
   return tlm_crsf_budget(rate_hz, ratio) * q;
 }

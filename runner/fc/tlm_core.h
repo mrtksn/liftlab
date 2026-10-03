@@ -21,6 +21,7 @@
 #define TLM_NV 16                        /* values in an item */
 #define TLM_TEXT 56                      /* characters in a message */
 #define TLM_QN 12                        /* messages waiting */
+#define TLM_PACK_MAX 256                 /* floats in one RN_LINK_TLM pack (the ESP32 takes no more; what doesn't fit goes next time) */
 
 /* The items. Values are floats; the table in tlm_core.c gives each one's period and how it is encoded. */
 enum {

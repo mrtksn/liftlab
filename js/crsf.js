@@ -42,7 +42,7 @@ function crsfRcFrame(ch) {
   return crsfFrame(CRSF.ADDR_FC, CRSF.RC, p);
 }
 function crsfLinkStatsFrame(L) {
-  const pw = L.power <= 10 ? 1 : L.power <= 25 ? 2 : L.power <= 100 ? 3 : L.power <= 250 ? 7 : L.power <= 500 ? 4 : 5;
+  const pw = L.power <= 10 ? 1 : L.power <= 25 ? 2 : L.power <= 50 ? 8 : L.power <= 100 ? 3 : L.power <= 250 ? 7 : L.power <= 500 ? 4 : 5;
   const u8 = x => clamp(Math.round(x), 0, 255), s8 = x => (clamp(Math.round(x), -128, 127) + 256) & 0xFF;
   return crsfFrame(CRSF.ADDR_FC, CRSF.LINK_STATS, [u8(-L.upRssi), u8(-L.upRssi), u8(L.upLq), s8(L.upSnr), 0, L.rfMode, pw, u8(-L.downRssi), u8(L.downLq), s8(L.downSnr)]);
 }

@@ -61,6 +61,10 @@ int main(void) {
   CHECK(arm[0] == 1 && arm[1] == 1 && arm[2] == -1 && arm[3] == -1, "a push button as a latching arm switch: press on, release stays, press off (%.0f %.0f %.0f %.0f)", arm[0], arm[1], arm[2], arm[3]);
   in.held = GB(GB_SPORT); t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); float lv = G.ch[RC_LEVEL]; in.held = 0;
   CHECK(lv == 1, "the sport button sets the speed level channel to +1");
+  { float a[3]; in.sw = GB(GB_ARM); t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); a[0] = G.ch[RC_ARM];
+    t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); a[1] = G.ch[RC_ARM];
+    in.sw = 0; t += dt; gnd_step(&G, &in, t, dt, out, sizeof out); a[2] = G.ch[RC_ARM];
+    CHECK(a[0] == 1 && a[1] == 1 && a[2] == -1, "a switch's state (a toggle, \"press arm\") doesn't latch: on while on, off when off (%.0f %.0f %.0f)", a[0], a[1], a[2]); }
 
   printf("commands\n");
   memset(&RI, 0, sizeof RI); memset(&RP, 0, sizeof RP);
@@ -78,6 +82,10 @@ int main(void) {
   in.held = 0;
   CHECK(RI.cmd_seq == s1 % 255 + 1 && RI.cmd == RC_CMD_LEARN && RI.cmd_v[0] == 1, "the calibrate button (held 0.24 s) sends one learning command: calibrate");
 
+  { int gotos = 0; float lastx = 0; uint32_t s0 = RI.cmd_seq;
+    gnd_goto(&G, 1, 0, 2, 0); gnd_goto(&G, 2, 0, 2, 0); gnd_goto(&G, 7, 0, 2, 0);   /* a dragged target: three before a step */
+    for (int k = 0; k < 150; k++) { t += dt; int n = gnd_step(&G, &in, t, dt, out, sizeof out); uint32_t sb = RI.cmd_seq; drone_reads(out, n, t); if (RI.cmd_seq != sb && RI.cmd == RC_CMD_GOTO) { gotos++; lastx = RI.cmd_v[0]; } }
+    CHECK(gotos == 1 && fabsf(lastx - 7) < 0.01f && RI.cmd_seq != s0, "three go-tos while one waits: one goes, the latest (x %.1f; %d sent)", lastx, gotos); }
   printf("the telemetry, as it comes down\n");
   host(); gnd_init(&G, &H, NULL);
   tlm_store T; tlm_init(&T);
@@ -133,6 +141,12 @@ int main(void) {
   }
   CHECK(warned && cleared > 1.9 && cleared < 3.3, "battery at 20%%: warning; charged again, it clears %.1f s later", cleared);
 
+  printf("what isn't the drone's\n");
+  { host(); gnd_init(&G, &H, NULL); uint8_t fr[64], pl[8] = { 0xEA, 0xEE, 0, 0, 0, 0, 0, 0 };
+    int n = crsf_frame(fr, CRSF_ADDR_HANDSET, 0x3A, pl, 8); gnd_from_radio(&G, fr, n, 1.0);
+    crsf_link Lk = { -50, 100, 9, -51, 100, 8, 0, 10, 0 }; n = crsf_link_stats(fr, CRSF_ADDR_HANDSET, &Lk); gnd_from_radio(&G, fr, n, 1.0);
+    float ch[16] = { 0 }; n = crsf_rc(fr, CRSF_ADDR_FC, ch); gnd_from_radio(&G, fr, n, 1.0);
+    CHECK(G.V.frames == 0 && G.V.t_any < 0 && G.V.t_link > 0, "the module's own frames (sync, link statistics, our echo): no telemetry counted (%u frames)", G.V.frames); }
   printf("if the formulas can't answer\n");
   gnd_init(&G, NULL, NULL); in.held = GB(GB_RIGHT) | GB(GB_ARM);
   t += dt; gnd_step(&G, &in, t, dt, out, sizeof out);

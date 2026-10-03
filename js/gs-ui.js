@@ -6,7 +6,7 @@
 const SUP_WHY = ['', 'a motor is running hot', 'the battery is hot', 'lift margin low', 'a motor has failed', 'lift margin very low', 'a battery cell has failed',
   'battery below 20%', 'battery voltage low', 'roll and pitch can no longer be held', 'not enough lift to stay up', 'battery nearly empty', 'battery overheating'];
 const SUP_MODE = ['normal', 'careful', 'returning home', 'landing'];
-const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, open: new Set(), paused: false };
+const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, open: new Set(), paused: null, clearId: 0 };   // paused: the log as it was when paused
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
@@ -46,15 +46,28 @@ function buildGs() {
   const lg = sec('Link log', 'inside the simulated radio', 'sim');
   GS_UI.stats = el('table', { class: 'gs-stats' });
   lg.append(GS_UI.stats, el('p', { class: 'hint', text: '↑ reached the drone\'s receiver, ↓ reached the command module, with how long it took. The sticks and switches are channels, sent in every uplink packet; commands are one-off frames. Click a line for its bytes.' }));
-  const kinds = [['stick', 'Sticks and switches'], ['cmd', 'Commands'], ['msg', 'Messages, mode'], ['link', 'Link, drops'], ['all', 'Every frame']];
-  const row = el('div', { class: 'gs-filters' });
+  const kinds = [['stick', 'Sticks & switches'], ['cmd', 'Commands'], ['msg', 'Messages & mode'], ['link', 'Link & drops'], ['all', 'Every frame']];
+  const row = el('div', { class: 'gs-logbar' }), chips = el('div', { class: 'gs-filters', role: 'group', 'aria-label': 'Show in the log' });
   for (const [k, label] of kinds) {
-    const id = 'gsLog-' + k, c = el('input', { type: 'checkbox', id }); c.checked = k === 'all' ? radioLogAll : GS_UI.logShow[k] !== false;
-    c.addEventListener('change', () => { if (k === 'all') radioLogAll = c.checked; else GS_UI.logShow[k] = c.checked; GS_UI.logN = -1; renderGs(true); });
-    row.append(el('label', { class: 'check', for: id }, c, label));
+    const on = () => k === 'all' ? radioLogAll : GS_UI.logShow[k] !== false;
+    const b = el('button', { type: 'button', class: 'gs-filter', 'aria-pressed': String(on()), text: label });
+    if (k === 'all') b.title = 'Log every telemetry frame too (busy). Off: only commands, switches, messages, the flight mode and link events.';
+    b.addEventListener('click', () => { if (k === 'all') radioLogAll = !radioLogAll; else GS_UI.logShow[k] = !on(); b.setAttribute('aria-pressed', String(on())); GS_UI.logN = -1; renderGs(true); });
+    chips.append(b);
   }
-  const pz = el('input', { type: 'checkbox', id: 'gsLogPause' }); pz.addEventListener('change', () => { GS_UI.paused = pz.checked; GS_UI.logN = -1; renderGs(true); });
-  row.append(el('label', { class: 'check gs-pause', for: 'gsLogPause' }, pz, 'Pause'));
+  const icon = d => { const n = 'http://www.w3.org/2000/svg', v = document.createElementNS(n, 'svg'), q = document.createElementNS(n, 'path'); v.setAttribute('viewBox', '0 0 16 16'); v.setAttribute('aria-hidden', 'true'); q.setAttribute('d', d); v.append(q); return v; };
+  const PAUSE = 'M4 3h3v10H4zM9 3h3v10H9z', PLAY = 'M5 3l8 5-8 5z';
+  const pz = GS_UI.pauseBtn = el('button', { type: 'button', class: 'btn btn-sm gs-pause', 'aria-pressed': 'false' });
+  GS_UI.setPause = () => {
+    const p = GS_UI.paused, fresh = p ? radio.logN - p.n : 0;
+    pz.replaceChildren(icon(p ? PLAY : PAUSE), el('span', { text: p ? 'Resume' : 'Pause' }), p && fresh > 0 ? el('span', { class: 'gs-new', text: `${fresh > 99 ? '99+' : fresh} new` }) : '');
+    pz.setAttribute('aria-pressed', String(!!p)); pz.title = p ? `Paused at ${p.t.toFixed(2)} s: the link keeps running, the log stands still` : 'Hold the log still to read it (the link keeps running)';
+  };
+  pz.addEventListener('click', () => { GS_UI.paused = GS_UI.paused ? null : { log: radio.log.slice(), n: radio.logN, t: radio.t }; GS_UI.setPause(); GS_UI.logN = -1; renderGs(true); });
+  const clr = el('button', { type: 'button', class: 'btn btn-sm', text: 'Clear', title: 'Start the log afresh from here' });
+  clr.addEventListener('click', () => { GS_UI.clearId = radio.logN; GS_UI.paused = null; GS_UI.open.clear(); GS_UI.setPause(); GS_UI.logN = -1; renderGs(true); });
+  GS_UI.setPause();
+  row.append(chips, el('div', { class: 'gs-logbtns' }, pz, clr));
   GS_UI.linkLog = el('ol', { class: 'w-log gs-linklog' }); GS_UI.logN = -1;
   lg.append(row, GS_UI.linkLog);
 
@@ -91,8 +104,8 @@ function buildGs() {
   applySrcTags(pane);
   GS_UI.built = true;
 }
-function boardsRadioCfg() {   // the radio's settings changed: the boards hear of it at the next reset (as on a real drone, set on both ends)
-  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w) w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0, radioCfg.rate, radioCfg.ratio); }
+function boardsRadioCfg() {   // the radio's settings changed: the boards' telemetry budget follows at once (as if set on both ends); nothing else resets
+  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && w.tlm_link) w.tlm_link(radioCfg.rate, radioCfg.ratio); }
 }
 
 function renderGs(force) {
@@ -116,7 +129,7 @@ function renderGs(force) {
   gs.rate.push([t, gs.bytes]); while (gs.rate.length > 2 && t - gs.rate[0][0] > 1) gs.rate.shift();
   const dt = gs.rate.length > 1 ? t - gs.rate[0][0] : 0;
   if (has) { W.thru.set(dt > 0 ? (gs.bytes - gs.rate[0][1]) / dt : 0, t); W.budget.set(radioCfg.rate / radioCfg.ratio * 5, t); }
-  const last = Math.max(-1e9, ...Object.values(gs.at)); if (has) W.age.set(isFinite(last) ? Math.max(0, t - last) : null, isFinite(last) ? t : null);
+  if (has) W.age.set(gs.lastAge >= 0 ? gs.lastAge : null, gs.lastAge >= 0 ? t : null);   // (the command module's own count: −1 until a frame comes)
   if (has && gs.sent) W.chans.set(gs.sent.slice(0, 9).map(v => (v + 1) / 2), t, ['Ail', 'Ele', 'Thr', 'Rud', 'Arm', 'Spd', 'Fly', 'Hold', 'Home']);
 
   const v = gs.v, at = gs.at;
@@ -149,23 +162,28 @@ function renderGs(force) {
     rows.forEach((r, i) => tb.append(el('tr', {}, ...r.map(c => el(i ? 'td' : 'th', { text: c })))));
     tb.title = 'Channels: the command module makes a frame every 4 ms; each uplink packet carries the newest, so the rest are superseded, not lost. Latency: from when it was made to when the other end got it. Lost: packets that didn\'t get through (sent again for commands and telemetry). Dropped: frames the drone\'s receiver threw away, its queue full.';
   }
-  if (radio.logN !== GS_UI.logN && !GS_UI.paused) {                  // the link log, when something new came
+  if (GS_UI.paused) GS_UI.setPause();                                  // (its count of what came since)
+  if (GS_UI.logN === -1 || (radio.logN !== GS_UI.logN && !GS_UI.paused)) {   // the link log, when something new came
     GS_UI.logN = radio.logN; const show = GS_UI.logShow, box = GS_UI.linkLog; box.textContent = '';
     const group = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
-    const want = e => e.kind === 'frame' ? radioLogAll : show[group[e.kind]] !== false;
+    const want = e => e.id > GS_UI.clearId && (e.kind === 'frame' ? radioLogAll : show[group[e.kind]] !== false);
     const TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
-    const list = radio.log.filter(want).slice(0, 100);
+    const list = (GS_UI.paused ? GS_UI.paused.log : radio.log).filter(want).slice(0, 100);
+    const toggle = e => { if (GS_UI.open.has(e.id)) GS_UI.open.delete(e.id); else GS_UI.open.add(e.id); GS_UI.logN = -1; renderGs(true); };
     for (const e of list) {
-      const li = el('li', { 'data-tone': e.tone || '', class: e.bytes ? 'has-raw' + (GS_UI.open.has(e.id) ? ' open' : '') : '' }, el('b', { text: e.t.toFixed(2) }), el('span', { class: 'gs-dir', text: e.dir }),
+      const open = GS_UI.open.has(e.id);
+      const li = el('li', { 'data-tone': e.tone || '', class: e.bytes ? 'has-raw' + (open ? ' open' : '') : '' }, el('b', { text: e.t.toFixed(2) }), el('span', { class: 'gs-dir', text: e.dir }),
         el('span', { class: 'gs-kind', text: TAG[e.kind] || e.kind }), el('span', { class: 'gs-data', text: e.data }), el('span', { class: 'gs-meta', text: e.meta }));
       if (e.bytes) {
-        li.title = 'Click for the bytes';
-        li.addEventListener('click', () => { if (GS_UI.open.has(e.id)) GS_UI.open.delete(e.id); else GS_UI.open.add(e.id); GS_UI.logN = -1; const p = GS_UI.paused; GS_UI.paused = false; renderGs(true); GS_UI.paused = p; });
-        if (GS_UI.open.has(e.id)) li.append(rawView(e.bytes));
+        Object.assign(li, { tabIndex: 0, title: open ? 'Hide the bytes' : 'Show the bytes' }); li.setAttribute('role', 'button'); li.setAttribute('aria-expanded', String(open));
+        li.addEventListener('click', () => toggle(e));
+        li.addEventListener('keydown', k => { if (k.target === li && (k.key === 'Enter' || k.key === ' ')) { k.preventDefault(); toggle(e); requestAnimationFrame(() => { const f = [...box.children].find(x => x.dataset.id === String(e.id)); if (f) f.focus(); }); } });
+        li.dataset.id = e.id;
+        if (open) li.append(rawView(e.bytes));
       }
       box.append(li);
     }
-    if (!list.length) box.append(el('li', { class: 'muted', text: has ? 'Nothing yet.' : 'The drone has no radio.' }));
+    if (!list.length) box.append(el('li', { class: 'muted', text: !has ? 'The drone has no radio.' : GS_UI.clearId ? 'Cleared. New entries show here.' : 'Nothing yet.' }));
   }
   for (const w of Object.values(W)) w.age(t);
 }

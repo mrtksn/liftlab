@@ -123,6 +123,8 @@ static int changed(const tlm_slot *s) { for (int k = 0; k < s->n; k++) if (s->v[
 int tlm_service(tlm_store *T, const tlm_transport *X, double t, float budget, uint8_t *out, int cap) {
   double dt = T->t_service > 0 ? t - T->t_service : 0; T->t_service = t;
   if (dt < 0 || dt > 1) dt = 0;
+  if (!(budget > 0 && budget < 1e6f)) budget = 0;            /* (NaN, negative: nothing) */
+  if (!(T->tokens == T->tokens)) T->tokens = 0;
   T->tokens += dt * budget; if (T->tokens > budget * 0.25 + X->max_frame) T->tokens = budget * 0.25 + X->max_frame;   /* a quarter second's worth, at most */
   int k = 0;
   while (T->tokens > 0 && k + X->max_frame <= cap) {

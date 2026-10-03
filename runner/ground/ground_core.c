@@ -11,12 +11,12 @@ static int fin(float x) { return x == x && x < 3e38f && x > -3e38f; }
 static void say(gnd_state *G, const char *s) { int i = 0; for (; s[i] && i < (int)sizeof G->why - 1; i++) G->why[i] = s[i]; G->why[i] = 0; }
 static void zero(void *p, unsigned n) { char *c = (char *)p; while (n--) *c++ = 0; }
 
-void gnd_config_default(gnd_config *c) { c->latch = 0; c->rc_period = 0.004f; c->cmd_gap = 0.15f; }
+void gnd_config_default(gnd_config *c) { c->latch = 0; c->rc_period = 0.004f; c->cmd_gap = 0.15f; c->seq0 = 0; }
 
 int gnd_init(gnd_state *G, rn_host *H, const gnd_config *c) {
   zero(G, sizeof *G);
   G->H = H; if (c) G->C = *c; else gnd_config_default(&G->C);
-  G->level = 1; G->t_cmd = G->t_rc = -1e9;
+  G->level = 1; G->t_cmd = -1e9; G->t_rc_next = -1e9; G->seq = G->C.seq0 % 255;
   gnd_view *V = &G->V;
   V->t_link = V->t_att = V->t_batt = V->t_gps = V->t_baro = V->t_mode = V->t_any = -1;
   for (int i = 0; i < TLM_ITEMS; i++) V->item[i].t = -1;
@@ -38,13 +38,17 @@ int gnd_command(gnd_state *G, int cmd, const float *v, int n) {
   G->qn++;
   return 0;
 }
-int gnd_goto(gnd_state *G, float x, float y, float z, float heading) { float v[4] = { x, y, z, heading }; return gnd_command(G, RC_CMD_GOTO, v, 4); }
+int gnd_goto(gnd_state *G, float x, float y, float z, float heading) {
+  float v[4] = { x, y, z, heading };
+  if (G->qn) { int k = (G->qh + G->qn - 1) % GND_QN; if (G->q[k].cmd == RC_CMD_GOTO) { for (int i = 0; i < 4; i++) G->q[k].v[i] = v[i]; G->q[k].n = 4; return 0; } }
+  return gnd_command(G, RC_CMD_GOTO, v, 4);
+}
 
 /* What the drone reports, for the alerts: the flight core's state, the navigation's mode bits, the supervisor. */
 static const float *item(const gnd_view *V, int id, int nmin) { return V->item[id].t >= 0 && V->item[id].n >= nmin ? V->item[id].v : 0; }
 static void alerts(gnd_state *G, double t, float dt) {
   const gnd_view *V = &G->V;
-  const float *st = item(V, TLM_STATE, 1), *nav = item(V, TLM_NAV, 5), *sup = item(V, TLM_SUPER, 5), *lk = item(V, TLM_LINK, 4);
+  const float *st = item(V, TLM_STATE, 1), *nav = item(V, TLM_NAV, 5), *sup = item(V, TLM_SUPER, 5);
   int navb = nav ? (int)nav[4] : 0, sm = sup ? (int)sup[0] : 0;
   float in[15]; int k = 0;
   in[k++] = V->t_any >= 0 ? (float)(t - V->t_any) : 1e3f;
@@ -56,7 +60,7 @@ static void alerts(gnd_state *G, double t, float dt) {
   in[k++] = st && (int)st[0] == 3 ? 1.0f : 0.0f;                                     /* crashed */
   in[k++] = (navb & 8) || sm == 2 ? 1.0f : 0.0f;                                     /* returning */
   in[k++] = (navb & 16) || sm == 3 ? 1.0f : 0.0f;                                    /* landing */
-  in[k++] = (navb & 64) || (lk && lk[3] > 0.5f) ? 1.0f : 0.0f;                       /* the drone hears no radio */
+  in[k++] = (navb & 64) ? 1.0f : 0.0f;                                               /* the drone hears no radio (the navigation says) */
   in[k++] = dt;
   float out[2];
   if (G->ok && !rn_host_call(G->H, G->f_alert, 0, in, out) && fin(out[0]) && fin(out[1])) {
@@ -65,12 +69,13 @@ static void alerts(gnd_state *G, double t, float dt) {
 }
 
 int gnd_step(gnd_state *G, const gnd_input *in, double t, float dt, uint8_t *out, int cap) {
-  /* buttons: latching ones toggle on each press */
+  /* buttons: latching ones toggle on each press; switch states from text or keys are taken as they are */
   uint32_t rise = in->held & ~G->held_was; G->held_was = in->held;
   G->latched ^= rise & G->C.latch;
-  uint32_t on = (in->held & ~G->C.latch) | (G->latched & G->C.latch);
-  if (on & GB(GB_GENTLE)) G->level = 0; else if (on & GB(GB_NORMAL)) G->level = 1; else if (on & GB(GB_SPORT)) G->level = 2;
-  if (rise & GB(GB_CAL)) { float c = 1; gnd_command(G, RC_CMD_LEARN, &c, 1); }
+  uint32_t on = (in->held & ~G->C.latch) | (G->latched & G->C.latch) | in->sw;
+  uint32_t all = in->held | in->sw, rise_all = all & ~G->all_was; G->all_was = all;
+  if (rise_all & GB(GB_GENTLE)) G->level = 0; else if (rise_all & GB(GB_NORMAL)) G->level = 1; else if (rise_all & GB(GB_SPORT)) G->level = 2;
+  if (rise_all & GB(GB_CAL)) { float c = 1; gnd_command(G, RC_CMD_LEARN, &c, 1); }
   /* the sticks, through stickInput (raw if it can't answer) */
   static const int plus[GND_AXES] = { GB_RIGHT, GB_FWD, GB_UP, GB_YAWR }, minus[GND_AXES] = { GB_LEFT, GB_BACK, GB_DOWN, GB_YAWL };
   int shaped = 1;
@@ -94,7 +99,10 @@ int gnd_step(gnd_state *G, const gnd_input *in, double t, float dt, uint8_t *out
   if (t - G->t_alert_step >= 0.1) { float adt = G->t_alert_step > 0 ? (float)(t - G->t_alert_step) : 0.1f; G->t_alert_step = t; alerts(G, t, adt); }
   /* what goes to the transmitter module now */
   int n = 0;
-  if (t - G->t_rc >= G->C.rc_period - 1e-6 && cap - n >= 26) { n += crsf_rc(out + n, CRSF_ADDR_TX, G->ch); G->t_rc = t; }
+  if (t >= G->t_rc_next - 1e-6 && cap - n >= 26) {                /* (on a fixed beat: a late step doesn't push the next frame back) */
+    n += crsf_rc(out + n, CRSF_ADDR_TX, G->ch);
+    G->t_rc_next += G->C.rc_period; if (G->t_rc_next < t) G->t_rc_next = t + G->C.rc_period;
+  }
   if (G->qn && t - G->t_cmd >= G->C.cmd_gap && cap - n >= CRSF_MAX_FRAME) {
     G->seq = G->seq % 255 + 1;
     n += tlm_crsf_cmd(out + n, G->q[G->qh].cmd, G->seq, G->q[G->qh].v, G->q[G->qh].n);
@@ -109,29 +117,30 @@ static int be16s(const uint8_t *p) { int v = be16u(p); return v & 0x8000 ? v - 0
 static long be32s(const uint8_t *p) { uint32_t v = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; return (long)(int32_t)v; }
 static void copy_str(char *d, const uint8_t *s, int n, int cap) { int i = 0; for (; i < n && i < cap - 1 && s[i]; i++) d[i] = (char)s[i]; d[i] = 0; }
 
-static int frame(gnd_state *G, double t) {   /* 1: one of the drone's */
+/* One whole frame from the transmitter module. Returns 1 if it was the drone's telemetry: only that counts as
+ * telemetry heard (the module's own frames, a link-statistics or sync frame, and our echo don't). */
+static int frame(gnd_state *G, double t) {
   gnd_view *V = &G->V; const uint8_t *p = crsf_payload(&G->P); int n = crsf_payload_len(&G->P);
   switch (crsf_type(&G->P)) {
-    case CRSF_LINK_STATS: crsf_link_stats_read(p, n, &V->link); V->t_link = t; return 0;   /* (the transmitter module's own) */
-    case CRSF_RC: return 0;                                            /* our own frames, echoed on a one-wire port */
-    case CRSF_ATTITUDE: if (n >= 6) { V->pitch = be16s(p) / 1e4f; V->roll = be16s(p + 2) / 1e4f; V->yaw = be16s(p + 4) / 1e4f; V->t_att = t; } break;
-    case CRSF_BATTERY: if (n >= 8) { V->volts = be16u(p) / 10.0f; V->amps = be16u(p + 2) / 10.0f; V->mah = (float)((p[4] << 16) | (p[5] << 8) | p[6]); V->pct = p[7]; V->t_batt = t; } break;
-    case CRSF_GPS: if (n >= 15) { V->lat = be32s(p) * 1e-7; V->lon = be32s(p + 4) * 1e-7; V->speed = be16u(p + 8) / 36.0f; V->course = be16u(p + 10) / 100.0f;
-      V->alt = (float)(be16u(p + 12) - 1000); V->sats = p[14]; V->t_gps = t; } break;
-    case CRSF_BARO_ALT: if (n >= 2) { int a = be16u(p); V->baro_alt = a & 0x8000 ? (float)(a & 0x7FFF) : (a - 10000) / 10.0f; if (n >= 4) V->vz = be16s(p + 2) / 100.0f; V->t_baro = t; } break;
-    case CRSF_VARIO: if (n >= 2) { V->vz = be16s(p) / 100.0f; } break;
-    case CRSF_FLIGHT_MODE: copy_str(V->mode, p, n, (int)sizeof V->mode); V->t_mode = t; break;
+    case CRSF_LINK_STATS: if (n >= 10) { crsf_link_stats_read(p, n, &V->link); V->t_link = t; } return 0;   /* (the transmitter module's own) */
+    case CRSF_ATTITUDE: if (n < 6) return 0; V->pitch = be16s(p) / 1e4f; V->roll = be16s(p + 2) / 1e4f; V->yaw = be16s(p + 4) / 1e4f; V->t_att = t; break;
+    case CRSF_BATTERY: if (n < 8) return 0; V->volts = be16u(p) / 10.0f; V->amps = be16u(p + 2) / 10.0f; V->mah = (float)((p[4] << 16) | (p[5] << 8) | p[6]); V->pct = p[7]; V->t_batt = t; break;
+    case CRSF_GPS: if (n < 15) return 0; V->lat = be32s(p) * 1e-7; V->lon = be32s(p + 4) * 1e-7; V->speed = be16u(p + 8) / 36.0f; V->course = be16u(p + 10) / 100.0f;
+      V->alt = (float)(be16u(p + 12) - 1000); V->sats = p[14]; V->t_gps = t; break;
+    case CRSF_BARO_ALT: { if (n < 2) return 0; int a = be16u(p); V->baro_alt = a & 0x8000 ? (float)(a & 0x7FFF) : (a - 10000) / 10.0f; if (n >= 4) V->vz = be16s(p + 2) / 100.0f; V->t_baro = t; break; }
+    case CRSF_VARIO: if (n < 2) return 0; V->vz = be16s(p) / 100.0f; break;
+    case CRSF_FLIGHT_MODE: if (n < 1) return 0; copy_str(V->mode, p, n, (int)sizeof V->mode); V->t_mode = t; break;
     case CRSF_EXT:
       if (n >= 2 && p[0] == CRSF_EXT_TEXT) {
         int k = (int)(V->nmsg % GND_MSGS); V->msg[k].sev = p[1]; copy_str(V->msg[k].s, p + 2, n - 2, (int)sizeof V->msg[k].s); V->msg[k].t = t; V->nmsg++;
       } else if (n >= 3 && p[0] == CRSF_EXT_ITEM) {
         int id = p[1], m = p[2];
-        if (id <= 0 || id >= TLM_ITEMS || m > TLM_NV || 3 + 2 * m > n) break;
+        if (id <= 0 || id >= TLM_ITEMS || m > TLM_NV || 3 + 2 * m > n) return 0;
         for (int k = 0; k < m; k++) V->item[id].v[k] = be16s(p + 3 + 2 * k) / tlm_scale(id, k);
         V->item[id].n = m; V->item[id].t = t;
-      } else if (n >= 1 && p[0] == CRSF_EXT_CMD) return 0;            /* (our own command, echoed) */
+      } else return 0;                                                 /* (our own command echoed, or not one of ours) */
       break;
-    default: break;
+    default: return 0;                                                 /* RC (our echo), the module's sync and settings frames… */
   }
   V->frames++; V->t_any = t;
   return 1;

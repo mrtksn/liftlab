@@ -46,6 +46,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
     P->level = in->ch[RC_LEVEL] < -0.33f ? 0 : in->ch[RC_LEVEL] > 0.33f ? 2 : 1;
     int fly = in->ch[RC_FLY] > 0;
     if (fly && !P->fly && !P->have_target) { P->target[0] = o->p[0]; P->target[1] = o->p[1]; P->target[2] = 1.5f; P->heading = sp->heading; P->have_target = 1; }
+    if (!fly && P->fly) P->have_target = 0;            /* (the next "fly" starts where the drone is then) */
     P->fly = fly;
     /* a ground-station "go to" */
     if (in->cmd_seq != P->cmd_seen) {
@@ -91,6 +92,7 @@ int rc_pack(const rc_input *in, double t, float *out) {
   out[k++] = in->frames ? (float)(t - in->t_ch) : 1e3f;
   out[k++] = in->up_rssi; out[k++] = in->up_lq; out[k++] = in->up_snr; out[k++] = in->down_rssi; out[k++] = in->down_lq;
   out[k++] = (float)(in->cmd_seq & 0xFFFF); out[k++] = (float)in->cmd; for (int i = 0; i < 6; i++) out[k++] = in->cmd_v[i];
+  out[k++] = in->cmd_seq ? (float)(t - in->t_cmd) : 1e3f;
   return k;
 }
 void rc_unpack(rc_input *in, const float *p, int n, double t) {
@@ -101,5 +103,9 @@ void rc_unpack(rc_input *in, const float *p, int n, double t) {
   if (age < 100) { in->t_ch = t - age; if (!in->frames) in->frames = 1; else in->frames++; }
   in->up_rssi = p[k++]; in->up_lq = p[k++]; in->up_snr = p[k++]; in->down_rssi = p[k++]; in->down_lq = p[k++];
   uint32_t seq = (uint32_t)p[k++]; int cmd = (int)p[k++];
-  if (seq != (in->cmd_seq & 0xFFFF)) { in->cmd_seq = seq; in->cmd = cmd; for (int i = 0; i < 6; i++) in->cmd_v[i] = p[k + i]; }
+  float cage = p[k + 6];
+  if (seq != (in->cmd_seq & 0xFFFF)) {                 /* a new one: acted on only if fresh (seen, either way) */
+    in->cmd_seq = seq; in->cmd = cage < RC_CMD_FRESH_S ? cmd : 0; in->t_cmd = t - cage;
+    for (int i = 0; i < 6; i++) in->cmd_v[i] = p[k + i];
+  }
 }
