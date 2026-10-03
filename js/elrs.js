@@ -20,6 +20,7 @@
 // The command module's inputs are you: the keys and the simulator's pilot (arm, take off) are its buttons and sticks.
 
 const ELRS_RATES = { 50: -115, 150: -112, 250: -108, 500: -105 };   // receiver sensitivity [dBm]
+const ELRS_AIR = { 50: 0.013, 150: 0.005, 250: 0.003, 500: 0.0016 };  // a packet's time on air, roughly [s]: it arrives that long after it's sent
 const ELRS_RATIOS = [2, 4, 8, 16, 32, 64, 128];
 const ELRS_POWERS = [10, 25, 100, 250, 500, 1000];   // [mW]
 const radioCfg = { rate: 250, ratio: 4, power: 100, extra: 0 };
@@ -31,7 +32,7 @@ function radioReset() {
     up: [], txCh: null, toBoard: [], toGround: [], nextStats: 0, ch: null,
     upHist: [], downHist: [], rssiUp: -50, rssiDown: -50, snrUp: 10, snrDown: 10, rfAt: -1,
     downChunks: 0, downGot: 0, upGot: 0, rxLost: false, holdUntil: -1, homeUntil: -1,
-    log: [], logN: 0, downMeta: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
+    log: [], logN: 0, downMeta: [], ev: {}, txChT: 0, air: [], inFlight: -1, delivered: null, lastUpOk: 0, upGap: false, lastDownOk: 0, downGap: false, lqLow: false, modeSeen: '',
   });
   gsReset();
 }
@@ -62,18 +63,20 @@ const radioP = margin => 1 / (1 + Math.exp(-(margin - 3) / 1.8));   // a packet 
 function radioStep(dt, t) {
   if (radio.rfAt < 0 || t - radio.rfAt > 0.02) { const r = radioRf(); radio.rf = r; radio.rfAt = t; }
   const r = radio.rf, pUp = radioP(r.margin), pDown = radioP(r.margin - 1);   // (the receiver's antenna is a little worse)
-  const period = 1 / radioCfg.rate;
+  const period = 1 / radioCfg.rate, air = ELRS_AIR[radioCfg.rate] || 0.003;
   while (radio.nextPkt <= t + 1e-9) {
+    const tp = radio.nextPkt;                                        // this packet goes now and arrives `air` later
     radio.nextPkt += period; radio.k++;
     const tlmSlot = radioCfg.ratio > 0 && radio.k % radioCfg.ratio === 0;
     if (tlmSlot) {
       const ok = radioRand() < pDown;
       radio.downHist.push(ok ? 1 : 0); if (radio.downHist.length > 100) radio.downHist.shift();
+      linkEv(ok ? 'downOk' : 'downLost', t);
       if (radio.down.length) {
         radio.downChunks++; { const m = radio.downMeta.find(m => m.id === radio.down[0].frame); if (m) m.tries++; }
         if (ok) {
           const c = radio.down.shift(); radio.downBytes -= c.length; radio.downGot++; radio.inFlight = radio.down.length && radio.down[0].frame === c.frame ? c.frame : -1;
-          radio.txIn.feed(c, f => { radio.toGround.push(f); linkDown(f, t); });   // (the module hands on whole frames)
+          radio.air.push({ at: tp + air, down: c });                // (the module then hands on whole frames)
         }
       }
       if (ok) { if (radio.downGap) linkLog('↓', 'link', 'telemetry back', `after ${(t - radio.lastDownOk).toFixed(1)} s`, 'good'); radio.lastDownOk = t; radio.downGap = false; }
@@ -82,6 +85,7 @@ function radioStep(dt, t) {
       const ok = radioRand() < pUp;
       radio.upHist.push(ok ? 1 : 0); if (radio.upHist.length > 100) radio.upHist.shift();
       const cmdSlot = radio.up.length && radio.k % 2;
+      linkEv(ok ? 'upOk' : 'upLost', t);
       if (!ok) {
         if (cmdSlot) radio.up[0].lost++;
         if (!radio.upGap && t - radio.lastUpOk > 0.5) { radio.upGap = true; linkLog('↑', 'link', 'uplink lost', 'no channels for 0.5 s', 'bad'); }
@@ -93,15 +97,28 @@ function radioStep(dt, t) {
       if (cmdSlot) {                                                 // this packet carries 5 bytes of a command
         const c = radio.up[0]; c.got.push(...c.bytes.subarray(c.at, c.at + 5)); c.at += 5; c.pk++;
         if (c.at >= c.bytes.length) {
-          radio.toBoard.push(Uint8Array.from(c.got)); radio.up.shift();
-          linkLog('↑', 'cmd', c.desc, `${Math.round((t - c.t0) * 1000)} ms · ${c.pk} pk${c.lost ? ` · ${c.lost} resent` : ''}`, '');
+          radio.up.shift(); radio.air.push({ at: tp + air, cmd: c });
         }
-      } else if (radio.txCh) { radio.toBoard.push(crsfRcFrame(radio.txCh)); linkChannels(radio.txCh, t); }   // (nothing from the command module yet: nothing to send)
+      } else if (radio.txCh) {
+        radio.air.push({ at: tp + air, ch: radio.txCh, made: radio.txChT });
+      }   // (nothing from the command module yet: nothing to send)
     }
   }
   const D = radio.dropRun;
   if (D && D.n && t - D.last > 0.5) { linkLog('↓', 'drop', `${D.n} frames dropped`, `${(D.last - D.t0).toFixed(1)} s · receiver queue full`, 'warn'); radio.dropRun = null; }
   if (radio.lqUp < 50 !== radio.lqLow && radio.upHist.length >= 50) { radio.lqLow = radio.lqUp < 50; linkLog('↑', 'link', `LQ ${Math.round(radio.lqUp)}%`, radio.lqLow ? 'below 50%' : 'above 50% again', radio.lqLow ? 'warn' : 'good'); }
+  // what has finished its time on air arrives
+  while (radio.air.length && radio.air[0].at <= t + 1e-9) {
+    const a = radio.air.shift();
+    if (a.down) radio.txIn.feed(a.down, f => { radio.toGround.push(f); linkDown(f, t); });
+    else if (a.cmd) {
+      const c = a.cmd, got = Uint8Array.from(c.got); radio.toBoard.push(got); linkEv('cmdOut', t, (t - c.t0) * 1000);
+      linkLog('↑', 'cmd', c.desc, `${Math.round((t - c.t0) * 1000)} ms · ${c.pk} pk${c.lost ? ` · ${c.lost} resent` : ''}`, '', got);
+    } else if (a.ch) {
+      const fr = crsfRcFrame(a.ch); radio.toBoard.push(fr); linkEv('chSent', t, (t - a.made) * 1000);
+      linkChannels(a.ch, t, fr, (t - a.made) * 1000);
+    }
+  }
   const lq = h => h.length ? 100 * h.reduce((a, b) => a + b, 0) / h.length : 0;
   radio.lqUp = lq(radio.upHist); radio.lqDown = lq(radio.downHist);
   radio.rssiUp = r.rssi + (radioRand() - 0.5) * 2; radio.rssiDown = r.rssi - 1 + (radioRand() - 0.5) * 2;
@@ -120,7 +137,8 @@ function radioFromDrone(bytes) {
       const id = first.frame; let n = 0; radio.down = radio.down.filter(c => { if (c.frame !== id) return true; n += c.length; return false; });
       radio.downBytes -= n; radio.downDropped++;
       const k = radio.downMeta.findIndex(m => m.id === id), m = k >= 0 ? radio.downMeta.splice(k, 1)[0] : null;
-      if (m && m.kind === 'msg') linkLog('↓', 'drop', m.desc, 'dropped · receiver queue full', 'bad');
+      if (m) linkEv('tlmDrop', radio.t);
+      if (m && m.kind === 'msg') linkLog('↓', 'drop', m.desc, 'dropped · receiver queue full', 'bad', m.bytes);
       else if (m) {                                                  // the rest: one line when it starts, one when it ends
         const D = radio.dropRun || (radio.dropRun = { n: 0, t0: radio.t, kinds: new Set() });
         if (!D.n) linkLog('↓', 'drop', 'dropping frames', 'receiver queue full (512 B)', 'warn');
@@ -128,7 +146,8 @@ function radioFromDrone(bytes) {
       }
     }
     radio.downFrames++;
-    radio.downMeta.push({ id: radio.downFrames, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0, sig: f.length * 256 + f[f.length - 1], type: f[2] });
+    radio.downMeta.push({ id: radio.downFrames, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0, sig: f.length * 256 + f[f.length - 1], type: f[2], bytes: f.slice() });
+    linkEv('tlmIn', radio.t);
     if (radio.downMeta.length > 400) radio.downMeta.shift();
     for (let i = 0; i < f.length; i += 5) { const c = f.subarray(i, i + 5); c.frame = radio.downFrames; radio.down.push(c); radio.downBytes += c.length; }
   });
@@ -137,7 +156,7 @@ function radioFromDrone(bytes) {
 // packet) and its commands (queued, and sent 5 bytes at a time in place of some channel packets).
 function radioFromGround(bytes) {
   radio.fromGround.feed(bytes, f => {
-    if (f[2] === CRSF.RC) radio.txCh = crsfRcRead(f.subarray(3, f.length - 1));
+    if (f[2] === CRSF.RC) { radio.txCh = crsfRcRead(f.subarray(3, f.length - 1)); radio.txChT = radio.t; linkEv('chMade', radio.t); }
     else if (f[2] === CRSF.EXT) {
       radio.up.push({ bytes: f, at: 0, got: [], t0: radio.t, pk: 0, lost: 0, desc: cmdDesc(f) });   // (logged when it reaches the drone)
     }
@@ -165,9 +184,59 @@ function groundInputs(t) {
 
 /* ───────── the link log: what passes through the simulated radio (only a simulator can watch this) ───────── */
 let radioLogAll = false;   // every frame (busy), or only commands, switches, messages, the flight mode and link events
-function linkLog(dir, kind, data, meta, tone) {
-  radio.log.unshift({ t: radio.t, dir, kind, data, meta: meta || '', tone: tone || '' }); radio.logN++;
+function linkLog(dir, kind, data, meta, tone, bytes) {
+  radio.log.unshift({ id: ++radio.logN, t: radio.t, dir, kind, data, meta: meta || '', tone: tone || '', bytes: bytes ? Uint8Array.from(bytes) : null });
   if (radio.log.length > 300) radio.log.length = 300;
+}
+// What happened in the last 5 s, for the statistics: [time, value] per kind.
+function linkEv(kind, t, v) {
+  const a = radio.ev[kind] || (radio.ev[kind] = []); a.push([t, v ?? 0]);
+  while (a.length && a[0][0] < t - 5) a.shift();
+}
+function linkStats(t) {
+  const W = 5, get = k => (radio.ev[k] || []).filter(e => e[0] >= t - W), n = k => get(k).length;
+  const lat = k => { const a = get(k).map(e => e[1]); return a.length ? { avg: a.reduce((s, x) => s + x, 0) / a.length, max: Math.max(...a) } : null; };
+  const span = Math.min(W, Math.max(0.5, t)), pct = (a, b) => a + b ? 100 * a / (a + b) : 0;
+  return {
+    chMade: n('chMade') / span, chSent: n('chSent') / span, chLat: lat('chSent'), upLostPct: pct(n('upLost'), n('upOk')),
+    cmds: n('cmdOut'), cmdLat: lat('cmdOut'),
+    tlmIn: n('tlmIn') / span, tlmOut: n('tlmOut') / span, tlmLat: lat('tlmOut'), tlmDrop: n('tlmDrop'), downLostPct: pct(n('downLost'), n('downOk')),
+    queued: radio.downBytes, upQueued: radio.up.length,
+  };
+}
+// A frame's bytes, field by field (the raw view of a log line).
+const CRSF_ADDR_NAME = { 0xC8: 'flight controller', 0xEA: 'handset / command module', 0xEC: 'receiver', 0xEE: 'transmitter module' };
+const CRSF_TYPE_NAME = { 0x02: 'GPS', 0x07: 'vario', 0x08: 'battery', 0x09: 'barometric altitude', 0x14: 'link statistics', 0x16: 'RC channels', 0x1E: 'attitude', 0x21: 'flight mode', 0x80: 'extended' };
+function frameFields(f) {
+  const p = f.subarray(3, f.length - 1), out = [];
+  out.push(['address', `0x${f[0].toString(16).toUpperCase()} (${CRSF_ADDR_NAME[f[0]] || '?'})`], ['length', `${f[1]} (type, ${f[1] - 2} payload bytes, CRC)`],
+    ['type', `0x${f[2].toString(16).toUpperCase()} (${CRSF_TYPE_NAME[f[2]] || '?'})`], ['CRC-8', `0x${f[f.length - 1].toString(16).toUpperCase()} ${crsfCrc8(f, 2, f.length - 1) === f[f.length - 1] ? '(good)' : '(BAD)'}`]);
+  switch (f[2]) {
+    case CRSF.RC: {
+      let bit = 0; const raw = [];
+      for (let i = 0; i < 16; i++) { let v = 0; for (let b = 0; b < 11; b++, bit++) if (p[bit >> 3] & (1 << (bit & 7))) v |= 1 << b; raw.push(v); }
+      const names = ['roll', 'pitch', 'throttle', 'yaw', 'arm', 'speed', 'fly', 'hold', 'home'];
+      raw.forEach((v, i) => { if (i < 9 || v !== 172) out.push([`ch${i + 1}${names[i] ? ' ' + names[i] : ''}`, `${v} → ${sgn((v - 992) / 819)}`]); });
+      if (raw.slice(9).every(v => v === 172)) out.push(['ch10–16', '172 (unused: −1)']);
+      break;
+    }
+    case CRSF.ATTITUDE: out.push(['pitch', `${be16s(p, 0)} → ${(be16s(p, 0) / 1e4 * R2D).toFixed(1)}°`], ['roll', `${be16s(p, 2)} → ${(be16s(p, 2) / 1e4 * R2D).toFixed(1)}°`], ['yaw', `${be16s(p, 4)} → ${(be16s(p, 4) / 1e4 * R2D).toFixed(1)}°`]); break;
+    case CRSF.BATTERY: out.push(['voltage', `${(p[0] << 8) | p[1]} → ${(((p[0] << 8) | p[1]) / 10).toFixed(1)} V`], ['current', `${(p[2] << 8) | p[3]} → ${(((p[2] << 8) | p[3]) / 10).toFixed(1)} A`],
+      ['used', `${(p[4] << 16) | (p[5] << 8) | p[6]} mAh`], ['remaining', `${p[7]}%`]); break;
+    case CRSF.GPS: { const la = (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3], lo = (p[4] << 24) | (p[5] << 16) | (p[6] << 8) | p[7];
+      out.push(['latitude', `${la} → ${(la * 1e-7).toFixed(7)}°`], ['longitude', `${lo} → ${(lo * 1e-7).toFixed(7)}°`], ['speed', `${(p[8] << 8) | p[9]} → ${(((p[8] << 8) | p[9]) / 36).toFixed(1)} m/s`],
+        ['course', `${(((p[10] << 8) | p[11]) / 100).toFixed(1)}°`], ['altitude', `${((p[12] << 8) | p[13]) - 1000} m`], ['satellites', `${p[14]}`]); break; }
+    case CRSF.BARO_ALT: { const a = (p[0] << 8) | p[1]; out.push(['altitude', `${a} → ${(a & 0x8000 ? a & 0x7FFF : (a - 10000) / 10).toFixed(1)} m`]); if (p.length >= 4) out.push(['climb', `${be16s(p, 2)} → ${(be16s(p, 2) / 100).toFixed(2)} m/s`]); break; }
+    case CRSF.FLIGHT_MODE: out.push(['mode', `"${cstrBytes(p, 0)}"`]); break;
+    case CRSF.EXT:
+      if (p[0] === CRSF.EXT_TEXT) out.push(['subtype', '0xF1 (status text)'], ['severity', `${p[1]} (${['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'][p[1]] || '?'})`], ['text', `"${cstrBytes(p, 2)}"`]);
+      else if (p[0] === CRSF.EXT_ITEM) { out.push(['subtype', '0xD0 (telemetry item)'], ['item', `${p[1]} (${(TLM_ITEMS[p[1]] || { key: '?' }).key})`], ['values', `${p[2]}`]);
+        const d = TLM_ITEMS[p[1]]; for (let k = 0; k < p[2]; k++) out.push([d && d.fields ? d.fields[k] || `v${k}` : d && d.list ? (k ? `#${k}` : 'count') : `v${k}`, `${be16s(p, 3 + 2 * k)} (int16, × the item's scale)`]); }
+      else if (p[0] === CRSF.EXT_CMD) { out.push(['subtype', '0xD1 (ground-station command)'], ['command', `${p[1]} (${{ 1: 'GOTO', 2: 'LEARN' }[p[1]] || '?'})`], ['sequence', `${p[2]}`]);
+        for (let i = 3, k = 0; i + 1 < p.length; i += 2, k++) { const v = be16s(p, i); out.push([p[1] === 1 ? ['x', 'y', 'z', 'heading'][k] || `value ${k + 1}` : p[1] === 2 ? 'code' : `value ${k + 1}`, p[1] === 1 ? `${v} → ${k < 3 ? (v / 100).toFixed(2) + ' m' : (v / 1000 * R2D).toFixed(1) + '°'}` : p[1] === 2 ? `${v} (${Object.keys(LN_CMD).find(n => LN_CMD[n] === v) || '?'})` : `${v}`]); } }
+      break;
+  }
+  return out;
 }
 const be16s = (p, i) => { const v = (p[i] << 8) | p[i + 1]; return v & 0x8000 ? v - 0x10000 : v; };
 const cstrBytes = (p, i) => { let n = i; while (n < p.length && p[n]) n++; return new TextDecoder().decode(p.subarray(i, n)); };
@@ -177,7 +246,7 @@ function cmdDesc(f) {   // a command frame as data (the command module's scaling
   if (p[0] !== CRSF.EXT_CMD) return `EXT 0x${p[0].toString(16)}`;
   const cmd = p[1], seq = p[2], v = []; for (let i = 3; i + 1 < p.length; i += 2) v.push(be16s(p, i));
   if (cmd === 1) return `GOTO x ${(v[0] / 100).toFixed(1)} y ${(v[1] / 100).toFixed(1)} z ${(v[2] / 100).toFixed(1)} hdg ${Math.round(v[3] / 1000 * R2D)}° #${seq}`;
-  if (cmd === 2) return `LEARN ${{ 1: 'calibrate', 2: 'stop', 3: 'description', 4: 'learned' }[v[0]] || v[0]} #${seq}`;
+  if (cmd === 2) return `LEARN ${Object.keys(LN_CMD).find(k => LN_CMD[k] === v[0]) || v[0]} #${seq}`;
   return `CMD ${cmd} ${v.join(' ')} #${seq}`;
 }
 function frameKind(f) { const p = f.subarray(3, f.length - 1); return f[2] === CRSF.FLIGHT_MODE ? 'mode' : f[2] === CRSF.EXT && p[0] === CRSF.EXT_TEXT ? 'msg' : 'frame'; }
@@ -202,13 +271,14 @@ function linkDown(f, t) {   // a whole frame out of the transmitter module, to t
   if (k < 0) return;
   const m = radio.downMeta[k]; radio.downMeta.splice(0, k + 1);
   const lat = `${Math.round((t - m.t0) * 1000)} ms`, resent = m.tries - Math.ceil(f.length / 5), meta = resent > 0 ? `${lat} · ${resent} resent` : lat;
-  if (m.kind === 'mode') { if (m.desc === radio.modeSeen && !radioLogAll) return; radio.modeSeen = m.desc; }
-  if (m.kind === 'msg' || m.kind === 'mode' || radioLogAll) linkLog('↓', m.kind, m.desc, meta, '');
+  if (m.kind === 'mode') { if (m.desc === radio.modeSeen && !radioLogAll) { linkEv('tlmOut', t, (t - m.t0) * 1000); return; } radio.modeSeen = m.desc; }
+  linkEv('tlmOut', t, t - m.t0 > 0 ? (t - m.t0) * 1000 : 0);
+  if (m.kind === 'msg' || m.kind === 'mode' || radioLogAll) linkLog('↓', m.kind, m.desc, meta, '', f);
 }
 // The channels as the drone's receiver passes them on: the sticks when they move (at most 10 times a second, and
 // when they come back to the centre), the switches when they change.
 const STICKS = ['roll', 'pitch', 'thr', 'yaw'];
-function linkChannels(ch, t) {
+function linkChannels(ch, t, fr, lat) {
   const d = radio.delivered; radio.delivered = ch.slice();
   if (!d) return;
   const L = radio.stickLogged || (radio.stickLogged = { v: [0, 0, 0, 0], t: -1 });
@@ -216,11 +286,11 @@ function linkChannels(ch, t) {
   if ((moved && t - L.t >= 0.1) || (centred && !wasCentred)) {
     L.v = ch.slice(0, 4); L.t = t;
     const parts = STICKS.map((n, i) => Math.abs(ch[i]) >= 0.02 ? `${n} ${sgn(ch[i])}` : '').filter(Boolean);
-    linkLog('↑', 'stick', parts.length ? parts.join('  ') : 'centred', `CH1–4`, '');
+    linkLog('↑', 'stick', parts.length ? parts.join('  ') : 'centred', `${Math.round(lat)} ms`, '', fr);
   }
   for (const [i, name] of [[4, 'ARM'], [5, 'SPEED'], [6, 'FLY'], [7, 'HOLD'], [8, 'HOME']]) {
     const a = Math.round(d[i] * 2) / 2, b = Math.round(ch[i] * 2) / 2; if (a === b) continue;
-    linkLog('↑', 'switch', `${name} ${i === 5 ? ['gentle', 'normal', 'sport'][Math.round(b) + 1] : b > 0 ? 'on' : 'off'}`, `CH${i + 1}`, '');
+    linkLog('↑', 'switch', `${name} ${i === 5 ? ['gentle', 'normal', 'sport'][Math.round(b) + 1] : b > 0 ? 'on' : 'off'}`, `CH${i + 1} · ${Math.round(lat)} ms`, '', fr);
   }
 }
 

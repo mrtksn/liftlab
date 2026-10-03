@@ -13,6 +13,7 @@
  *   1 roll  2 pitch  3 throttle  4 yaw  5 arm  6 speed level (−1 gentle, 0 normal, +1 sport)  7 fly (take off / land)
  *   8 hold (momentary)  9 home (momentary)
  * With navigation the throttle stick is centred: up climbs, down sinks; without, it is the throttle.
+ * Channels older than 0.1 s: the sticks count as centred (the throttle stays as it was); after 1 s, the link is lost.
  */
 #ifndef RC_CORE_H
 #define RC_CORE_H
@@ -27,6 +28,9 @@ enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD,
 enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2 };
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
+#define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'
+                                             failsafe "hold" stage does), so the drone doesn't fly on with the last
+                                             stick it heard until the link is declared lost */
 
 typedef struct rc_input {
   float ch[16]; double t_ch; uint32_t frames;          /* the channels, and when they last came */

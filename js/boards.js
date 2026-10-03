@@ -291,7 +291,13 @@ function boardsHostEvents() {
   if (e) rnEvent(`${computers().ground.name}: ${(HOST_EVENTS[e] || 'event ' + e).replace('flies', 'runs').replace('flying', 'running')}`, e === 3 ? 'good' : e === 1 ? '' : 'bad');
 }
 const HOST_EVENTS = { 1: 'loaded the new program, flying it in the background', 2: 'rejected the new program', 3: 'flies the new program now', 4: 'the new program stopped: back to the one before', 5: 'even the built-in program stopped' };
-// The learning task's commands (on the drone: from the pilot's app over the Pi's network).
+// What the pilot asks the learning (the Learning panel, the throw): with a radio and the navigation it goes up the
+// link as a command (the navigation passes it on, as dfb_pi does); otherwise straight to the learning's board.
+function pilotLearnCmd(name) {
+  if (brt.gnd && hasTask('nav') && hasTask('learn')) { radioCommand(2, [LN_CMD[name]]); return 0; }
+  return boardsLearnCmd(name);
+}
+// The learning task's commands, on its board.
 function boardsLearnCmd(name) {
   const b = boardOf('learn'), w = b && brt.ready && brt.inst.get(b.id); if (!w) return -1;
   const r = w.learn_cmd(LN_CMD[name]); boardsReadViews(true); return r;
@@ -536,7 +542,7 @@ function autoPilot(dt, navigated) {
   if (P.phase === 'ground' && P.t > 0.6 && att) { P.arm = 1; P.phase = 'arming'; P.t = 0; }
   if (P.phase === 'arming' && P.t > 0.2) {
     if (brt.fcState !== 1) { if (P.t > 2) { P.phase = 'ground'; P.arm = 0; P.t = 0; } return; }   // didn't arm (the reason is shown): switch off and try again
-    if (throwing) { P.phase = 'hand'; P.t = 0; P.fly = navigated ? 1 : 0; P.thr = navigated ? 0 : 0.5; boardsLearnCmd('throw'); return; }
+    if (throwing) { P.phase = 'hand'; P.t = 0; P.fly = navigated ? 1 : 0; P.thr = navigated ? 0 : 0.5; pilotLearnCmd('throw'); return; }
     P.phase = 'takeoff'; P.t = 0; P.fly = navigated ? 1 : 0; P.thr = navigated ? 0 : 0.85;
   }
   if (P.phase === 'hand') {

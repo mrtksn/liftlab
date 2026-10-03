@@ -8,7 +8,8 @@ static void say(rc_pilot *P, const char *s) { int i = 0; for (; s[i] && i < 63; 
 
 int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c) {
   if (!rc_link_ok(in, t)) return -1;
-  c->arm = in->ch[RC_ARM] > 0; c->roll = in->ch[RC_ROLL]; c->pitch = in->ch[RC_PITCH]; c->yaw = -in->ch[RC_YAW];   /* (yaw stick right: turn right, the flight core's negative yaw) */
+  int fresh = t - in->t_ch < RC_STALE_S;                         /* (stale: level and keep the heading, throttle as it was) */
+  c->arm = in->ch[RC_ARM] > 0; c->roll = fresh ? in->ch[RC_ROLL] : 0; c->pitch = fresh ? in->ch[RC_PITCH] : 0; c->yaw = fresh ? -in->ch[RC_YAW] : 0;   /* (yaw stick right: turn right, the flight core's negative yaw) */
   c->throttle = clampf_((in->ch[RC_THR] + 1) * 0.5f, 0, 1); c->test_motor = -1; c->test_throttle = 0; c->guided = 0;
   c->acc[0] = c->acc[1] = c->acc[2] = 0; c->heading = 0;
   return 0;
@@ -63,7 +64,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
   /* the sticks move the target (not while the navigation flies home or lands by itself) */
   float want[3] = { 0, 0, 0 }, yaw = 0;
   int own = N->sup_mode >= 2 || N->rc_rth || N->landed;
-  if (ok && !own) {
+  if (ok && !own && t - in->t_ch < RC_STALE_S) {                   /* (stale channels: the sticks count as centred) */
     const float *L = LEVEL[P->level];
     float lim = N->lim_speed > 0 && N->lim_speed < L[0] ? N->lim_speed : L[0];   /* the supervisor's speed limit */
     float f = dead(in->ch[RC_PITCH]), r = dead(in->ch[RC_ROLL]), u = dead(in->ch[RC_THR]);

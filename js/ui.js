@@ -494,19 +494,19 @@ function renderEst() {
 }
 
 /* ───────── the learning (a task on a board: boards.js) ───────── */
-$('#useDesc').addEventListener('click', () => { boardsLearnCmd('useDesc'); renderLearn(true); });
-$('#useLearned').addEventListener('click', () => { boardsLearnCmd('useLearned'); renderLearn(true); });
-$('#keepLearn').addEventListener('change', e => { learnPrefs.keep = e.target.checked; boardsLearnCmd(e.target.checked ? 'keepOn' : 'keepOff'); save(); });
+$('#useDesc').addEventListener('click', () => { pilotLearnCmd('useDesc'); renderLearn(true); });
+$('#useLearned').addEventListener('click', () => { pilotLearnCmd('useLearned'); renderLearn(true); });
+$('#keepLearn').addEventListener('change', e => { learnPrefs.keep = e.target.checked; pilotLearnCmd(e.target.checked ? 'keepOn' : 'keepOff'); save(); });
 $('#calBtn').addEventListener('click', () => {
   const v = learn.view;
-  if (v && v.cal) { boardsLearnCmd('stop'); renderLearn(true); return; }
+  if (v && v.cal) { pilotLearnCmd('stop'); renderLearn(true); return; }
   if (S.crashed) return;
   if (typeof editMode !== 'undefined' && editMode) setEditMode(false);
   if (!running) { running = true; renderRun(); }
-  boardsLearnCmd('calibrate'); renderLearn(true);
+  pilotLearnCmd('calibrate'); renderLearn(true);
 });
-$('#holdPulses').addEventListener('change', e => { learnPrefs.holdPulses = e.target.checked; boardsLearnCmd(e.target.checked ? 'holdOn' : 'holdOff'); save(); });
-$('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; boardsLearnCmd(e.target.checked ? 'thenCalOn' : 'thenCalOff'); save(); });
+$('#holdPulses').addEventListener('change', e => { learnPrefs.holdPulses = e.target.checked; pilotLearnCmd(e.target.checked ? 'holdOn' : 'holdOff'); save(); });
+$('#thenCal').addEventListener('change', e => { throwCfg.thenCalibrate = e.target.checked; pilotLearnCmd(e.target.checked ? 'thenCalOn' : 'thenCalOff'); save(); });
 function setLaunch(m, go = true) {
   launchMode = m;
   $('#launchHover').setAttribute('aria-pressed', String(m === 'hover')); $('#launchThrow').setAttribute('aria-pressed', String(m === 'throw'));

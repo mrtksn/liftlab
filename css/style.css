@@ -596,3 +596,14 @@ select.break{font-size:12px;padding:1px 2px;max-width:78px}
 .gs-linklog li[data-tone="bad"] .gs-data{color:var(--bad)} .gs-linklog li[data-tone="warn"] .gs-data{color:var(--warn)} .gs-linklog li[data-tone="good"] .gs-data{color:var(--good)}
 .gs-linklog li[data-tone]{color:inherit}
 .w-log li[data-tone="good"]{color:var(--good)} .w-log li.muted{color:var(--muted)}
+.gs-stats{width:100%;border-collapse:collapse;font-family:var(--f-mono);font-size:11px;margin:2px 0 4px}
+.gs-stats th{font-family:var(--f-display);font-weight:600;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:2px 6px 4px 0}
+.gs-stats td{padding:3px 6px 3px 0;border-top:1px solid var(--line);color:var(--ink-2);vertical-align:top}
+.gs-stats td:first-child{color:var(--ink);white-space:nowrap}
+.gs-pause{margin-left:auto}
+.gs-linklog li.has-raw{cursor:pointer} .gs-linklog li.has-raw:hover{background:var(--panel-2)}
+.gs-linklog li.open{background:var(--panel-2)}
+.gs-raw{grid-column:1/-1;margin:4px 0 6px 3.6em;padding:6px 8px;border:1px solid var(--line);border-radius:4px;background:var(--panel);cursor:auto}
+.gs-raw pre{margin:0 0 6px;font-size:11px;color:var(--ink);white-space:pre;overflow-x:auto}
+.gs-raw dl{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;margin:0;font-size:11px}
+.gs-raw dt{color:var(--muted)} .gs-raw dd{margin:0;color:var(--ink-2);overflow-wrap:anywhere}

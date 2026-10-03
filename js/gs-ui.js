@@ -6,7 +6,7 @@
 const SUP_WHY = ['', 'a motor is running hot', 'the battery is hot', 'lift margin low', 'a motor has failed', 'lift margin very low', 'a battery cell has failed',
   'battery below 20%', 'battery voltage low', 'roll and pitch can no longer be held', 'not enough lift to stay up', 'battery nearly empty', 'battery overheating'];
 const SUP_MODE = ['normal', 'careful', 'returning home', 'landing'];
-const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1 };
+const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, open: new Set(), paused: false };
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
@@ -44,7 +44,8 @@ function buildGs() {
 
   // inside the link (the simulator's view: a real ground station can't see this)
   const lg = sec('Link log', 'inside the simulated radio', 'sim');
-  lg.append(el('p', { class: 'hint', text: '↑ reached the drone\'s receiver, ↓ reached the command module, with how long it took. The sticks and switches are channels, sent in every uplink packet; commands are one-off frames.' }));
+  GS_UI.stats = el('table', { class: 'gs-stats' });
+  lg.append(GS_UI.stats, el('p', { class: 'hint', text: '↑ reached the drone\'s receiver, ↓ reached the command module, with how long it took. The sticks and switches are channels, sent in every uplink packet; commands are one-off frames. Click a line for its bytes.' }));
   const kinds = [['stick', 'Sticks and switches'], ['cmd', 'Commands'], ['msg', 'Messages, mode'], ['link', 'Link, drops'], ['all', 'Every frame']];
   const row = el('div', { class: 'gs-filters' });
   for (const [k, label] of kinds) {
@@ -52,6 +53,8 @@ function buildGs() {
     c.addEventListener('change', () => { if (k === 'all') radioLogAll = c.checked; else GS_UI.logShow[k] = c.checked; GS_UI.logN = -1; renderGs(true); });
     row.append(el('label', { class: 'check', for: id }, c, label));
   }
+  const pz = el('input', { type: 'checkbox', id: 'gsLogPause' }); pz.addEventListener('change', () => { GS_UI.paused = pz.checked; GS_UI.logN = -1; renderGs(true); });
+  row.append(el('label', { class: 'check gs-pause', for: 'gsLogPause' }, pz, 'Pause'));
   GS_UI.linkLog = el('ol', { class: 'w-log gs-linklog' }); GS_UI.logN = -1;
   lg.append(row, GS_UI.linkLog);
 
@@ -136,16 +139,44 @@ function renderGs(force) {
     W.cal.set(lv.cal ? lv.progress * 100 : 0, at.learn);
   }
   W.log.set(gs.log);
-  if (radio.logN !== GS_UI.logN) {                                   // the link log, when something new came
+  if (has) {                                                         // the link's numbers, last 5 s
+    const S = linkStats(t), ms = L => L ? `${Math.round(L.avg)} / ${Math.round(L.max)} ms` : '—', ps = x => x < 10 ? x.toFixed(1) : Math.round(x);
+    const rows = [['', 'per second', 'latency avg / max', 'lost'],
+      ['↑ channels', `${ps(S.chSent)} carried of ${ps(S.chMade)} made`, ms(S.chLat), `${S.upLostPct.toFixed(0)}% of packets`],
+      ['↑ commands', `${S.cmds} in 5 s${S.upQueued ? ` · ${S.upQueued} waiting` : ''}`, ms(S.cmdLat), ''],
+      ['↓ telemetry', `${ps(S.tlmOut)} delivered of ${ps(S.tlmIn)} written`, ms(S.tlmLat), `${S.downLostPct.toFixed(0)}% of packets · ${S.tlmDrop} frames dropped · ${S.queued} B queued`]];
+    const tb = GS_UI.stats; tb.textContent = '';
+    rows.forEach((r, i) => tb.append(el('tr', {}, ...r.map(c => el(i ? 'td' : 'th', { text: c })))));
+    tb.title = 'Channels: the command module makes a frame every 4 ms; each uplink packet carries the newest, so the rest are superseded, not lost. Latency: from when it was made to when the other end got it. Lost: packets that didn\'t get through (sent again for commands and telemetry). Dropped: frames the drone\'s receiver threw away, its queue full.';
+  }
+  if (radio.logN !== GS_UI.logN && !GS_UI.paused) {                  // the link log, when something new came
     GS_UI.logN = radio.logN; const show = GS_UI.logShow, box = GS_UI.linkLog; box.textContent = '';
     const group = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
     const want = e => e.kind === 'frame' ? radioLogAll : show[group[e.kind]] !== false;
     const TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
     const list = radio.log.filter(want).slice(0, 100);
-    for (const e of list) box.append(el('li', { 'data-tone': e.tone || '' }, el('b', { text: e.t.toFixed(2) }), el('span', { class: 'gs-dir', text: e.dir }),
-      el('span', { class: 'gs-kind', text: TAG[e.kind] || e.kind }), el('span', { class: 'gs-data', text: e.data }), el('span', { class: 'gs-meta', text: e.meta })));
+    for (const e of list) {
+      const li = el('li', { 'data-tone': e.tone || '', class: e.bytes ? 'has-raw' + (GS_UI.open.has(e.id) ? ' open' : '') : '' }, el('b', { text: e.t.toFixed(2) }), el('span', { class: 'gs-dir', text: e.dir }),
+        el('span', { class: 'gs-kind', text: TAG[e.kind] || e.kind }), el('span', { class: 'gs-data', text: e.data }), el('span', { class: 'gs-meta', text: e.meta }));
+      if (e.bytes) {
+        li.title = 'Click for the bytes';
+        li.addEventListener('click', () => { if (GS_UI.open.has(e.id)) GS_UI.open.delete(e.id); else GS_UI.open.add(e.id); GS_UI.logN = -1; const p = GS_UI.paused; GS_UI.paused = false; renderGs(true); GS_UI.paused = p; });
+        if (GS_UI.open.has(e.id)) li.append(rawView(e.bytes));
+      }
+      box.append(li);
+    }
     if (!list.length) box.append(el('li', { class: 'muted', text: has ? 'Nothing yet.' : 'The drone has no radio.' }));
   }
   for (const w of Object.values(W)) w.age(t);
+}
+// A frame's bytes: hex with offsets, then each field.
+function rawView(b) {
+  const box = el('div', { class: 'gs-raw' }), hex = [];
+  for (let i = 0; i < b.length; i += 16) hex.push(i.toString().padStart(3, ' ') + '  ' + Array.from(b.subarray(i, i + 16), x => x.toString(16).toUpperCase().padStart(2, '0')).join(' '));
+  box.append(el('pre', { text: hex.join('\n') }));
+  const dl = el('dl'); for (const [k, v] of frameFields(b)) dl.append(el('dt', { text: k }), el('dd', { text: v }));
+  box.append(dl);
+  box.addEventListener('click', e => e.stopPropagation());
+  return box;
 }
 const fmtDist = m => m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;
