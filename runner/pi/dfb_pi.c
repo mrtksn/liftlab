@@ -15,6 +15,14 @@
  *     lands) and the learning (it rescales what it learned). This Pi has no health sensor drivers yet: the
  *     supervisor works from the flight core's data stream (a failed or weakened motor, a stuck servo, the lift left).
  *
+ *   - the pilot's radio and the telemetry (rc_core.h, tlm_core.h): with an ExpressLRS (or Crossfire) receiver on a
+ *     serial port here (--crsf /dev/ttyAMA1; CRSF at 420000 baud; --elrs 250,4: the link's packet rate and telemetry
+ *     ratio), its channels fly the navigation (the sticks move the target; switches arm, take off, hold, fly home; a
+ *     second without channels in flight and it flies home and lands), and this program sends the telemetry of all
+ *     the tasks, the ESP32's included (it asks for them: RN_LINK_WANT bit 2), down the radio. With the receiver on
+ *     the ESP32 instead, the channels come from it (RN_LINK_RC) and this program sends its tasks' telemetry there
+ *     (RN_LINK_TLM) when asked.
+ *
  * The pilot's commands are lines of text, on standard input or UDP (port 14560 by default; fly.py or a phone can
  * send them):
  *   arm | disarm | takeoff [height m] | land | goto X Y Z | move VX VY VZ (target velocity, m/s; 0 0 0 stops)
@@ -24,11 +32,15 @@
  *
  * Build:  sh runner/pi/build.sh
  * Run:    ./dfb_pi --link /dev/serial0 --baud 921600 --nav drone.dnc [--gps /dev/ttyUSB0] [--airframe drone.dfa --pi drone.dlc]
+ *                  [--crsf /dev/ttyAMA1 --elrs 250,4]
+ * While the radio's channels come, they fly it; the text commands are for when there is no radio.
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
 #define _DEFAULT_SOURCE
 #include "nav_core.h"
 #include "super_core.h"
+#include "tlm_sources.h"
+#include "tlm_crsf.h"
 #include "rn_link.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -47,6 +59,7 @@
 extern const uint8_t *const rn_builtin_img;
 extern const uint32_t rn_builtin_len;
 
+int serial_custom_baud(int fd, int baud);
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 
 static int open_serial(const char *dev, int baud) {
@@ -60,7 +73,7 @@ static int open_serial(const char *dev, int baud) {
 }
 
 /* ── GPS: NMEA sentences → position (x north, y west, z up) [m] around the first fix, and velocity ── */
-typedef struct { int have_origin; double lat0, lon0, alt0; float p[3], v[3]; double t; int fix; char line[128]; int n; } gps_t;
+typedef struct { int have_origin; double lat0, lon0, alt0, lat, lon, alt; float p[3], v[3]; double t; int fix, sats; char line[128]; int n; } gps_t;
 static double nmea_deg(const char *f, const char *hemi) {   /* ddmm.mmmm or dddmm.mmmm */
   double x = atof(f); int d = (int)(x / 100); double v = d + (x - d * 100) / 60;
   return (*hemi == 'S' || *hemi == 'W') ? -v : v;
@@ -72,6 +85,7 @@ static void gps_line(gps_t *G, char *s) {
     if (atoi(f[6]) < 1 || !*f[2] || !*f[4]) { G->fix = 0; return; }
     double lat = nmea_deg(f[2], f[3]), lon = nmea_deg(f[4], f[5]), alt = atof(f[9]);
     if (!G->have_origin) { G->lat0 = lat; G->lon0 = lon; G->alt0 = alt; G->have_origin = 1; }
+    G->lat = lat; G->lon = lon; G->alt = alt; G->sats = atoi(f[7]);
     const double R = 6371000.0, k = M_PI / 180;
     G->p[0] = (float)((lat - G->lat0) * k * R); G->p[1] = (float)(-(lon - G->lon0) * k * R * cos(G->lat0 * k)); G->p[2] = (float)(alt - G->alt0);
     G->fix = 1; G->t = now_s();
@@ -157,7 +171,8 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
 }
 
 int main(int argc, char **argv) {
-  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
+  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
+  int elrs_rate = 250, elrs_ratio = 4;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -166,9 +181,10 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
+    else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--elrs")) sscanf(argv[++i], "%d,%d", &elrs_rate, &elrs_ratio);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
-    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
+    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560] [--crsf /dev/ttyAMA1 --elrs 250,4]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"); return 2; }
 
   setvbuf(stdout, NULL, _IOLBF, 0);   /* a line at a time, also into a pipe or a log file */
@@ -188,13 +204,18 @@ int main(int argc, char **argv) {
   } else if (af_path || pi_path) fprintf(stderr, "the learning and the supervisor need both --airframe and --pi\n");
 
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
+  int crsf = -1;
+  if (crsf_dev) { crsf = open_serial(crsf_dev, 115200); if (crsf < 0) return 1; if (serial_custom_baud(crsf, CRSF_BAUD)) fprintf(stderr, "%s: couldn't set %d baud\n", crsf_dev, CRSF_BAUD); }
+  static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
+  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
+  double tlm_want = -10, next_pub = 0, next_radio = 0, next_pack = 0; nav_sp last_sp; memset(&last_sp, 0, sizeof last_sp);
   int gps = gps_dev ? open_serial(gps_dev, gps_baud) : -1;
   int udp = socket(AF_INET, SOCK_DGRAM, 0);
   struct sockaddr_in addr = { .sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_ANY) };
   if (udp >= 0 && bind(udp, (struct sockaddr *)&addr, sizeof addr)) { perror("udp"); close(udp); udp = -1; }
   fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
-  printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
-         have_learn ? "on" : "off", have_super ? "on" : "off");
+  printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s; radio %s\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
+         have_learn ? "on" : "off", have_super ? "on" : "off", crsf_dev ? crsf_dev : "on the ESP32, if it has one");
 
   static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
   gps_t G; memset(&G, 0, sizeof G);
@@ -202,9 +223,10 @@ int main(int argc, char **argv) {
   nav_out o; memset(&o, 0, sizeof o);
   double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0; float fc_state = 0; uint32_t seen_log = 0;
   for (;;) {
-    struct pollfd pf[4] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { 0, POLLIN, 0 }, { udp, POLLIN, 0 } };
-    poll(pf, 4, 10);
+    struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { 0, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
+    poll(pf, 5, 5);
     double t = now_s();
+    if (crsf >= 0 && (pf[4].revents & POLLIN)) { uint8_t b[256]; ssize_t n = read(crsf, b, sizeof b); for (ssize_t i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t); }
     if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
     for (int k = 2; k < 4; k++) if (pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot */
       static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
@@ -228,6 +250,9 @@ int main(int argc, char **argv) {
     for (ssize_t i = 0; i < n; i++) {
       int type = rn_link_feed(&L, rx[i]);
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
+      if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
+      if (type == RN_LINK_TLM && crsf >= 0) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
+      if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
       if (type == RN_LINK_LTEL && (have_learn || have_super)) {   /* the learning and the supervisor, on every frame */
         static float lt[FC_LTEL_MAX], fo[FC_MODEL_MAX]; int n = (int)(L.len / 4); if (n > FC_LTEL_MAX) continue;
         memcpy(lt, L.buf, (size_t)n * 4);
@@ -260,16 +285,38 @@ int main(int argc, char **argv) {
       /* landing: sink at 0.5 m/s; on the ground (height near home and not sinking any more), idle and disarm */
       if (P.landing && P.fly) { P.sp.vref[2] = -0.5f; P.sp.target[2] = o.p[2] - 0.3f; if (o.p[2] < 0.15f && fabsf(o.v[2]) < 0.1f) { P.fly = 0; P.landing = 0; P.arm = 0; P.sp.fly = 0; printf("landed\n"); } }
       P.sp.fly = P.fly;
+      /* the radio's channels fly it while they come (the text commands are for when there is no radio) */
+      int radio = rc_link_ok(&RCI, t) || RP.lost, radio_arm = 0; nav_sp rsp = P.sp;
+      if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); } }
+      if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; }
       if (nav_step(&N, &in, &P.sp, dt, &o)) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; continue; }
-      if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; printf("the supervisor landed it: disarmed\n"); }
+      { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
+      if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
       if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
-      for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity */
+      if (!radio) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
+      last_sp = P.sp;
       float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
       uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
       if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
       last_send = t;
     }
-    if ((have_learn || have_super) && t - last_want > 0.5) { float w = 1; send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, please */
+    if ((have_learn || have_super || crsf >= 0) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (crsf >= 0 ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
+    /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
+    if (t >= next_pub) {
+      next_pub = t + 0.01;
+      tlm_from_nav(&TS, &TW, &N, &o, &last_sp, RP.level, t);
+      if (have_learn) tlm_from_learn(&TS, &TW, &LS, t);
+      if (have_super) tlm_from_super(&TS, &TW, &SS, t);
+      if (G.fix && G.t > last_fix_t - 1) { static double gps_t; if (G.t != gps_t) { gps_t = G.t; tlm_from_gps(&TS, G.lat, G.lon, (float)G.alt, sqrtf(G.v[0] * G.v[0] + G.v[1] * G.v[1]), atan2f(-G.v[1], G.v[0]) * 57.29578f + (G.v[1] > 0 ? 360 : 0), G.sats, t); } }
+      if (crsf >= 0) tlm_from_link(&TS, &RCI, t);
+    }
+    if (crsf >= 0 && t >= next_radio) {
+      next_radio = t + 0.005; static uint8_t out[512];
+      int n = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget(elrs_rate, elrs_ratio), out, sizeof out);
+      if (n && write(crsf, out, (size_t)n) < 0 && errno != EAGAIN) perror("crsf");
+    } else if (crsf < 0 && t - tlm_want < 1 && t >= next_pack) {
+      next_pack = t + 0.05; static float pk[512]; int n = tlm_pack(&TS, pk, 512); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
+    }
     /* no navigation telemetry yet (the ESP32 sends it once guided commands come): announce ourselves, disarmed */
     if (t - last_send > 0.1) {
       float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };

@@ -116,7 +116,7 @@ function applyDesign(d) {
   cfg.frame.mass = +d.frame || 0.45;
   cfg.comps = migrateComps(JSON.parse(JSON.stringify(d.comps)));
   cfg.battery = { ...defaultBattery(), ...(d.battery || {}) };
-  if (d.computers) cfg.computers = fixComputers(d.computers);   // (a design saved before boards keeps the ones you have)
+  if (d.computers) cfg.computers = fixComputers(computersWithRadio(d.computers));   // (a design saved before boards keeps the ones you have)
   if (typeof syncFlightUi === 'function') setTimeout(syncFlightUi);
   uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
   setMode(['level', 'mixed'].includes(d.mode) ? d.mode : 'tilt', false); openSet.clear();

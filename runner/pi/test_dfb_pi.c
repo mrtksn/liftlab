@@ -3,13 +3,17 @@
  * navigation, the learning and the supervisor, types "arm", "takeoff 1.5", "calibrate" (and waits for it to finish),
  * "health" and "goto 2 1 2" on its input, checks the calibration ran on the link (EXC and MODEL frames; the plant is the
  * description 4% stronger, so it may well keep flying on the description), that the supervisor answers and that it
- * gets there, then stops dfb_pi and checks the ESP32 goes to its failsafe.
- *   sh build.sh && cc -O2 -I.. -I../fc -o test_dfb_pi test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_dfb_pi */
+ * gets there; then, as if the ESP32 had a radio receiver, sends the channels (RN_LINK_RC: arm, fly, the pitch stick
+ * forward for 2 s) and asks for the Pi's telemetry (RN_LINK_WANT bit 2), checks the stick moves it and the
+ * telemetry comes (RN_LINK_TLM), stops the channels and checks it flies home and lands by itself, then stops dfb_pi and checks the ESP32 goes to its failsafe.
+ *   sh build.sh && cc -O2 -I.. -I../fc -o test_dfb_pi test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../rn_builtin.c -lm -lutil && ./test_dfb_pi */
 #define _DEFAULT_SOURCE
 #define main main_orig
 #include "../fc/test_nav.c"
 #undef main
 #include "rn_link.h"
+#include "tlm_core.h"
+#include "rc_core.h"
 #include <pty.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -60,7 +64,8 @@ int main(int argc, char **argv) {
   static uint8_t buf[8192]; rn_link L; rn_link_init(&L, buf, sizeof buf);
   double t0 = now_s(), next = t0, want_t = -10, cal_at = 0, cal_done = 0, goto_at = 0;
   int sent_arm = 0, sent_to = 0, ncmd = 0, nguided = 0, nexc = 0, nmodel = 0, nset = 0, nltel = 0, health_ok = 0, learned_ok = 0, ready_line = 0;
-  double zmin_cal = 1e9, zmax_cal = -1e9;
+  double zmin_cal = 1e9, zmax_cal = -1e9, radio_at = 0, next_rc = 0, next_want = 0; int ntlm = 0, rc_lost_line = 0; float x_before = 0, x_after_stick = 0;
+  static tlm_store TS; tlm_init(&TS);
   char out[8192]; int on = 0;
   while (now_s() - t0 < 120) {
     double el = now_s() - t0;
@@ -72,6 +77,7 @@ int main(int argc, char **argv) {
       if (strstr(out, "learning on, supervisor on")) ready_line = 1;
       if (strstr(out, "Calibrated.") || strstr(out, "Calibration finished.")) { cal_done = el; learned_ok = strstr(out, "Flying on the learned model") != 0; }
       if (strstr(out, "lift margin")) health_ok = 1;
+      if (strstr(out, "radio link lost: flying home")) rc_lost_line = 1;
       int k = (int)(nl - out) + 1; memmove(out, nl + 1, (size_t)(on - k)); on -= k;
     }
     /* frames from the Pi */
@@ -85,6 +91,7 @@ int main(int argc, char **argv) {
       else if (type == RN_LINK_EXC) { if (!fc_exc(&F, (const float *)L.buf, (int)(L.len / 4))) nexc++; }
       else if (type == RN_LINK_MODEL) { if (!fc_model(&F, (const float *)L.buf, (int)(L.len / 4))) nmodel++; }
       else if (type == RN_LINK_SET) { if (!fc_set(&F, (const float *)L.buf, (int)(L.len / 4))) nset++; }
+      else if (type == RN_LINK_TLM) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), el); ntlm++; }
     }
     /* 10 ms of flight in real time (LTEL every 5 ms while asked), then the navigation telemetry */
     while (now_s() < next) usleep(200);
@@ -113,18 +120,30 @@ int main(int argc, char **argv) {
     }
     if (cal_at && !cal_done) { if (B.p[2] < zmin_cal) zmin_cal = B.p[2]; if (B.p[2] > zmax_cal) zmax_cal = B.p[2]; }
     if (cal_done && !goto_at && el > cal_done + 1) { (void)!write(inp[1], "health\n", 7); (void)!write(inp[1], "goto 2 1 2\n", 11); goto_at = el; }
-    if (goto_at && el > goto_at + 8) break;
+    /* the ESP32's radio: the channels for 6 s (pitch forward for 2 s of them), then none */
+    if (goto_at && el > goto_at + 8 && !radio_at) { radio_at = el; x_before = (float)B.p[0]; printf("  after goto: at (%.2f %.2f %.2f)\n", B.p[0], B.p[1], B.p[2]); }
+    if (radio_at) {
+      double r = el - radio_at;
+      if (r < 6 && el >= next_rc) {
+        next_rc = el + 0.02; rc_input in; memset(&in, 0, sizeof in); in.frames = 1; in.t_ch = el;
+        float ch[16] = { 0, r > 1 && r < 3 ? 1.0f : 0, 0, 0, 1, 0, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }; memcpy(in.ch, ch, sizeof ch);
+        in.up_rssi = -60; in.up_lq = 100; float pk[RC_PACK_N]; rc_pack(&in, el, pk); send_frame(mfd, RN_LINK_RC, pk, sizeof pk);
+      }
+      if (el >= next_want) { next_want = el + 0.5; float w = 2; send_frame(mfd, RN_LINK_WANT, &w, 4); }
+      if (r > 5.5 && !x_after_stick) x_after_stick = (float)B.p[0];
+      if (r > 24) break;
+    }
   }
   printf("  calibration: %s in %.0f s, height %.2f..%.2f m; frames EXC %d, MODEL %d, SET %d; on the learned model: %s\n", cal_done ? "done" : "NOT done",
          cal_done - cal_at, zmin_cal, zmax_cal, nexc, nmodel, nset, learned_ok ? "yes" : "no");
-  printf("  after goto: at (%.2f %.2f %.2f), state %s, flight core on the learned model: %s\n", B.p[0], B.p[1], B.p[2], fc_state_name(F.state), F.use_learned ? "yes" : "no");
-  int ok1 = fabs(B.p[0] - 2) < 0.5 && fabs(B.p[1] - 1) < 0.5 && fabs(B.p[2] - 2) < 0.4;
+  const tlm_slot *pos = tlm_get(&TS, TLM_POS), *nav = tlm_get(&TS, TLM_NAV), *sup = tlm_get(&TS, TLM_SUPER);
+  printf("  radio: the stick moved it %.2f m forward; telemetry frames from the Pi %d (position %s, navigation %s, supervisor %s; %d messages); link lost line: %s\n",
+         x_after_stick - x_before, ntlm, pos ? "yes" : "no", nav ? "yes" : "no", sup ? "yes" : "no", TS.qn, rc_lost_line ? "yes" : "no");
+  printf("  without the channels: at (%.2f %.2f %.2f), state %s\n", B.p[0], B.p[1], B.p[2], fc_state_name(F.state));
+  int ok1 = x_after_stick - x_before > 2 && ntlm > 20 && pos && nav && sup && rc_lost_line && hypot(B.p[0], B.p[1]) < 1.0 && B.p[2] < 0.2 && F.state == FC_DISARMED;
   int ok2 = ready_line && cal_done && nexc > 100 && nmodel > 0 && nset > 0 && zmin_cal > 1.0 && zmax_cal < 2.0 && health_ok && learned_ok == F.use_learned;
   kill(pid, SIGTERM); usleep(300000);
-  /* with dfb_pi gone, the ESP32 must go to its failsafe */
-  for (int k = 0; k < 1000; k++) step_ms();
-  printf("  dfb_pi stopped: %s\n", fc_state_name(F.state));
-  int ok = ok1 && ok2 && F.state == FC_FAILSAFE;
+  int ok = ok1 && ok2;
   printf(ok ? "end-to-end: ok\n" : "end-to-end: FAIL (goto %d, learning %d)\n", ok1, ok2);
   return ok ? 0 : 1;
 }

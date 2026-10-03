@@ -782,13 +782,15 @@ function toggleTorque() {   // Q: rotor and net torque together
 
 /* ───────── tabs ───────── */
 function showTab(which) {
-  const form = which === 'form';
-  $('#tabAir').setAttribute('aria-selected', String(!form)); $('#tabForm').setAttribute('aria-selected', String(form));
-  $('#paneAir').hidden = form; $('#paneForm').hidden = !form;
-  $('.work').classList.toggle('wide', form);
+  if (!['air', 'form', 'gs'].includes(which)) which = 'air';
+  const form = which === 'form', gsT = which === 'gs';
+  $('#tabAir').setAttribute('aria-selected', String(which === 'air')); $('#tabForm').setAttribute('aria-selected', String(form)); $('#tabGs').setAttribute('aria-selected', String(gsT));
+  $('#paneAir').hidden = which !== 'air'; $('#paneForm').hidden = !form; $('#paneGs').hidden = !gsT;
+  $('.work').classList.toggle('wide', form || gsT);
+  if (gsT) renderGs(true);
   try { localStorage.setItem(LS + '-tab', which); } catch (e) {}
 }
-$('#tabAir').addEventListener('click', () => showTab('air')); $('#tabForm').addEventListener('click', () => showTab('form'));
+$('#tabAir').addEventListener('click', () => showTab('air')); $('#tabForm').addEventListener('click', () => showTab('form')); $('#tabGs').addEventListener('click', () => showTab('gs'));
 
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';
@@ -796,7 +798,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate } }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -829,8 +831,9 @@ function load() {
     try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
   }
   if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
+  if (s.radio) for (const k of ['rate', 'ratio', 'power', 'extra']) if (isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.cfg.computers); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learnPrefs.keep = false;
     if (s.holdPulses === false) learnPrefs.holdPulses = false;
@@ -860,12 +863,13 @@ function boot() {
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   initDesigns(bootDesign); syncFlightUi();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
-  showTab(tab === 'form' ? 'form' : 'air');
+  showTab(tab);
   let lastT = performance.now(), envT = 0, uiT = 0;
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
     envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
+    renderGs();
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }

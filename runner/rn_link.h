@@ -31,10 +31,16 @@ enum { RN_LINK_CMD = 3, RN_LINK_AIRFRAME = 4, RN_LINK_SETTING = 5, RN_LINK_TELEM
  *   Pi → drone:  RN_LINK_EXC   the learning's excitation (test moves; the throw's open loop), at each LTEL
  *                RN_LINK_MODEL the model to fly on (learned or the description), the servos' measured speed and lag
  *                RN_LINK_SET   the supervisor's settings: parts out, scaled or capped, the flight mode and its limits
- *                RN_LINK_WANT  one float: 1 = send LTEL (twice a second while the Pi runs the learning or the supervisor)
+ *                RN_LINK_WANT  one float, bits: 1 = send LTEL (twice a second while the Pi runs the learning or the
+ *                              supervisor); 2 = send your telemetry items (RN_LINK_TLM): the sender runs the telemetry task
  *   drone → Pi:  RN_LINK_LTEL  the learning's and the supervisor's telemetry, 200 times a second (at 921600 baud; fewer
  *                              at slower links) */
 enum { RN_LINK_EXC = 6, RN_LINK_MODEL = 7, RN_LINK_SET = 8, RN_LINK_WANT = 9, RN_LINK_LTEL = 0x85 };
+/* The telemetry task (fc/tlm_core.h) and the pilot's radio (fc/rc_core.h), on whichever board has the radio receiver:
+ *   RN_LINK_TLM  either way: telemetry items and messages, as floats (tlm_pack), to the board with the radio (which
+ *                asks for them with RN_LINK_WANT bit 2)
+ *   RN_LINK_RC   the radio's board → the navigation's: what the receiver got (rc_pack), 50 times a second */
+enum { RN_LINK_TLM = 10, RN_LINK_RC = 11 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

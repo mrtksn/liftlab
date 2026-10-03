@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "fc_core.h"
 
-#define HW_VERSION 3
+#define HW_VERSION 4
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -18,6 +18,8 @@ typedef struct {
   int16_t rate_hz, telem_hz;                       /* control loop, telemetry */
   float vref;                                      /* the pack voltage the airframe's thrust is for (16: 4S) */
   int32_t link_baud;                               /* the Pi's serial link (and the USB port): 921600 for the learning */
+  int8_t crsf_rx, crsf_tx;                         /* the radio receiver's UART (CRSF at 420000 baud): its TX to crsf_rx, −1: none */
+  int16_t elrs_rate, elrs_ratio;                   /* the ExpressLRS packet rate [Hz] and telemetry ratio (1:n) set on the radio */
 } hw_config;
 
 void hw_defaults(hw_config *c);

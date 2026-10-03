@@ -1,6 +1,8 @@
 'use strict';
 // Manual flight. Keys and the on-screen pads don't drive the motors directly: they move the target
 // the controller is holding, at a commanded velocity that is also fed forward to the position law.
+// With a radio (a board runs the telemetry & radio task) they are the handset's sticks and switches instead
+// (elrs.js): the drone moves its own target from them (runner/fc/rc_core.c).
 //
 //   W / S       climb / descend          ↑ / ↓   forward / back   (relative to the heading)
 //   A / D       turn left / right        ← / →   left / right
@@ -26,6 +28,7 @@ function releaseAll() { const cs = [...pilot.held.keys()]; pilot.held.clear(); c
 
 function pilotStep(dt) {
   if (S.crashed || dt <= 0) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
+  if (radioActive()) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }   // the keys are the handset's sticks: the drone moves its own target
   const sv = brt.superView;   // the supervisor bringing it home or down: the navigation flies that by itself
   if ((sv && sv.mode >= 2) || (brt.navOut && brt.navOut.landed)) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
   const L0 = PILOT_LEVELS[pilot.level], L = sv && sv.lim.speed > 0 ? { ...L0, h: Math.min(L0.h, sv.lim.speed) } : L0;   // the supervisor's speed limit
@@ -49,13 +52,14 @@ function pilotStep(dt) {
 }
 function pilotHold() {   // hold where the flight software believes it is
   if (!est.havePos) return;   // no position estimate (no navigation): nothing to hold
+  if (radioActive()) { radioHold(); flashCtl('hold'); return; }   // the hold switch on the handset
   const hub = est.p;
   setpoint.x = clamp(hub[0], -PILOT_BOX.xy, PILOT_BOX.xy); setpoint.y = clamp(hub[1], -PILOT_BOX.xy, PILOT_BOX.xy);
   setpoint.z = clamp(hub[2], PILOT_BOX.zMin, PILOT_BOX.zMax);
   pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];
   flashCtl('hold');
 }
-function pilotHome() { if (!hasTask("nav")) return; const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
+function pilotHome() { if (!hasTask("nav")) return; if (radioActive()) { radioHome(); flashCtl('home'); return; } const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
 function setPilotLevel(k) {
   pilot.level = k;
   document.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === k)));

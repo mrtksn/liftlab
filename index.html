@@ -73,6 +73,7 @@
       <div class="tabs" role="tablist" aria-label="Left panel">
         <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true">Airframe</button>
         <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false">Computers <span class="count" id="editedCount" hidden></span></button>
+        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false">Ground station</button>
       </div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
@@ -131,6 +132,7 @@
       </section>
       </div>
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
+      <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden></div>
     </aside>
 
     <section class="view" aria-label="3D view">
@@ -338,7 +340,11 @@
 <script src="js/editor.js"></script>
 <script src="js/fc-export.js"></script>
 <script src="js/board-wasm.js"></script>
+<script src="js/crsf.js"></script>
+<script src="js/elrs.js"></script>
 <script src="js/boards.js"></script>
+<script src="js/gs-widgets.js"></script>
+<script src="js/gs-ui.js"></script>
 <script>boot();</script>
 </body>
 </html>

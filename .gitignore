@@ -15,3 +15,6 @@ runner/pi/test_dfb_pi
 runner/fc/esp32/build/
 runner/fc/esp32/sdkconfig
 runner/fc/esp32/sdkconfig.old
+runner/fc/test_fc
+runner/fc/test_nav
+runner/fc/test_tlm

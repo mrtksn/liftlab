@@ -17,6 +17,11 @@
  * While the Pi's navigation sends guided commands (12-float RN_LINK_CMD), it gets RN_LINK_NAV 100 times a second.
  * While the Pi runs the learning or the health supervisor (it sends RN_LINK_WANT), it gets RN_LINK_LTEL 200 times a
  * second (fewer at slower links), and takes their RN_LINK_EXC, RN_LINK_MODEL and RN_LINK_SET (fc_core.h).
+ * The pilot's radio (an ExpressLRS or Crossfire receiver on a second UART, setting crsf=rx,tx; CRSF at 420000 baud): its
+ * channels fly the drone (rc_core.h): without the Pi's navigation, as the stick command; with it, they go to the Pi
+ * (RN_LINK_RC). The telemetry task (tlm_core.h) sends what the flight core and the Pi's tasks publish back down the
+ * radio as CRSF frames, within the link's budget (setting elrs=rate,ratio). Without a receiver, if the Pi runs the
+ * telemetry task (it sends RN_LINK_WANT bit 2), the flight core's items go to the Pi instead (RN_LINK_TLM).
  * Telemetry (RN_LINK_TELEM), 36 floats: t, state, roll, pitch, yaw [deg], body rates [deg/s] ×3, height [m],
  * vertical speed [m/s], battery [V], loop [µs], longest loop [µs], flags (1 gyro, 2 barometer, 4 attitude
  * settled, 8 holding height, 16 airframe loaded), flying program slot, last formula error, 12 throttles, 8 servo
@@ -37,6 +42,8 @@
 #include "rn_host.h"
 #include "rn_link.h"
 #include "fc_core.h"
+#include "tlm_sources.h"
+#include "tlm_crsf.h"
 #include "hw.h"
 
 extern const uint8_t *const rn_builtin_img;
@@ -47,6 +54,7 @@ extern const uint32_t rn_builtin_len;
 #define IMG_CAP (40 * 1024)
 #define AIRFRAME_CAP 4096       /* the largest airframe (12 motors on 2 joints each, 8 servos) is 3.6 KB */
 #define LINK UART_NUM_0
+#define RADIO UART_NUM_2
 
 static hw_config HW, HW_next;            /* the wiring in use, and as it will be after a reboot */
 static hw_sensors SENS;
@@ -120,6 +128,10 @@ static volatile float vbatt;
 static float exc_box[8 + FC_MAX_MOTORS + FC_MAX_JOINTS], set_box[6 + 3 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS], model_box[FC_MODEL_MAX];
 static volatile int exc_n, set_n, model_n;
 static float ltel_box[FC_LTEL_MAX]; static volatile int ltel_n; static volatile int64_t want_us = -10000000;
+/* the telemetry task's store (the radio task and the link task), and the radio's input */
+static tlm_store TS; static tlm_watch TW; static rc_input RCI; static volatile int64_t tlm_want_us = -10000000;
+static portMUX_TYPE tlm_mux = portMUX_INITIALIZER_UNLOCKED;
+static float tlm_in[256]; static volatile int tlm_in_n;
 
 /* ── the control loop ── */
 static volatile int64_t loop_us, loop_max; static volatile int loop_late;
@@ -197,6 +209,10 @@ static void link_send(uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[FC_MODEL_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
 }
+static void link_send2(uint8_t type, const void *p, uint32_t n) {   /* (the radio task's own buffer) */
+  static uint8_t fr[1100]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
+  if (k) uart_write_bytes(LINK, fr, k);
+}
 static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
 static void report(const char *text) { link_send(RN_LINK_REPORT, text, (uint32_t)strlen(text)); }
 static void telemetry(void) {
@@ -232,7 +248,8 @@ static void setting(const char *line) {
 static uint32_t frame_limit(uint8_t type) {
   switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
     case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP;
-    case RN_LINK_EXC: return sizeof exc_box; case RN_LINK_SET: return sizeof set_box; case RN_LINK_MODEL: return sizeof model_box; case RN_LINK_WANT: return 4; }
+    case RN_LINK_EXC: return sizeof exc_box; case RN_LINK_SET: return sizeof set_box; case RN_LINK_MODEL: return sizeof model_box; case RN_LINK_WANT: return 4;
+    case RN_LINK_TLM: return sizeof tlm_in; }
   return 0;
 }
 static void link_task(void *arg) {
@@ -285,7 +302,13 @@ static void link_task(void *arg) {
       } else if (type == RN_LINK_EXC || type == RN_LINK_SET || type == RN_LINK_MODEL) {   /* the learning and the supervisor: to the control loop */
         float *box = type == RN_LINK_EXC ? exc_box : type == RN_LINK_SET ? set_box : model_box; volatile int *cnt = type == RN_LINK_EXC ? &exc_n : type == RN_LINK_SET ? &set_n : &model_n;
         portENTER_CRITICAL(&mux); memcpy(box, L.buf, L.len & ~3u); *cnt = (int)(L.len / 4); portEXIT_CRITICAL(&mux);
-      } else if (type == RN_LINK_WANT) want_us = now;
+      } else if (type == RN_LINK_WANT) {
+        float w = 1; if (L.len == 4) memcpy(&w, L.buf, 4);
+        if ((int)w & 1) want_us = now;
+        if ((int)w & 2) tlm_want_us = now;
+      } else if (type == RN_LINK_TLM) {                   /* the Pi's tasks' telemetry, for the radio */
+        portENTER_CRITICAL(&tlm_mux); memcpy(tlm_in, L.buf, L.len & ~3u); tlm_in_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
+      }
       else if (type < 0) say("dropped a damaged or oversized frame");
     }
     now = esp_timer_get_time();
@@ -295,6 +318,33 @@ static void link_task(void *arg) {
     if (ltel_n) { static float lt[FC_LTEL_MAX]; int k; portENTER_CRITICAL(&mux); k = ltel_n; memcpy(lt, ltel_box, (size_t)k * 4); ltel_n = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_LTEL, lt, (uint32_t)k * 4); }
     /* the full telemetry: at its rate, or twice a second while the Pi navigates (the link's room goes to RN_LINK_NAV) */
     if (telem_us && now >= next_t) { next_t = now + (guided ? 500000 : telem_us); telemetry(); }
+  }
+}
+
+/* ── the pilot's radio and the telemetry task ── */
+static void radio_task(void *arg) {
+  int radio = HW.crsf_rx >= 0;
+  static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[256];
+  tlm_init(&TS); tlm_watch_init(&TW);
+  int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0;
+  float budget = tlm_crsf_budget(HW.elrs_rate, HW.elrs_ratio);
+  for (;;) {
+    int n = radio ? uart_read_bytes(RADIO, rx, sizeof rx, pdMS_TO_TICKS(2)) : (vTaskDelay(pdMS_TO_TICKS(5)), 0);
+    int64_t now = esp_timer_get_time(); double t = now * 1e-6;
+    for (int i = 0; i < n; i++) tlm_crsf_input(&P, rx[i], &RCI, t);
+    int guided = now - guided_us < 1000000;                  /* the Pi's navigation flies it */
+    if (radio && !guided) {                                  /* angle mode: the sticks, while the channels come */
+      fc_cmd c; if (!rc_stick_cmd(&RCI, t, &c)) { portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux); }
+    }
+    if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
+    if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
+    if (now >= next_pub) { next_pub = now + 10000; tlm_from_core(&TS, &TW, &F, t); if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (radio) {
+      int m = tlm_service(&TS, &tlm_crsf, t, budget, out, sizeof out); if (m) uart_write_bytes(RADIO, out, m);
+      if (now >= next_want) { next_want = now + 500000; float w = 2; link_send2(RN_LINK_WANT, &w, 4); }   /* the Pi's items, please */
+    } else if (now - tlm_want_us < 1000000 && now >= next_pack) {   /* the Pi runs the telemetry: our items go there */
+      next_pack = now + 50000; int k = tlm_pack(&TS, pk, 256); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);
+    }
   }
 }
 
@@ -350,4 +400,10 @@ void app_main(void) {
   xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, 1);
   xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);
   xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0);
+  if (HW.crsf_rx >= 0) {
+    uart_config_t uc = { .baud_rate = CRSF_BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };
+    uart_driver_install(RADIO, 1024, 1024, 0, NULL, 0); uart_param_config(RADIO, &uc); uart_set_pin(RADIO, HW.crsf_tx, HW.crsf_rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    printf("radio receiver: CRSF on GPIO %d (from its TX) and %d (to its RX); ExpressLRS %d Hz, telemetry 1:%d\n", HW.crsf_rx, HW.crsf_tx, HW.elrs_rate, HW.elrs_ratio);
+  }
+  xTaskCreatePinnedToCore(radio_task, "radio", 6144, NULL, 4, NULL, 0);
 }

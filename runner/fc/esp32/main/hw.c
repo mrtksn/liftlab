@@ -30,13 +30,15 @@ void hw_defaults(hw_config *c) {
   c->sda = 21; c->scl = 22;
   c->batt_pin = -1; c->batt_divider = 11.0f;
   c->rate_hz = 1000; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
+  c->crsf_rx = c->crsf_tx = -1; c->elrs_rate = 250; c->elrs_ratio = 4;
 }
 int hw_load(hw_config *c) {
   hw_defaults(c);
   nvs_handle_t h; if (nvs_open("dfb", NVS_READONLY, &h) != ESP_OK) return 0;
   hw_config t; size_t n = sizeof t;
   if (nvs_get_blob(h, "hw", &t, &n) == ESP_OK && n == sizeof t && t.version == HW_VERSION) *c = t;
-  else if (n == offsetof(hw_config, link_baud) && t.version == 2) { memcpy(c, &t, n); c->version = HW_VERSION; c->link_baud = 115200; }   /* saved by v3: its link speed */
+  else if (n == offsetof(hw_config, link_baud) && t.version == 2) { memcpy(c, &t, n); c->version = HW_VERSION; c->link_baud = 115200; }   /* saved by v2: its link speed */
+  else if (n == offsetof(hw_config, crsf_rx) && t.version == 3) { memcpy(c, &t, n); c->version = HW_VERSION; }                            /* saved by v3: no receiver yet */
   nvs_close(h); return 0;
 }
 int hw_save(const hw_config *c) {
@@ -75,7 +77,7 @@ static int hw_check(const hw_config *c, char *err, int errn) {
   #define USE(p, what) do { int p_ = (p); if (p_ >= 0 && p_ < 40) { if (used[p_]) { snprintf(err, errn, "GPIO %d is used twice (%s)", p_, what); return -1; } used[p_] = 1; } } while (0)
   for (int i = 0; i < FC_MAX_MOTORS; i++) USE(c->motor_pin[i], "motor");
   for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
-  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery");
+  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
   #undef USE
   int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
   if (nm > 8 && nm - 8 + ns > 8) { snprintf(err, errn, "%d motors and %d servos: at most 16 outputs, motors 9–12 share the servos' 8", nm, ns); return -1; }
@@ -125,6 +127,13 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   } else if (!strcmp(key, "baud")) {
     if (n != 1 || (v[0] != 115200 && v[0] != 230400 && v[0] != 460800 && v[0] != 921600)) { snprintf(err, errn, "baud: 115200, 230400, 460800 or 921600 (the learning wants 921600)"); return -1; }
     c->link_baud = (int32_t)v[0];
+  } else if (!strcmp(key, "crsf")) {
+    if (n == 1 && v[0] == -1) c->crsf_rx = c->crsf_tx = -1;
+    else if (n != 2 || !(pin_ok((int)v[0]) || (v[0] >= 34 && v[0] <= 39)) || !pin_ok((int)v[1]) || v[1] < 0) { snprintf(err, errn, "crsf=rx,tx: the pin the receiver's TX goes to (also 34–39), and one to its RX (or crsf=-1)"); return -1; }
+    else { c->crsf_rx = (int8_t)v[0]; c->crsf_tx = (int8_t)v[1]; }
+  } else if (!strcmp(key, "elrs")) {
+    if (n != 2 || (v[0] != 50 && v[0] != 150 && v[0] != 250 && v[0] != 500) || v[1] < 2 || v[1] > 128) { snprintf(err, errn, "elrs=rate,ratio as set on the radio: 50, 150, 250 or 500 Hz; telemetry 1:2 to 1:128"); return -1; }
+    c->elrs_rate = (int16_t)v[0]; c->elrs_ratio = (int16_t)v[1];
   } else if (!strcmp(key, "telemetry")) {
     if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
     c->telem_hz = (int16_t)v[0];
@@ -136,8 +145,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
   for (int i = 0; i < FC_MAX_MOTORS && c->motor_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->motor_pin[i]);
   k += snprintf(out + k, n - k, " servos=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_pin[i]);
-  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld servo_center=",
-                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, (double)c->vref, c->rate_hz, c->telem_hz, (long)c->link_baud);
+  k += snprintf(out + k, n - k, " esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d elrs=%d,%d servo_center=",
+                c->esc_hz, c->esc_min_us, c->esc_max_us, c->sda, c->scl, c->batt_pin, (double)c->batt_divider, (double)c->vref, c->rate_hz, c->telem_hz, (long)c->link_baud, c->crsf_rx, c->crsf_tx, c->elrs_rate, c->elrs_ratio);
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%d", i ? "," : "", c->servo_center_us[i]);
   k += snprintf(out + k, n - k, " servo_us_per_rad=");
   for (int i = 0; i < FC_MAX_JOINTS && c->servo_pin[i] >= 0; i++) k += snprintf(out + k, n - k, "%s%.0f", i ? "," : "", (double)c->servo_us_per_rad[i]);

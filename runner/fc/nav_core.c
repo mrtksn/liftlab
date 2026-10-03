@@ -125,7 +125,7 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
 
   /* the supervisor's return home and landing: it moves the target itself, as the pilot would, within the limits */
   const float *target = sp->target, *vref = sp->vref;
-  if (N->sup_mode >= 2 && N->have_home) {
+  if ((N->sup_mode >= 2 || N->rc_rth) && N->have_home) {
     if (!N->auto_on) { N->auto_on = 1; memcpy(N->auto_t, N->p, sizeof N->auto_t); memset(N->auto_v, 0, sizeof N->auto_v); N->land_t = 0; }
     if (N->sup_mode == 3) N->auto_land = 1;
     float spd = N->lim_speed > 0 ? N->lim_speed : 1, want[3] = { 0, 0, 0 };

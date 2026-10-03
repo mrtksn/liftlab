@@ -64,6 +64,7 @@ typedef struct {
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
   int sup_mode; float lim_speed, lim_accel, lim_lean;
+  int rc_rth;                            /* the pilot's radio link is lost in flight: it flies home and lands (rc_core.h) */
   int auto_on, auto_land, landed; float auto_t[3], auto_v[3], land_t;
   char why[64];
   uint32_t steps;
