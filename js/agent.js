@@ -27,7 +27,7 @@ const AGENT_ENDPOINTS = {
 
 const agent = {
   cfg: { connected: false, endpoint: 'openai', url: AGENT_ENDPOINTS.openai.url, model: AGENT_ENDPOINTS.openai.model, remember: false,
-    pauseThinking: true, askFormulas: false, budget: 60, temperature: 0.2 },
+    pauseThinking: true, askFormulas: false, budget: 60, temperature: 0.2, canSee: false, allowJs: false, askJs: true },
   key: '',
   triggers: [],          // { id, kind, value, expr, msg, gap, keepFlying, on, fired, last }
   // Threads: each chat, and each trigger's (kind 'trigger', triggerId). msgs: the conversation as the API takes it
@@ -52,7 +52,7 @@ function agentLoad() {
 }
 // The threads, without what can't be kept (a pending question, an undo's code): the newest chats, every trigger's.
 function agentSaveThreads() {
-  const keep = t => ({ ...t, feed: t.feed.map(({ confirm, undo, ...f }) => f) });
+  const keep = t => ({ ...t, feed: t.feed.map(({ confirm, undo, img, ...f }) => f) });
   const chats = agent.threads.filter(t => t.kind === 'chat').sort((a, b) => b.updated - a.updated).slice(0, AGENT_THREADS_MAX);
   const out = [...chats, ...agent.threads.filter(t => t.kind === 'trigger')].map(keep);
   try { localStorage.setItem(AGENT_THREADS_LS, JSON.stringify(out)); }
@@ -116,6 +116,9 @@ function agentState() {
     formulas: { edited: editedLaws().map(L => L.def.key), stopped: editedLaws().filter(L => L.status === 'error').map(L => L.def.key + ': ' + L.err) },
     latches: latches().map((l, i) => { const v = typeof latchView === 'function' ? latchView(l) : null; return { index: i, name: l.name, closed: v ? v.closed : l.closed, holds: liveUnder(l).map(c => c.name) }; }),
     loose_things: cargo.loose.map(L => ({ name: L.name, at: L.p ? L.p.map(r2) : undefined })),
+    parts_in_trouble: [...actuators(), ...joints()].map(c => { const h = hs.get(c.id) || {}; const st = h.prop ? 'prop broken' : h.dead ? 'stopped' : h.loss > 0.004 ? `lost ${Math.round(h.loss * 100)}% thrust` : h.limp ? 'limp' : h.jam != null ? 'jammed' : ''; return st ? `${c.name}: ${st}` : ''; }).filter(Boolean)
+      .concat(hb.cut ? ['battery: cut out'] : hb.cellsLost ? [`battery: ${hb.cellsLost} cells lost`] : []),
+    supervisor: brt.superView ? (MODE_TXT[brt.superView.mode | 0] || MODE_TXT[0])[0] : null,
     recent_events: agentEvents(),
   };
 }
@@ -167,6 +170,7 @@ function agentSystem() {
     'Axes: X forward, Y left, Z up, metres, from the world origin (the start point). Body axes on the airframe: the same, from the frame hub. Angles in degrees.',
     'Flight computers: boards (ESP32 microcontrollers, Raspberry Pi) run tasks: core (attitude, control, mixing), nav (position), learn, super (health), tlm (radio), cargo (latches). Each task runs formulas: JavaScript functions you can read and replace (same arguments, same kind of return value).',
     'Work in small steps and check: after a change, run the simulation for a few seconds (wait) and read the state. Read a formula (get_formula) before you replace it, and keep its signature.',
+    'You can reach everything the page shows or does: get_health for each part\'s true state (a broken prop, a stopped motor), get_actuators for thrust and throttle, get_estimate, get_learning, get_boards, get_envelope, get_radio, get_events; stick and poke to fly by hand; set_view and look (if allowed) to see; designs, triggers, cargo_items, set_control, set_learning, set_radio, set_frame_shape; run_js (if allowed) for anything else.',
     'The person sees each tool you call. Be brief in words: say what you did, what you saw and what you suggest.',
     `Now: ${new Date().toISOString().slice(0, 10)}. Simulated time ${S.t.toFixed(1)} s.`,
   ].join('\n');
@@ -232,6 +236,7 @@ async function agentTurn(text, o = {}) {
       th.msgs.push({ role: 'assistant', content: m.content || null, ...(calls.length ? { tool_calls: calls } : {}) });
       if (m.content && String(m.content).trim()) agentFeed({ who: 'ai', text: String(m.content).trim() });
       if (!calls.length) break;
+      const images = [];   // (a look: the picture goes after the tool answers, as a user message: tool answers are text)
       for (const c of calls) {
         let args = {}, out;
         const item = agentFeed({ who: 'tool', name: c.function.name, args: c.function.arguments, text: '…' });
@@ -243,10 +248,14 @@ async function agentTurn(text, o = {}) {
         }
         let s = typeof out === 'string' ? out : JSON.stringify(out);
         if (s.length > AGENT_RESULT_MAX) s = s.slice(0, AGENT_RESULT_MAX) + '… (cut: ask for less)';
-        item.text = s; item.bad = !!(out && out.error); agentRenderFeed();
-        th.msgs.push({ role: 'tool', tool_call_id: c.id, content: s });
+        let img = null; if (out && out.__image) { img = out.__image; delete out.__image; }
+        let s2 = img ? JSON.stringify(out) : s; if (img) item.img = img;
+        item.text = s2; item.bad = !!(out && out.error); agentRenderFeed();
+        th.msgs.push({ role: 'tool', tool_call_id: c.id, content: s2 });
+        if (img) images.push(img);
         if (agent.abort.signal.aborted) throw new DOMException('stopped', 'AbortError');
       }
+      if (images.length) th.msgs.push({ role: 'user', content: [{ type: 'text', text: 'The view you asked to look at:' }, ...images.map(u => ({ type: 'image_url', image_url: { url: u } }))] });
       if (round === AGENT_ROUNDS - 1) agentFeed({ who: 'note', text: `Stopped after ${AGENT_ROUNDS} rounds of tools: say "go on" to continue.` });
     }
   } catch (e) {
@@ -280,6 +289,8 @@ async function agentRequest(th) {
   let d = null; try { d = await r.json(); } catch (e) {}
   if (!r.ok) throw new Error(`The endpoint said ${r.status}${d && d.error ? ': ' + (d.error.message || JSON.stringify(d.error)) : ''}`);
   if (d && d.usage) for (const T of [agent.tokens, th.tokens]) { T.in += d.usage.prompt_tokens || 0; T.out += d.usage.completion_tokens || 0; }
+  for (const x of th.msgs) if (Array.isArray(x.content) && x.content.some(p => p.type === 'image_url'))   // (seen once: keep the conversation small)
+    x.content = x.content.map(p => p.type === 'image_url' ? { type: 'text', text: '[a picture of the view, already seen]' } : p);
   const m = d && d.choices && d.choices[0] && d.choices[0].message;
   if (!m) throw new Error('The endpoint sent no answer' + (d && d.error ? ': ' + (d.error.message || '') : ''));
   return m;
