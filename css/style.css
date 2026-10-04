@@ -354,7 +354,7 @@ button.chip{background:transparent;cursor:pointer}
   .pilot{flex-wrap:wrap;row-gap:12px}
   .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
   .hud-tl{top:44px}
-  .crash{bottom:232px}
+  .crash,.liftoff{bottom:232px}
   .pad{grid-template-columns:repeat(3,34px);grid-template-rows:repeat(3,34px);gap:2px}
   .pad-cap{font-size:8.5px}
   .pk kbd{display:none}
@@ -398,24 +398,25 @@ button.chip{background:transparent;cursor:pointer}
 .tag-link{color:var(--ink-2)}
 .tag-latch{color:var(--cargo)}
 
-/* the launch banner: what the drone is doing between reset and flying */
+/* the launch status: what the drone is doing between reset and flying. A slim pill low on the view, where the crash
+   notice goes (they never show together), so it doesn't cover the drone or the scene. */
 .liftoff[hidden]{display:none}
-.liftoff{display:block;width:max-content;position:absolute;left:50%;top:22%;transform:translateX(-50%);z-index:4;pointer-events:none;text-align:center;
-  padding:12px 20px 10px;border-radius:10px;background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line);
-  box-shadow:0 6px 24px rgba(0,0,0,.12);max-width:min(460px,86%);transition:opacity .4s}
+.liftoff{display:flex;align-items:center;gap:8px;width:max-content;max-width:calc(100% - 24px);position:absolute;left:50%;bottom:172px;transform:translateX(-50%);
+  z-index:4;pointer-events:none;padding:4px 12px;border-radius:999px;border:1px solid var(--line);font-size:12.5px;color:var(--ink-2);
+  background:color-mix(in srgb,var(--panel) 80%,transparent);transition:opacity .4s;white-space:nowrap;overflow:hidden}
 .liftoff.fade{opacity:0}
-.liftoff-title{font-family:var(--f-display);font-weight:700;font-size:26px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink)}
+.liftoff-title{font-family:var(--f-display);font-weight:700;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
 .liftoff.warn .liftoff-title{color:var(--warn)}
 .liftoff.bad .liftoff-title{color:var(--bad)}
 .liftoff.good .liftoff-title{color:var(--good)}
-.liftoff-sub{font-size:13px;color:var(--ink-2);margin-top:2px;min-height:1em}
-.liftoff-steps{display:flex;flex-wrap:wrap;gap:4px 8px;justify-content:center;list-style:none;margin:8px 0 0;padding:0;font-family:var(--f-mono);font-size:10.5px;color:var(--muted)}
-.liftoff-steps li{display:flex;align-items:center;gap:4px}
-.liftoff-steps li::before{content:'';width:8px;height:8px;border-radius:50%;border:1.5px solid currentColor}
-.liftoff-steps li.done{color:var(--good)} .liftoff-steps li.done::before{background:currentColor}
-.liftoff-steps li.now{color:var(--accent);font-weight:600} .liftoff-steps li.now::before{background:currentColor;animation:liftoffPulse 1s infinite}
+.liftoff-sub{overflow:hidden;text-overflow:ellipsis}
+.liftoff-sub:empty{display:none}
+.liftoff-steps{display:flex;gap:3px;list-style:none;margin:0;padding:0;order:-1}
+.liftoff-steps li{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--muted);font-size:0}
+.liftoff-steps li.done{border-color:var(--good);background:var(--good)}
+.liftoff-steps li.now{border-color:var(--accent);background:var(--accent);animation:liftoffPulse 1s infinite}
 @keyframes liftoffPulse{50%{opacity:.25}}
-@media (prefers-reduced-motion:reduce){.liftoff-steps li.now::before{animation:none}}
+@media (prefers-reduced-motion:reduce){.liftoff-steps li.now{animation:none}}
 
 /* cargo: the latch buttons on the view, the Cargo section */
 .cargo-bar{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;max-width:min(560px,90vw)}
@@ -734,7 +735,7 @@ select.pending{border-color:var(--warn);border-style:dashed}
 @container view (max-width:480px){
   .pilot{flex-wrap:wrap;row-gap:12px}
   .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
-  .crash{bottom:232px}
+  .crash,.liftoff{bottom:232px}
   .hud-tl{max-width:calc(100% - 210px)}
   .legend{display:none}
 }
