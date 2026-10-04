@@ -63,11 +63,11 @@
 
   <main class="work">
     <aside class="panel" id="airframe" aria-label="Airframe and flight computers">
-      <div class="tabs" role="tablist" aria-label="Left panel">
-        <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true" tabindex="0">Airframe</button>
-        <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false" tabindex="-1">Computers <span class="count" id="editedCount" hidden></span></button>
-        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false" tabindex="-1" aria-label="Ground station" title="Ground station: what comes down the radio">Ground</button>
-        <button type="button" role="tab" id="tabAi" aria-controls="paneAi" aria-selected="false" tabindex="-1" aria-label="AI agent" title="An AI agent that can fly, build and tune the simulated drone">AI</button>
+      <div class="tabs ftabs" role="tablist" aria-label="Left panel">
+        <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="5" r="2.4"/><circle cx="15" cy="5" r="2.4"/><circle cx="5" cy="15" r="2.4"/><circle cx="15" cy="15" r="2.4"/><path d="M6.8 6.8l2 2m4.4-2-2 2m-4.4 4.4 2-2m4.4 2-2-2"/></svg><span>Airframe</span></button>
+        <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false" tabindex="-1"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M8 2.5V5m4-2.5V5M8 15v2.5m4-2.5v2.5M2.5 8H5m-2.5 4H5m10-4h2.5M15 12h2.5"/></svg><span>Computers <span class="count" id="editedCount" hidden></span></span></button>
+        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false" tabindex="-1" aria-label="Ground station" title="Ground station: what comes down the radio"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v7M7 18h6"/><circle cx="10" cy="9" r="1.6"/><path d="M6.5 5.5a5 5 0 0 0 0 7M13.5 5.5a5 5 0 0 1 0 7M4 3a8.5 8.5 0 0 0 0 12M16 3a8.5 8.5 0 0 1 0 12"/></svg><span>Ground</span></button>
+        <button type="button" role="tab" id="tabAi" aria-controls="paneAi" aria-selected="false" tabindex="-1" aria-label="AI agent" title="An AI agent that can fly, build and tune the simulated drone"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg><span>AI</span></button>
       </div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
@@ -76,22 +76,24 @@
           <input type="text" id="designName" placeholder="Name this design" aria-label="Design name" maxlength="60" autocomplete="off">
           <button class="btn primary" id="designSave" type="button">Save</button>
         </div>
-        <div class="design-row">
-          <button class="btn" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">Undo</button>
-          <button class="btn" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">Redo</button>
-        </div>
-        <p class="note" id="designNote" role="status" hidden></p>
-        <span class="lbl">Saved designs</span>
-        <div class="designs" id="designList"></div>
-        <div class="design-row">
-          <button class="btn" id="designImport" type="button" title="Open a design file">Open file…</button>
-          <button class="btn" id="designExport" type="button" title="Save this design as a file">Save to file</button>
+        <div class="design-tools" role="group" aria-label="Design">
+          <button class="btn sm" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">↶ Undo</button>
+          <button class="btn sm" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">↷ Redo</button>
+          <span class="design-gap"></span>
+          <button class="btn sm" id="designImport" type="button" title="Open a design file">Open…</button>
+          <button class="btn sm" id="designExport" type="button" title="Save this design as a file">Export</button>
           <input type="file" id="designFile" accept=".json,application/json" hidden>
         </div>
-        <p class="hint" id="designWhere"></p>
+        <p class="note" id="designNote" role="status" hidden></p>
+        <details class="fold" id="designsFold">
+          <summary><span>Saved designs</span><small id="designsCount"></small></summary>
+          <div class="designs" id="designList"></div>
+          <p class="hint" id="designWhere"></p>
+        </details>
       </section>
-      <section class="sec">
-        <h2>Attach</h2>
+      <section class="sec" id="partsSec">
+        <h2>Parts <small id="compCount"></small></h2>
+        <p class="hint">Each + asks where the part goes: on the frame, on a servo, rod or latch, or (servos, rods, latches) between a part and what it hangs on. Body axes: X forward, Y left, Z up, from the frame hub. Press Edit (E) to pick parts in the 3D view and drag them; in the list, drag a part onto a servo, rod or latch to move it there. Which boards fly it, and every formula, are in the Computers tab.</p>
         <div class="addrow">
           <button class="btn" type="button" data-add="motor"><b>+</b>Motor</button>
           <button class="btn" type="button" data-add="tilt" title="A servo joint with a motor attached at the same point"><b>+</b>Motor on servo</button>
@@ -102,40 +104,41 @@
           <button class="btn" type="button" data-add="wing" title="A wing: lift and drag in the air (the flight computers aren't told about it)"><b>+</b>Wing</button>
           <button class="btn" type="button" data-add="latch" title="A hook or gripper: what hangs from it can be dropped in flight, and it can pick things up"><b>+</b>Latch (drop, grab)</button>
         </div>
-        <span class="lbl">Sensors</span>
-        <div class="addrow">
-          <button class="btn" type="button" data-add="imu"><b>+</b>IMU</button>
-          <button class="btn" type="button" data-add="mag"><b>+</b>Compass</button>
-          <button class="btn" type="button" data-add="baro"><b>+</b>Barometer</button>
-          <button class="btn" type="button" data-add="fix"><b>+</b>Position fix</button>
-          <button class="btn wide" type="button" data-add="flow"><b>+</b>Optical flow + rangefinder</button>
-        </div>
-        <p class="hint">Body axes: X forward, Y left, Z up. Positions are measured from the frame hub. Press Edit (E) to select parts in the 3D view and drag them into place. Each + asks where the part goes: on the frame, on a servo, rod or latch, or (servos, rods, latches) in between a part and what it hangs on. In the list, drag a part onto a servo, rod or latch to move it there.</p>
-      </section>
-      <section class="sec">
-        <div id="frameMassSlot"></div>
-      </section>
-      <section class="sec" id="steerSec">
-        <h2 id="modeLbl">Steering <small>how it pushes sideways</small></h2>
-        <div class="seg" role="group" aria-labelledby="modeLbl" aria-describedby="modeDesc">
-          <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
-          <button type="button" id="modeMixed" aria-pressed="false">Mixed</button>
-          <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
-        </div>
-        <p class="hint" id="modeDesc"></p>
-        <div id="mixSlot"></div>
-        <p class="hint" id="steerNote"></p>
-      </section>
-      <section class="sec" id="battSec">
-        <h2>Battery <small id="battSmall"></small></h2>
-        <div id="battFields"></div>
-      </section>
-      <section class="sec">
-        <h2>Components <small id="compCount"></small></h2>
+        <details class="fold sub" id="sensorsFold">
+          <summary><span>+ Sensors</span><small>IMU, compass, barometer, position, flow</small></summary>
+          <div class="addrow">
+            <button class="btn" type="button" data-add="imu"><b>+</b>IMU</button>
+            <button class="btn" type="button" data-add="mag"><b>+</b>Compass</button>
+            <button class="btn" type="button" data-add="baro"><b>+</b>Barometer</button>
+            <button class="btn" type="button" data-add="fix"><b>+</b>Position fix</button>
+            <button class="btn" type="button" data-add="flow"><b>+</b>Optical flow + rangefinder</button>
+          </div>
+        </details>
         <div class="complist" id="compList"></div>
       </section>
-      <section class="sec">
-        <p class="hint">Which boards fly it, and every formula they run (and the physics), are in the Computers tab.</p>
+      <section class="sec" id="bodySec">
+        <h2>Body</h2>
+        <details class="fold" id="frameFold">
+          <summary><span>Frame</span><small id="frameSum"></small></summary>
+          <div id="frameMassSlot"></div>
+        </details>
+        <details class="fold" id="steerFold">
+          <summary><span>Steering</span><small id="steerSum"></small></summary>
+          <div id="steerSec">
+            <div class="seg" role="group" aria-label="Steering" aria-describedby="modeDesc">
+              <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
+              <button type="button" id="modeMixed" aria-pressed="false">Mixed</button>
+              <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
+            </div>
+            <p class="hint" id="modeDesc"></p>
+            <div id="mixSlot"></div>
+            <p class="hint" id="steerNote"></p>
+          </div>
+        </details>
+        <details class="fold" id="battFold">
+          <summary><span>Battery</span><small id="battSmall"></small></summary>
+          <div id="battFields"></div>
+        </details>
       </section>
       </div>
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
@@ -308,7 +311,7 @@
         </div>
         <p class="alerts" id="liveAlerts" role="status"></p>
       </section>
-      <div class="tabs rtabs" role="tablist" aria-label="Readouts">
+      <div class="tabs ftabs rtabs" role="tablist" aria-label="Readouts">
         <button type="button" role="tab" id="rtab-flight" aria-controls="rpane-flight" aria-selected="true" tabindex="0" title="What it does now: the actuators, the traces, the cargo"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11h3l2-5 3 9 2.5-6 1.5 2H18"/></svg><span>Flight</span></button>
         <button type="button" role="tab" id="rtab-health" aria-controls="rpane-health" aria-selected="false" tabindex="-1" title="The parts, the supervisor and the state estimate"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16.5s-6.5-3.9-6.5-8.4A3.4 3.4 0 0 1 10 6a3.4 3.4 0 0 1 6.5 2.1c0 4.5-6.5 8.4-6.5 8.4z"/></svg><span>Health</span></button>
         <button type="button" role="tab" id="rtab-control" aria-controls="rpane-control" aria-selected="false" tabindex="-1" title="Learning, allocation, headroom and mass"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v12M10 4v12M16 4v12"/><circle cx="4" cy="12" r="1.8" fill="currentColor"/><circle cx="10" cy="7" r="1.8" fill="currentColor"/><circle cx="16" cy="11" r="1.8" fill="currentColor"/></svg><span>Control</span></button>
@@ -354,17 +357,20 @@
           </div>
           <div class="learn-actions">
             <button class="btn primary" type="button" id="calBtn">Calibrate</button>
-            <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
-            <label class="check" for="holdPulses" title="While one motor is pulsed, the others keep their throttle, so the controller's corrections don't blur which motor did what"><input type="checkbox" id="holdPulses" checked> Freeze other motors during pulses</label>
           </div>
           <div class="calprog" id="calProg" hidden><div class="calbar"><i id="calFill"></i></div><span id="calStage"></span></div>
           <p class="hint" id="learnMsg">Calibrate runs about 10 seconds of small test moves while hovering, learns what each actuator really does, then flies on it.</p>
-          <div class="throw-opts">
-            <span class="lbl">Throw start</span>
+          <details class="fold" id="learnOpts">
+            <summary><span>Options</span><small>learning in flight, pulses</small></summary>
+            <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
+            <label class="check" for="holdPulses" title="While one motor is pulsed, the others keep their throttle, so the controller's corrections don't blur which motor did what"><input type="checkbox" id="holdPulses" checked> Freeze other motors during pulses</label>
+          </details>
+          <details class="fold throw-opts" id="throwFold">
+            <summary><span>Throw start</span><small>height, tumble</small></summary>
             <div id="throwFields"></div>
             <label class="check" for="thenCal"><input type="checkbox" id="thenCal" checked> Refine with a hover calibration after the catch</label>
             <p class="hint" id="throwHint"></p>
-          </div>
+          </details>
           <span class="lbl has-src" data-src="cmp">How close each learned effect is to the truth</span>
           <div class="match" id="matchRows"></div>
           <span class="lbl has-src" data-src="board">Actuator response (from the tests)</span>

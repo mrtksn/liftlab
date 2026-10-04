@@ -852,8 +852,7 @@ select.pending{border-color:var(--warn);border-style:dashed}
 #steerSec .seg button{flex:1}
 /* the readouts' tabs (right panel) */
 .rtabs{position:sticky;top:0;margin-top:2px}
-.rtabs button{font-size:12.5px;padding:9px 6px 8px;letter-spacing:.07em}
-.rtabs button.alert::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad)}
+.ftabs button.alert::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad)}
 .rpane{display:flex;flex-direction:column}
 /* the status strip on top of the readouts: fixed tiles, one line of warnings (ui.js updateLive) */
 .status{padding:10px 12px 10px;border-bottom:1px solid var(--line);gap:8px;flex:none}
@@ -873,11 +872,11 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .alerts{margin:0;font-size:12px;line-height:18px;height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
 .alerts.warn{color:var(--warn)} .alerts.bad{color:var(--bad)} .alerts.info{color:var(--ink-2)}
 /* the readouts' tabs: folder tabs with icons */
-.rtabs{display:flex;gap:3px;padding:7px 8px 0;background:var(--panel-2);border-bottom:1px solid var(--line);margin-top:0}
-.rtabs button{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 4px 7px;border:1px solid transparent;border-bottom:0;border-radius:7px 7px 0 0;margin-bottom:-1px;font-size:12px;letter-spacing:.05em;color:var(--muted)}
-.rtabs button svg{width:15px;height:15px;flex:none}
-.rtabs button:hover{color:var(--ink-2);background:color-mix(in srgb,var(--panel) 50%,transparent)}
-.rtabs button[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--ink);border-bottom:1px solid var(--panel)}
+.ftabs{display:flex;gap:3px;padding:7px 8px 0;background:var(--panel-2);border-bottom:1px solid var(--line);margin-top:0}
+.ftabs button{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 4px 7px;border:1px solid transparent;border-bottom:0;border-radius:7px 7px 0 0;margin-bottom:-1px;font-size:12px;letter-spacing:.05em;color:var(--muted)}
+.ftabs button svg{width:15px;height:15px;flex:none}
+.ftabs button:hover{color:var(--ink-2);background:color-mix(in srgb,var(--panel) 50%,transparent)}
+.ftabs button[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--ink);border-bottom:1px solid var(--panel)}
 /* the key to the source tags: one quiet line until opened */
 #telemetry > .src-legend summary .src{display:none}
 #telemetry > .src-legend summary{padding:6px 12px;color:var(--muted)}
@@ -898,7 +897,44 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .h-state{text-align:right}
 .h-sub:empty{display:none}
 .h-sub{padding-left:14px}
-.rtabs button{flex-direction:column;gap:2px;padding:6px 2px 5px;font-size:11px;letter-spacing:.06em;line-height:1.1}
-.rtabs button svg{width:17px;height:17px}
-.rtabs button.alert::after{position:absolute;margin:-2px 0 0 18px}
-.rtabs button{position:relative}
+.ftabs button{flex-direction:column;gap:2px;padding:6px 2px 5px;font-size:11px;letter-spacing:.06em;line-height:1.1}
+.ftabs button svg{width:17px;height:17px}
+.ftabs button.alert::after{position:absolute;margin:-2px 0 0 18px}
+.ftabs button{position:relative}
+/* calmer panels: ⓘ for long explanations, source tags as dots in headings, folded rows (ui.js infoize, index.html) */
+.info-btn{width:17px;height:17px;border-radius:50%;border:1px solid var(--line-strong);background:var(--panel);color:var(--muted);font:600 10.5px/1 var(--f-body);font-style:italic;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none;align-self:center;text-transform:none;letter-spacing:0}
+.info-btn:hover,.info-btn[aria-expanded="true"]{color:var(--accent);border-color:var(--accent)}
+.info-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.info-more{display:none}
+.sec.show-info .info-more{display:block}
+.sec h2 .srcs{gap:3px}
+.sec h2 .srcs .src{font-size:0;border:0;padding:0;background:none;gap:0}
+.sec h2 .srcs .src i{width:7px;height:7px}
+.lbl.has-src .srcs .src{font-size:0;border:0;padding:0;background:none;gap:0}
+.btn.sm{padding:3px 9px;font-size:12.5px}
+.design-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.design-gap{flex:1}
+.fold{border-top:1px solid var(--line);margin:0 -14px;padding:0 14px}
+.fold > summary{display:flex;align-items:baseline;gap:8px;padding:9px 0;cursor:pointer;list-style:none;font-size:13px;font-weight:600;color:var(--ink)}
+.fold > summary::-webkit-details-marker{display:none}
+.fold > summary::before{content:"▸";color:var(--muted);font-size:11px;width:10px}
+.fold[open] > summary::before{content:"▾"}
+.fold > summary small{margin-left:auto;font-family:var(--f-mono);font-weight:400;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.fold[open]{padding-bottom:10px}
+.fold[open] > :not(summary){margin-bottom:8px}
+.fold.sub{border-top:0;margin:0}
+.fold.sub > summary{padding:4px 0;font-weight:500;font-size:12.5px;color:var(--accent)}
+.fold.sub > summary::before{display:none}
+#designSec .fold{margin-bottom:-12px}
+#bodySec{gap:0;padding-bottom:0}
+#bodySec h2{margin-bottom:8px}
+#bodySec .fold:last-child{border-bottom:0}
+.addrow .btn{padding:4px 8px;font-size:12.5px}
+.fold.throw-opts{display:block;gap:0;padding:0 14px;margin:0 -14px;border-top:1px solid var(--line)}
+#learnSec > .fold:last-of-type{border-bottom:1px solid var(--line)}
+.fold[open] > .check{margin-bottom:8px}
+.sec h2 > .srcs{order:0;flex-basis:auto;align-self:center}
+.lbl.has-src{flex-wrap:nowrap}
+.fold > summary > span{white-space:nowrap;flex:none}
+.ftabs button{letter-spacing:.02em;font-size:10.5px;overflow:hidden}
+.ftabs button > span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

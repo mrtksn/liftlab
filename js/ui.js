@@ -1097,7 +1097,7 @@ function showRtab(k) {
   try { localStorage.setItem('drone-force-bench-v1-rtab', k); } catch (e) {}
 }
 for (const t of RTABS) $('#rtab-' + t).addEventListener('click', () => showRtab(t));
-$('.rtabs').addEventListener('keydown', e => {
+$('#telemetry .rtabs').addEventListener('keydown', e => {
   const i = RTABS.findIndex(t => 'rtab-' + t === e.target.id); if (i < 0) return;
   const j = e.key === 'ArrowRight' ? (i + 1) % RTABS.length : e.key === 'ArrowLeft' ? (i - 1 + RTABS.length) % RTABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? RTABS.length - 1 : -1;
   if (j < 0) return; e.preventDefault(); showRtab(RTABS[j]); $('#rtab-' + RTABS[j]).focus();
@@ -1106,6 +1106,30 @@ try { showRtab(localStorage.getItem('drone-force-bench-v1-rtab') || 'flight'); }
 function syncRtabAlerts() {
   const sv = brt.superView, hot = (typeof anyBroken === 'function' && anyBroken()) || (sv && sv.mode > 0);
   const b = $('#rtab-health'); b.classList.toggle('alert', !!hot); b.title = hot ? 'Something is broken or failing, or the supervisor has stepped in' : 'The parts, the supervisor and the state estimate';
+}
+
+// Long explanations fold behind an ⓘ in their section's heading (the panels read at a glance; the ⓘ opens them).
+// Only fixed text: a hint the code rewrites (it has an id) stays in view. Sections built later (the Computers and
+// Ground tabs) get theirs as they appear.
+function infoize(root) {
+  for (const sec of root.querySelectorAll('.sec')) {
+    const h = sec.querySelector(':scope > h2'); if (!h || h.querySelector(':scope > .info-btn')) continue;
+    const hints = [...sec.querySelectorAll(':scope > p.hint:not([id])')].filter(p => p.textContent.trim().length > 70);
+    if (!hints.length) continue;
+    hints.forEach(p => p.classList.add('info-more'));
+    const name = (h.firstChild && h.firstChild.textContent || 'this').trim();
+    const b = el('button', { class: 'info-btn', type: 'button', 'aria-expanded': 'false', title: 'What this is', 'aria-label': 'About ' + name, text: 'i' });
+    b.addEventListener('click', () => { const o = sec.classList.toggle('show-info'); b.setAttribute('aria-expanded', String(o)); });
+    h.insertBefore(b, h.childNodes[1] || null);
+  }
+}
+infoize(document);
+{ let t = 0; const mo = new MutationObserver(() => { clearTimeout(t); t = setTimeout(() => { infoize($('#airframe')); }, 50); }); mo.observe($('#airframe'), { childList: true, subtree: true }); }
+// The folded rows' summaries (Airframe tab): what's inside, at a glance.
+function syncFolds() {
+  const fs = frameShapeOf(); setText($('#frameSum'), `${cfg.frame.mass.toFixed(2)} kg · ${fs.aero === 'wing' ? 'wing' : 'box hub'}`);
+  setText($('#steerSum'), { tilt: 'Tilt body', mixed: `Mixed · ${Math.round(steerMix.share * 100)}% servos`, level: 'Stay level' }[mode] || '');
+  const n = typeof designs !== 'undefined' ? designs.list.length : 0; setText($('#designsCount'), n ? String(n) : 'none yet');
 }
 
 /* ───────── persistence (this browser only) ───────── */
@@ -1190,7 +1214,7 @@ function boot() {
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
     envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
     renderGs();
-    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); }
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); }
     renderLaunch();
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }
