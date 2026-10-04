@@ -11,7 +11,7 @@
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
 const undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
-const designOf = () => ({ frame: cfg.frame.mass, comps: cfg.comps, mode, battery: cfg.battery, computers: computers() });
+const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, computers: computers() });
 const designSnap = () => JSON.stringify(designOf());
 
 // Called from save() after every change. Records a step when the design itself changed.
@@ -33,10 +33,10 @@ function restoreSnap(s) {
   const d = JSON.parse(s);
   undo.restoring = true;
   try {
-    cfg.frame.mass = d.frame; cfg.comps = d.comps; cfg.battery = { ...defaultBattery(), ...(d.battery || {}) }; uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
+    cfg.frame.mass = d.frame; setFrameShape(d.frameShape); cfg.comps = d.comps; cfg.battery = { ...defaultBattery(), ...(d.battery || {}) }; uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
     if (d.computers) { cfg.computers = fixComputers(d.computers); if (typeof syncFlightUi === 'function') syncFlightUi(); }
     if (typeof renderBattery === 'function') renderBattery();
-    setMode(d.mode, false); frameMassField.refresh(); structural();
+    setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof edit !== 'undefined' && edit.sel != null) selectComp(compById(edit.sel) ? edit.sel : null);
   } finally { undo.restoring = false; }
   undo.lastKey = null; renderUndo(); renderDesignState();
@@ -113,7 +113,7 @@ async function saveDesign() {
   renderDesigns();
 }
 function applyDesign(d) {
-  cfg.frame.mass = +d.frame || 0.45;
+  cfg.frame.mass = +d.frame || 0.45; setFrameShape(d.frameShape);
   cfg.comps = migrateComps(JSON.parse(JSON.stringify(d.comps)));
   cfg.battery = { ...defaultBattery(), ...(d.battery || {}) };
   if (d.computers) cfg.computers = fixComputers(computersWithRadio(d.computers));   // (a design saved before boards keeps the ones you have)
@@ -145,9 +145,9 @@ async function exportDesign(rec) {
 }
 function readDesignFile(text) {   // a design file, or a design copied from the page's own storage
   const o = JSON.parse(text);
-  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, comps: o.cfg.comps, mode: o.mode } : o;
+  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode } : o;
   if (!d || !Array.isArray(d.comps) || !d.comps.every(c => c && typeof c.type === 'string' && Array.isArray(c.pos))) throw new Error('not a design');
-  return { name: (o.name || '').toString().slice(0, 60), design: { frame: d.frame, comps: d.comps, mode: d.mode } };
+  return { name: (o.name || '').toString().slice(0, 60), design: { frame: d.frame, frameShape: d.frameShape, comps: d.comps, mode: d.mode } };
 }
 async function importDesign(file) {
   try {

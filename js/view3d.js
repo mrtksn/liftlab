@@ -8,6 +8,7 @@ const LAYERS = [
   { key: 'thrust', label: 'Thrust', group: 'Forces', on: true, tip: 'Each rotor\'s thrust, along its axis' },
   { key: 'weight', label: 'Weight', group: 'Forces', on: true, tip: 'Gravity at the true centre of mass' },
   { key: 'wind', label: 'Wind', group: 'Forces', on: true, tip: 'Wind direction and strength' },
+  { key: 'aero', label: 'Wing forces', group: 'Forces', on: true, tip: 'Each wing\'s lift and drag together, where it acts' },
   { key: 'rtorque', label: 'Rotor torque', group: 'Torque', on: false, tip: 'Each rotor\'s reaction torque on the frame, opposite to its spin: what makes the drone yaw (Q toggles torque)' },
   { key: 'ntorque', label: 'Net torque', group: 'Torque', on: false, tip: 'Everything turning the drone about its centre of mass, smoothed (Q toggles torque)' },
   { key: 'want', label: 'Wanted torque', group: 'Torque', on: false, tip: 'What the controller asked for, to compare with the net torque' },
@@ -102,6 +103,7 @@ function buildMaterials() {
     shadow: new THREE.MeshBasicMaterial({ color: colorOf('--ink'), transparent: true, opacity: 0.2, depthWrite: false }),
     stub: new THREE.MeshBasicMaterial({ color: colorOf('--bad') }),
     cargo: new THREE.MeshStandardMaterial({ color: colorOf('--cargo'), roughness: 0.8 }),
+    wing: new THREE.MeshStandardMaterial({ color: colorOf('--wing'), roughness: 0.5, metalness: 0.1 }),
     reachOk: new THREE.LineDashedMaterial({ color: colorOf('--good'), dashSize: 0.02, gapSize: 0.012, depthTest: false, transparent: true }),
     reachFar: new THREE.LineDashedMaterial({ color: colorOf('--muted'), dashSize: 0.02, gapSize: 0.012, depthTest: false, transparent: true, opacity: 0.8 }),
     ringOk: new THREE.MeshBasicMaterial({ color: colorOf('--good'), side: THREE.DoubleSide, transparent: true, depthTest: false }),
@@ -164,6 +166,7 @@ function updateCity(hub) {
     shadowMesh.material.opacity = 0.28 * clamp(1 - h / (bigWorld() ? 60 : 8), 0.08, 1);
   }
 }
+const m4of = R => new THREE.Matrix4().set(R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1);
 function rod(a, b, r, mat) {
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b); const len = va.distanceTo(vb); if (len < 1e-4) return null;
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), mat); m.position.copy(va).add(vb).multiplyScalar(0.5);
@@ -234,7 +237,7 @@ function rebuildDrone() {
   droneShown = cargo.rev + ':' + (typeof editMode !== 'undefined' && editMode);
   const comps = viewComps();
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
-  drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
+  { const fm = new THREE.Mesh(new THREE.BoxGeometry(...frameDims()), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); drone.add(fm); }   // the hub, or the body as a wing
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
   const js = comps.filter(c => c.type === 'joint').sort((a, b) => chainOf(a).length - chainOf(b).length);
@@ -288,7 +291,8 @@ function rebuildDrone() {
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
       else if (c.shape === 'cylinder') geo = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
       else geo = new THREE.BoxGeometry(...c.size);
-      const m = new THREE.Mesh(geo, c.cargo ? mats.cargo : c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
+      const m = new THREE.Mesh(geo, c.cargo ? mats.cargo : isWing(c) ? mats.wing : c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
+      if (c.inc) m.setRotationFromMatrix(m4of(massRot(c)));
     } else if (c.type === 'latch') {   // a hook: its body, and a jaw that swings open (updateScene)
       const lg = new THREE.Group(); lg.position.set(...p); lg.userData.compId = c.id; pickGroups.set(c.id, lg); g.add(lg);
       lg.add(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.022, 0.012), mats.frame));
@@ -334,6 +338,18 @@ function buildGhost() {   // outline of where the flight software thinks the dro
   const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mats.ghost); ls.computeLineDistances(); ghost.add(ls);
   worldFx.add(ghost);
 }
+/* ───────── wings: each one's lift and drag together, as an arrow from where it acts ───────── */
+const aeroArrows = [];
+function updateAeroVis(R, live) {
+  const list = live && view.aero && !S.crashed ? (S.aero || []) : [];
+  while (aeroArrows.length < list.length) { const a = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, colorOf('--wing-f'), 0.035, 0.022); a.traverse(o => { o.userData.noPick = true; }); worldFx.add(a); aeroArrows.push(a); }
+  aeroArrows.forEach((a, i) => {
+    const e = list[i], m = e ? nrm(e.F) : 0; a.visible = m > 0.02; if (!a.visible) return;
+    const p = add(S.p, m3v(R, e.P)), d = scl(m3v(R, e.F), 1 / m);
+    a.position.set(p[0], p[1], p[2]); a.setDirection(tmpV.set(d[0], d[1], d[2])); a.setLength(0.05 + Math.min(0.6, m * 0.04), 0.035, 0.022);
+  });
+}
+
 /* ───────── cargo: loose bodies, the latches' jaws, how far an open latch is from what it could grab ───────── */
 const looseVis = new Map(), reachVis = [];   // loose body id -> group; per latch: { line, ring }
 function looseGroup(L) {   // its parts, drawn at rest in the body's own axes (origin: its grab point)
@@ -522,7 +538,7 @@ function updateScene() {
     const aw = add(S.p, m3v(R, posNow(c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
-  updateCargoVis(live);
+  updateCargoVis(live); updateAeroVis(R, live);
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
   spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;

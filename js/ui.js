@@ -155,6 +155,10 @@ const FD = {
   radius: { label: 'Radius', path: ['radius'], min: 0.01, max: 0.25, step: 0.005, u: 'm', dp: 3 },
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   cable: { label: 'Cable length', hmax: 10,  path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
+  inc: { label: 'Incidence (leading edge up)', path: ['inc'], min: -20, max: 20, step: 0.5, u: '°', dp: 1 },
+  wchord: { label: 'Chord (X)', path: ['size', 0], min: 0.03, max: 0.6, hmax: 1.5, step: 0.005, u: 'm', dp: 3 },
+  wspan: { label: 'Span (Y)', path: ['size', 1], min: 0.1, max: 2, hmax: 4, step: 0.01, u: 'm', dp: 2 },
+  wthick: { label: 'Thickness (Z)', path: ['size', 2], min: 0.003, max: 0.08, step: 0.001, u: 'm', dp: 3 },
   lreach: { label: 'Reach (how close a thing must be to grab it)', path: ['reach'], min: 0.02, max: 0.3, step: 0.005, u: 'cm', dp: 1, k: 100 },
   ltravel: { label: 'Time to open or close', path: ['travel'], min: 0.03, max: 1, hmax: 5, step: 0.01, u: 'ms', dp: 0, k: 1000 },
   lmass: { label: 'Latch mass', path: ['mass'], min: 0.005, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
@@ -208,6 +212,7 @@ function summary(c) {
   if (c.type === 'link') { const n = descendants(c).length; return `${Math.round(c.length * 100)} cm · ${linkPointing(c)} · carries ${n}${on ? ' · on ' + on.name : ''}`; }
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.push ? 'pusher · ' : ''}${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
+  if (c.type === 'mass' && isWing(c)) return `${c.mass.toFixed(2)} kg wing · span ${c.size[1].toFixed(2)} m · chord ${c.size[0].toFixed(2)} m · ${(c.inc || 0).toFixed(1)}° · ${p}`;
   if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'latch') { const n = descendants(c).length; return `${c.closed ? 'closed' : 'open'} at take-off · holds ${n} part${n === 1 ? '' : 's'} · reach ${Math.round((c.reach ?? 0.08) * 100)} cm · ${p}`; }
   if (c.type === 'sensor') {
@@ -346,9 +351,14 @@ function compBody(c) {
       el('span', { class: 'lbl', text: 'Base' }), pos, presetSel(ROD_PRESETS, 'az', 'el', 'Points'), slider(c, 'laz'), slider(c, 'lel'), slider(c, 'lroll'), slider(c, 'llen'), slider(c, 'mass'),
       checkF(c, 'known', 'Controller knows this rod\'s mass'));
   } else if (c.type === 'mass') {
-    b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
-    if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
-    else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
+    b.append(selectF(c, 'aero', 'In the air', [['prism', 'Prism: blunt (drag)'], ['wing', 'Wing: lift and drag']], () => { if (c.aero === 'wing') c.shape = 'box'; edited(c, 'shape'); rerender(); }));
+    if (isWing(c)) b.append(slider(c, 'mass'), pos, el('div', { class: 'subgrid' }, slider(c, 'wchord'), slider(c, 'wspan'), slider(c, 'wthick')), slider(c, 'inc'),
+      el('p', { class: 'hint', text: 'Chord along X (the leading edge forward), span along Y. It lifts as the air meets it at an angle, stalls past about 15°, and catches the wind and the rotors\' wash (the Wing lift and drag formula). On a servo set by you, it is a flap, a tilting wing or an air brake. The flight computers aren\'t told about it: to them it\'s an oddly shaped body.' }));
+    else {
+      b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
+      if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
+      else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
+    }
     b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
       el('p', { class: 'hint', text: 'With no battery left on board (hung on a latch and dropped), the motors stop and the boards go dark until the next reset. A design with no mass marked as a battery is always powered.' }));
   } else if (c.type === 'latch') {
@@ -471,6 +481,7 @@ function addComp(type) {
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
   else if (type === 'latch') c = mkLatch('Latch ' + n, 0, 0, -0.04);
+  else if (type === 'wing') c = mkMass('Wing ' + (cfg.comps.filter(x => isWing(x)).length + 1), 0, 0, 0.06, { shape: 'box', size: [0.1, 0.7, 0.01], mass: 0.06, aero: 'wing', inc: 6 });
   else {
     const k = cfg.comps.filter(x => x.type === 'sensor' && x.kind === type).length + 1;
     const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03] }[type];
@@ -634,6 +645,10 @@ function updateLive() {
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
   if (bad.length) chip('laws', 'you', `${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', goForm);
   else if (ed.length) chip('laws', 'you', `${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', goForm);
+  if (S.aero && S.aero.length && !S.crashed) {   // the wings' pull, which the flight computers don't know about
+    const F = S.aero.reduce((s, e) => add(s, e.F), [0, 0, 0]), f = nrm(F), w = truth.m * G;
+    if (f > 0.05) chip('aero', 'sim', `Wings ${f.toFixed(1)} N (${Math.round(100 * f / w)}% of its weight)`, f > 0.3 * w ? 'warn' : '');
+  }
   const soc = Math.max(0, S.batt.soc ?? 1); chip('batt', 'sim', `Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
   if (brt.err && !brt.ready) chip('board', 'board', brt.err, 'bad', goForm);
   else chip('board', 'board', `${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
@@ -854,18 +869,33 @@ const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left
     else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
   } });
 $('#presetSlot').replaceWith(presetMenu.node); presetMenu.node.id = 'presetSlot';
-function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear();
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; setFrameShape(p.frameShape); cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear();
   if (PRESETS[key].cargoTask && !hasTask('cargo')) { const C = JSON.parse(JSON.stringify(computers())); C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo'); cfg.computers = fixComputers(C); syncFlightUi(); }   // (its latch needs a board to drive it: the flight controller)
   designLoaded(null, ''); afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
 function afterLoad() {
-  frameMassField.refresh();
+  frameMassField.refresh(); renderFrameShape();
   truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
 }
 const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
   v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
-$('#frameMassSlot').replaceWith(frameMassField.node);
+$('#frameMassSlot').replaceWith(frameMassField.node, el('div', { id: 'frameShape' }));
+// The frame's shape in the air: a prism (a box hub: drag) or a wing (lift and drag; its span, chord, thickness and
+// incidence). The flight computers aren't told either way.
+function renderFrameShape() {
+  const box = $('#frameShape'); if (!box) return; box.textContent = '';
+  const changed = () => { undoKey = 'frame-shape'; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); };
+  const sel = el('select', { id: 'frameAero' }, el('option', { value: 'prism', text: 'Prism: a box hub (drag)' }), el('option', { value: 'wing', text: 'Wing: the body is a wing (lift and drag)' }));
+  sel.value = frameWing() ? 'wing' : 'prism';
+  sel.addEventListener('change', () => { cfg.frame.aero = sel.value; changed(); renderFrameShape(); });
+  box.append(el('div', { class: 'field' }, el('label', { for: 'frameAero', text: 'Frame shape' }), sel));
+  if (!frameWing()) return;
+  const f = (key, d) => numField('frame-' + key, d, () => frameShapeOf()[key], v => { cfg.frame[key] = v; changed(); }).node;
+  box.append(el('div', { class: 'subgrid' }, f('span', { label: 'Span', min: 0.2, max: 2, hmin: 0.1, hmax: 4, step: 0.01, u: 'm', dp: 2 }), f('chord', { label: 'Chord', min: 0.05, max: 0.8, hmax: 1.5, step: 0.01, u: 'm', dp: 2 }), f('thick', { label: 'Thickness', min: 0.005, max: 0.1, hmax: 0.2, step: 0.005, u: 'm', dp: 3 })),
+    f('inc', { label: 'Incidence (leading edge up)', min: -20, max: 20, step: 0.5, u: '°', dp: 1 }),
+    el('p', { class: 'hint', text: 'The hub becomes a wing, chord along X, span along Y: it lifts in forward flight and catches the wind and the rotors\' wash (the Wing lift and drag formula). The flight computers aren\'t told: they fly it as an oddly shaped body.' }));
+}
 const MODE_DESC = { tilt: 'Leans to move; servos help turn.', mixed: 'Servos push part, leaning does the rest.', level: 'Stays level; servos push sideways.' };
 function setMode(m, recalc = true) {
   mode = m; steerMix.rho = 1;
@@ -1036,6 +1066,8 @@ function migrateComps(comps) {
     if (c.type === 'joint' && !(c.mass > 0)) c.mass = 0.015;
     if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
     if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
+    if (c.type === 'mass' && !c.aero) c.aero = 'prism';
+    if (c.type === 'mass' && c.inc == null) c.inc = 0;
     if (c.type === 'mass' && c.battery == null) c.battery = /battery/i.test(c.name || '');   // saved before batteries powered anything
     if (c.type === 'latch') for (const [k, v] of Object.entries({ mass: 0.02, closed: true, reach: 0.08, travel: 0.15, sense: true, known: true })) if (c[k] == null) c[k] = v;
   }
@@ -1052,7 +1084,7 @@ function load() {
   if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
   if (s.radio) for (const k of ['rate', 'ratio', 'power', 'extra']) if (isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learnPrefs.keep = false;
     if (s.holdPulses === false) learnPrefs.holdPulses = false;

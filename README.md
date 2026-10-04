@@ -184,12 +184,25 @@ The simulated world has effects the controller is never told about:
   - rotor drag, which grows with thrust and airspeed;
   - vortex ring state: descending straight down at around the rotor's own induced velocity costs it up to 30% of its thrust.
 - **Downwash on parts** (`wakeLoad`): rotor wash pushes the hub, rigid masses and cable payloads.
+- **Shapes in the air** (`wingAero`, `bluffDrag`): see Wings and blunt parts, below.
 - **Battery** (`batteryModel`): a 4-cell 1.3 Ah LiPo. It supplies the current the motors really draw, drains with it and sags under it, so the same throttle gives less thrust over a flight and during hard manoeuvres. Its resting voltage follows a real discharge curve: 4.2 V per cell full, flat around 3.8 V through the middle, 3.6 V at 10%, 3.2 V empty, and collapsing past that; near empty its internal resistance grows too, so it sags more. The flight controller's voltage compensation keeps the thrust up by raising the throttles until they run out; after that the drone can no longer hold its height.
 - **ESC low-voltage cutoff** (Battery section, 2.8 V per cell by default, 0 turns it off): once the pack stays under it, under load, for 1.5 s, the ESCs stop their motors; they restart only after the throttle has been at zero. **Charge at take-off** starts a flight on a part-used pack, to try this without waiting.
 
   On the quad from 25%, with no supervisor: it flies on as the throttles creep up (0.63 to 0.80), and at about 3% left, 3 m up, the ESCs cut out and it falls. With the supervisor (and a voltage sensor), it heads home at 20% and lands with about 18% left.
 
 Prop radius is a motor setting. **Airflow** on the 3D view shows the wake columns.
+
+### Wings and blunt parts
+
+Every solid part has a shape in the air, **prism** or **wing**: the frame (Frame shape, under the frame's mass) and each rigid mass ("In the air" on its card). **+ Wing** adds a rigid mass that is a wing: 70 cm span, 10 cm chord, 6° of incidence.
+
+- **Prism** (`bluffDrag`): drag on the face the part shows the air, by direction (Cd 1.05 on each face of its box; a sphere's or cylinder's own frontal area). A flat battery drags more face-on than edge-on. The frame as a prism keeps its general drag (`bodyDrag`).
+- **Wing** (`wingAero`): a box with its chord along X (leading edge forward), span along Y and thickness along Z, tipped by its **incidence** (leading edge up). It meets the wind, its own motion and the rotors' wash: lift across the airflow rising with the angle of attack (2πα, less for a short wing), a stall at about 15° falling off to what a flat plate gives, drag that grows with the lift, acting at the quarter chord (the middle once stalled). Air from below, from behind or along the span all give sensible forces, so it works in a hover, in a side wind or flying backwards. On a servo set by you, a wing is a flap, a tilting wing or an air brake.
+- **The body as a wing:** Frame shape → Wing turns the hub into one, with its own span, chord, thickness and incidence.
+
+**The flight computers aren't told about wings.** To them a wing is an oddly shaped body, as it would be bolted onto a real drone running this firmware: the attitude and position integrators take up what it does, as they do an unknown mass. So it shows: on the **Quad with a wing** layout (an 80 × 10 cm wing at 15° over a quad), accelerating forward at sport speed it leans 20–25° and the wing pushes *down*; cruising at 6.5 m/s it leans about 10° and the wing lifts about 1 N (11% of the weight), and the drone balloons up 20–30 cm before the integrators take it back. With the frame as a 70 cm wing, a quad only reaches about 3.5 m/s at sport: the plate drags when it leans. The **Wing forces** view (Show → Forces) draws each wing's force where it acts, and a chip under the airframe check gives the wings' pull with its share of the weight.
+
+The learning doesn't model wings either: it measures what the motors and servos do with short test moves and filters out slow, steady forces, so a wing is background to it. The health supervisor compares the forces it expects from the motors with what the IMU feels; a big wing in fast flight can make it think a motor is weaker than it is (and so slow down, or head home). The airframe check is about hovering, where wings do little, so it leaves them out.
 
 ### An imperfect world
 
@@ -613,7 +626,7 @@ If its formulas fail and even its built-in program can't answer, the raw sticks 
 
 **Sensors:** `imuModel`, `magModel`, `baroModel`, `posFixModel`, `flowModel`, `rangeModel`.
 
-**Airflow, battery and heat (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `batteryModel`, `thermalModel`.
+**Airflow, battery and heat (physics):** `wakeVelocity`, `rotorAero`, `wakeLoad`, `wingAero`, `bluffDrag`, `batteryModel`, `thermalModel`.
 
 **Estimation:** `attitudeEstimator`, `flowVelocity`, `servoPredictor`, `positionEstimator`.
 
@@ -851,7 +864,7 @@ The physics isn't simplified for speed; every step (2 kHz) does the full version
 - **Pullers and pushers** (a motor's **Prop** setting). A motor is mounted along its shaft, which points from the motor to the prop (the shaft tilt and azimuth). A puller (tractor) makes thrust along the shaft, toward the prop, and blows air back past the motor. A pusher's prop is pitched the other way: its thrust points back along the shaft, toward the motor, and it blows air away past the prop. Spin is always seen facing the prop, so the drag torque and gyroscopic torque follow the prop's real rotation either way; a pusher's spin about its thrust axis is the reverse of its card. A quad of pushers hung under the arms (shafts down) flies the same as an ordinary quad. In edit mode the selected motor shows its thrust arrow. Two faint arcs with arrowheads on each prop disc show which way it turns, seen facing the prop.
 - **Collective-pitch rotors** (a motor's **Blade pitch** setting), as on a helicopter. The ESC's governor holds the rotor at a set speed and the blade pitch sets the thrust, so thrust follows the command after the pitch servo's 30 ms lag. The rotor never speeds up or slows down, so there's no spin-up twist, but more pitch means more drag torque, which twists the frame. The blades flap: the disc follows the mast a few milliseconds behind (flapping time constant 16/(γΩ), Lock number γ ≈ 4), so turning the airframe doesn't meet the rotor's gyroscopic stiffness the way a rigid prop does. With rigid blades, a helicopter-sized rotor couples the axes so strongly the controller can't hold it.
 - **Servo joints** (`servoTorque`). A hobby servo is a geared motor with a position loop: full stall torque when stopped, none at its no-load speed, a 3° proportional band, the gearbox's reflected inertia, a command delay, and hard stops just past its travel. It moves by the multibody dynamics, so a light arm snaps to its target, a heavy one lags and overshoots, and thrust or weight on an arm holds it slightly off target (checked: a 100 g weight on a 15 cm arm sags it 0.5°).
-- **Rigid mass:** box, sphere or vertical cylinder, riding on whichever body it's attached to.
+- **Rigid mass:** box, sphere or vertical cylinder, riding on whichever body it's attached to; in the air a prism (drag) or, as a box, a wing (lift and drag), turned by its incidence.
 - **Mass on cable:** a point mass on a tension-only spring-damper cable that can swing, go slack and touch the ground.
 - **Sensors:** each rides on its body. The IMU has scale errors and axis misalignment as well as noise, bias and drift; the magnetometer has soft-iron distortion as well as hard iron and motor interference.
 - Masses and cables can be hidden from the controller ("Controller knows" off), so it must absorb them with integral action.
@@ -924,6 +937,7 @@ The attainable set of accelerations is the sum of what each rotor can make: anyt
 - Sensors have no temperature effects.
 - Magnetic interference comes only from motor currents, not from wiring or the battery.
 - Airflow uses engineering models (momentum theory, Glauert inflow, a skewed wake), not CFD. The prop's drag torque doesn't change with inflow.
+- A wing is one panel with one angle of attack, taken at its middle (a long wing's tips don't see different air), with the rotors' wash where its middle is. Wings and blunt parts don't shade each other or the rotors, and a prop's disc can sit inside a wing without touching it. Nothing on board knows about wings: there is no airspeed sensor and no control through them.
 - Structure is rigid: frames, rods and servo horns don't flex, and gears have no backlash.
 - The controller's effectiveness model is static. The rotors' gyroscopic torque and the spin-up reaction are real in the physics; the learning measures the spin-up reaction (B₂) so it doesn't corrupt the rest, but the controller doesn't yet use it to cancel those twists, as the Delft INDI controller does. On the main-lifter layout the big rotor's gyroscopic torque is large, and its calibration explains only about 70% of the rotation.
 - Learning treats the CoG as fixed. When a known mass swings on a joint, the controller's model follows it, but the learned columns stay as they were at calibration, and keep-learning catches up over about 30 s.

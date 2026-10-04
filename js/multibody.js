@@ -40,7 +40,7 @@ function buildBodies() {   // (what's on the drone now: a load dropped or picked
   }
   // Mass items per body, in that body's axes (rest positions relative to its pivot).
   const items = MB.bodies.map(() => []);
-  items[0].push({ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) });
+  items[0].push({ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() });
   for (const c of liveComps()) {
     const b = bodyIndexOf(c), o = MB.bodies[b].pivot;
     MB.of.set(c.id, b);
