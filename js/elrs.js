@@ -69,7 +69,7 @@ const radioP = margin => 1 / (1 + Math.exp(-(margin - 3) / 1.8));   // a packet 
 // Each 1 ms step: the packets due. Fills radio.toBoard with the bytes the receiver writes to the drone's UART.
 function radioStep(dt, t) {
   if (radio.rfAt < 0 || t - radio.rfAt > 0.02) { const r = radioRf(); radio.rf = r; radio.rfAt = t; }
-  const r = radio.rf, pUp = radioP(r.margin), pDown = radioP(r.margin - 1);   // (the receiver's antenna is a little worse)
+  const r = radio.rf, on = cargo.power, pUp = on ? radioP(r.margin) : 0, pDown = on ? radioP(r.margin - 1) : 0;   // (the receiver's antenna is a little worse; with no power on the drone, nothing at all)
   const period = 1 / radioCfg.rate, air = ELRS_AIR[radioCfg.rate] || 0.003;
   while (radio.nextPkt <= t + 1e-9) {
     const tp = radio.nextPkt;                                        // this packet goes now and arrives `air` later
@@ -214,7 +214,7 @@ function radioFromGround(bytes) {
 function radioCommand(cmd, values) {
   const g = brt.gnd; if (!g) return -1;
   let r; if (cmd === 1) r = g.gnd_goto(...values); else { frIn(g, values); r = g.gnd_command(cmd, values.length); }
-  if (r) linkLog('↑', 'cmd', `${cmd === 1 ? 'GOTO' : 'command ' + cmd} not sent`, r === -2 ? 'a value out of range' : 'the command module has too many waiting', 'bad');
+  if (r) linkLog('↑', 'cmd', `${cmd === 1 ? 'GOTO' : cmd === 3 ? 'LATCH' : 'command ' + cmd} not sent`, r === -2 ? 'a value out of range' : 'the command module has too many waiting', 'bad');
   return r ? -1 : 0;
 }
 function radioHold() { radio.holdUntil = radio.t + 0.3; }
@@ -301,6 +301,7 @@ function cmdDesc(f) {   // a command frame as data (the command module's scaling
   const cmd = p[1], seq = p[2], v = []; for (let i = 3; i + 1 < p.length; i += 2) v.push(be16s(p, i));
   if (cmd === 1) return `GOTO x ${(v[0] / 100).toFixed(1)} y ${(v[1] / 100).toFixed(1)} z ${(v[2] / 100).toFixed(1)} hdg ${Math.round(v[3] / 1000 * R2D)}° #${seq}`;
   if (cmd === 2) return `LEARN ${Object.keys(LN_CMD).find(k => LN_CMD[k] === v[0]) || v[0]} #${seq}`;
+  if (cmd === 3) return `LATCH ${v[0] < 0 ? 'all' : v[0] + 1} ${['open', 'close', 'toggle'][v[1]] || v[1]} #${seq}`;
   return `CMD ${cmd} ${v.join(' ')} #${seq}`;
 }
 function frameKind(f) { const p = f.subarray(3, f.length - 1); return f[2] === CRSF.FLIGHT_MODE ? 'mode' : f[2] === CRSF.EXT && p[0] === CRSF.EXT_TEXT ? 'msg' : 'frame'; }

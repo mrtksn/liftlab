@@ -30,8 +30,8 @@ const spatialForce = (F, P) => cat6(crs(P, F), F);   // force F acting at point 
 /* ───────── structure ───────── */
 // Which body a part rides on: its nearest joint's, or the frame (0).
 const bodyIndexOf = c => { const j = chainOf(c)[0]; return j ? MB.index.get(j.id) : 0; };
-function buildBodies() {
-  const js = joints().slice().sort((a, b) => chainOf(a).length - chainOf(b).length);
+function buildBodies() {   // (what's on the drone now: a load dropped or picked up changes it, cargo.js)
+  const js = liveJoints().slice().sort((a, b) => chainOf(a).length - chainOf(b).length);
   MB = { bodies: [{ j: null, parent: -1, pivot: [0, 0, 0] }], index: new Map(), of: new Map() };
   for (const j of js) {
     const pj = chainOf(j)[0], parent = pj ? MB.index.get(pj.id) : 0;
@@ -41,10 +41,10 @@ function buildBodies() {
   // Mass items per body, in that body's axes (rest positions relative to its pivot).
   const items = MB.bodies.map(() => []);
   items[0].push({ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) });
-  for (const c of cfg.comps) {
+  for (const c of liveComps()) {
     const b = bodyIndexOf(c), o = MB.bodies[b].pivot;
     MB.of.set(c.id, b);
-    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor') items[b].push({ m: c.mass, r: sub(c.pos, o), I: null });
+    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items[b].push({ m: c.mass, r: sub(c.pos, o), I: null });
     else if (c.type === 'mass') items[b].push({ m: c.mass, r: sub(c.pos, o), I: shapeI(c) });
     else if (c.type === 'link') items[b].push({ m: c.mass, r: sub(add(c.pos, scl(linkDir(c), c.length / 2)), o), I: rodI(c) });
   }

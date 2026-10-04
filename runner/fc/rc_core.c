@@ -23,7 +23,7 @@ void rc_pilot_init(rc_pilot *P) { char *p = (char *)P; for (unsigned i = 0; i < 
 static const float LEVEL[3][3] = { { 1, 0.6f, 0.785f }, { 3, 1.5f, 1.571f }, { 6, 3, 2.618f } };
 #define RC_ACCEL 3.0f                     /* how fast the commanded velocity ramps [m/s²] */
 #define BOX_XY 25.0f
-#define BOX_ZLO 0.3f
+#define BOX_ZLO 0.15f                     /* above home: low enough to hover a hook over a parcel on the ground */
 #define BOX_ZHI 15.0f
 
 int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const nav_out *o, float dt, nav_sp *sp) {

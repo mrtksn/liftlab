@@ -9,6 +9,7 @@
 //   Space       hold here                H       fly home
 //   K           pause / run              R       reset
 //   1 / 2 / 3   gentle / normal / sport  C       chase camera
+//   G           the chosen latch: drop what it holds, or close on what's in reach (cargo-ui.js)
 
 const PILOT_LEVELS = {
   gentle: { label: 'Gentle', h: 1, v: 0.6, yaw: 45 },   // max horizontal m/s, vertical m/s, turn °/s
@@ -16,7 +17,7 @@ const PILOT_LEVELS = {
   sport: { label: 'Sport', h: 6, v: 3, yaw: 150 },
 };
 const PILOT_ACCEL = 3;                  // how fast the commanded velocity ramps [m/s²]
-const PILOT_BOX = { xy: 25, zMin: 0.3, zMax: 15 };
+const PILOT_BOX = { xy: 25, zMin: 0.15, zMax: 15 };   // (as the drone's own box, rc_core.c: low enough to reach a parcel)
 const KEYMAP = { KeyW: 'up', KeyS: 'down', KeyA: 'yawL', KeyD: 'yawR', ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right' };
 const pilot = { held: new Map(), level: 'normal', vref: [0, 0, 0] };   // held: control -> set of sources
 
@@ -91,6 +92,7 @@ window.addEventListener('keydown', e => {
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
   if (e.code === 'Space') { e.preventDefault(); spaceHold = true; pilotHold(); }
   else if (e.code === 'KeyH') pilotHome();
+  else if (e.code === 'KeyG' && typeof cargoKey === 'function') cargoKey();   // the chosen latch: drop, or grab
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
   else if (e.code === 'KeyT' && typeof setLaunch === 'function' && hasTask('learn')) setLaunch('throw');   // the throw start needs the learning task

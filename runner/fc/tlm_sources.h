@@ -7,6 +7,7 @@
 #include "nav_core.h"
 #include "learn_core.h"
 #include "super_core.h"
+#include "cargo_core.h"
 
 typedef struct {
   int fc_state; char fc_why[64], nav_why[64]; char learn_msg[480];
@@ -19,4 +20,6 @@ void tlm_from_gps(tlm_store *T, double lat, double lon, float alt, float speed, 
 void tlm_from_learn(tlm_store *T, tlm_watch *W, const learn_state *L, double t);
 void tlm_from_super(tlm_store *T, tlm_watch *W, const super_state *S, double t);
 void tlm_from_link(tlm_store *T, const rc_input *in, double t);
+/* the cargo task: its latches, and what it says (once each) */
+void tlm_from_cargo(tlm_store *T, cargo_state *C, double t);
 #endif

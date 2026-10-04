@@ -109,6 +109,7 @@
           <button class="btn" type="button" data-add="link" title="A stick or lever: attach it to a servo, then attach parts to its far end"><b>+</b>Rod / lever</button>
           <button class="btn" type="button" data-add="mass"><b>+</b>Rigid mass</button>
           <button class="btn" type="button" data-add="hang"><b>+</b>Mass on cable</button>
+          <button class="btn" type="button" data-add="latch" title="A hook or gripper: what hangs from it can be dropped in flight, and it can pick things up"><b>+</b>Latch (drop, grab)</button>
         </div>
         <span class="lbl">Sensors</span>
         <div class="addrow">
@@ -179,6 +180,7 @@
               <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>forward, back, left, right (from the heading)</dd>
               <dt><kbd>Space</kbd></dt><dd>hold here</dd>
               <dt><kbd>H</kbd></dt><dd>fly home</dd>
+              <dt><kbd>G</kbd></dt><dd>the chosen latch: drop what it holds, or grab what's in reach</dd>
               <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Gentle, Normal, Sport</dd>
               <dt><kbd>P</kbd></dt><dd>poke: hold to charge, release to hit</dd>
             </dl></div>
@@ -239,6 +241,7 @@
           <button type="button" class="pk p-down" data-ctrl="down" aria-pressed="false" aria-label="Descend (S)"><span class="gl">▼</span><kbd>S</kbd></button>
         </div>
         <div class="pilot-mid">
+          <div class="cargo-bar" id="cargoBar" role="group" aria-label="Latches" hidden></div>
           <p class="kbd-hint" id="kbdHint" hidden>Click the view to fly with the keyboard</p>
           <div class="seg seg-sm" role="group" aria-label="Flight speed">
             <button type="button" data-level="gentle" aria-pressed="false" title="Max 1 m/s (1)">Gentle</button>
@@ -284,6 +287,10 @@
         <span class="pill good" id="verdict"><i></i><span>Flyable</span></span>
         <p id="verdictWhy"></p>
         <div class="chips" id="liveChips"></div>
+      </section>
+      <section class="sec" id="cargoSec" hidden>
+        <h2 data-src="sim you">Cargo <small>latches, things to pick up</small></h2>
+        <div id="cargoBody"></div>
       </section>
       <section class="sec" id="healthSec">
         <h2 data-src="sim sensor board">Health <small id="healthSmall">supervisor</small></h2>
@@ -371,6 +378,7 @@
 <script src="js/sim.js"></script>
 <script src="js/joints.js"></script>
 <script src="js/multibody.js"></script>
+<script src="js/cargo.js"></script>
 <script src="js/sensors.js"></script>
 <script src="js/health.js"></script>
 <script src="js/learn.js"></script>
@@ -378,6 +386,7 @@
 <script src="js/pilot.js"></script>
 <script src="js/computers-ui.js"></script>
 <script src="js/ui.js"></script>
+<script src="js/cargo-ui.js"></script>
 <script src="js/health-ui.js"></script>
 <script src="js/designs.js"></script>
 <script src="js/editor.js"></script>

@@ -22,17 +22,22 @@
  *     the tasks, the ESP32's included (it asks for them: RN_LINK_WANT bit 2), down the radio. With the receiver on
  *     the ESP32 instead, the channels come from it (RN_LINK_RC) and this program sends its tasks' telemetry there
  *     (RN_LINK_TLM) when asked.
+ *   - the cargo (--latch pwm0,gpio17: fc/cargo_core.h): the latches wired to this Pi, a servo on a hardware PWM
+ *     channel or an on/off line (latch_hw.c; --latch-us 1000,2000: a servo's pulse closed and open, µs). They start
+ *     closed; the radio's LATCH commands (the ground station's buttons) and the text commands open and close them,
+ *     and their state goes down the radio with the rest.
  *
  * The pilot's commands are lines of text, on standard input or UDP (port 14560 by default; fly.py or a phone can
  * send them):
  *   arm | disarm | takeoff [height m] | land | goto X Y Z | move VX VY VZ (target velocity, m/s; 0 0 0 stops)
  *   heading DEG | hold | home | status
  *   calibrate | stop | learned | description | keep on | keep off | throw | learning | health
+ *   latch N open | latch N close | latch N toggle | latch all open | latches   (with --latch; N from 1)
  * (throw: hold it level and arm it first; throw it upward and it flies itself from there.)
  *
  * Build:  sh runner/pi/build.sh
  * Run:    ./dfb_pi --link /dev/serial0 --baud 921600 --nav drone.dnc [--gps /dev/ttyUSB0] [--airframe drone.dfa --pi drone.dlc]
- *                  [--crsf /dev/ttyAMA1 --elrs 250,4]
+ *                  [--crsf /dev/ttyAMA1 --elrs 250,4] [--latch pwm0,gpio17 [--latch-us 1000,2000]]
  * While the radio's channels come, they fly it; the text commands are for when there is no radio.
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
@@ -42,6 +47,7 @@
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
 #include "rn_link.h"
+#include "latch_hw.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -167,6 +173,23 @@ static int task_line(learn_state *L, int have_learn, super_state *S, int have_su
   }
   return 0;
 }
+/* The cargo's commands (with --latch). Returns 1 if it was one of them. */
+static int cargo_line(cargo_state *C, latch_out *out, char *s, char *reply, size_t rn) {
+  if (strncmp(s, "latch", 5)) return 0;
+  if (!C->n) { snprintf(reply, rn, "no latches (start with --latch pwm0,gpio17)"); return 1; }
+  if (!strncmp(s, "latches", 7)) {
+    int k = 0; for (int i = 0; i < C->n && k < (int)rn; i++) { int b = cargo_bits(C, i); k += snprintf(reply + k, rn - k, "%slatch %d (%s): %s%s", i ? "; " : "", i + 1, latch_hw_name(&out[i]), b & 1 ? "closed" : "open", b & 4 ? ", moving" : ""); }
+    return 1;
+  }
+  char which[16], act[16]; int i;
+  if (sscanf(s + 5, "%15s %15s", which, act) != 2) { snprintf(reply, rn, "latch N open | close | toggle, latch all open, latches"); return 1; }
+  int a = !strcmp(act, "open") ? CG_OPEN : !strcmp(act, "close") ? CG_CLOSE : !strcmp(act, "toggle") ? CG_TOGGLE : -1;
+  int l = !strcmp(which, "all") ? CG_ALL : sscanf(which, "%d", &i) == 1 ? i - 1 : -2;
+  int e = a < 0 ? -2 : l == -2 ? -1 : cargo_command(C, l, a, "text");
+  if (e) snprintf(reply, rn, e == -1 ? "no latch %s (1 to %d, or all)" : "%s? open, close or toggle", e == -1 ? which : act, C->n);
+  else snprintf(reply, rn, "%s", C->msg);
+  return 1;
+}
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -184,7 +207,7 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
 
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
-  int elrs_rate = 250, elrs_ratio = 4;
+  int elrs_rate = 250, elrs_ratio = 4; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -194,9 +217,11 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
     else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--elrs")) sscanf(argv[++i], "%d,%d", &elrs_rate, &elrs_ratio);
+    else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
     "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560] [--crsf /dev/ttyAMA1 --elrs 250,4]\n"
+    "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"); return 2; }
 
   setvbuf(stdout, NULL, _IOLBF, 0);   /* a line at a time, also into a pipe or a log file */
@@ -215,6 +240,14 @@ int main(int argc, char **argv) {
     if (!no_super) { if (super_init(&SS, &H) || super_config_load(&SS, pc, np) || super_airframe(&SS, af, na)) fprintf(stderr, "supervisor: %s\n", SS.why_text); else have_super = 1; }
   } else if (af_path || pi_path) fprintf(stderr, "the learning and the supervisor need both --airframe and --pi\n");
 
+  static cargo_state CG; static latch_out LO[CG_MAX]; uint32_t cg_drive = 0, cg_said = 0;
+  if (latch_spec) {                                                  /* the latches: each closed to start with */
+    char spec[128], err[160]; snprintf(spec, sizeof spec, "%s", latch_spec); int n = 0;
+    if (us_closed < 500 || us_closed > 2500 || us_open < 500 || us_open > 2500) { fprintf(stderr, "--latch-us: pulses from 500 to 2500 µs\n"); return 2; }
+    for (char *tok = strtok(spec, ","); tok && n < CG_MAX; tok = strtok(0, ","), n++)
+      if (latch_hw_open(&LO[n], tok, 1, us_closed, us_open, err, sizeof err)) { fprintf(stderr, "latch %d: %s\n", n + 1, err); return 1; }
+    cargo_init(&CG, n, (1u << n) - 1, 0); cg_drive = cargo_drive(&CG); cg_said = CG.nmsg;
+  }
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
   int crsf = -1;
   if (crsf_dev) { crsf = open_serial(crsf_dev, 115200); if (crsf < 0) return 1; if (serial_custom_baud(crsf, CRSF_BAUD)) fprintf(stderr, "%s: couldn't set %d baud\n", crsf_dev, CRSF_BAUD); }
@@ -226,8 +259,8 @@ int main(int argc, char **argv) {
   struct sockaddr_in addr = { .sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_ANY) };
   if (udp >= 0 && bind(udp, (struct sockaddr *)&addr, sizeof addr)) { perror("udp"); close(udp); udp = -1; }
   fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
-  printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s; radio %s\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
-         have_learn ? "on" : "off", have_super ? "on" : "off", crsf_dev ? crsf_dev : "on the ESP32, if it has one");
+  printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s; radio %s; latches %d\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
+         have_learn ? "on" : "off", have_super ? "on" : "off", crsf_dev ? crsf_dev : "on the ESP32, if it has one", CG.n);
 
   static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
   gps_t G; memset(&G, 0, sizeof G);
@@ -254,7 +287,7 @@ int main(int argc, char **argv) {
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
-          char reply[600]; if (!task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; }
+          char reply[600]; if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; }
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
         s = nl + 1;
@@ -332,6 +365,15 @@ int main(int argc, char **argv) {
         }
       }
     }
+    if (CG.n) {                                                       /* the cargo: the radio's LATCH commands, the moves, the outputs */
+      static double cg_t; float cdt = cg_t > 0 ? (float)(t - cg_t) : 0; cg_t = t;
+      if (RCI.frames || RCI.cmd_seq) cargo_from_rc(&CG, &RCI, t);
+      cargo_step(&CG, cdt);
+      uint32_t d = cargo_drive(&CG);
+      for (int i = 0; i < CG.n; i++) if (((d ^ cg_drive) >> i) & 1) latch_hw_set(&LO[i], (d >> i) & 1);
+      cg_drive = d;
+      if (CG.nmsg != cg_said) { cg_said = CG.nmsg; printf("cargo: %s\n", CG.msg); }
+    }
     if ((have_learn || have_super || crsf >= 0) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (crsf >= 0 ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
     /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
     if (t >= next_pub) {
@@ -339,6 +381,7 @@ int main(int argc, char **argv) {
       tlm_from_nav(&TS, &TW, &N, &o, &last_sp, RP.level, t);
       if (have_learn) tlm_from_learn(&TS, &TW, &LS, t);
       if (have_super) tlm_from_super(&TS, &TW, &SS, t);
+      if (CG.n) tlm_from_cargo(&TS, &CG, t);
       if (G.fix && G.t > last_fix_t - 1) { static double gps_t; if (G.t != gps_t) { gps_t = G.t; tlm_from_gps(&TS, G.lat, G.lon, (float)G.alt, sqrtf(G.v[0] * G.v[0] + G.v[1] * G.v[1]), atan2f(-G.v[1], G.v[0]) * 57.29578f + (G.v[1] > 0 ? 360 : 0), G.sats, t); } }
       if (crsf >= 0) tlm_from_link(&TS, &RCI, t);
     }

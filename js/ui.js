@@ -116,7 +116,7 @@ function commitSelect(sel, apply, hint = 'Press Enter to apply') {
 let running = true, speed = 1;
 
 /* ───────── components ───────── */
-const TAG = { motor: 'Motor', joint: 'Servo', link: 'Rod', mass: 'Mass', hang: 'Cable' };
+const TAG = { motor: 'Motor', joint: 'Servo', link: 'Rod', mass: 'Mass', hang: 'Cable', latch: 'Latch' };
 const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix', flow: 'Flow' };
 const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
@@ -155,6 +155,9 @@ const FD = {
   radius: { label: 'Radius', path: ['radius'], min: 0.01, max: 0.25, step: 0.005, u: 'm', dp: 3 },
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   cable: { label: 'Cable length', hmax: 10,  path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
+  lreach: { label: 'Reach (how close a thing must be to grab it)', path: ['reach'], min: 0.02, max: 0.3, step: 0.005, u: 'cm', dp: 1, k: 100 },
+  ltravel: { label: 'Time to open or close', path: ['travel'], min: 0.03, max: 1, hmax: 5, step: 0.01, u: 'ms', dp: 0, k: 1000 },
+  lmass: { label: 'Latch mass', path: ['mass'], min: 0.005, max: 0.2, step: 0.005, u: 'kg', dp: 3 },
   // sensors
   mr: { label: 'Mount roll', path: ['mount', 0], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   mp: { label: 'Mount pitch', path: ['mount', 1], min: -90, max: 90, step: 5, u: '°', dp: 0 },
@@ -205,7 +208,8 @@ function summary(c) {
   if (c.type === 'link') { const n = descendants(c).length; return `${Math.round(c.length * 100)} cm · ${linkPointing(c)} · carries ${n}${on ? ' · on ' + on.name : ''}`; }
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.push ? 'pusher · ' : ''}${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
-  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  if (c.type === 'latch') { const n = descendants(c).length; return `${c.closed ? 'closed' : 'open'} at take-off · holds ${n} part${n === 1 ? '' : 's'} · reach ${Math.round((c.reach ?? 0.08) * 100)} cm · ${p}`; }
   if (c.type === 'sensor') {
     const u = (c.known ? '' : ' · mount unknown'), g = Math.round(c.mass * 1000) + ' g · ';
     if (c.kind === 'imu') return `${g}${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
@@ -300,7 +304,7 @@ function compBody(c) {
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
   b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
   // Attached to: the frame, or any servo joint that isn't this part or below it.
-  const holders = [['', 'Frame']].concat(cfg.comps.filter(h => canAttach(c, h)).map(h => [String(h.id), `${h.name} (${h.type === 'link' ? 'rod end' : 'servo'})`]));
+  const holders = [['', 'Frame']].concat(cfg.comps.filter(h => canAttach(c, h)).map(h => [String(h.id), `${h.name} (${h.type === 'link' ? 'rod end' : h.type === 'latch' ? 'latch' : 'servo'})`]));
   const aid = `f-${c.id}-parent`, asel = el('select', { id: aid });
   for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') === v) o.selected = true; asel.append(o); }
   asel.addEventListener('change', () => { attachTo(c, asel.value ? compById(+asel.value) : null); if (c.type === 'hang') reseatPend(c); structural(); });
@@ -345,7 +349,13 @@ function compBody(c) {
     b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
     if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
     else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
-    b.append(checkF(c, 'known', 'Controller knows this mass'));
+    b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
+      el('p', { class: 'hint', text: 'With no battery left on board (hung on a latch and dropped), the motors stop and the boards go dark until the next reset. A design with no mass marked as a battery is always powered.' }));
+  } else if (c.type === 'latch') {
+    const held = descendants(c);
+    b.append(el('p', { class: 'hint', text: held.length ? 'Holds: ' + held.map(x => x.name).join(', ') + '. Opened in flight, all of it falls away together.' : 'Nothing hangs from it yet: drag a part onto it (a mass, a cable payload, an arm, even a motor or the battery), or pick something up in flight.' }),
+      pos, slider(c, 'lreach'), slider(c, 'ltravel'), slider(c, 'lmass'), checkF(c, 'closed', 'Closed at take-off'), checkF(c, 'sense', 'Load switch: it can tell when something hangs from it'),
+      el('p', { class: 'hint', text: 'A hook, gripper or electromagnet that a board running the Cargo task opens and closes (Computers tab). Half open, what it holds falls; closed again, it holds whatever loose thing has its top within reach of the hook, snapped under it. The buttons on the view (G) send the command, up the radio when the drone has one.' }));
   } else if (c.type === 'sensor') {
     const mount = el('div', { class: 'subgrid' }, slider(c, 'mr'), slider(c, 'mp'), slider(c, 'my'));
     if (c.kind === 'imu') b.append(pos, mount, slider(c, 'rateImu'), slider(c, 'latImu'), slider(c, 'gyroNoise'), slider(c, 'gyroBias'), slider(c, 'gyroDrift'),
@@ -460,6 +470,7 @@ function addComp(type) {
   else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; }
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
+  else if (type === 'latch') c = mkLatch('Latch ' + n, 0, 0, -0.04);
   else {
     const k = cfg.comps.filter(x => x.type === 'sensor' && x.kind === type).length + 1;
     const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03] }[type];
@@ -803,7 +814,9 @@ const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left
     else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
   } });
 $('#presetSlot').replaceWith(presetMenu.node); presetMenu.node.id = 'presetSlot';
-function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear(); designLoaded(null, ''); afterLoad();
+function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear();
+  if (PRESETS[key].cargoTask && !hasTask('cargo')) { const C = JSON.parse(JSON.stringify(computers())); C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo'); cfg.computers = fixComputers(C); syncFlightUi(); }   // (its latch needs a board to drive it: the flight controller)
+  designLoaded(null, ''); afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
 function afterLoad() {
@@ -983,6 +996,8 @@ function migrateComps(comps) {
     if (c.type === 'joint' && !(c.mass > 0)) c.mass = 0.015;
     if (c.type === 'motor' && c.fm == null) c.fm = 0.6;
     if (c.type === 'joint' && c.hingeEl == null) c.hingeEl = 0;
+    if (c.type === 'mass' && c.battery == null) c.battery = /battery/i.test(c.name || '');   // saved before batteries powered anything
+    if (c.type === 'latch') for (const [k, v] of Object.entries({ mass: 0.02, closed: true, reach: 0.08, travel: 0.15, sense: true, known: true })) if (c[k] == null) c[k] = v;
   }
   return comps;
 }
@@ -1034,7 +1049,7 @@ function boot() {
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
     envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
     renderGs();
-    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); }
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); }
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

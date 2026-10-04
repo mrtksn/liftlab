@@ -118,6 +118,12 @@ function buildGs() {
   W.learn = GSW.value('Learning', { fmt: v => v, text: true }); W.cal = GSW.bar('Calibration', { min: 0, max: 100, unit: '%' });
   t.append(W.motors.el, grid(W.sup.el, W.margin.el), W.learn.el, W.cal.el);
 
+  // the latches: what the drone's cargo item says, and commands up
+  const cg = GS_UI.cargoSec = sec('Cargo', 'the latches', 'tlm you');
+  W.cargo = GSW.value('Latches', { fmt: v => v, text: true });
+  GS_UI.cargoBtns = el('div', { class: 'gs-row gs-cargo' }); GS_UI.cargoN = -1;
+  cg.append(W.cargo.el, GS_UI.cargoBtns, el('p', { class: 'hint', text: 'The buttons send LATCH commands up the radio: the command module queues them and they go once the link is up. Each latch\'s state comes back down in the drone\'s cargo item (closed or open, and, with a load switch, whether something hangs from it), on a change and every 2 s.' }));
+
   // messages
   const l = sec('Messages');
   W.log = GSW.log(40); l.append(W.log.el);
@@ -224,6 +230,17 @@ function renderGs(force) {
     const lv = v.learn;
     W.learn.set(lv.cal ? 'calibrating' : lv.throw ? ['', 'in the hand', 'thrown', 'pulsing in free fall', 'catching itself'][lv.throw] || 'throw' : `${lv.learned ? 'on the learned model' : 'on the description'}${lv.keep ? ', learning in flight' : ''}${lv.fitRot ? ` (fit ${Math.round(lv.fitRot * 100)}% rotation, ${Math.round(lv.fitForce * 100)}% force)` : ''}`, at.learn);
     W.cal.set(lv.cal ? lv.progress * 100 : 0, at.learn);
+  }
+  {                                                                  // the latches (names from the design, as the motors')
+    const ls = latches(); GS_UI.cargoSec.hidden = !ls.length && !v.cargo;
+    if (GS_UI.cargoN !== ls.length) {
+      GS_UI.cargoN = ls.length; const box = GS_UI.cargoBtns; box.textContent = '';
+      const b = (text, title, latch, action) => { const x = el('button', { type: 'button', class: 'btn btn-sm', text, title }); x.addEventListener('click', () => radioCommand(3, [latch, action])); return x; };
+      ls.forEach((l, i) => box.append(b(`Open ${l.name}`, `LATCH ${i + 1} open: drop what it holds`, i, 0), b(`Close ${l.name}`, `LATCH ${i + 1} close: grab what's in reach`, i, 1)));
+      if (ls.length > 1) box.append(b('Open all', 'LATCH all open', -1, 0));
+    }
+    GS_UI.cargoBtns.querySelectorAll('button').forEach(x => { x.disabled = !has || !brt.gnd; });
+    if (v.cargo) W.cargo.set(v.cargo.values.map((bits, i) => `${(ls[i] || {}).name || 'latch ' + (i + 1)} ${bits & 1 ? 'closed' : 'open'}${bits & 4 ? ' (moving)' : ''}${bits & 8 ? (bits & 2 ? ', loaded' : ', empty') : ''}`).join(' · ') || 'none', at.cargo);
   }
   W.log.set(gs.log);
   if (has) {                                                         // the link's numbers, last 5 s

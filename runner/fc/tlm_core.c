@@ -14,6 +14,7 @@ const tlm_def tlm_defs[TLM_ITEMS] = {
   [TLM_SUPER] = { TLM_SUPER, 8, 1.0f, 2, 0, "supervisor" },
   [TLM_SUPER_M] = { TLM_SUPER_M, 13, 2.0f, 3, 0, "parts" },
   [TLM_LINK] = { TLM_LINK, 4, 1.0f, 3, 0, "link" },
+  [TLM_CARGO] = { TLM_CARGO, 9, 2.0f, 1, 1, "cargo" },
 };
 float tlm_scale(int id, int k) {
   switch (id) {
@@ -22,7 +23,7 @@ float tlm_scale(int id, int k) {
     case TLM_NAV: return k < 3 ? 100 : k == 3 ? 1000 : 1;
     case TLM_LEARN: return k == 1 || k >= 5 ? 1000 : 1;
     case TLM_SUPER: return k == 2 ? 100 : k == 3 ? 1000 : k == 5 ? 10 : 1;
-    case TLM_LINK: return 1;
+    case TLM_LINK: case TLM_CARGO: return 1;
     default: return 100;
   }
 }

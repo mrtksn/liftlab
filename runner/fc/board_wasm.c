@@ -16,6 +16,8 @@
  * The command module (runner/ground/ground_core.h), the pilot's side of the radio, is an instance of this too, with
  * the ground program: gnd_setup, then gnd_tick with the pilot's inputs (its CRSF frames for the transmitter module
  * come out in rbuf), gnd_from_radio with what the module hands back, gnd_view for the Ground station.
+ * The cargo task (cargo_core.h): cargo_setup, then cargo_tick with the load switches; it takes the radio's LATCH
+ * commands from this board's rc_input (the receiver's, or the RN_LINK_RC frames it is sent) and cargo_cmd's.
  * Built by fc/build_wasm.sh. */
 #include "fc_core.h"
 #include "nav_core.h"
@@ -23,6 +25,7 @@
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
 #include "ground/ground_core.h"
+#include "cargo_core.h"
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -176,8 +179,10 @@ EXPORT("tlm_link") void tlm_link(int rate, int ratio) { elrs_rate = rate; elrs_r
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
 EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(elrs_rate, elrs_ratio, &RCI, t), rbuf, (int)sizeof rbuf); }
-/* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor */
+static cargo_state CG;
+/* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor, 16 cargo */
 EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {
+  if (tasks & 16) tlm_from_cargo(&TS, &CG, t);
   if (tasks & 1) tlm_from_core(&TS, &TW, &F, t);
   if ((tasks & 2) && have_nav_out) tlm_from_nav(&TS, &TW, &N, &last_o, &last_sp, RP.level, t);
   if ((tasks & 4) && LS.ok) tlm_from_learn(&TS, &TW, &LS, t);
@@ -202,6 +207,22 @@ EXPORT("radio_stick") int radio_stick(double t) {
 EXPORT("rc_msg_ptr") char *rc_msg_ptr(void) { return RP.msg; }
 /* a LEARN command came up the radio (its code, once): the board passes it to the learning */
 EXPORT("rc_learn_req") int rc_learn_req(void) { int r = RP.learn_req; RP.learn_req = 0; return r; }
+
+/* ── the cargo task ── */
+/* n latches, closed: bit per latch closed at the start; each latch's travel [s] in fr */
+EXPORT("cargo_setup") void cargo_setup(int n, int closed) { cargo_init(&CG, n, (uint32_t)closed, fr); }
+/* latch (−1 all), action (0 open, 1 close, 2 toggle), from a text command or another board: 0, −1, −2 */
+EXPORT("cargo_cmd") int cargo_cmd(int latch, int action) { return cargo_command(&CG, latch, action, "board"); }
+/* a step: the radio's LATCH commands, the load switches (bits loaded, sw), the moves. Returns what to drive: bit per latch closed. */
+EXPORT("cargo_tick") int cargo_tick(float dt, double t, int loaded, int sw) {
+  if (RCI.frames || RCI.cmd_seq) cargo_from_rc(&CG, &RCI, t);
+  cargo_switches(&CG, (uint32_t)loaded, (uint32_t)sw);
+  cargo_step(&CG, dt);
+  return (int)cargo_drive(&CG);
+}
+/* what it said last, and how many things it has said */
+EXPORT("cargo_msg_ptr") char *cargo_msg_ptr(void) { return CG.msg; }
+EXPORT("cargo_nmsg") int cargo_nmsg(void) { return (int)CG.nmsg; }
 
 /* ── the command module ── */
 static gnd_state GND;

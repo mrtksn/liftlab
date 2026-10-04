@@ -20,6 +20,7 @@ const TLM_ITEMS = {
   10: { key: 'super', fields: ['mode', 'why', 'margin', 'soc', 'cells', 'amps', 'mah'] },
   11: { key: 'parts', list: true },
   12: { key: 'link', fields: ['rssi', 'lq', 'snr', 'lost'] },
+  13: { key: 'cargo', list: true },   // each latch: 1 closed, 2 loaded, 4 moving, 8 has a load switch
 };
 
 function crsfCrc8(b, from, to) {

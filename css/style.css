@@ -2,7 +2,7 @@
   --bg:#E6EBF0; --panel:#F6F8FA; --panel-2:#EDF1F5; --ink:#15202B; --ink-2:#3A4755; --muted:#637284;
   --line:#CFD7E0; --line-strong:#AEB9C6;
   --accent:#2B55C4; --accent-ink:#FFFFFF; --accent-soft:#DCE4F7;
-  --cable:#9A3AA6; --grav:#8A5A2B; --mass:#5F6B77; --frame:#3A4552; --wind:#1F7E86; --torque:#D6337A;
+  --cargo:#A0662A; --cable:#9A3AA6; --grav:#8A5A2B; --mass:#5F6B77; --frame:#3A4552; --wind:#1F7E86; --torque:#D6337A;
   --sensor:#5E7F12; --swing:#D08600; --ax-x:#D2412F; --ax-y:#2C9A47; --ax-z:#2F62D8; --good:#157046; --warn:#8A5A0E; --bad:#C0392F; --good-soft:#DDF0E6; --warn-soft:#F6EAD3; --bad-soft:#F6DEDB;
   --viewport:#DCE3EA; --grid:#C6CFD9; --grid-strong:#A3B0BE; --bldg:#EEF1F4; --bldg-edge:#8E9CAB;
   --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
@@ -15,7 +15,7 @@
     --bg:#0D1217; --panel:#141B22; --panel-2:#1A232C; --ink:#E2E8EE; --ink-2:#B9C4CF; --muted:#8392A2;
     --line:#25303B; --line-strong:#384654;
     --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
-    --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
+    --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
     --sensor:#A9CF5A; --swing:#F2B544; --ax-x:#F2705F; --ax-y:#5CCB76; --ax-z:#7FA3F7; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
     --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F; --bldg:#26323E; --bldg-edge:#4E6072;
     color-scheme:dark;
@@ -25,7 +25,7 @@
   --bg:#0D1217; --panel:#141B22; --panel-2:#1A232C; --ink:#E2E8EE; --ink-2:#B9C4CF; --muted:#8392A2;
   --line:#25303B; --line-strong:#384654;
   --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
-  --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
+  --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
   --sensor:#A9CF5A; --swing:#F2B544; --ax-x:#F2705F; --ax-y:#5CCB76; --ax-z:#7FA3F7; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
   --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F; --bldg:#26323E; --bldg-edge:#4E6072;
   color-scheme:dark;
@@ -396,6 +396,32 @@ button.chip{background:transparent;cursor:pointer}
 .comp.dragging{opacity:.45}
 .drop-ok{outline:2px dashed var(--accent);outline-offset:2px}
 .tag-link{color:var(--ink-2)}
+.tag-latch{color:var(--cargo)}
+
+/* cargo: the latch buttons on the view, the Cargo section */
+.cargo-bar{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;max-width:min(560px,90vw)}
+.cargo-btn{position:relative;display:inline-flex;align-items:center;gap:6px;padding:4px 9px 6px;font-size:12.5px;background:color-mix(in srgb,var(--panel) 92%,transparent)}
+.cargo-btn .cg-name{font-weight:600}
+.cargo-btn .cg-state{font-family:var(--f-mono);font-size:11.5px;color:var(--muted)}
+.cargo-btn[data-tone="loaded"] .cg-state{color:var(--cargo)}
+.cargo-btn[data-tone="reach"]{border-color:var(--good)}
+.cargo-btn[data-tone="reach"] .cg-state{color:var(--good)}
+.cargo-btn kbd{font-family:var(--f-mono);font-size:10px;color:var(--muted)}
+.cargo-btn:disabled{opacity:.55}
+.cg-meter{position:absolute;left:8px;right:8px;bottom:2px;height:2px;border-radius:1px;background:var(--line);overflow:hidden}
+.cg-meter i{display:block;height:100%;width:0;background:var(--good);transition:width .1s linear}
+.cargo-say{flex-basis:100%;text-align:center;font-size:12px;color:var(--warn);min-height:0}
+.cargo-say:empty{display:none}
+.cargo-item{border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin:6px 0}
+.cargo-item-head{display:flex;gap:6px;align-items:center}
+.cargo-item-head input{flex:1;min-width:0}
+.cargo-log{list-style:none;margin:4px 0 0;padding:0;font-size:12px;max-height:160px;overflow:auto}
+.cargo-log li{padding:2px 0}
+.cargo-log .t{font-family:var(--f-mono);color:var(--muted)}
+.cargo-log .tone-bad{color:var(--bad)}
+.cargo-log .tone-warn{color:var(--warn)}
+.cargo-log .tone-good{color:var(--good)}
+.cargo-log .muted{color:var(--muted)}
 
 .budget{margin-top:10px}
 .budget td+td,.budget th+th{padding-left:10px;white-space:nowrap}
@@ -693,3 +719,5 @@ select.pending{border-color:var(--warn);border-style:dashed}
   .hud-tl{max-width:calc(100% - 210px)}
   .legend{display:none}
 }
+
+.gs-cargo{flex-wrap:wrap;gap:6px}
