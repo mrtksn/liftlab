@@ -1,75 +1,163 @@
 'use strict';
-// The AI tab (left panel): the chat with the agent (agent.js), its triggers, the connection and the settings.
+// The AI tab (left panel). Until a model is connected it's one card: connect a model. Then it's the chat: a list of
+// threads (your chats, and a Triggers group, each trigger with its own thread), a thread with the model and the tokens
+// it used in its header, and Settings (the connection, to change or remove, and how the agent behaves).
 
 function refreshLawCard(key) { const c = lawCards.get(key); if (c) { c.ta.value = LAWS[key].src; fitTa(c.ta); refreshLaw(key); } }
 
-const aiUi = { built: false };
-function agentBuild() {
-  const P = $('#paneAi'); P.textContent = '';
-  // the chat
-  const chat = el('section', { class: 'sec ai-chat' }, el('h2', {}, 'AI agent', el('small', { id: 'aiUse' })));
-  const feed = el('div', { class: 'ai-feed', id: 'aiFeed', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation with the AI agent' });
-  const input = el('textarea', { id: 'aiInput', class: 'ai-input', rows: '3', placeholder: 'Ask it to fly, build, tune or test… (Enter sends, Shift+Enter: a new line)', 'aria-label': 'Message to the AI agent' });
-  const send = el('button', { class: 'btn primary', type: 'button', id: 'aiSend', text: 'Send' });
-  const stop = el('button', { class: 'btn', type: 'button', id: 'aiStop', text: 'Stop' });
-  const clear = el('button', { class: 'btn', type: 'button', id: 'aiClear', text: 'New chat', title: 'Forget the conversation (the airframe and formulas stay as they are)' });
-  const go = () => { const t = input.value.trim(); if (!t || agent.busy) return; input.value = ''; agentAsk(t); };
-  send.addEventListener('click', go); stop.addEventListener('click', agentStop); clear.addEventListener('click', agentClear);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
-  chat.append(feed, input, el('div', { class: 'ai-row' }, send, stop, clear), el('p', { class: 'hint', id: 'aiHint' }));
-  // triggers
-  const trig = el('section', { class: 'sec' }, el('h2', {}, 'Triggers', el('small', { text: 'ask the AI when…' })),
-    el('div', { id: 'aiTrig' }),
-    el('button', { class: 'btn', type: 'button', id: 'aiTrigAdd', text: '+ Trigger', onclick: () => { if (agent.triggers.length >= 12) return; agent.triggers.push({ id: 't' + Date.now().toString(36), kind: 'crash', value: null, expr: TRIGGER_KINDS.expr.expr, msg: 'Find out why and suggest a fix.', gap: 10, keepFlying: false, on: true, fired: 0, last: -1e9, was: false }); agentSave(); agentRenderTriggers(); } }),
-    el('p', { class: 'hint', text: 'Checked 10 times a simulated second. When one turns true it sends its message and the state to the AI; it waits its gap before it fires again. "Keep flying" lets the simulation run while the AI thinks (as a real drone would), instead of pausing it. Expressions can read: ' + Object.keys(agentSample()).join(', ') + '.' }));
-  // connection and settings
-  const C = agent.cfg, conn = el('details', { class: 'sec ai-conn', id: 'aiConn' });
-  if (!C.url || (!agent.key && !(AGENT_ENDPOINTS[C.endpoint] || {}).noKey)) conn.open = true;
-  const ep = el('select', { id: 'aiEp', 'aria-label': 'Endpoint' });
-  for (const [k, E] of Object.entries(AGENT_ENDPOINTS)) { const o = el('option', { value: k, text: E.label }); if (k === C.endpoint) o.selected = true; ep.append(o); }
-  const url = el('input', { type: 'url', id: 'aiUrl', value: C.url, placeholder: 'https://…/v1', autocomplete: 'off', spellcheck: 'false' });
-  const key = el('input', { type: 'password', id: 'aiKey', value: agent.key, placeholder: 'sk-…', autocomplete: 'off', spellcheck: 'false' });
-  const rem = el('input', { type: 'checkbox', id: 'aiRemember' }); rem.checked = C.remember;
-  const model = el('input', { type: 'text', id: 'aiModel', value: C.model, list: 'aiModels', autocomplete: 'off', spellcheck: 'false', placeholder: 'model name' });
-  const models = el('datalist', { id: 'aiModels' });
-  const load = el('button', { class: 'btn', type: 'button', text: 'Load models', title: 'Ask the endpoint which models it has (also checks the key)' });
-  const status = el('p', { class: 'hint', id: 'aiConnMsg', role: 'status' });
-  ep.addEventListener('change', () => { C.endpoint = ep.value; const E = AGENT_ENDPOINTS[ep.value]; if (E.url) url.value = C.url = E.url; if (E.model) model.value = C.model = E.model; agentSave(); agentUi(); });
-  url.addEventListener('change', () => { C.url = url.value.trim(); agentSave(); agentUi(); });
-  key.addEventListener('change', () => { agent.key = key.value.trim(); agentSave(); agentUi(); });
-  rem.addEventListener('change', () => { C.remember = rem.checked; agentSave(); });
-  model.addEventListener('change', () => { C.model = model.value.trim(); agentSave(); agentUi(); });
-  load.addEventListener('click', async () => {
-    status.textContent = 'Asking…'; status.className = 'hint';
-    try { const L = await agentModels(); models.textContent = ''; for (const m of L.slice(0, 400)) models.append(el('option', { value: m })); status.textContent = `${L.length} models. Pick one in the Model field.`; status.className = 'hint good'; }
-    catch (e) { status.textContent = 'Couldn\'t list the models: ' + e.message; status.className = 'hint bad'; }
-  });
-  const row = (label, node, id) => el('label', { class: 'ai-field', for: id }, el('span', { class: 'lbl', text: label }), node);
-  conn.append(el('summary', {}, el('h2', {}, 'Connection', el('small', { id: 'aiConnSmall' }))),
-    row('Endpoint', ep, 'aiEp'), row('Base URL (OpenAI-compatible)', url, 'aiUrl'), row('API key', key, 'aiKey'),
-    el('label', { class: 'check', for: 'aiRemember' }, rem, 'Remember the key in this browser (otherwise: until this tab closes)'),
-    row('Model', el('div', { class: 'ai-row' }, model, load, models), 'aiModel'), status,
-    el('p', { class: 'hint', text: 'The key goes only to this endpoint, from this page. A server on this computer (Ollama, LM Studio) must allow requests from a web page: CORS (for Ollama: OLLAMA_ORIGINS=*). Use a model that can call tools.' }));
-  const chk = (id, label, k) => { const i = el('input', { type: 'checkbox', id }); i.checked = !!C[k]; i.addEventListener('change', () => { C[k] = i.checked; agentSave(); }); return el('label', { class: 'check', for: id }, i, label); };
-  const budget = numField('aiBudget', { label: 'Requests this session, at most', min: 1, max: 1000, step: 1, u: '', dp: 0, int: true }, () => C.budget, v => { C.budget = Math.round(v); agentSave(); agentUi(); });
-  const sets = el('details', { class: 'sec ai-conn' }, el('summary', {}, el('h2', {}, 'Settings')),
-    chk('aiPause', 'Pause the simulation while the AI thinks (triggers can keep it flying)', 'pauseThinking'),
-    chk('aiAsk', 'Ask me before it changes a formula', 'askFormulas'),
-    budget.node,
-    el('div', { class: 'ai-row' }, el('button', { class: 'btn', type: 'button', text: 'Reset the count', onclick: () => { agent.used = 0; agent.tokens = { in: 0, out: 0 }; agentUi(); } })),
-    el('p', { class: 'hint', text: 'Each request to the model counts, a turn with tools takes several (at most 16). Airframe and computer changes go into Undo; a formula change has its own Undo in the chat. It works on the simulator only.' }));
-  P.append(chat, trig, conn, sets);
-  aiUi.built = true; agentRenderFeed(); agentRenderTriggers(); agentUi();
+const aiUi = { built: false, view: 'list', editConn: false, draft: null, msg: '', msgTone: '', models: [] };
+const kfmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+const ago = ms => { const s = (Date.now() - ms) / 1000; return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'; };
+const epLabel = () => (AGENT_ENDPOINTS[agent.cfg.endpoint] || {}).label || 'Custom';
+const iconBtn = (label, text, onclick, extra = {}) => el('button', { class: 'ai-icon', type: 'button', 'aria-label': label, title: label, text, onclick, ...extra });
+
+function agentRender() {   // the whole tab, for the view it's on
+  const P = $('#paneAi'); if (!P) return;
+  aiUi.built = true; P.textContent = '';
+  if (!agent.cfg.connected || aiUi.editConn) { P.append(connView()); agentUi(); return; }
+  const v = aiUi.view, th = threadOf(agent.cur);
+  P.append(v === 'settings' ? settingsView() : v === 'chat' && th ? chatView(th) : listView());
+  agentUi();
 }
 
-function agentUi() {
-  if (!aiUi.built) return;
-  const C = agent.cfg, E = AGENT_ENDPOINTS[C.endpoint] || {}, ready = !!C.url && !!C.model && (!!agent.key || !!E.noKey || C.endpoint === 'custom');
-  setText($('#aiUse'), `${agent.used} / ${C.budget} requests${agent.tokens.in ? ` · ${(agent.tokens.in / 1000).toFixed(1)}k in, ${(agent.tokens.out / 1000).toFixed(1)}k out` : ''}`);
-  setText($('#aiConnSmall'), ready ? `${E.label || 'custom'} · ${C.model}` : 'not set');
-  $('#aiSend').disabled = agent.busy || !ready; $('#aiStop').disabled = !agent.busy;
-  setText($('#aiHint'), agent.busy ? `Thinking…${agent.queue.length ? ` (${agent.queue.length} waiting)` : ''}` : !ready ? 'Set the endpoint, key and model under Connection, below.' : '');
-  $('#tabAi').classList.toggle('busy', agent.busy);
+/* ───────── connecting a model (first run, or editing the connection) ───────── */
+function connView() {
+  const C = agent.cfg, D = aiUi.draft || (aiUi.draft = { endpoint: C.endpoint, url: C.url, model: C.model, key: agent.key, remember: C.remember });
+  const E = () => AGENT_ENDPOINTS[D.endpoint] || AGENT_ENDPOINTS.custom;
+  const box = el('div', { class: 'ai-view ai-setup' });
+  box.append(el('div', { class: 'ai-hero' },
+    el('div', { class: 'ai-mark', 'aria-hidden': 'true', text: '✦' }),
+    el('h2', { text: aiUi.editConn ? 'Change the connection' : 'Connect an AI model' }),
+    el('p', { text: 'An agent that can fly the simulated drone, rebuild it, tune its formulas and test it, and that triggers can call when something happens. Any OpenAI-compatible chat API works; pick a model that can call tools.' })));
+  const ep = el('div', { class: 'ai-eps', role: 'radiogroup', 'aria-label': 'Provider' });
+  for (const [k, X] of Object.entries(AGENT_ENDPOINTS)) {
+    const b = el('button', { type: 'button', class: 'ai-ep', role: 'radio', 'aria-checked': String(k === D.endpoint), text: X.label.replace(' (this computer)', ''), title: X.label });
+    if (X.noKey) b.append(el('small', { text: 'on this computer' }));
+    b.addEventListener('click', () => { D.endpoint = k; if (X.url) D.url = X.url; else if (k === 'custom') D.url = ''; D.model = X.model || ''; aiUi.models = []; aiUi.msg = ''; agentRender(); });
+    ep.append(b);
+  }
+  const field = (label, input, note) => el('label', { class: 'ai-field' }, el('span', { class: 'lbl', text: label }), input, note ? el('span', { class: 'ai-fnote', text: note }) : null);
+  const url = el('input', { type: 'url', id: 'aiUrl', value: D.url, placeholder: 'https://…/v1', autocomplete: 'off', spellcheck: 'false' }); url.addEventListener('input', () => { D.url = url.value.trim(); });
+  const key = el('input', { type: 'password', id: 'aiKey', value: D.key, placeholder: E().noKey ? 'not needed' : 'sk-…', autocomplete: 'off', spellcheck: 'false' }); key.addEventListener('input', () => { D.key = key.value.trim(); });
+  const model = el('input', { type: 'text', id: 'aiModel', value: D.model, list: 'aiModels', autocomplete: 'off', spellcheck: 'false', placeholder: 'model name' }); model.addEventListener('input', () => { D.model = model.value.trim(); });
+  const dl = el('datalist', { id: 'aiModels' }); for (const m of aiUi.models.slice(0, 500)) dl.append(el('option', { value: m }));
+  const rem = el('input', { type: 'checkbox', id: 'aiRemember' }); rem.checked = D.remember; rem.addEventListener('change', () => { D.remember = rem.checked; });
+  const msg = el('p', { class: 'hint ' + (aiUi.msgTone || ''), id: 'aiConnMsg', role: 'status', text: aiUi.msg });
+  const test = async () => {
+    const save = { url: agent.cfg.url, key: agent.key }; agent.cfg.url = D.url; agent.key = D.key;
+    try { aiUi.models = await agentModels(); return ''; } catch (e) { return e.message; } finally { agent.cfg.url = save.url; agent.key = save.key; }
+  };
+  const load = el('button', { class: 'btn', type: 'button', text: 'Load models', id: 'aiLoad', onclick: async () => {
+    aiUi.msg = 'Asking…'; aiUi.msgTone = ''; msg.textContent = aiUi.msg; const err = await test();
+    aiUi.msg = err ? 'Couldn\'t list the models: ' + err : `${aiUi.models.length} models: pick one in the Model field.`; aiUi.msgTone = err ? 'bad' : 'good'; agentRender(); } });
+  const connect = el('button', { class: 'btn primary', type: 'button', id: 'aiConnect', text: aiUi.editConn ? 'Save' : 'Connect', onclick: async () => {
+    if (!D.url) { aiUi.msg = 'The base URL is missing.'; aiUi.msgTone = 'bad'; return agentRender(); }
+    if (!D.model) { aiUi.msg = 'Pick a model (Load models lists them).'; aiUi.msgTone = 'bad'; return agentRender(); }
+    if (!D.key && !E().noKey && D.endpoint !== 'custom') { aiUi.msg = 'The API key is missing.'; aiUi.msgTone = 'bad'; return agentRender(); }
+    connect.disabled = true; aiUi.msg = 'Checking the connection…'; aiUi.msgTone = ''; msg.textContent = aiUi.msg; msg.className = 'hint';
+    const err = await test();
+    if (err && !aiUi.forceOk) { aiUi.msg = `Couldn't reach it: ${err}. Check the URL and key, or save it anyway (some servers don't list their models).`; aiUi.msgTone = 'bad'; aiUi.forceOk = true; connect.disabled = false; connect.textContent = 'Save anyway'; msg.textContent = aiUi.msg; msg.className = 'hint bad'; return; }
+    Object.assign(agent.cfg, { connected: true, endpoint: D.endpoint, url: D.url, model: D.model, remember: D.remember }); agent.key = D.key; agentSave();
+    aiUi.draft = null; aiUi.msg = ''; aiUi.forceOk = false; aiUi.editConn = false; aiUi.view = agent.threads.some(t => t.kind === 'chat') ? 'list' : 'chat';
+    if (aiUi.view === 'chat') agent.cur = threadNew().id;
+    agentRender(); } });
+  const form = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'Provider' }), ep,
+    field('Base URL', url, 'OpenAI-compatible: the chat API lives at …/chat/completions'),
+    E().noKey ? null : field('API key', key, 'Sent only to this URL, from this page.'),
+    E().noKey ? null : el('label', { class: 'check', for: 'aiRemember' }, rem, 'Remember the key in this browser (otherwise until the tab closes)'),
+    field('Model', el('div', { class: 'ai-row' }, model, load, dl)),
+    msg, el('div', { class: 'ai-row' }, connect, aiUi.editConn ? el('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => { aiUi.editConn = false; aiUi.draft = null; aiUi.msg = ''; agentRender(); } }) : null),
+    E().noKey ? el('p', { class: 'hint', text: 'A server on this computer must allow requests from a web page (CORS). For Ollama, start it with OLLAMA_ORIGINS=*.' }) : null);
+  box.append(form, el('p', { class: 'hint ai-foot', text: 'It works on the simulator only: this page has no link to a real drone.' }));
+  return box;
+}
+
+/* ───────── the thread list ───────── */
+function topBar(left, title, right) { return el('div', { class: 'ai-top' }, left, el('div', { class: 'ai-top-t' }, title), right); }
+function modelChip() { return el('span', { class: 'ai-chip', title: `${epLabel()} · ${agent.cfg.url}`, text: agent.cfg.model }); }
+function listView() {
+  const box = el('div', { class: 'ai-view' });
+  box.append(topBar(null, el('div', {}, el('b', { text: 'AI agent' }), el('div', { class: 'ai-sub' }, modelChip(), el('span', { id: 'aiUse' }))),
+    iconBtn('Settings', '⚙', () => { aiUi.view = 'settings'; agentRender(); }, { id: 'aiSettings' })));
+  const list = el('div', { class: 'ai-list' });
+  const newChat = el('button', { class: 'btn primary ai-new', type: 'button', id: 'aiNewChat', text: '+ New chat', onclick: () => { agent.cur = threadNew().id; aiUi.view = 'chat'; agentRender(); setTimeout(() => { const i = $('#aiInput'); if (i) i.focus(); }); } });
+  list.append(newChat);
+  const chats = agent.threads.filter(t => t.kind === 'chat' && (t.msgs.length || t.feed.length)).sort((a, b) => b.updated - a.updated);
+  list.append(el('div', { class: 'ai-group' }, el('span', { class: 'lbl', text: 'Chats' })));
+  if (!chats.length) list.append(el('p', { class: 'hint ai-none', text: 'No chats yet.' }));
+  for (const t of chats) list.append(threadRow(t, t.title, `${ago(t.updated)}${t.tokens.in ? ' · ' + kfmt(t.tokens.in + t.tokens.out) + ' tokens' : ''}`));
+  list.append(el('div', { class: 'ai-group' }, el('span', { class: 'lbl', text: 'Triggers' }),
+    el('button', { class: 'ai-link', type: 'button', id: 'aiNewTrig', text: '+ New trigger', onclick: () => {
+      if (agent.triggers.length >= 12) return;
+      const T = { id: 't' + Date.now().toString(36), kind: 'crash', value: null, expr: TRIGGER_KINDS.expr.expr, msg: 'Find out why and suggest a fix.', gap: 10, keepFlying: false, on: true, fired: 0, last: -1e9, was: false };
+      agent.triggers.push(T); agentSave(); const th = threadForTrigger(T); agentSaveThreads(); agent.cur = th.id; aiUi.view = 'chat'; aiUi.trigOpen = true; agentRender(); } })));
+  if (!agent.triggers.length) list.append(el('p', { class: 'hint ai-none', text: 'Triggers ask the AI by themselves when something happens: a crash, a low battery, off target, or a condition of yours.' }));
+  for (const T of agent.triggers) {
+    const th = threadForTrigger(T);
+    const on = el('input', { type: 'checkbox', class: 'ai-switch', 'aria-label': 'On', title: T.on ? 'On' : 'Off' }); on.checked = T.on;
+    on.addEventListener('click', e => e.stopPropagation()); on.addEventListener('change', () => { T.on = on.checked; T.was = false; agentSave(); agentRender(); });
+    list.append(threadRow(th, triggerText(T), `${T.on ? 'on' : 'off'}${T.fired ? ` · fired ${T.fired}×` : ''}${th.feed.length ? ' · ' + ago(th.updated) : ''}`, on, () => { agent.triggers = agent.triggers.filter(x => x !== T); agentSave(); }));
+  }
+  box.append(list);
+  return box;
+}
+function threadRow(t, title, meta, lead, onDelete) {
+  const row = el('div', { class: 'ai-thread' + (t.kind === 'trigger' ? ' trig' : '') + (agent.turn === t ? ' busy' : ''), 'data-thread': t.id });
+  const open = el('button', { type: 'button', class: 'ai-thread-open', onclick: () => { agent.cur = t.id; aiUi.view = 'chat'; aiUi.trigOpen = false; agentRender(); } },
+    t.kind === 'trigger' ? el('span', { class: 'ai-bolt', 'aria-hidden': 'true', text: '⚡' }) : null,
+    el('span', { class: 'ai-thread-t', text: title }), el('span', { class: 'ai-thread-m', text: meta }));
+  const del = iconBtn(t.kind === 'trigger' ? 'Delete this trigger' : 'Delete this chat', '×', () => { if (onDelete) onDelete(); threadDelete(t.id); agentRender(); }, { class: 'ai-icon del' });
+  if (lead) row.append(lead); row.append(open, del);
+  return row;
+}
+
+/* ───────── a thread ───────── */
+const AI_SUGGEST = ['Fly a 2 m square at 2 m height and tell me how well it held the corners', 'Add a wing and see how it flies in 5 m/s wind', 'Make the position control softer', 'Find out why it crashes when M2 stops'];
+function chatView(th) {
+  const box = el('div', { class: 'ai-view ai-chatv' });
+  const T = th.kind === 'trigger' ? agent.triggers.find(x => x.id === th.triggerId) : null;
+  box.append(topBar(iconBtn('All chats', '‹', () => { aiUi.view = 'list'; agentRender(); }, { id: 'aiBack' }),
+    el('div', {}, el('b', { class: 'ai-title', text: T ? '⚡ ' + triggerText(T) : th.title }),
+      el('div', { class: 'ai-sub' }, modelChip(), el('span', { id: 'aiThreadUse' }))),
+    iconBtn('Settings', '⚙', () => { aiUi.view = 'settings'; agentRender(); })));
+  if (T) {
+    const d = el('details', { class: 'ai-trigcard' }); d.open = !!aiUi.trigOpen || !th.feed.length;
+    d.addEventListener('toggle', () => { aiUi.trigOpen = d.open; });
+    d.append(el('summary', {}, el('span', { text: 'When it fires' }), el('span', { class: 'ai-thread-m', id: 'aiFired', text: T.fired ? `fired ${T.fired}×` : 'not fired yet' })), triggerEditor(T, th));
+    box.append(d);
+  }
+  box.append(el('div', { class: 'ai-feed', id: 'aiFeed', role: 'log', 'aria-live': 'polite', 'aria-label': 'Conversation with the AI agent' }));
+  const input = el('textarea', { id: 'aiInput', class: 'ai-input', rows: '2', placeholder: T ? 'Ask about what it found, or tell it what to do next…' : 'Ask it to fly, build, tune or test…', 'aria-label': 'Message to the AI agent' });
+  const send = el('button', { class: 'btn primary', type: 'button', id: 'aiSend', text: 'Send' });
+  const stop = el('button', { class: 'btn', type: 'button', id: 'aiStop', text: 'Stop', onclick: agentStop });
+  const go = () => { const t = input.value.trim(); if (!t || agent.busy) return; input.value = ''; agentAsk(t, { thread: th }); };
+  send.addEventListener('click', go);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); go(); } });
+  box.append(el('div', { class: 'ai-compose' }, input, el('div', { class: 'ai-row' }, el('span', { class: 'ai-status', id: 'aiHint' }), stop, send)));
+  setTimeout(() => agentRenderFeed(th));
+  return box;
+}
+function triggerEditor(T, th) {
+  const K = TRIGGER_KINDS[T.kind] || TRIGGER_KINDS.crash, ch = () => { agentSave(); th.title = triggerText(T); const t = document.querySelector('.ai-title'); if (t) t.textContent = '⚡ ' + th.title; };
+  const box = el('div', { class: 'ai-trig' });
+  const kind = el('select', { 'aria-label': 'When' });
+  for (const [k, D] of Object.entries(TRIGGER_KINDS)) { const o = el('option', { value: k, text: D.label }); if (k === T.kind) o.selected = true; kind.append(o); }
+  kind.addEventListener('change', () => { T.kind = kind.value; T.value = TRIGGER_KINDS[T.kind].value ?? null; T.was = false; ch(); aiUi.trigOpen = true; agentRender(); });
+  const val = K.value != null ? el('input', { type: 'number', class: 'ai-num', value: T.value ?? K.value, 'aria-label': 'Value' }) : null;
+  if (val) val.addEventListener('change', () => { T.value = +val.value; ch(); });
+  const expr = T.kind === 'expr' ? el('input', { type: 'text', class: 'ai-expr', value: T.expr || '', spellcheck: 'false', 'aria-label': 'Expression' }) : null;
+  const err = el('span', { class: 'ai-err' });
+  if (expr) { const chk = () => { const f = triggerTest(T); err.textContent = f ? '' : triggerFn.get(T.id).err; }; expr.addEventListener('change', () => { T.expr = expr.value; ch(); chk(); }); chk(); }
+  const msg = el('input', { type: 'text', class: 'ai-tmsg', value: T.msg || '', placeholder: 'What to tell the AI', 'aria-label': 'Message to the AI' });
+  msg.addEventListener('change', () => { T.msg = msg.value; ch(); });
+  const on = el('input', { type: 'checkbox' }); on.checked = T.on; on.addEventListener('change', () => { T.on = on.checked; T.was = false; ch(); });
+  const gap = el('input', { type: 'number', class: 'ai-num', value: T.gap ?? 10, min: '0', 'aria-label': 'Gap, seconds' }); gap.addEventListener('change', () => { T.gap = Math.max(0, +gap.value || 0); ch(); });
+  const kf = el('input', { type: 'checkbox' }); kf.checked = !!T.keepFlying; kf.addEventListener('change', () => { T.keepFlying = kf.checked; ch(); });
+  box.append(...[el('div', { class: 'ai-row' }, kind, val), expr ? el('div', { class: 'ai-row' }, expr) : null, err,
+    el('label', { class: 'ai-field' }, el('span', { class: 'lbl', text: 'Tell the AI' }), msg),
+    el('div', { class: 'ai-row small' }, el('label', { class: 'check' }, on, 'on'), el('label', {}, 'again after ', gap, ' s'), el('label', { class: 'check', title: 'Let the simulation run while the AI thinks, as a real drone would, instead of pausing it' }, kf, 'keep flying')),
+    T.kind === 'expr' ? el('p', { class: 'hint', text: 'Reads: ' + Object.keys(agentSample()).join(', ') + '.' }) : null].filter(Boolean));
+  return box;
 }
 
 const AI_DESC = {   // a tool call, in a few words, for the chat
@@ -81,12 +169,17 @@ const AI_DESC = {   // a tool call, in a few words, for the chat
   wait: a => `run ${a.seconds} s${a.fast ? ', fast' : ''}${a.until ? ' until ' + a.until : ''}`, fly: a => a.action === 'goto' ? `go to ${['x', 'y', 'z'].map(k => a[k] ?? '·').join(', ')}${a.heading != null ? ' facing ' + a.heading + '°' : ''}` : a.action + (a.level ? ' ' + a.level : ''),
   latch: a => `${a.action} latch ${a.latch}`, environment: a => 'set ' + Object.entries(a).map(([k, v]) => `${k} ${v}`).join(', '), break_part: a => `break ${a.id}${a.mode ? ' (' + a.mode + ')' : ''}`, repair_all: () => 'repair all',
 };
-function agentRenderFeed() {
+function agentRenderFeed(th) {
   const F = $('#aiFeed'); if (!F) return;
+  const cur = threadOf(agent.cur); if (th && th !== cur) { agentUi(); return; } th = cur; if (!th) return;
   const atEnd = F.scrollHeight - F.scrollTop - F.clientHeight < 40;
   F.textContent = '';
-  if (!agent.feed.length) F.append(el('p', { class: 'ai-empty', text: 'Try: "Fly a 2 m square at 2 m height and tell me how well it held the corners", "Add a wing and see how it flies in 5 m/s wind", "Make the position control softer", or "Find out why it crashes when motor 2 stops".' }));
-  for (const it of agent.feed) {
+  if (!th.feed.length) {
+    if (th.kind === 'trigger') F.append(el('p', { class: 'ai-empty', text: 'Nothing yet. When it fires, what it sent and what the AI did shows here, and you can carry on the conversation.' }));
+    else F.append(el('div', { class: 'ai-empty' }, el('p', { text: 'What should it do? For example:' }),
+      ...AI_SUGGEST.map(s => el('button', { type: 'button', class: 'ai-suggest', text: s, onclick: () => { const i = $('#aiInput'); if (i) { i.value = s; i.focus(); } } }))));
+  }
+  for (const it of th.feed) {
     if (it.who === 'tool') {
       let a = {}; try { a = JSON.parse(it.args || '{}'); } catch (e) {}
       const d = el('details', { class: 'ai-tool' + (it.bad ? ' bad' : '') });
@@ -99,39 +192,62 @@ function agentRenderFeed() {
         el('button', { class: 'btn primary', type: 'button', text: 'Apply', onclick: () => it.confirm.resolve(true) }),
         el('button', { class: 'btn', type: 'button', text: 'Don\'t', onclick: () => it.confirm.resolve(false) })));
       if (it.undo && !it.undone) F.append(el('div', { class: 'ai-ask' }, el('button', { class: 'btn', type: 'button', text: '↶ ' + it.undo.label + ' this formula change',
-        onclick: () => { try { it.undone = it.undo.run(); } catch (e) { it.undone = 'Couldn\'t undo: ' + e.message; } agentFeed({ who: 'note', text: it.undone }); } })));
+        onclick: () => { try { it.undone = it.undo.run(); } catch (e) { it.undone = 'Couldn\'t undo: ' + e.message; } agentFeed({ who: 'note', text: it.undone }, th); } })));
       continue;
     }
     F.append(el('div', { class: 'ai-msg w-' + it.who + (it.tone ? ' t-' + it.tone : '') },
-      it.who === 'trigger' ? el('b', { text: '⚡ ' }) : null, el('span', { text: it.text })));
+      it.who === 'trigger' ? el('b', { text: `⚡ ${it.t != null ? (+it.t).toFixed(1) + ' s · ' : ''}` }) : null, el('span', { text: it.text })));
   }
-  if (atEnd) F.scrollTop = F.scrollHeight;
+  if (agent.turn === th) F.append(el('div', { class: 'ai-typing', 'aria-label': 'Thinking' }, el('i'), el('i'), el('i')));
+  if (atEnd || agent.turn === th) F.scrollTop = F.scrollHeight;
+  agentUi();
 }
 
-function agentRenderTriggers() {
-  const box = $('#aiTrig'); if (!box) return; box.textContent = '';
-  if (!agent.triggers.length) box.append(el('p', { class: 'hint', text: 'None yet.' }));
-  for (const T of agent.triggers) {
-    const K = TRIGGER_KINDS[T.kind] || TRIGGER_KINDS.crash, ch = () => { agentSave(); };
-    const on = el('input', { type: 'checkbox', 'aria-label': 'On' }); on.checked = T.on; on.addEventListener('change', () => { T.on = on.checked; T.was = false; ch(); });
-    const kind = el('select', { 'aria-label': 'When' });
-    for (const [k, D] of Object.entries(TRIGGER_KINDS)) { const o = el('option', { value: k, text: D.label }); if (k === T.kind) o.selected = true; kind.append(o); }
-    kind.addEventListener('change', () => { T.kind = kind.value; T.value = TRIGGER_KINDS[T.kind].value ?? null; T.was = false; ch(); agentRenderTriggers(); });
-    const val = K.value != null ? el('input', { type: 'number', class: 'ai-num', value: T.value ?? K.value, 'aria-label': 'Value' }) : null;
-    if (val) val.addEventListener('change', () => { T.value = +val.value; ch(); });
-    const expr = T.kind === 'expr' ? el('input', { type: 'text', class: 'ai-expr', value: T.expr || '', spellcheck: 'false', 'aria-label': 'Expression' }) : null;
-    const err = el('span', { class: 'ai-err' });
-    if (expr) { const chk = () => { const f = triggerTest(T); err.textContent = f ? '' : triggerFn.get(T.id).err; }; expr.addEventListener('change', () => { T.expr = expr.value; ch(); chk(); }); chk(); }
-    const msg = el('input', { type: 'text', class: 'ai-tmsg', value: T.msg || '', placeholder: 'What to tell the AI', 'aria-label': 'Message' });
-    msg.addEventListener('change', () => { T.msg = msg.value; ch(); });
-    const gap = el('input', { type: 'number', class: 'ai-num', value: T.gap ?? 10, min: '0', 'aria-label': 'Gap, seconds' }); gap.addEventListener('change', () => { T.gap = Math.max(0, +gap.value || 0); ch(); });
-    const kf = el('input', { type: 'checkbox' }); kf.checked = !!T.keepFlying; kf.addEventListener('change', () => { T.keepFlying = kf.checked; ch(); });
-    const del = el('button', { class: 'icon-btn', type: 'button', text: '×', 'aria-label': 'Remove this trigger', onclick: () => { agent.triggers = agent.triggers.filter(x => x !== T); ch(); agentRenderTriggers(); } });
-    box.append(el('div', { class: 'ai-trig' + (T.on ? '' : ' off') },
-      el('div', { class: 'ai-row' }, on, kind, val, del), expr ? el('div', { class: 'ai-row' }, expr) : null, err,
-      el('div', { class: 'ai-row' }, msg),
-      el('div', { class: 'ai-row small' }, el('label', {}, 'gap ', gap, ' s'), el('label', { class: 'check' }, kf, 'keep flying'), el('span', { class: 'ai-fired', text: T.fired ? `fired ${T.fired}×` : '' }))));
-  }
+/* ───────── settings ───────── */
+function settingsView() {
+  const C = agent.cfg, box = el('div', { class: 'ai-view' });
+  box.append(topBar(iconBtn('Back', '‹', () => { aiUi.view = threadOf(agent.cur) ? 'chat' : 'list'; agentRender(); }, { id: 'aiBack' }), el('b', { text: 'Settings' }), null));
+  const kv = (k, v) => [el('dt', { text: k }), el('dd', { text: v })];
+  const conn = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'Connection' }),
+    el('dl', { class: 'kv' }, ...kv('Provider', epLabel()), ...kv('URL', C.url), ...kv('Model', C.model), ...kv('Key', agent.key ? '••••' + agent.key.slice(-4) + (C.remember ? ' (remembered)' : ' (until the tab closes)') : 'none')),
+    el('div', { class: 'ai-row' },
+      el('button', { class: 'btn', type: 'button', id: 'aiEditConn', text: 'Change…', onclick: () => { aiUi.editConn = true; aiUi.draft = null; aiUi.models = []; agentRender(); } }),
+      el('button', { class: 'btn danger', type: 'button', id: 'aiDelConn', text: 'Remove the connection', onclick: () => {
+        if (!confirm('Remove the connection and forget the key? Your chats and triggers stay.')) return;
+        agentStop(); C.connected = false; agent.key = ''; agentSave(); aiUi.view = 'list'; agentRender(); } })));
+  const chk = (id, label, k) => { const i = el('input', { type: 'checkbox', id }); i.checked = !!C[k]; i.addEventListener('change', () => { C[k] = i.checked; agentSave(); }); return el('label', { class: 'check', for: id }, i, label); };
+  const budget = numField('aiBudget', { label: 'Requests this session, at most', min: 1, max: 1000, step: 1, u: '', dp: 0, int: true }, () => C.budget, v => { C.budget = Math.round(v); agentSave(); agentUi(); });
+  const beh = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'While it works' }),
+    chk('aiPause', 'Pause the simulation while the AI thinks (a trigger can keep it flying)', 'pauseThinking'),
+    chk('aiAsk', 'Ask me before it changes a formula', 'askFormulas'), budget.node,
+    el('p', { class: 'hint', id: 'aiUse' }),
+    el('div', { class: 'ai-row' }, el('button', { class: 'btn', type: 'button', text: 'Reset the count', onclick: () => { agent.used = 0; agent.tokens = { in: 0, out: 0 }; agentUi(); } })),
+    el('p', { class: 'hint', text: 'Each request to the model counts; a turn with tools takes several (at most 16). Airframe and computer changes go into Undo; a formula change has its own Undo in the chat.' }));
+  const data = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'Chats' }),
+    el('p', { class: 'hint', text: 'Kept in this browser (the newest 30, and each trigger\'s).' }),
+    el('div', { class: 'ai-row' }, el('button', { class: 'btn danger', type: 'button', text: 'Delete all chats', onclick: () => {
+      if (!confirm('Delete every chat? Triggers stay.')) return; for (const t of agent.threads.filter(x => x.kind === 'chat')) threadDelete(t.id); agentRender(); } })));
+  box.append(el('div', { class: 'ai-list' }, conn, beh, data));
+  return box;
 }
-setInterval(() => { if (aiUi.built && !$('#paneAi').hidden) for (const [i, T] of agent.triggers.entries()) { const s = document.querySelectorAll('#aiTrig .ai-fired')[i]; if (s) setText(s, T.fired ? `fired ${T.fired}×` : ''); } }, 1000);
-agentBuild();
+
+/* ───────── what changes as it works ───────── */
+function agentUi() {
+  if (!aiUi.built) return;
+  const C = agent.cfg, th = threadOf(agent.cur);
+  const use = $('#aiUse'); if (use) setText(use, `${agent.used}/${C.budget} requests${agent.tokens.in ? ` · ${kfmt(agent.tokens.in)} in, ${kfmt(agent.tokens.out)} out` : ''} this session`);
+  const tt = document.querySelector('.ai-title'); if (tt && th && th.kind === 'chat') setText(tt, th.title);
+  const tu = $('#aiThreadUse'); if (tu && th) setText(tu, th.tokens.in ? `${kfmt(th.tokens.in)} in · ${kfmt(th.tokens.out)} out · ${th.requests} req` : 'no tokens yet');
+  const send = $('#aiSend'), stop = $('#aiStop');
+  if (send) send.disabled = agent.busy; if (stop) stop.hidden = !agent.busy;
+  const hint = $('#aiHint');
+  if (hint) setText(hint, agent.busy ? (agent.turn === th ? 'Thinking…' : 'Busy in another thread…') + (agent.queue.length ? ` (${agent.queue.length} waiting)` : '') : `${agent.used}/${C.budget} requests`);
+  const fired = $('#aiFired'); if (fired && th && th.kind === 'trigger') { const T = agent.triggers.find(x => x.id === th.triggerId); if (T) setText(fired, T.fired ? `fired ${T.fired}×` : 'not fired yet'); }
+  document.querySelectorAll('.ai-thread').forEach(r => r.classList.toggle('busy', !!agent.turn && r.dataset.thread === agent.turn.id));
+  $('#tabAi').classList.toggle('busy', agent.busy);
+}
+setInterval(() => { if (aiUi.built && !$('#paneAi').hidden && aiUi.view === 'list' && agent.cfg.connected && !aiUi.editConn) {   // (fired counts, times)
+  const L = $('.ai-list'); if (L && !L.contains(document.activeElement)) agentRender(); } }, 5000);
+if (!agent.cfg.connected) aiUi.view = 'list';
+else if (agent.threads.some(t => t.kind === 'chat')) aiUi.view = 'list';
+agentRender();

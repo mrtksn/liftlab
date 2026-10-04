@@ -12,7 +12,8 @@
 // from the target, a formula stopped, every N seconds while flying, or an expression of your own). When one turns
 // true it sends the agent its message and the state; it doesn't fire again within its gap.
 
-const AGENT_LS = 'dfb-agent', AGENT_KEY_LS = 'dfb-agent-key';
+const AGENT_LS = 'dfb-agent', AGENT_KEY_LS = 'dfb-agent-key', AGENT_THREADS_LS = 'dfb-agent-threads';
+const AGENT_THREADS_MAX = 30;         // chats kept (the oldest go first); each trigger has its own as well
 const AGENT_ROUNDS = 16;              // tool rounds in one turn
 const AGENT_RESULT_MAX = 6000;        // characters of one tool result sent back
 const AGENT_CONTEXT_MAX = 90000;      // characters of conversation kept (the oldest turns are dropped)
@@ -25,13 +26,14 @@ const AGENT_ENDPOINTS = {
 };
 
 const agent = {
-  cfg: { endpoint: 'openai', url: AGENT_ENDPOINTS.openai.url, model: AGENT_ENDPOINTS.openai.model, remember: false,
+  cfg: { connected: false, endpoint: 'openai', url: AGENT_ENDPOINTS.openai.url, model: AGENT_ENDPOINTS.openai.model, remember: false,
     pauseThinking: true, askFormulas: false, budget: 60, temperature: 0.2 },
   key: '',
   triggers: [],          // { id, kind, value, expr, msg, gap, keepFlying, on, fired, last }
-  msgs: [],              // the conversation, as the API takes it (without the system message)
-  feed: [],              // what the chat shows: { who: 'you'|'ai'|'tool'|'trigger'|'note'|'ask', text, … }
-  busy: false, abort: null, queue: [],
+  // Threads: each chat, and each trigger's (kind 'trigger', triggerId). msgs: the conversation as the API takes it
+  // (without the system message); feed: what the chat shows ({ who: 'you'|'ai'|'tool'|'trigger'|'note', text, … }).
+  threads: [], cur: null,
+  busy: false, abort: null, queue: [], turn: null,   // turn: the thread a turn is running in
   used: 0, tokens: { in: 0, out: 0 },
   rec: [], recNext: 0, recLast: 0,   // telemetry, 10 per simulated second, the last 120 s
   wasRunning: null,
@@ -43,7 +45,18 @@ function agentLoad() {
     if (s && s.cfg) for (const k of Object.keys(agent.cfg)) if (s.cfg[k] != null && typeof s.cfg[k] === typeof agent.cfg[k]) agent.cfg[k] = s.cfg[k];
     if (s && Array.isArray(s.triggers)) agent.triggers = s.triggers.slice(0, 12).map(t => ({ ...t, fired: 0, last: -1e9, was: false }));
     agent.key = (agent.cfg.remember ? localStorage.getItem(AGENT_KEY_LS) : sessionStorage.getItem(AGENT_KEY_LS)) || '';
+    if (s && s.cfg && s.cfg.connected == null) agent.cfg.connected = !!(agent.cfg.url && agent.cfg.model);   // (set up before connections were a step)
+    const T = JSON.parse(localStorage.getItem(AGENT_THREADS_LS) || '[]');
+    if (Array.isArray(T)) agent.threads = T.filter(t => t && t.id && Array.isArray(t.msgs) && Array.isArray(t.feed));
   } catch (e) {}
+}
+// The threads, without what can't be kept (a pending question, an undo's code): the newest chats, every trigger's.
+function agentSaveThreads() {
+  const keep = t => ({ ...t, feed: t.feed.map(({ confirm, undo, ...f }) => f) });
+  const chats = agent.threads.filter(t => t.kind === 'chat').sort((a, b) => b.updated - a.updated).slice(0, AGENT_THREADS_MAX);
+  const out = [...chats, ...agent.threads.filter(t => t.kind === 'trigger')].map(keep);
+  try { localStorage.setItem(AGENT_THREADS_LS, JSON.stringify(out)); }
+  catch (e) { try { localStorage.setItem(AGENT_THREADS_LS, JSON.stringify(out.map(t => ({ ...t, feed: t.feed.slice(-40), msgs: t.msgs.slice(-20) })))); } catch (x) {} }   // (over the browser's quota: keep less)
 }
 function agentSave() {
   try {
@@ -158,38 +171,65 @@ function agentSystem() {
     `Now: ${new Date().toISOString().slice(0, 10)}. Simulated time ${S.t.toFixed(1)} s.`,
   ].join('\n');
 }
-function agentFeed(item) { agent.feed.push(item); if (agent.feed.length > 300) agent.feed.shift(); if (typeof agentRenderFeed === 'function') agentRenderFeed(); return item; }
-// Ask the agent something: what you typed, or a trigger. Waits its turn if one is running.
+/* threads */
+const threadOf = id => agent.threads.find(t => t.id === id) || null;
+function threadNew(kind = 'chat', o = {}) {
+  const t = { id: (kind === 'trigger' ? 'g' : 'c') + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind, title: o.title || 'New chat',
+    triggerId: o.triggerId || null, msgs: [], feed: [], tokens: { in: 0, out: 0 }, requests: 0, created: Date.now(), updated: Date.now() };
+  agent.threads.push(t); return t;
+}
+function threadForTrigger(T) {
+  let t = agent.threads.find(x => x.kind === 'trigger' && x.triggerId === T.id);
+  if (!t) t = threadNew('trigger', { triggerId: T.id, title: triggerText(T) });
+  return t;
+}
+function threadDelete(id) {
+  const t = threadOf(id); if (!t) return;
+  if (agent.turn === t) agentStop();
+  agent.queue = agent.queue.filter(q => q.o.thread !== t);
+  agent.threads = agent.threads.filter(x => x !== t); if (agent.cur === id) agent.cur = null;
+  agentSaveThreads();
+}
+function agentFeed(item, th) {
+  th = th || agent.turn || threadOf(agent.cur); if (!th) return item;
+  th.feed.push(item); if (th.feed.length > 300) th.feed.shift(); th.updated = Date.now();
+  if (typeof agentRenderFeed === 'function') agentRenderFeed(th);
+  return item;
+}
+// Ask the agent something: what you typed (in a thread), or a trigger (in its own). Waits its turn if one is running.
 function agentAsk(text, o = {}) {
+  o.thread = o.thread || (o.trigger ? threadForTrigger(o.trigger) : threadOf(agent.cur) || threadNew());
   if (agent.busy) {
     if (o.trigger && agent.queue.some(q => q.o.trigger === o.trigger)) return;   // (that trigger is already waiting)
-    if (agent.queue.length < 4) agent.queue.push({ text, o }); return;
+    if (agent.queue.length < 4) agent.queue.push({ text, o }); if (typeof agentUi === 'function') agentUi(); return;
   }
   agentTurn(text, o);
 }
-function agentTrim() {   // keep the conversation under AGENT_CONTEXT_MAX, dropping whole turns from the start
-  let n = JSON.stringify(agent.msgs).length;
-  while (n > AGENT_CONTEXT_MAX && agent.msgs.length > 2) {
-    let i = 1; while (i < agent.msgs.length && agent.msgs[i].role !== 'user') i++;
-    if (i >= agent.msgs.length) break;
-    agent.msgs.splice(0, i); n = JSON.stringify(agent.msgs).length;
+function agentTrim(th) {   // keep the conversation under AGENT_CONTEXT_MAX, dropping whole turns from the start
+  let n = JSON.stringify(th.msgs).length;
+  while (n > AGENT_CONTEXT_MAX && th.msgs.length > 2) {
+    let i = 1; while (i < th.msgs.length && th.msgs[i].role !== 'user') i++;
+    if (i >= th.msgs.length) break;
+    th.msgs.splice(0, i); n = JSON.stringify(th.msgs).length;
   }
 }
 async function agentTurn(text, o = {}) {
-  if (!agent.cfg.url) { agentFeed({ who: 'note', tone: 'bad', text: 'Set the endpoint first (Connection, above).' }); return; }
-  agent.busy = true; agent.abort = new AbortController(); agentUi();
-  agentFeed(o.trigger ? { who: 'trigger', text: triggerText(o.trigger) + (o.trigger.msg ? ': ' + o.trigger.msg : '') } : { who: 'you', text });
-  agent.msgs.push({ role: 'user', content: text });
+  const th = o.thread || threadOf(agent.cur) || threadNew();
+  if (!agent.cfg.url || !agent.cfg.connected) { agentFeed({ who: 'note', tone: 'bad', text: 'Connect a model first.' }, th); return; }
+  agent.busy = true; agent.abort = new AbortController(); agent.turn = th; agentUi();
+  if (th.kind === 'chat' && th.title === 'New chat' && !o.trigger) th.title = text.replace(/\s+/g, ' ').slice(0, 60) + (text.length > 60 ? '…' : '');
+  agentFeed(o.trigger ? { who: 'trigger', text: triggerText(o.trigger) + (o.trigger.msg ? ': ' + o.trigger.msg : ''), t: S.t } : { who: 'you', text }, th);
+  th.msgs.push({ role: 'user', content: text });
   const pause = agent.cfg.pauseThinking && !o.keepFlying;
   agent.wasRunning = running;
   try {
     for (let round = 0; round < AGENT_ROUNDS; round++) {
       if (agent.used >= agent.cfg.budget) { agentFeed({ who: 'note', tone: 'bad', text: `The session's budget of ${agent.cfg.budget} requests is used up. Raise it in Settings to go on.` }); break; }
       if (pause && running) { running = false; renderRun(); }
-      agentTrim();
-      const m = await agentRequest();
+      agentTrim(th);
+      const m = await agentRequest(th);
       const calls = m.tool_calls || [];
-      agent.msgs.push({ role: 'assistant', content: m.content || null, ...(calls.length ? { tool_calls: calls } : {}) });
+      th.msgs.push({ role: 'assistant', content: m.content || null, ...(calls.length ? { tool_calls: calls } : {}) });
       if (m.content && String(m.content).trim()) agentFeed({ who: 'ai', text: String(m.content).trim() });
       if (!calls.length) break;
       for (const c of calls) {
@@ -204,7 +244,7 @@ async function agentTurn(text, o = {}) {
         let s = typeof out === 'string' ? out : JSON.stringify(out);
         if (s.length > AGENT_RESULT_MAX) s = s.slice(0, AGENT_RESULT_MAX) + '… (cut: ask for less)';
         item.text = s; item.bad = !!(out && out.error); agentRenderFeed();
-        agent.msgs.push({ role: 'tool', tool_call_id: c.id, content: s });
+        th.msgs.push({ role: 'tool', tool_call_id: c.id, content: s });
         if (agent.abort.signal.aborted) throw new DOMException('stopped', 'AbortError');
       }
       if (round === AGENT_ROUNDS - 1) agentFeed({ who: 'note', text: `Stopped after ${AGENT_ROUNDS} rounds of tools: say "go on" to continue.` });
@@ -213,10 +253,11 @@ async function agentTurn(text, o = {}) {
     if (e.name === 'AbortError') agentFeed({ who: 'note', text: 'Stopped.' });
     else agentFeed({ who: 'note', tone: 'bad', text: e.message || String(e) });
     // (the conversation must not end on tool calls without their answers)
-    const last = agent.msgs[agent.msgs.length - 1];
-    if (last && last.role === 'assistant' && last.tool_calls) for (const c of last.tool_calls) agent.msgs.push({ role: 'tool', tool_call_id: c.id, content: '{"error":"stopped"}' });
+    const last = th.msgs[th.msgs.length - 1];
+    if (last && last.role === 'assistant' && last.tool_calls) for (const c of last.tool_calls) th.msgs.push({ role: 'tool', tool_call_id: c.id, content: '{"error":"stopped"}' });
   } finally {
-    agent.busy = false; agent.abort = null;
+    agent.busy = false; agent.abort = null; agent.turn = null; th.updated = Date.now(); agentSaveThreads();
+    if (typeof agentRenderFeed === 'function') agentRenderFeed(th);   // (without the thinking dots)
     if (pause && agent.wasRunning && !running && !S.crashed) { running = true; renderRun(); }
     agentUi();
     const next = agent.queue.shift(); if (next) setTimeout(() => agentTurn(next.text, next.o), 0);
@@ -224,12 +265,12 @@ async function agentTurn(text, o = {}) {
 }
 function agentStop() { if (agent.abort) agent.abort.abort(); agent.queue.length = 0; }
 
-async function agentRequest() {
+async function agentRequest(th) {
   const url = agent.cfg.url.replace(/\/+$/, '') + '/chat/completions';
-  const body = { model: agent.cfg.model, messages: [{ role: 'system', content: agentSystem() }, ...agent.msgs],
+  const body = { model: agent.cfg.model, messages: [{ role: 'system', content: agentSystem() }, ...th.msgs],
     tools: Object.entries(AGENT_TOOLS).map(([name, T]) => ({ type: 'function', function: { name, description: T.desc, parameters: T.params } })),
     tool_choice: 'auto', temperature: agent.cfg.temperature };
-  agent.used++; agentUi();
+  agent.used++; th.requests++; agentUi();
   let r;
   try { r = await fetch(url, { method: 'POST', headers: agentHeaders(), body: JSON.stringify(body), signal: agent.abort.signal }); }
   catch (e) {
@@ -238,7 +279,7 @@ async function agentRequest() {
   }
   let d = null; try { d = await r.json(); } catch (e) {}
   if (!r.ok) throw new Error(`The endpoint said ${r.status}${d && d.error ? ': ' + (d.error.message || JSON.stringify(d.error)) : ''}`);
-  if (d && d.usage) { agent.tokens.in += d.usage.prompt_tokens || 0; agent.tokens.out += d.usage.completion_tokens || 0; }
+  if (d && d.usage) for (const T of [agent.tokens, th.tokens]) { T.in += d.usage.prompt_tokens || 0; T.out += d.usage.completion_tokens || 0; }
   const m = d && d.choices && d.choices[0] && d.choices[0].message;
   if (!m) throw new Error('The endpoint sent no answer' + (d && d.error ? ': ' + (d.error.message || '') : ''));
   return m;
@@ -255,4 +296,3 @@ async function agentModels() {
   if (!r.ok) throw new Error(`${r.status}${d && d.error ? ': ' + (d.error.message || '') : ''}`);
   return ((d && d.data) || []).map(m => m.id).filter(Boolean).sort();
 }
-function agentClear() { agentStop(); agent.msgs = []; agent.feed = []; agentRenderFeed(); }
