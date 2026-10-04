@@ -698,7 +698,6 @@ button.chip{background:transparent;cursor:pointer}
 /* ───────── header bits ───────── */
 .launch{display:inline-flex;align-items:center;gap:6px}
 .mini-lbl{font-size:12px;color:var(--muted);white-space:nowrap}
-.mode-desc{margin:0;width:0;min-width:100%;font-size:11.5px;line-height:1.3;color:var(--muted)}
 select.pending{border-color:var(--warn);border-style:dashed}
 
 /* ───────── fields: scale ends, clamping, switched off ───────── */
@@ -794,3 +793,8 @@ select.pending{border-color:var(--warn);border-style:dashed}
 .ai-fired{margin-left:auto}
 .hint.good{color:var(--good)}
 .hint.bad{color:var(--bad)}
+/* the game key layout: the move pad on the left, under W A S D (pilot.js) */
+.pilot.game > .pad:first-child{order:3}
+.pilot.game > .pilot-mid{order:2}
+.pilot.game > .pad:last-child{order:1}
+.keys-pop .seg{align-self:flex-start}

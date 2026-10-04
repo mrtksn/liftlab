@@ -8,12 +8,13 @@ Every physical law and control law is a plain function in `js/laws.js`, and you 
 
 Open `index.html` in a browser. There is no build step. It needs an internet connection to load three.js (r128, from cdnjs) and the Google Fonts it uses.
 
-The header has three groups:
+The header has two groups:
 - **Airframe:** start from a layout or one of your saved designs (the **Layouts ▾** menu). **Blank** is a bare frame with a battery and an IMU; it opens in edit mode, resting on the ground, for you to add motors to. If the airframe on screen has changes you haven't saved, you're asked first: save it (under a name you give, never over a different design), don't save, or cancel. Opening a saved design or a design file asks the same.
 - **Simulation:** ▶ / ❚❚ runs and pauses (**K**), ↺ resets (**R**), and ¼× ½× 1× sets the speed. Every flight starts on the ground with the motors stopped; the simulator then arms the drone and takes off to the target height for you, as you would with a real one. (**Reset into Hover / Throw** shows when a board runs the learning task: Throw has the drone thrown from the hand, to 7 m by default; picking one resets into it.)
-- **Steering:** Tilt body, Mixed or Stay level, with a line under it saying what the choice does.
 
-**Keys ?** lists every keyboard shortcut. The flight keys don't take keys a focused control needs: Space and Enter press a focused button or tick a box, arrows move a focused slider, and the tabs move with ←/→. Selects that reset the flight (the world, a task's board) apply a keyboard change on Enter or when you leave them, so stepping through them with the arrows doesn't reset anything.
+**Which way is forward.** A red arrow on the hub points to the drone's nose (red, as the X axis on the orientation triad). A fainter red arrow beside the drone, level and just outside the props, shows the way the forward key moves it: the heading it holds (with navigation), or its nose (without). **Show ▾ → Forward** turns it off.
+
+**Keys ?** lists every keyboard shortcut, and picks the layout: **Handset** (the default: W/S climb and descend, A/D turn, the arrows move, as the left and right sticks of a Mode 2 radio, the command module's keys and most drone simulators) or **Game** (W A S D move, the arrows climb and turn; the move pad goes to the left). The choice is kept in this browser. The flight keys don't take keys a focused control needs: Space and Enter press a focused button or tick a box, arrows move a focused slider, and the tabs move with ←/→. Selects that reset the flight (the world, a task's board) apply a keyboard change on Enter or when you leave them, so stepping through them with the arrows doesn't reset anything.
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
 
@@ -484,6 +485,8 @@ Its settings go to the flight core (parts out, columns scaled, ceilings, lean an
 A quad that loses a motor needs a controller that lets the body spin and flies on three (as in the Delft and ETH work); that isn't modelled.
 
 ## Flying it
+
+**Steering** (Airframe tab) is part of the design: how the drone makes a sideways force. **Tilt body** leans the whole drone, as any multirotor does. **Stay level** keeps the body flat and swings the rotors on their servos to push sideways (thrust vectoring). **Mixed** has the servos make a share of it (the slider under it) and leans for the rest. It's written into the flight controller's airframe file (`fc-export.js` → `fc_core.c`, read at start), and the flight core hands it to `thrustAxisTarget`, `forceDemand` and `allocation`; so a change starts the flight again. Mixed and Stay level need a servo that tilts a rotor; on other airframes only Tilt body can be picked. The supervisor falls back to Tilt body by itself when it holds the servos (a failing one).
 
 The pads on the 3D view and the keyboard steer the drone. With navigation they move the target it holds, at a commanded velocity that is also fed forward to the position law, so every airframe you build flies with the same controls. Without navigation (angle mode) they are the sticks: the arrows lean the drone (Gentle, Normal and Sport set how far), A/D turn it, W/S climb and sink around the hover throttle; Hold and Home are hidden, since nothing knows where the drone is.
 

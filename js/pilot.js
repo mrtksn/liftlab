@@ -18,7 +18,33 @@ const PILOT_LEVELS = {
 };
 const PILOT_ACCEL = 3;                  // how fast the commanded velocity ramps [m/s²]
 const PILOT_BOX = { xy: 25, zMin: 0.15, zMax: 15 };   // (as the drone's own box, rc_core.c: low enough to reach a parcel)
-const KEYMAP = { KeyW: 'up', KeyS: 'down', KeyA: 'yawL', KeyD: 'yawR', ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right' };
+// Two layouts. Handset: as a Mode 2 radio, the left hand climbs and turns (W A S D, the left stick), the right moves
+// (the arrows, the right stick); the command module's keys and most drone simulators do this. Game: W A S D move, as
+// in games, and the arrows climb and turn.
+const KEY_LAYOUTS = {
+  handset: { KeyW: 'up', KeyS: 'down', KeyA: 'yawL', KeyD: 'yawR', ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right' },
+  game: { KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'yawL', ArrowRight: 'yawR' },
+};
+const KEY_NAMES = { KeyW: 'W', KeyS: 'S', KeyA: 'A', KeyD: 'D', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+const CTRL_NAMES = { up: 'Climb', down: 'Descend', yawL: 'Turn left', yawR: 'Turn right', fwd: 'Forward', back: 'Back', left: 'Left', right: 'Right' };
+let keyLayout = 'handset'; try { if (localStorage.getItem('dfb-keys') === 'game') keyLayout = 'game'; } catch (e) {}
+const KEYMAP = { ...KEY_LAYOUTS[keyLayout] };
+const keyOf = c => KEY_NAMES[Object.keys(KEYMAP).find(k => KEYMAP[k] === c)];
+function setKeyLayout(k, store = true) {
+  if (!KEY_LAYOUTS[k]) return;
+  releaseAll(); keyLayout = k;
+  for (const x of Object.keys(KEYMAP)) delete KEYMAP[x]; Object.assign(KEYMAP, KEY_LAYOUTS[k]);
+  if (store) try { localStorage.setItem('dfb-keys', k); } catch (e) {}
+  // the pads show their keys; in the game layout the move pad goes on the left, under the hand on W A S D
+  document.querySelectorAll('[data-ctrl]').forEach(b => { const c = b.dataset.ctrl, kb = b.querySelector('kbd'); if (kb) kb.textContent = keyOf(c); b.setAttribute('aria-label', `${CTRL_NAMES[c]} (${keyOf(c)})`); });
+  const pl = document.querySelector('.pilot'); if (pl) pl.classList.toggle('game', k === 'game');
+  document.querySelectorAll('[data-keys]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.keys === k)));
+  const kb = (...cs) => cs.map(c => `<kbd>${keyOf(c)}</kbd>`).join(' ');
+  const set = (id, h) => { const e = document.getElementById(id); if (e) e.innerHTML = h; };
+  set('keysMove', kb('fwd', 'back', 'left', 'right')); set('keysAlt', kb('up', 'down')); set('keysTurn', kb('yawL', 'yawR'));
+  const f = document.getElementById('fwdKey'); if (f) f.textContent = keyOf('fwd');
+}
+document.querySelectorAll('[data-keys]').forEach(b => b.addEventListener('click', () => setKeyLayout(b.dataset.keys)));
 const pilot = { held: new Map(), level: 'normal', vref: [0, 0, 0] };   // held: control -> set of sources
 
 const isHeld = c => pilot.held.has(c);
@@ -112,6 +138,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) relea
 
 // On-screen pads: press and hold with mouse or touch.
 function bindPads() {
+  setKeyLayout(keyLayout, false);
   document.querySelectorAll('[data-ctrl]').forEach(b => {
     const c = b.dataset.ctrl;
     b.addEventListener('pointerdown', e => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (x) {} press(c, 'ptr:' + e.pointerId); });

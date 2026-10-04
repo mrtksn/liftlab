@@ -537,12 +537,16 @@ function buildAllocFields() {
   const f = (key, label) => { const n = numField('ap-' + key, { label, min: 0, max: 0.2, step: 0.005, u: '', dp: 3, ends: ['0 off', '0.2 strongest'] }, () => allocPrefs[key], v => { allocPrefs[key] = v; save(); }); allocFieldRefs.push(n.refresh); allocOff[key] = n.setOff; return n.node; };
   box.append(f('allowance', 'Keep margin (allowance)'), f('efficiency', 'Save power (efficiency)'), f('servoMove', 'Servo move cost (uses speed and lag)'));
   const m = numField('ap-mix', { label: 'Mixed steering: servos\' share of sideways force', min: 0, max: 1, step: 0.05, u: '%', dp: 0, k: 100, ends: ['0: the body leans', '100: servos only'] }, () => steerMix.share, v => { steerMix.share = v; steerMix.rho = 1; save(); });
-  allocFieldRefs.push(m.refresh); allocOff.mix = m.setOff; box.append(m.node);
+  allocFieldRefs.push(m.refresh); allocOff.mix = m.setOff; $('#mixSlot').append(m.node);
 }
 function syncAllocFields() {   // what doesn't apply to this airframe or steering is greyed out, with why
   const nj = joints().length, steer = steerJoints().length;
   allocOff.servoMove(!nj, 'No servos on this airframe.');
-  allocOff.mix(mode !== 'mixed' || !steer, mode !== 'mixed' ? 'Used only when Steering (top bar) is Mixed.' : 'No servos steer this airframe.');
+  allocOff.mix(mode !== 'mixed' || !steer, mode !== 'mixed' ? 'Used only when Steering is Mixed.' : 'No servos steer this airframe.');
+  $('#mixSlot').hidden = mode !== 'mixed';
+  // Mixed and Stay level push sideways by tilting rotors: they need a servo that swings one.
+  for (const id of ['modeMixed', 'modeLevel']) { const b = $('#' + id); b.disabled = !steer && b.getAttribute('aria-pressed') !== 'true'; b.title = steer ? '' : 'Needs a servo that tilts a rotor (Motor on servo)'; }
+  setText($('#steerNote'), !steer ? 'Only leaning: no servo tilts a rotor on this airframe.' + (mode !== 'tilt' ? ' Pick Tilt body.' : '') : 'Part of the design: the flight controller reads it when it starts (it\'s in its airframe file), so a change starts the flight again.');
 }
 function updateAllocInfo() {
   let P = (S.battV || 0) * (S.battI || 0), tight = null;   // electrical power from the pack
@@ -915,7 +919,9 @@ function setMode(m, recalc = true) {
   setText($('#modeDesc'), MODE_DESC[m] || '');
   ctl.iAtt = [0, 0, 0]; if (recalc) { refreshEnvelope(); save(); }
 }
-$('#modeTilt').addEventListener('click', () => setMode('tilt')); $('#modeMixed').addEventListener('click', () => setMode('mixed')); $('#modeLevel').addEventListener('click', () => setMode('level'));
+// A choice made here is a change to the design the flight controller loads at start (fc-export.js): fly it from the start.
+const pickMode = m => { if (m === mode) return; setMode(m); doReset(); syncAllocFields(); };
+$('#modeTilt').addEventListener('click', () => pickMode('tilt')); $('#modeMixed').addEventListener('click', () => pickMode('mixed')); $('#modeLevel').addEventListener('click', () => pickMode('level'));
 function renderRun() {   // one button: shows pause while running, play while paused
   const b = $('#runBtn'); b.classList.toggle('paused', !running);
   b.setAttribute('aria-label', running ? 'Pause' : 'Run'); b.title = running ? 'Pause (K)' : 'Run (K)';

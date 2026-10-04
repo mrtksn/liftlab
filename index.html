@@ -59,17 +59,6 @@
         </div>
       </div>
     </div>
-    <div class="hgroup" role="group" aria-labelledby="modeLbl">
-      <span class="lbl" id="modeLbl">Steering</span>
-      <div class="hrow">
-        <div class="seg" role="group" aria-labelledby="modeLbl" aria-describedby="modeDesc">
-          <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
-          <button type="button" id="modeMixed" aria-pressed="false">Mixed</button>
-          <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
-        </div>
-      </div>
-      <p class="mode-desc" id="modeDesc"></p>
-    </div>
   </header>
 
   <main class="work">
@@ -126,6 +115,17 @@
       <section class="sec">
         <div id="frameMassSlot"></div>
       </section>
+      <section class="sec" id="steerSec">
+        <h2 id="modeLbl">Steering <small>how it pushes sideways</small></h2>
+        <div class="seg" role="group" aria-labelledby="modeLbl" aria-describedby="modeDesc">
+          <button type="button" id="modeTilt" aria-pressed="true">Tilt body</button>
+          <button type="button" id="modeMixed" aria-pressed="false">Mixed</button>
+          <button type="button" id="modeLevel" aria-pressed="false">Stay level</button>
+        </div>
+        <p class="hint" id="modeDesc"></p>
+        <div id="mixSlot"></div>
+        <p class="hint" id="steerNote"></p>
+      </section>
       <section class="sec" id="battSec">
         <h2>Battery <small id="battSmall"></small></h2>
         <div id="battFields"></div>
@@ -164,6 +164,7 @@
           <span class="key" data-layer="cog"><i class="dot" style="background:var(--ink)"></i>true CoG</span>
           <span class="key" data-layer="cog"><i class="ring"></i>controller's CoG <i class="src-dot src-board" title="On board: what the flight code believes"></i></span>
           <span class="key"><i class="sq" style="background:var(--sensor)"></i>sensor</span>
+          <span class="key" data-layer="heading"><i class="sw" style="background:var(--ax-x)"></i>forward (<span id="fwdKey">↑</span>)</span>
           <span class="key" data-layer="est"><i class="sw ghost"></i>estimated pose <i class="src-dot src-board" title="On board: where the flight code thinks it is"></i></span>
         </div>
       </div>
@@ -180,10 +181,15 @@
           <button class="btn" type="button" id="tKeys" aria-expanded="false" aria-controls="keysPop" title="Keyboard shortcuts">Keys <span aria-hidden="true">?</span></button>
           <div class="show-menu keys-pop" id="keysPop" role="dialog" aria-label="Keyboard shortcuts" hidden>
             <p>The keys work while the cursor isn't in a field or on a control that uses the key itself: click the 3D view first.</p>
+            <div class="show-grp"><span class="lbl" id="keyLayLbl">Layout</span>
+              <div class="seg seg-sm" role="group" aria-labelledby="keyLayLbl">
+                <button type="button" data-keys="handset" aria-pressed="true" title="As a handset (Mode 2): the left stick climbs and turns (W A S D), the right stick moves (the arrows)">Handset</button>
+                <button type="button" data-keys="game" aria-pressed="false" title="As in games: W A S D move, the arrows climb and turn">Game</button>
+              </div></div>
             <div class="show-grp"><span class="lbl">Flying</span><dl>
-              <dt><kbd>W</kbd> <kbd>S</kbd></dt><dd>climb, descend</dd>
-              <dt><kbd>A</kbd> <kbd>D</kbd></dt><dd>turn left, right</dd>
-              <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>forward, back, left, right (from the heading)</dd>
+              <dt id="keysMove"></dt><dd>forward, back, left, right (from the heading: the red arrow beside the drone)</dd>
+              <dt id="keysAlt"></dt><dd>climb, descend</dd>
+              <dt id="keysTurn"></dt><dd>turn left, right</dd>
               <dt><kbd>Space</kbd></dt><dd>hold here</dd>
               <dt><kbd>H</kbd></dt><dd>fly home</dd>
               <dt><kbd>G</kbd></dt><dd>the chosen latch: drop what it holds, or grab what's in reach</dd>

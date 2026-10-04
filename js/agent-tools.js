@@ -105,7 +105,7 @@ const AGENT_TOOLS = {
     params: obj({ frame_mass: { type: 'number' }, steering: { type: 'string', enum: ['tilt', 'mixed', 'level'] }, battery: { type: 'object' } }),
     run: a => {
       if (a.frame_mass != null) { cfg.frame.mass = clamp(num(a.frame_mass, cfg.frame.mass), 0.02, 50); frameMassField.refresh(); }
-      if (a.steering) setMode(a.steering, false);
+      if (a.steering && a.steering !== mode) { setMode(a.steering, false); doReset(); }   // (the flight controller reads it at start)
       if (a.battery) { const b = battCfg(); for (const [k, v] of Object.entries(a.battery)) if (k in b && typeof v === typeof b[k]) b[k] = v; renderBattery(); renderBattSmall(); }
       undoKey = null; recomputeProps(); refreshEnvelope(); renderMass(); structural();
       return { frame_mass: cfg.frame.mass, steering: mode, battery: battCfg() };
