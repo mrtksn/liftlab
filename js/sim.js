@@ -12,22 +12,22 @@ function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang
 const r3 = v => +v.toFixed(3);
 const PRESETS = {
   blank: { label: 'Blank (frame, battery, IMU)', blank: true, build() {   // a bare frame to build on: nothing to lift it yet
-    return { frame: 0.12, comps: [mkMass('Battery', 0, 0, -0.03, { mass: 0.1, size: [0.07, 0.035, 0.02] }), mkSensor('imu', 'IMU', 0, 0, 0.01)], mode: 'tilt' }; } },
+    return { frame: 0.12, comps: [mkMass('Battery', 0, 0, -0.03, { battery: true, mass: 0.1, size: [0.07, 0.035, 0.02] }), mkSensor('imu', 'IMU', 0, 0, 0.01)], mode: 'tilt' }; } },
   quadx: { label: 'Quad X', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
-    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   hex: { label: 'Hexacopter', build() {
     const r = 0.25; const c = [0, 60, 120, 180, 240, 300].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1, tmax: 5 }));
-    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.26, size: [0.13, 0.045, 0.035] })); return { frame: 0.55, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.04, { battery: true, mass: 0.26, size: [0.13, 0.045, 0.035] })); return { frame: 0.55, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   tri: { label: 'Tricopter (yaw servo)', build() {
     const r = 0.22; const c = [mkMotor('Left', r3(r * cosd(60)), r3(r * sind(60)), 0.02, { spin: 1, tmax: 7 }),
       mkMotor('Right', r3(r * cosd(-60)), r3(r * sind(-60)), 0.02, { spin: -1, tmax: 7 }),
       ...mkServoMotor('Tail', -r, 0, 0.02, { hingeAz: 0, range: 30, rate: 300 }, { spin: 1, tmax: 7 })];
-    c.push(mkMass('Battery', 0.02, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.4, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
+    c.push(mkMass('Battery', 0.02, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.4, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   heli: { label: 'Main lifter + 4 steering motors', build() {
     const c = [mkMotor('Main', 0, 0, 0.06, { tmax: 22, kappa: 0.03, mass: 0.22, spin: 1, tau: 0.06, prop: 0.2 })]; const r = 0.26;
     [0, 90, 180, 270].forEach((a, i) => c.push(...mkServoMotor('S' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 45, rate: 300 }, { tmax: 4, kappa: 0.012, spin: i % 2 ? 1 : -1 })));
-    c.push(mkMass('Battery', 0, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }));
+    c.push(mkMass('Battery', 0, 0, -0.04, { battery: true, mass: 0.3, size: [0.12, 0.05, 0.035] }));
     const sn = defaultSensors(); sn[1].pos = [-0.12, -0.12, 0.08];   // compass on a boom, away from the big main motor
     return { frame: 0.5, comps: c.concat(sn), mode: 'tilt' }; } },
   helicopter: { label: 'Helicopter (main rotor + tail rotor)', build() {
@@ -39,19 +39,30 @@ const PRESETS = {
     const main = mkMotor('Main rotor', 0, 0, 0.14, { tmax: 24, prop: 0.3, kappa: 0.035, tau: 0.1, pitch: 'collective', mass: 0.2, spin: 1, parent: roll.id });
     const boom = mkLink('Tail boom', -0.03, 0, 0.04, { az: 180, el: 0, length: 0.45, mass: 0.05 });
     const tail = mkMotor('Tail rotor', -0.48, 0, 0.04, { tilt: 90, az: -90, tmax: 4, prop: 0.06, kappa: 0.012, tau: 0.02, mass: 0.04, spin: 1, parent: boom.id });
-    const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { mass: 0.3, size: [0.12, 0.05, 0.035] }),   // battery forward, to balance the tail
+    const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { battery: true, mass: 0.3, size: [0.12, 0.05, 0.035] }),   // battery forward, to balance the tail
       mkMass('Landing skids', 0.02, 0, -0.12, { mass: 0.06, size: [0.32, 0.2, 0.012] })];   // it stands on these, the tail rotor clear of the ground
     const sn = defaultSensors(); sn[1].pos = [-0.25, 0, 0.07];   // compass back along the boom, away from the main motor
     return { frame: 0.4, comps: c.concat(sn), mode: 'tilt' }; } },
   indoor: { label: 'Indoor quad (optical flow, no GPS)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
-    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] }));
+    c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] }));
     const sn = defaultSensors().filter(x => x.kind !== 'fix');
     sn.push(mkSensor('flow', 'Flow', 0, -0.03, -0.03));
     return { frame: 0.45, comps: c.concat(sn), mode: 'tilt' }; } },
+  cargo: { label: 'Cargo quad (a hook, a bag on a line)', cargoTask: true, build() {   // a quad with a hook under the hub, carrying a bag on a line, that can drop it and pick things up
+    const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
+    // The navigation holds 0.15 m above where it took off at the lowest: that leaves the hook about 7 cm over an
+    // 8 cm parcel's top, within its 20 cm reach (with room to spare for hovering a little high or to one side). (A parcel hung straight on the hook would have it take off standing
+    // on the parcel, too high to come back down to it once it's dropped: the bag hangs on a line instead.)
+    // The hook sits beside the battery, not below it: it rests on the battery's corners, not on the hook.
+    const hook = mkLatch('Hook', 0, 0.032, -0.035, { reach: 0.2 });
+    c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] }), hook,
+      mkHang('Bag', 0, 0.032, r3(-0.035 + LATCH_HOOK[2]), { length: 0.35, mass: 0.25, parent: hook.id }));
+    const sn = defaultSensors(); Object.assign(sn[3], fixDefaults('rtk'), { quality: 'rtk', name: 'RTK GPS' });   // (to line the hook up on a parcel: plain GPS wanders half a metre)
+    return { frame: 0.45, comps: c.concat(sn), mode: 'tilt' }; } },
   tiltquad: { label: 'Tilt-rotor quad (thrust vectoring)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].flatMap((a, i) => mkServoMotor('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360 }, { spin: i % 2 ? -1 : 1, tmax: 6 }));
-    c.push(mkMass('Battery', 0, 0, -0.035, { mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
+    c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
 };
 const cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
@@ -108,12 +119,13 @@ function shapeI(c) {
 // angles the flight software believes for its model.
 // A thin rod's inertia about its middle: m L²/12 across it, nothing along it.
 function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; return [0, 1, 2].flatMap(i => [0, 1, 2].map(j => k * ((i === j ? 1 : 0) - d[i] * d[j]))); }
+// The truth is what's on the drone now (a load dropped or picked up, cargo.js); the model is the design.
 function massProps(which) {
   const ang = which === 'truth' ? angleTrue : angleSeen;
   const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) }];
-  for (const c of cfg.comps) {
+  for (const c of which === 'truth' ? liveComps() : cfg.comps) {
     const pose = () => poseOf(c, ang);
-    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor') items.push({ m: c.mass, r: pose().p, I: null });
+    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
     else if (c.type === 'hang') { if (which === 'model' && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
     else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
@@ -136,12 +148,13 @@ function nominalAxis() {
   return nrm(s) > 1e-9 ? unit(s) : [0, 0, 1];
 }
 function syncRuntime() {
-  const ids = new Set(cfg.comps.map(c => c.id));
+  const live = liveComps(), ids = new Set(cfg.comps.map(c => c.id).concat(live.map(c => c.id))), here = new Set(live.map(c => c.id));
   for (const k of [...act.keys()]) if (!ids.has(k)) act.delete(k);
   for (const k of [...jst.keys()]) if (!ids.has(k)) jst.delete(k);
-  for (const k of [...pend.keys()]) if (!ids.has(k)) pend.delete(k);
+  for (const k of [...pend.keys()]) if (!here.has(k)) pend.delete(k);   // (a cable payload that fell is a loose body now)
   const R = qmat(S.q);
-  for (const c of cfg.comps) {
+  for (const c of cfg.comps.concat(cargo.extra)) {
+    if (c.type === 'hang' && !here.has(c.id)) continue;
     if (c.type === 'motor' && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, u: 0, v: 0, k: 1, Omega: 0, i: 0 });
     if (c.type === 'joint' && !jst.has(c.id)) { const t0 = restAngle(c), tr = t0 + (c.offset || 0) * D2R; jst.set(c.id, { th: tr, thR: tr, thCmd: t0, thHat: t0, pst: {}, rate: 0, acc: 0, dq: [] }); }
     if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, posNow(c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
@@ -202,7 +215,7 @@ function contactPoints() {
   const on = c => (MB && MB.of.get(c.id)) || 0;
   const pts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }];
   for (const x of [-0.06, 0.06]) for (const y of [-0.06, 0.06]) for (const z of [-0.02, 0.02]) pts.push({ rest: [x, y, z], b: 0, r: 0 });
-  for (const c of cfg.comps) {
+  for (const c of liveComps()) {
     const b = on(c);
     if (c.type === 'motor' || c.type === 'joint') {
       pts.push({ rest: add(c.pos, [0, 0, -0.03]), b, r: 0 }, { rest: c.pos.slice(), b, r: c.type === 'motor' ? 0.018 : 0.015 });
@@ -215,8 +228,9 @@ function contactPoints() {
       else pts.push({ rest: add(c.pos, [0, 0, c.length / 2 - c.radius]), b, r: c.radius }, { rest: add(c.pos, [0, 0, -c.length / 2 + c.radius]), b, r: c.radius });
     } else if (c.type === 'link') pts.push({ rest: linkTip(c), b, r: 0 }, { rest: c.pos.slice(), b, r: 0 }, { rest: add(c.pos, scl(linkDir(c), c.length / 2)), b, r: 0.008 });
     else if (c.type === 'sensor') pts.push({ rest: add(c.pos, [0, 0, -0.005]), b, r: 0.006 });
+    else if (c.type === 'latch') pts.push({ rest: add(c.pos, [0, 0, -0.01]), b, r: 0.008 });
   }
-  cReach = Math.max(0.1, ...pts.map(p => nrm(p.rest) + p.r), ...actuators().map(c => nrm(c.pos) + propR(c)));
+  cReach = Math.max(0.1, ...pts.map(p => nrm(p.rest) + p.r), ...liveMotors().map(c => nrm(c.pos) + propR(c)));
   return pts;
 }
 let cPts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }], cReach = 0.3;   // how far from the hub any part (or prop tip) reaches
@@ -224,7 +238,7 @@ const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // p
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area)
   const parts = [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
-  for (const c of cfg.comps) if (c.type === 'mass') parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
+  for (const c of liveComps()) if (c.type === 'mass') parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
   return parts;
 }
 function crash(why) { if (S.crashed) return; S.crashed = why; for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } onCrash(); }
@@ -312,7 +326,7 @@ function dynamics(dt) {
     return;
   }
   stepGusts(dt);
-  const R = qmat(S.q), RT = m3T(R), wv = windVec(), acts = actuators(), N = MB.bodies.length;
+  const R = qmat(S.q), RT = m3T(R), wv = windVec(), acts = liveMotors(), N = MB.bodies.length;
   const K = mbKinematics(cat6(S.w, m3v(RT, S.v)));
   const posed = (b, rest) => add(K.ob[b], m3v(K.Rb[b], sub(rest, MB.bodies[b].pivot)));   // a rest point on body b, now (frame axes)
   const fext = MB.bodies.map(() => [0, 0, 0, 0, 0, 0]);
@@ -327,8 +341,8 @@ function dynamics(dt) {
   MB.bodies.forEach((B, i) => { if (B.I.m > 0) push(i, m3v(RT, run('gravity', B.I.m, G)), posed(i, add(B.pivot, B.I.c))); });
 
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
-  let Ibatt = 0.5;   // avionics
-  const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0));
+  let Ibatt = cargo.power ? 0.5 : 0;   // avionics (no battery on board: nothing at all, cargo.js)
+  const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0)) || !cargo.power;
   const rotors = acts.map(c => {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
     const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, J: mp0.J * sp.J };   // this particular motor and prop
@@ -351,11 +365,13 @@ function dynamics(dt) {
   // The pack and the motors pull on each other within a step (more current, more sag, less current), so the voltage
   // the ESCs see settles through their input capacitors (about 2 ms) rather than jumping each step, which would
   // ring once a nearly empty pack's resistance is high.
-  const Vpack = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
-  S.battV += (Vpack - S.battV) * Math.min(1, dt / 0.002);
-  S.battK = steadyX(1, S.battV) ** 2;
-  S.battI = Ibatt;
-  heatBattery(Math.max(0, Ibatt), dt);
+  if (cargo.power) {
+    const Vpack = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
+    S.battV += (Vpack - S.battV) * Math.min(1, dt / 0.002);
+    S.battK = steadyX(1, S.battV) ** 2;
+    S.battI = Ibatt;
+    heatBattery(Math.max(0, Ibatt), dt);
+  } else { S.battV = 0; S.battK = 0; S.battI = 0; }
 
   // Rotors in the air: inflow, wake interaction, ground effect, then the loads on whatever carries them.
   rotorAir(rotors, K, R, RT, wv, dt);
@@ -373,7 +389,7 @@ function dynamics(dt) {
   const dr = run('bodyDrag', S.v, wv, S.w); push(0, m3v(RT, dr.F), [0, 0, 0]); pushT(0, dr.tau);
 
   // Hanging payloads on cables.
-  for (const c of cfg.comps) {
+  for (const c of liveComps()) {
     if (c.type !== 'hang') continue; const st = pend.get(c.id); if (!st) continue;
     const b = MB.of.get(c.id) || 0, P = posed(b, c.pos), aw = toWorld(P), va = velW(b, P);
     const dv = sub(st.p, aw), L = nrm(dv); let Fc = [0, 0, 0], Tn = 0;
@@ -391,7 +407,7 @@ function dynamics(dt) {
   // Ground and buildings: a contact spring at every point that's inside something, along the way out
   // (groundContact, turned to face that surface). Landing on something at more than 3 m/s is a crash;
   // bumping into a wall isn't, but the props may not survive it (below).
-  const near = terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : [];
+  const near = (terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : []).concat(cargoSolids(S.p, cReach + 0.2 + nrm(S.v) * 0.02));   // (and loose things at rest, cargo.js)
   for (const pt of cPts) {
     if (pt.b >= N) continue;
     const P = posed(pt.b, pt.rest), pw = toWorld(P);
@@ -452,7 +468,7 @@ function dynamics(dt) {
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
 }
-function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
+function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); cargoStep(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
 
 // Every flight starts on the ground, motors stopped, under the target (or at the start point if a building is in
 // the way); the flight computers then start as if just powered on, and the simulator arms and takes off for you.
@@ -460,6 +476,7 @@ let spawnAt = [0, 0, 0];
 function resetSim() {
   thr = null;
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
+  cargoReset();                        // every part back on board, the items to pick up where they're set
   buildBodies(); cPts = contactPoints();
   const blocked = (x, y) => { for (let z = 0.3; z <= Math.max(0.3, setpoint.z) + 0.01; z += 0.4) if (terrainNear([x, y, z], cReach + 0.4).length) return true; return false; };
   if (terrain.boxes.length && blocked(setpoint.x, setpoint.y)) {   // a building in the way: start again at the start point, in the open
@@ -506,7 +523,7 @@ function envelopeCalc() {
   const k = mode === 'level' ? 6 : 4; const gens = [];   // mixed can always fall back on leaning, so it needs the 4 axes
   const sj = steerJoints();
   const sets = [];   // what each rotor can really make: its thrust (0 to full) along any direction its servos can swing it to
-  for (const c of actuators()) {
+  for (const c of liveMotors()) {
     const h = motorEff(c); if (h <= 0) continue;   // what it really delivers: health, damage, or nothing if it has failed
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
@@ -523,7 +540,7 @@ function envelopeCalc() {
     } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
   }
   let mp = 0, treq = [0, 0, 0];
-  for (const c of cfg.comps) if (c.type === 'hang') { mp += c.mass; treq = add(treq, crs(sub(posNow(c), truth.c), scl(nb, c.mass * G))); }
+  for (const c of liveComps()) if (c.type === 'hang') { mp += c.mass; treq = add(treq, crs(sub(posNow(c), truth.c), scl(nb, c.mass * G))); }
   const fz = (truth.m + mp) * G / truth.m, areq = m3v(truth.Jinv, treq), freq = scl(nb, fz);
   const w = k === 4 ? [fz, areq[0], areq[1], areq[2]] : [freq[0], freq[1], freq[2], areq[0], areq[1], areq[2]];
   const labels = k === 4 ? ['Climb', 'Roll', 'Pitch', 'Yaw'] : ['Fwd/back', 'Left/right', 'Climb', 'Roll', 'Pitch', 'Yaw'];

@@ -77,6 +77,13 @@ void tlm_from_super(tlm_store *T, tlm_watch *W, const super_state *S, double t) 
   }
 }
 
+void tlm_from_cargo(tlm_store *T, cargo_state *C, double t) {
+  float v[1 + CG_MAX]; v[0] = (float)C->n;
+  for (int i = 0; i < C->n; i++) v[1 + i] = (float)cargo_bits(C, i);
+  tlm_put(T, TLM_CARGO, v, 1 + C->n, t);
+  if (C->said) { C->said = 0; tlm_text(T, 6, C->msg); }
+}
+
 void tlm_from_link(tlm_store *T, const rc_input *in, double t) {
   float v[4] = { in->up_rssi, in->up_lq, in->up_snr, rc_link_ok(in, t) ? 0.0f : 1.0f };
   tlm_put(T, TLM_LINK, v, 4, t);

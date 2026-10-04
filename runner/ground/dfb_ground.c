@@ -28,10 +28,10 @@
  *   --status           a status line every second
  *
  * Keys (--keys): W/S climb, sink · A/D turn · arrows (or I/K/J/L) forward, back, left, right · Space hold here ·
- *   H home · 1/2/3 gentle, normal, sport · R arm/disarm · T take off/land · C calibrate · Q quit
+ *   H home · 1/2/3 gentle, normal, sport · R arm/disarm · T take off/land · C calibrate · G latch 1 (drop, grab) · Q quit
  *
  * Text commands (ground_text.h), one per line, from the terminal or as UDP datagrams (replies go back to the
- * sender): press/release/tap NAME, stick AXIS V, goto X Y Z [HEADING], calibrate, cmd ID V…, status, messages, quit.
+ * sender): press/release/tap NAME, stick AXIS V, goto X Y Z [HEADING], calibrate, latch N open|close, cmd ID V…, status, messages, quit.
  * Sticks and stick buttons sent this way lapse after a second unless sent again: if a script stops, the sticks centre.
  *
  * Wiring. A module with separate CRSF TX and RX pads (a full UART): a USB-serial adapter at 3.3 V, its TX to the
@@ -112,7 +112,7 @@ static void command(char *s, char *reply, size_t rn, double t) {
   char cp[256]; snprintf(cp, sizeof cp, "%s", s);
   int r = gnd_text(&G, &IN, s, t, reply, (int)rn);
   if (r == 2) running = 0;
-  else if (!r) snprintf(reply, rn, "unknown: %.40s (press, release, tap, stick, goto, calibrate, cmd, status, messages, quit)", cp);
+  else if (!r) snprintf(reply, rn, "unknown: %.40s (press, release, tap, stick, goto, calibrate, latch, cmd, status, messages, quit)", cp);
 }
 
 /* ── the terminal's keys ── */
@@ -133,6 +133,7 @@ static void key(int c, double t, int *esc) {
     case 'r': IN.held ^= GB(GB_ARM); printf("\r%s\r\n", IN.held & GB(GB_ARM) ? "arm switch on" : "arm switch off"); return;
     case 't': IN.held ^= GB(GB_FLY); printf("\r%s\r\n", IN.held & GB(GB_FLY) ? "fly switch on: take off" : "fly switch off: land"); return;
     case 'c': { float v = 1; gnd_command(&G, RC_CMD_LEARN, &v, 1); printf("\rasked the learning to calibrate\r\n"); return; }
+    case 'g': { float v[2] = { 0, 2 }; gnd_command(&G, RC_CMD_LATCH, v, 2); printf("\rlatch 1: toggle (drop, or grab)\r\n"); return; }
     case 'q': running = 0; return;
   }
   if (b >= 0) IN.until[b] = t + HOLD;
@@ -201,7 +202,7 @@ int main(int argc, char **argv) {
   signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
   printf("command module: %s%s, inputs: %s%s%s; %s\r\n", tx_dev ? "transmitter module on " : "no transmitter module (test)", tx_dev ? tx_dev : "",
          keys ? "keys" : "text commands", js >= 0 ? ", gamepad" : "", udp >= 0 ? ", UDP" : "", G.why);
-  if (keys) printf("W/S climb, sink · A/D turn · arrows move · Space hold · H home · 1/2/3 speed · R arm · T take off/land · C calibrate · Q quit\r\n");
+  if (keys) printf("W/S climb, sink · A/D turn · arrows move · Space hold · H home · 1/2/3 speed · R arm · T take off/land · C calibrate · G latch 1 · Q quit\r\n");
 
   const double step = 0.004; double t0 = now_s(), next = t0, next_status = t0 + 1, last = t0;
   uint32_t msgs_seen = 0, dropped_was = 0; int alert_was = -1, why_was = -1, esc = 0, stdin_open = 1; char line[512]; int ln = 0;

@@ -250,7 +250,7 @@ function renderComputers1(full) {
         el('p', { class: 'board-note', text: K.note }),
         el('dl', { class: 'kv board-kv' },
           el('dt', { text: 'Runs' }), el('dd', { text: runs }),
-          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : [])].join(', ') || '—' }),
+          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : []), ...(b.tasks.includes('cargo') ? latches().map(l => l.name) : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
           ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
         ex.childElementCount ? ex : el('span'), ex.childElementCount ? errLine(b.id) : null));

@@ -28,8 +28,10 @@
 enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD, RC_HOME };
 /* Ground-station commands (CRSF 0x80/0xD1: command, sequence 1–255, up to 6 values as 16-bit integers × rc_cmd_scale):
  *   GOTO   x y z [m from home], heading [rad]: fly there
- *   LEARN  code: a learning command (learn_core.h: 1 calibrate, 2 stop, 3 fly on the description, 4 on the learned) */
-enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2 };
+ *   LEARN  code: a learning command (learn_core.h: 1 calibrate, 2 stop, 3 fly on the description, 4 on the learned)
+ *   LATCH  latch (0…, −1 all), action (0 open, 1 close, 2 toggle): for the cargo task (cargo_core.h), on whichever
+ *          board runs it; the navigation ignores it */
+enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3 };
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 #define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'

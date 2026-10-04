@@ -28,8 +28,9 @@ const linkTip = l => add(l.pos, scl(linkDir(l), l.length));
 
 const joints = () => cfg.comps.filter(c => c.type === 'joint');
 const links = () => cfg.comps.filter(c => c.type === 'link');
-const compById = id => id == null ? null : cfg.comps.find(c => c.id === id) || null;
-const isHolder = c => !!c && (c.type === 'joint' || c.type === 'link');
+// (also a part picked up in flight: cargo.js keeps those apart from the design)
+const compById = id => id == null ? null : cfg.comps.find(c => c.id === id) || (typeof cargo !== 'undefined' && cargo.extra.find(c => c.id === id)) || null;
+const isHolder = c => !!c && (c.type === 'joint' || c.type === 'link' || c.type === 'latch');
 function parentOf(c) { const p = compById(c.parent); return isHolder(p) ? p : null; }   // what a part is attached to (null: the frame)
 function ancestorsOf(c) {   // what a part hangs from, nearest first
   const out = [], seen = new Set([c.id]);
@@ -62,7 +63,7 @@ function mountFrame(c) {
   const p = parentOf(c);
   return p && p.type === 'link' ? rodFrameOf(p) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
 }
-const mountName = c => { const p = parentOf(c); return p && p.type === 'link' ? p.name : p ? p.name + '\'s output' : 'the frame'; };
+const mountName = c => { const p = parentOf(c); return p && (p.type === 'link' || p.type === 'latch') ? p.name : p ? p.name + '\'s output' : 'the frame'; };
 // A servo's hinge axis as a heading and tilt relative to what it's mounted on (degrees), and back.
 function hingeRel(j) {
   const a = m3v(m3T(mountFrame(j)), jointAxis(j));
@@ -222,11 +223,13 @@ function rotationBetween(a, b) {   // smallest rotation taking unit a to unit b
 }
 // Attach a part to a holder (or to the frame with null). On a rod a part goes to the rod's far end; on a
 // servo it goes onto the servo's output: a motor or rod right on the pivot (a tilt-rotor, an arm), anything
-// else just below it. A servo given its first motor is there to steer it, so it's handed to the allocator.
+// else just below it; on a latch it hangs from the hook, its top at the hook. A servo given its first motor is
+// there to steer it, so it's handed to the allocator.
 function attachTo(c, a) {
   const firstMotor = a && a.type === 'joint' && c.type === 'motor' && !motorsUnder(a).length;
   c.parent = a ? a.id : null;
-  const to = !a ? null : a.type === 'link' ? linkTip(a) : c.type === 'motor' || c.type === 'link' ? a.pos : add(a.pos, [0, 0, -0.04]);
+  const to = !a ? null : a.type === 'link' ? linkTip(a) : a.type === 'latch' ? add(hookOf(a), [0, 0, -topOf(c)])
+    : c.type === 'motor' || c.type === 'link' ? a.pos : add(a.pos, [0, 0, -0.04]);
   if (to) { const d = sub(to, c.pos); c.pos = to.map(v => +v.toFixed(4)); shiftSubtree(c, d); }
   if (firstMotor && a.mode === 'manual') a.mode = 'auto';
 }

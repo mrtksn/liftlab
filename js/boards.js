@@ -20,6 +20,9 @@
 //          comes to it and goes down the radio as CRSF frames, within the link's budget. Usually the flight
 //          controller (where receivers go: the sticks then don't depend on the Pi), it can be on the Pi instead.
 //          Without it the simulator's pilot reaches the boards directly, as over a cable.
+//   cargo  the latches (cargo_core.c), 50 Hz: drives each latch open or closed on the pilot's command (the radio's
+//          LATCH command, or the simulator's buttons as over a cable), reads their load switches, and reports them.
+//          Any board: a third ESP32 just for the latches, the flight controller, or the Pi (dfb_pi --latch).
 // Without navigation the pilot flies the flight core directly, in angle mode (the sticks lean the drone).
 // Each board loads a program with the formulas of its tasks.
 //
@@ -52,6 +55,11 @@ const TASKS = {
 };
 TASKS.tlm = { label: 'Telemetry & radio', hz: 200, formulas: [],
   what: 'The ExpressLRS receiver is wired to this board. Its channels fly the drone; the other tasks\' telemetry comes here and goes down the radio, as much as the link has room for. About 16 KB of an ESP32\'s memory.' };
+TASKS.cargo = { label: 'Cargo', hz: 50, formulas: [],
+  what: 'The latches are wired to this board: it opens and closes them on the pilot\'s command (the radio, or the buttons on the view) and reports what they hold. Any board will do: the flight controller, the Pi, or an ESP32 of its own.' };
+// Tasks that are plain code, without formulas: a board that runs only these loads no flight program.
+const NO_PROGRAM = new Set(['tlm', 'cargo']);
+const needsProgram = b => b.tasks.some(t => !NO_PROGRAM.has(t));
 const BOARD_MAX = 4, LINK_DELAY = 0.006;   // serial link (921600 baud): frame time plus scheduling, each way [s]
 
 /* ───────── the configuration (part of the design) ───────── */
@@ -113,6 +121,7 @@ function taskCost(task) {
   if (task === 'learn') { const k = 2 * inputs; return 5 * k * k + 30 * k + 40 * inputs + 150 + 300; }   // the in-flight learning, every frame
   if (task === 'super') return 5 * m * 40 + 2 * (30 * n + 60 * n * n + 200) + 800;   // the health check, the margins (two solves), the decisions
   if (task === 'tlm') return 400;   // parsing the receiver's bytes, packing and scheduling the telemetry
+  if (task === 'cargo') return 60 + 20 * latches().length;
   if (task === 'ground') return 4 * FLIGHT_COST.stickInput() + FLIGHT_COST.groundAlerts() / 25 + 300;   // the sticks every step, the alerts 10 times a second, the frames
   return 0;
 }
@@ -139,7 +148,7 @@ function boardBudget(b) {
   const K = BOARD_KINDS[b.kind];
   const ops = b.tasks.reduce((s, t) => s + taskCost(t) * TASKS[t].hz, 0);
   const load = ops / (K.mops * 1e6) * (K.mcu ? 1 : 1.5);   // a Linux board loses some to the system
-  let memKB = 0; if (b.tasks.length) try { const P = boardProgram(b.tasks); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
+  let memKB = 0; if (needsProgram(b)) try { const P = boardProgram(b.tasks); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
   return { ops, load, memKB, ramKB: K.ramKB };
 }
 
@@ -147,7 +156,7 @@ function boardBudget(b) {
 const brt = {
   module: null, err: '', inst: new Map(), sig: null, ready: false,
   toCore: [], toNav: [], q: [], tel: null, navOut: null, navReady: false, home: null,
-  t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0,
+  t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0, nextCargo: 0, cargoN: 0,
   gnd: null, gndErr: '', gndOk: false,   // the command module's instance (while the drone has a radio); gndOk: its program runs (stickInput, groundAlerts)
   pilot: { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 },
   fcState: 0, fcWhy: '', navWhy: '', out: null, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
@@ -202,7 +211,7 @@ function boardsStart() {
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
-  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; gsSet.x = null; gsSet.pending = null; radioReset();
+  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
   learn.view = null; learn.msg = '';
@@ -215,13 +224,17 @@ function boardsStart() {
     let w = brt.inst.get(b.id);
     if (!w) { w = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports; brt.inst.set(b.id, w); }
     w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0, radioCfg.rate, radioCfg.ratio);
-    if (!b.tasks.some(t => t !== 'tlm')) continue;                 // (the radio alone needs no flight program)
+    if (b.tasks.includes('cargo')) {                                // the latches, as they were set up: closed or open
+      const ls = latches().slice(0, 8); frIn(w, ls.map(l => l.travel ?? 0.15));
+      w.cargo_setup(ls.length, ls.reduce((m, l, i) => m | (l.closed ? 1 << i : 0), 0)); brt.cargoN = w.cargo_nmsg();
+    }
+    if (!needsProgram(b)) continue;                                 // (the radio and the latches need no flight program)
     let img; try { img = boardImage(b); } catch (e) { brt.err = `${b.name}: ${e.message}`; return; }
     brt.srcs.set(b.id, boardSrcKey(b.tasks, rnSources()));
     if (img.length > w.img_cap()) { brt.err = `${b.name}: the flight program is too big for the board`; return; }
     new Uint8Array(w.memory.buffer, w.img_ptr(), img.length).set(img);
     const e = w.host_setup(img.length); if (e) { brt.err = `${b.name}: ${cstr(w, w.why_ptr())}`; return; }
-    const needAf = b.tasks.some(t => t !== 'nav' && t !== 'tlm');
+    const needAf = b.tasks.some(t => t !== 'nav' && !NO_PROGRAM.has(t));
     if (needAf && !af) { brt.err = 'Flight core: ' + afErr; brt.fcWhy = brt.err; return; }
     if (needAf) new Uint8Array(w.memory.buffer, w.blob_ptr(), af.length).set(af);
     if (b.tasks.includes('core') && w.fc_setup(af.length)) { brt.err = 'Flight core: ' + cstr(w, w.why_ptr()); brt.fcWhy = brt.err; return; }
@@ -267,7 +280,7 @@ function boardsStageProgram() {
   if (!brt.ready) return;
   const srcs = rnSources();
   for (const b of computers().boards) {
-    const w = brt.inst.get(b.id); if (!w || !b.tasks.some(t => t !== 'tlm')) continue;
+    const w = brt.inst.get(b.id); if (!w || !needsProgram(b)) continue;
     const key = boardSrcKey(b.tasks, srcs); if (brt.srcs.get(b.id) === key) continue;   // none of its formulas changed
     let img; try { img = boardImage(b, srcs); } catch (e) { rnEvent(`${b.name}: the edit didn't compile for it: ${e.message}`, 'bad'); continue; }
     brt.srcs.set(b.id, key);
@@ -294,7 +307,7 @@ function boardsStageProgram() {
 // What the boards' loaders did since (shown in the Computers tab): swapped in, or fell back.
 function boardsHostEvents() {
   for (const b of computers().boards) {
-    const w = brt.inst.get(b.id); if (!w || !b.tasks.some(t => t !== 'tlm')) continue;
+    const w = brt.inst.get(b.id); if (!w || !needsProgram(b)) continue;
     const e = w.host_event(); if (!e) continue;
     rnEvent(`${b.name}: ${HOST_EVENTS[e] || 'event ' + e}`, e === 3 ? 'good' : e === 1 ? '' : 'bad');
   }
@@ -312,6 +325,29 @@ function pilotLearnCmd(name) {
 function boardsLearnCmd(name) {
   const b = boardOf('learn'), w = b && brt.ready && brt.inst.get(b.id); if (!w) return -1;
   const r = w.learn_cmd(LN_CMD[name]); boardsReadViews(true); return r;
+}
+
+// The cargo task's step, 50 times a second on its board: the load switches in (each latch with one fitted reads
+// whether something hangs from it), the latches out (cargo.js moves them), and what it says.
+function cargoTick() {
+  const b = boardOf('cargo'), w = b && brt.inst.get(b.id);
+  if (!w || brt.t < brt.nextCargo - 1e-9) return;
+  brt.nextCargo += 0.02;
+  const ls = latches().slice(0, 8);
+  const loaded = ls.reduce((m, l, i) => m | (latchLoaded(l) ? 1 << i : 0), 0), sw = ls.reduce((m, l, i) => m | (l.sense !== false ? 1 << i : 0), 0);
+  cargoDrive(w.cargo_tick(0.02, brt.t, loaded, sw));
+  const n = w.cargo_nmsg(); if (n !== brt.cargoN) { brt.cargoN = n; cargoLog(`${b.name}: ${cstr(w, w.cargo_msg_ptr())}`, 'board'); }
+}
+// A latch command from the pilot (the buttons on the view, G): with a radio it goes up the link as a LATCH command
+// (the command module queues it), otherwise straight to the cargo task's board, as over a cable. latch: 0… or −1 all;
+// action: 0 open, 1 close, 2 toggle. Returns '' or why it can't.
+function pilotCargoCmd(latch, action) {
+  const b = boardOf('cargo');
+  if (!b) return 'no board runs the Cargo task (Computers tab)';
+  if (!cargo.power) return 'the drone has no power';
+  if (brt.gnd) return radioCommand(3, [latch, action]) ? 'the command module has too many commands waiting' : '';
+  const w = brt.ready && brt.inst.get(b.id); if (!w) return 'the boards aren\'t running';
+  return w.cargo_cmd(latch, action) ? 'no such latch' : '';
 }
 
 /* ───────── frames between the tasks ───────── */
@@ -389,13 +425,20 @@ function boardsControl(dt) {
   const idle = () => { for (const c of acts) { const st = act.get(c.id); if (st) setThrottle(c, st, 0, 0); } };
   if (!brt.ready || !coreB) { idle(); return; }
   brt.t += dt;
+  if (!cargo.power) {                                               // no battery on board: every board is dark (cargo.js)
+    idle(); brt.fcState = 0; brt.fcWhy = 'no power: the battery fell off'; brt.navOut = null;
+    const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
+    if (tw) radioTick(dt, tlmB, tw, coreB, navB, true);             // (the command module on the ground runs on, and hears nothing)
+    return;
+  }
   const W = brt.inst.get(coreB.id), nav = navB && brt.inst.get(navB.id), same = navB && navB.id === coreB.id;
   throwHandTick(dt);
   autoPilot(dt, !!navB);
-  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && b.tasks.some(t => t !== 'tlm')) w.host_tick(dt); }   // the loaders' steps, on every board
+  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && needsProgram(b)) w.host_tick(dt); }   // the loaders' steps, on every board
   deliverFrames();
   const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
   if (tw) radioTick(dt, tlmB, tw, coreB, navB);
+  cargoTick();
 
   // The flight core: commands that have arrived, then a step on the newest IMU sample.
   while (brt.toCore.length && brt.toCore[0].at <= brt.t + 1e-9) {
@@ -481,7 +524,7 @@ function boardsControl(dt) {
 // board wrote goes down. The tasks put their telemetry in every 10 ms; boards without the radio send theirs over
 // the link every 50 ms; the channels go to the navigation's board 50 times a second, or (no navigation) the
 // receiver's board makes the flight core's stick command.
-function radioTick(dt, tlmB, tw, coreB, navB) {
+function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
   radio.t = brt.t;
   const g = brt.gnd;
   if (g) {                                                           // the command module: its step, every 4 ms
@@ -499,6 +542,7 @@ function radioTick(dt, tlmB, tw, coreB, navB) {
     if (brt.t >= brt.nextGsRead - 1e-9) { brt.nextGsRead += 0.1; gsRead(); }
   }
   radioStep(dt, brt.t);
+  if (droneOff) { radio.toBoard = []; return; }                    // (nothing powers the receiver)
   if (radio.toBoard.length) {
     const rb = new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), 2048); let n = 0;
     let k = 0; for (; k < radio.toBoard.length; k++) { const f = radio.toBoard[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
@@ -509,7 +553,7 @@ function radioTick(dt, tlmB, tw, coreB, navB) {
     const pack = brt.t >= brt.nextPack - 1e-9; if (pack) brt.nextPack += 0.05;
     for (const b of computers().boards) {
       const w = brt.inst.get(b.id); if (!w || !b.tasks.length) continue;
-      w.tlm_publish((b.tasks.includes('core') ? 1 : 0) | (b.tasks.includes('nav') ? 2 : 0) | (b.tasks.includes('learn') ? 4 : 0) | (b.tasks.includes('super') ? 8 : 0), brt.t);
+      w.tlm_publish((b.tasks.includes('core') ? 1 : 0) | (b.tasks.includes('nav') ? 2 : 0) | (b.tasks.includes('learn') ? 4 : 0) | (b.tasks.includes('super') ? 8 : 0) | (b.tasks.includes('cargo') ? 16 : 0), brt.t);
       if (pack && b.id !== tlmB.id) { const n = w.tlm_pack(); if (n) sendFrame(b, tlmB, 'tlm', frOut(w, n)); }
     }
   }
@@ -520,6 +564,8 @@ function radioTick(dt, tlmB, tw, coreB, navB) {
   if (brt.t >= brt.nextRc - 1e-9) {
     brt.nextRc += 0.02;
     if (navB && navB.id !== tlmB.id) sendFrame(tlmB, navB, 'rc', frOut(tw, tw.rc_pack(brt.t)));
+    const cgB = boardOf('cargo');                                    // the latches' board takes the LATCH commands from these too
+    if (cgB && cgB.id !== tlmB.id && (!navB || cgB.id !== navB.id)) sendFrame(tlmB, cgB, 'rc', frOut(tw, tw.rc_pack(brt.t)));
     if (!navB && coreB && !tw.radio_stick(brt.t)) {                 // angle mode: the sticks, while the channels come
       const c = new Float32Array(tw.memory.buffer, tw.cmd_ptr(), 5);
       fcSend({ arm: c[0], roll: c[1], pitch: c[2], yaw: c[3], throttle: c[4] }, coreB.id === tlmB.id ? 0 : LINK_DELAY);

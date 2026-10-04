@@ -26,7 +26,7 @@
  * A restart that isn't a power-on (a crash, the watchdog, reboot force) keeps the switches as they were, in memory
  * that survives it, so the switch warning (ground_core.h) doesn't turn arm and fly off in flight.
  * And the text commands (ground_text.h) from a script or a terminal on the USB port: press/release/tap NAME,
- * stick AXIS V, goto X Y Z [HEADING], calibrate, cmd ID V…, status, messages. A program with edited formulas is
+ * stick AXIS V, goto X Y Z [HEADING], calibrate, latch N open|close, cmd ID V…, status, messages. A program with edited formulas is
  * not loaded here yet: the ESP32 runs its built-in one (dfb_ground --program takes one).
  */
 #include <stdio.h>
@@ -257,7 +257,7 @@ void app_main(void) {
         if (line[6]) printf("rebooting; the switches stay as they are\n"); else keep.magic = 0;   /* (a plain reboot starts afresh: the switch warning) */
         fflush(stdout); esp_restart();
       }
-      else if (!gnd_text(&G, &TI, line, t, reply, sizeof reply)) snprintf(reply, sizeof reply, "unknown (show, set, save, reboot, press, release, tap, stick, goto, calibrate, cmd, status, messages)");
+      else if (!gnd_text(&G, &TI, line, t, reply, sizeof reply)) snprintf(reply, sizeof reply, "unknown (show, set, save, reboot, press, release, tap, stick, goto, calibrate, latch, cmd, status, messages)");
       if (reply[0]) printf("%s\n", reply);
     }
     /* what the module hands back */

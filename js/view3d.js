@@ -101,6 +101,11 @@ function buildMaterials() {
     bldgEdgeFade: new THREE.LineBasicMaterial({ color: colorOf('--bldg-edge'), transparent: true, opacity: 0.3, depthWrite: false }),
     shadow: new THREE.MeshBasicMaterial({ color: colorOf('--ink'), transparent: true, opacity: 0.2, depthWrite: false }),
     stub: new THREE.MeshBasicMaterial({ color: colorOf('--bad') }),
+    cargo: new THREE.MeshStandardMaterial({ color: colorOf('--cargo'), roughness: 0.8 }),
+    reachOk: new THREE.LineDashedMaterial({ color: colorOf('--good'), dashSize: 0.02, gapSize: 0.012, depthTest: false, transparent: true }),
+    reachFar: new THREE.LineDashedMaterial({ color: colorOf('--muted'), dashSize: 0.02, gapSize: 0.012, depthTest: false, transparent: true, opacity: 0.8 }),
+    ringOk: new THREE.MeshBasicMaterial({ color: colorOf('--good'), side: THREE.DoubleSide, transparent: true, depthTest: false }),
+    ringFar: new THREE.MeshBasicMaterial({ color: colorOf('--muted'), side: THREE.DoubleSide, transparent: true, opacity: 0.8, depthTest: false }),
   };
 }
 function applyTheme() {
@@ -221,12 +226,18 @@ function spinMarks(pr, spin) {
   }
   return g;
 }
+// What the view draws on the drone: the design while editing, what's on board now while flying (a load dropped or
+// picked up, cargo.js). Rebuilt when that changes.
+let droneShown = '';
+const viewComps = () => typeof editMode !== 'undefined' && editMode ? cfg.comps : liveComps();
 function rebuildDrone() {
+  droneShown = cargo.rev + ':' + (typeof editMode !== 'undefined' && editMode);
+  const comps = viewComps();
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
   drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), mats.frame));
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
-  const js = joints().slice().sort((a, b) => chainOf(a).length - chainOf(b).length);
+  const js = comps.filter(c => c.type === 'joint').sort((a, b) => chainOf(a).length - chainOf(b).length);
   const holder = c => { const j = parentJoint(c); return j ? { g: jointGroups.get(j.id), o: j.pos } : { g: drone, o: [0, 0, 0] }; };
   // A part's connector starts where it hangs from: a rod's tip, a joint's pivot, or the hub.
   const rel = c => { const h = holder(c), par = parentOf(c); return { g: h.g, p: sub(c.pos, h.o), from: par && par.type === 'link' ? sub(linkTip(par), h.o) : [0, 0, 0] }; };
@@ -245,7 +256,7 @@ function rebuildDrone() {
     const horn = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.008, 0.003), mats.ink); horn.position.set(0.012, 0, 0.004);
     const hg = new THREE.Group(); hg.quaternion.setFromRotationMatrix(basis); hg.add(horn); horn.userData.compId = j.id; jg.add(hg);
   }
-  for (const c of cfg.comps) {
+  for (const c of comps) {
     if (c.type === 'joint') continue;
     const { g, p, from } = rel(c);
     const r = rod(from, p, 0.007, mats.frame); if (r) { r.userData.compId = c.id; g.add(r); }   // clicking the arm a part hangs on picks the part
@@ -277,7 +288,14 @@ function rebuildDrone() {
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
       else if (c.shape === 'cylinder') geo = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
       else geo = new THREE.BoxGeometry(...c.size);
-      const m = new THREE.Mesh(geo, c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
+      const m = new THREE.Mesh(geo, c.cargo ? mats.cargo : c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
+    } else if (c.type === 'latch') {   // a hook: its body, and a jaw that swings open (updateScene)
+      const lg = new THREE.Group(); lg.position.set(...p); lg.userData.compId = c.id; pickGroups.set(c.id, lg); g.add(lg);
+      lg.add(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.022, 0.012), mats.frame));
+      const jaw = new THREE.Group(); jaw.position.set(0.012, 0, -0.006); lg.add(jaw);
+      const j1 = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.016, 0.016), mats.ink); j1.position.set(0, 0, -0.008); jaw.add(j1);
+      const j2 = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.016, 0.004), mats.ink); j2.position.set(-0.01, 0, -0.016); jaw.add(j2);
+      parts.set(c.id, { jaw });
     } else if (c.type === 'hang') {
       const hk = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), mats.payload); hk.position.set(...p); hk.userData.compId = c.id; pickGroups.set(c.id, hk); g.add(hk);
     } else if (c.type === 'sensor') {
@@ -300,7 +318,7 @@ function rebuildDrone() {
   modelRing = new THREE.Line(rg, mats.ring); modelRing.computeLineDistances(); drone.add(modelRing);
   for (const v of pendVis.values()) { worldFx.remove(v.line); worldFx.remove(v.ball); v.line.geometry.dispose(); v.ball.geometry.dispose(); }
   pendVis = new Map();
-  for (const c of cfg.comps) if (c.type === 'hang') {
+  for (const c of comps) if (c.type === 'hang') {
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), mats.cable);
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.025 + 0.035 * Math.cbrt(c.mass), 18, 12), mats.payload);
     worldFx.add(line); worldFx.add(ball); pendVis.set(c.id, { line, ball });
@@ -316,6 +334,58 @@ function buildGhost() {   // outline of where the flight software thinks the dro
   const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mats.ghost); ls.computeLineDistances(); ghost.add(ls);
   worldFx.add(ghost);
 }
+/* ───────── cargo: loose bodies, the latches' jaws, how far an open latch is from what it could grab ───────── */
+const looseVis = new Map(), reachVis = [];   // loose body id -> group; per latch: { line, ring }
+function looseGroup(L) {   // its parts, drawn at rest in the body's own axes (origin: its grab point)
+  const g = new THREE.Group(), at = (m, p) => { m.position.set(...p); g.add(m); };
+  for (const c of L.parts) {
+    if (c.type === 'mass') {
+      const geo = c.shape === 'sphere' ? new THREE.SphereGeometry(c.radius, 20, 14) : c.shape === 'cylinder' ? new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2) : new THREE.BoxGeometry(...c.size);
+      at(new THREE.Mesh(geo, c.origin == null ? mats.cargo : mats.mass), c.pos);
+    } else if (c.type === 'motor') {
+      const mg = new THREE.Group(); mg.quaternion.setFromUnitVectors(Z, new THREE.Vector3(...mountDir(c)));
+      mg.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(propR(c), 32), mats.prop); disc.position.z = 0.02; mg.add(disc);
+      at(mg, c.pos);
+    } else if (c.type === 'link') { const r = rod(c.pos, linkTip(c), 0.006, mats.servo); if (r) g.add(r); }
+    else if (c.type === 'joint') at(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.02, 0.036), mats.servo), c.pos);
+    else if (c.type === 'hang') at(new THREE.Mesh(new THREE.SphereGeometry(payloadRad(c), 18, 12), mats.payload), c.pos);
+    else if (c.type === 'sensor') at(new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.008), mats.sensor), c.pos);
+    else at(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.022, 0.012), mats.frame), c.pos);
+  }
+  g.traverse(o => { o.userData.noPick = true; });
+  return g;
+}
+function updateCargoVis(live) {
+  const seen = new Set();
+  for (const L of cargo.loose) {
+    let g = looseVis.get(L.id); if (!g) { g = looseGroup(L); worldFx.add(g); looseVis.set(L.id, g); }
+    seen.add(L.id); const o = looseGrab(L); g.position.set(o[0], o[1], o[2]); g.quaternion.set(L.q[1], L.q[2], L.q[3], L.q[0]);
+  }
+  for (const [id, g] of looseVis) if (!seen.has(id)) { worldFx.remove(g); g.traverse(x => x.geometry && x.geometry.dispose()); looseVis.delete(id); }
+  for (const l of latches()) {   // the jaw: shut, or swung open
+    const p = parts.get(l.id), st = cargo.lat.get(l.id); if (!p || !p.jaw) continue;
+    p.jaw.rotation.y = -1.1 * (1 - (editMode ? (l.closed ? 1 : 0) : st ? st.pos : 1));
+  }
+  // From each open latch's hook to the nearest loose thing: green within reach, grey further (up to 3 m).
+  const ls = live ? latches() : [];
+  ls.forEach((l, i) => {
+    let r = reachVis[i];
+    if (!r) {
+      r = { line: new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), mats.reachFar), ring: new THREE.Mesh(new THREE.RingGeometry(0.05, 0.062, 36), mats.ringFar) };
+      for (const o of [r.line, r.ring]) { o.renderOrder = 20; o.userData.noPick = true; worldFx.add(o); }
+      reachVis[i] = r;
+    }
+    const st = cargo.lat.get(l.id), n = st && st.pos < 0.999 ? cargoNearest(l) : null, show = !!n && n.d < 3;
+    r.line.visible = r.ring.visible = show; if (!show) return;
+    const b = looseGrab(n.L), pos = r.line.geometry.attributes.position;
+    pos.setXYZ(0, ...n.hook); pos.setXYZ(1, ...b); pos.needsUpdate = true; r.line.geometry.computeBoundingSphere(); r.line.computeLineDistances();
+    r.line.material = n.ok ? mats.reachOk : mats.reachFar; r.ring.material = n.ok ? mats.ringOk : mats.ringFar;
+    r.ring.position.set(b[0], b[1], b[2] + 0.004);
+  });
+  for (let i = ls.length; i < reachVis.length; i++) reachVis[i].line.visible = reachVis[i].ring.visible = false;
+}
+
 /* A torque, drawn as a turning arrow: an arc round the torque's axis, turning the way the torque turns
  * (right-hand rule: thumb along the axis, fingers the way it turns). The arc grows with the torque: set(frac)
  * shows that fraction of 315°. Built at unit radius; scale the group to size it. */
@@ -394,6 +464,7 @@ function updateTorque(R, live) {
   }
 }
 function updateScene() {
+  if (droneShown !== cargo.rev + ':' + editMode) rebuildDrone();
   if (grid) grid.visible = view.grid;
   const R = qmat(S.q); const { hub } = hubState(R);
   updateCity(hub);
@@ -445,12 +516,13 @@ function updateScene() {
   const wv = windVec(); windArrow.visible = live && view.wind && envr.wind > 0.05;
   updateTorque(R, live);
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
-  for (const c of cfg.comps) {
+  for (const c of liveComps()) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;
     v.line.visible = v.ball.visible = live;
     const aw = add(S.p, m3v(R, posNow(c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
+  updateCargoVis(live);
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
   spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;

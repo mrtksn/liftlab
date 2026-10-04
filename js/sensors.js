@@ -115,7 +115,7 @@ function measure(c, rt, dt) {
 function sampleSensors(dt) {
   advanceVibration(dt);
   for (const c of allSensors()) {
-    const rt = sens.get(c.id); if (!rt) continue;
+    const rt = sens.get(c.id); if (!rt || !onBoard(c) || !cargo.power) continue;   // (it fell off, or nothing powers it: no readings)
     const period = 1 / Math.max(1, c.rate);
     rt.acc += dt; if (rt.acc + 1e-9 < period) continue;
     rt.acc = rt.acc % period;
@@ -143,7 +143,7 @@ function mean3(list) { const s = list.reduce((a, b) => add(a, b), [0, 0, 0]); re
 
 function senseAndEstimate(dt) {
   for (const rt of sens.values()) while (rt.queue.length && rt.queue[0].t <= S.t + 1e-9) { const q = rt.queue.shift(); rt.latest = q.m; rt.ts = q.ts; rt.fresh = true; }
-  const ready = kind => sensorsOf(kind).filter(c => sens.get(c.id) && sens.get(c.id).latest);
+  const ready = kind => sensorsOf(kind).filter(c => onBoard(c) && sens.get(c.id) && sens.get(c.id).latest);   // (a sensor that fell off reads nothing)
   const imus = ready('imu');
   est.haveImu = imus.length > 0;
   const drv = est.drv || (est.drv = {});

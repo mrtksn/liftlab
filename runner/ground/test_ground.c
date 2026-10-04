@@ -217,6 +217,16 @@ static void more_tests(void) {
   { float v[4] = { 1, 2, 3, 0 }, big[1] = { 40000 }; int a = gnd_goto(&G, NAN, 0, 2, 0), b = gnd_goto(&G, 400, 0, 2, 0), cc = gnd_goto(&G, 1, 2, 3, INFINITY);
     int d = gnd_command(&G, 300, v, 1), e = gnd_command(&G, RC_CMD_GOTO, (float[]){ 1000, 0, 2, 0 }, 4), f = gnd_command(&G, 2, big, 1), g = gnd_command(&G, 2, v, 7);
     CHECK(a == -2 && b == -2 && cc == -2 && d == -2 && e == -2 && f == -2 && g == -2 && G.qn == 1, "and the core refuses them too (−2), as the simulator calls it directly: %d %d %d %d %d %d %d", a, b, cc, d, e, f, g); }
+  {   /* the cargo's latches: latch N|all open|close|toggle, N from 1 (the command carries it from 0, −1 for all) */
+    int q0 = G.qn;
+    text(&G, &I, "latch 9 open", t, r); int bad2 = G.qn == q0 && strstr(r, "not sent");
+    text(&G, &I, "latch 1 wiggle", t, r); bad2 &= G.qn == q0; text(&G, &I, "latch 1.5 open", t, r); bad2 &= G.qn == q0; text(&G, &I, "latch 0 open", t, r); bad2 &= G.qn == q0;
+    text(&G, &I, "latch 2 open", t, r); int k = (G.qh + G.qn - 1) % GND_QN;
+    int ok = G.qn == q0 + 1 && G.q[k].cmd == RC_CMD_LATCH && G.q[k].n == 2 && G.q[k].v[0] == 1 && G.q[k].v[1] == 0;
+    text(&G, &I, "latch all toggle", t, r); k = (G.qh + G.qn - 1) % GND_QN;
+    ok &= G.qn == q0 + 2 && G.q[k].v[0] == -1 && G.q[k].v[1] == 2;
+    CHECK(bad2 && ok, "latch 9, wiggle, 1.5, 0: refused; latch 2 open, latch all toggle: queued as LATCH 1 0, −1 2 (%s)", r);
+  }
 
   printf("switches at the start\n");
   gnd_config_default(&c); c.latch = GB(GB_ARM) | GB(GB_FLY);

@@ -68,6 +68,11 @@ int gnd_text(gnd_state *G, gnd_text_in *I, char *s, double t, char *reply, int r
     else if (fabs(x) > GND_GOTO_MAX || fabs(y) > GND_GOTO_MAX || fabs(z) > GND_GOTO_MAX) snprintf(reply, (size_t)rn, "goto: X, Y and Z within %.0f m of home (what the command carries): not sent", (double)GND_GOTO_MAX);
     else if ((r = gnd_goto(G, (float)x, (float)y, (float)z, (float)(fmod(h, 360) * 3.14159265358979 / 180)))) snprintf(reply, (size_t)rn, r == -1 ? "too many commands waiting" : "goto: can't send that");
     else snprintf(reply, (size_t)rn, "going to %.1f %.1f %.1f%s", x, y, z, gnd_link_up(G, t) ? "" : " (once the link is back)");
+  } else if (!strcmp(w[0], "latch") && n >= 3) {           /* the cargo task's latches (cargo_core.h): latch 1 open, latch all close */
+    double x = 0; int all = !strcmp(w[1], "all"), a = !strcmp(w[2], "open") ? 0 : !strcmp(w[2], "close") ? 1 : !strcmp(w[2], "toggle") ? 2 : -1;
+    if (a < 0 || (!all && (!num(w[1], &x) || x < 1 || x > 8 || x != floor(x)))) snprintf(reply, (size_t)rn, "latch N|all open|close|toggle: N from 1 to 8: not sent");
+    else { float v[2] = { all ? -1.0f : (float)(x - 1), (float)a }; int r = gnd_command(G, RC_CMD_LATCH, v, 2);
+      snprintf(reply, (size_t)rn, r ? "too many commands waiting" : "latch %s: %s%s", w[1], w[2], r || gnd_link_up(G, t) ? "" : " (once the link is back)"); }
   } else if (!strcmp(w[0], "calibrate")) { float c = 1; snprintf(reply, (size_t)rn, gnd_command(G, RC_CMD_LEARN, &c, 1) ? "too many commands waiting" : "asked the learning to calibrate"); }
   else if (!strcmp(w[0], "cmd") && n >= 2) {
     char *e; long id = strtol(w[1], &e, 10); float v[6]; int m = 0, bad = e == w[1] || *e || id < 1 || id > 255 || n - 2 > 6;
