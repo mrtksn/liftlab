@@ -56,6 +56,8 @@ typedef struct {
                                 module's first command isn't taken by the drone for a repeat of its last one */
   uint32_t resume;           /* after a restart in flight: the buttons that were on (gnd_state.on, kept by the caller
                                 across it). Latching ones start latched on, and none is held back by the switch warning */
+  float hook[3];             /* where the drone's hook is, from its hub, in its body axes [m] (x forward, y left, z up):
+                                for a pickup (gnd_pickup). 0 0 −0.06 by default */
 } gnd_config;
 void gnd_config_default(gnd_config *c);
 
@@ -108,6 +110,11 @@ int gnd_command(gnd_state *G, int cmd, const float *v, int n);
  * the command's centimetres hold), heading [rad] any finite angle. Returns as gnd_command. */
 #define GND_GOTO_MAX 327.0f
 int gnd_goto(gnd_state *G, float x, float y, float z, float heading);
+/* A pickup (rc_core.h RC_CMD_PICKUP): the thing's top, from home [m], and the latch (0…). Works out where the hub
+ * must be for the hook (gnd_config.hook) to reach it, facing the way the drone faces now (its attitude telemetry,
+ * no older than 2 s), and sends that. Returns as gnd_command, or −3: no attitude from the drone to go by. */
+#define GND_PICKUP_CLEAR 0.03f     /* [m] the hook comes down to this far above the thing's top */
+int gnd_pickup(gnd_state *G, const float top[3], int latch, double t);
 /* Set a latching button (gnd_config.latch) on or off, as pressing it would toggle it: for a script or an emergency,
  * whatever the hardware button last did. Returns the state now (0, 1), or −1 if b doesn't latch. */
 int gnd_latch(gnd_state *G, int b, int on);

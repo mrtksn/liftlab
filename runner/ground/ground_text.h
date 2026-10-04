@@ -8,6 +8,8 @@
  *                                          command carries), facing HEADING [°]
  *   calibrate                              the learning's hover calibration
  *   latch N|all open|close|toggle          the cargo task's latches (N from 1): drop what one holds, or grab
+ *   pickup X Y Z [LATCH]                   fly the hook onto a thing whose top is at X Y Z [m] from home and close
+ *                                          the latch (1 by default; open it first): gnd_pickup, gnd_config.hook
  *   cmd ID V1 V2 …                         any command (rc_core.h): ID 1–255, up to 6 values
  * A value that isn't a number (or is out of range) is refused with a reply saying why; nothing is sent.
  *   status, messages, quit

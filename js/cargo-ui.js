@@ -14,12 +14,35 @@ function latchView(l) {
   return { on, pos, closed: pos >= 0.5, under, mass, moving, near };
 }
 function cargoSay(text) { cargoUi.say = text; cargoUi.sayT = performance.now(); }
+// A press: drop what it holds; open an empty closed one; close on what's in reach; or, with the nearest thing out of
+// reach, fetch it (the navigation's pickup: it flies over it, comes down, closes the latch and climbs); during a
+// pickup, stop it.
+const FETCH_MAX = 15;   // [m] the farthest thing it fetches
+const PK_PHASE = ['', 'flying over it', 'coming down', 'closing', 'climbing'];
 function cargoAct(i) {
   const l = latches()[i]; if (!l) return;
   cargoUi.cur = i;
-  const why = pilotCargoCmd(i, 2);   // toggle: the cargo task knows which way it's driving it
-  cargoSay(why ? `${l.name}: ${why}` : '');
+  if (brt.pickup) { pickupStop(); cargoSay(`${l.name}: pickup stopped`); cargoBarSync(); return; }
+  const v = latchView(l), fetch = v.on && !v.closed && !v.moving && v.near && !v.near.ok && v.near.d < FETCH_MAX;
+  const why = fetch ? cargoFetch(l, i, v.near.L) : pilotCargoCmd(i, 2);   // (toggle: the cargo task knows which way it's driving it)
+  cargoSay(why ? `${l.name}: ${why}` : fetch ? `${l.name}: fetching ${v.near.L.name}` : '');
   cargoBarSync();
+}
+// Fetch a loose thing: the simulator knows where it is (on the drone, the pilot says: dfb_ground's "pickup X Y Z").
+// With a radio the command module works out where the hub goes from the hook's place and the drone's heading
+// (gnd_pickup) and sends it up; without one, it goes straight to the navigation's board.
+function cargoFetch(l, i, L) {
+  if (!hasTask('nav')) return 'fetching needs the navigation (Computers tab)';
+  if (brt.pilot.phase !== 'flying' || !brt.home) return 'take off first';
+  const top = sub(looseGrab(L), brt.home), P = poseOf(l), hk = add(P.p, m3v(P.R, LATCH_HOOK));   // the thing's top from home; the hook from the hub (body axes)
+  if (brt.gnd) {
+    const r = brt.gnd.gnd_pickup(hk[0], hk[1], hk[2], top[0], top[1], top[2], i, brt.t);
+    return r === -3 ? 'no attitude from the drone yet' : r === -1 ? 'the command module has too many commands waiting' : r ? 'too far' : '';
+  }
+  const b = boardOf('nav'), w = b && brt.inst.get(b.id); if (!w) return 'the navigation isn\'t running';
+  const h = Math.atan2(est.R[3], est.R[0]), c = Math.cos(h), s = Math.sin(h);
+  const spot = [top[0] - (c * hk[0] - s * hk[1]), top[1] - (s * hk[0] + c * hk[1]), top[2] - hk[2] + 0.03];
+  return w.pickup_cmd(spot[0], spot[1], spot[2], h, i) ? cstr(w, w.pk_msg_ptr()) : '';
 }
 const cargoKey = () => { if (latches().length) cargoAct(Math.min(cargoUi.cur, latches().length - 1)); };
 
@@ -50,7 +73,10 @@ function cargoBarSync() {
     else if (v.moving) { text = v.closed ? 'opening…' : 'closing…'; title = `${l.name} is moving`; }
     else if (v.closed && v.under.length) { text = `drop ${(v.mass * 1000).toFixed(0)} g`; tone = 'loaded'; title = `${l.name} holds ${v.under.filter(c => parentOf(c) === l).map(c => c.name).join(', ')}: press to let go`; }
     else if (v.closed) { text = 'empty · open'; title = `${l.name} is closed with nothing in it: press to open it, ready to grab`; }
-    else if (v.near) { text = `grab · ${(v.near.d * 100).toFixed(0)} cm`; tone = v.near.ok ? 'reach' : ''; title = v.near.ok ? `${v.near.L.name} is within reach: press to close on it` : `${v.near.L.name} is ${(v.near.d * 100).toFixed(0)} cm away; it needs to be within ${((l.reach ?? 0.08) * 100).toFixed(0)} cm` ; }
+    else if (brt.pickup && i === cargoUi.cur) { text = `fetching · ${PK_PHASE[brt.pickup] || ''}`; tone = 'reach'; title = 'The drone is picking it up by itself: press to stop (or move the sticks)'; }
+    else if (v.near && v.near.ok) { text = `grab · ${(v.near.d * 100).toFixed(0)} cm`; tone = 'reach'; title = `${v.near.L.name} is within reach: press to close on it`; }
+    else if (v.near && v.near.d < FETCH_MAX) { text = `fetch · ${v.near.d < 1 ? (v.near.d * 100).toFixed(0) + ' cm' : v.near.d.toFixed(1) + ' m'}`; title = `${v.near.L.name} is ${v.near.d.toFixed(2)} m away (in reach: ${((l.reach ?? 0.08) * 100).toFixed(0)} cm). Press and the drone fetches it: flies over it, comes down, closes the latch and climbs`; }
+    else if (v.near) { text = `${v.near.d.toFixed(0)} m away`; title = `The nearest loose thing, ${v.near.L.name}, is too far to fetch`; }
     else { text = 'open · close'; title = `${l.name} is open, nothing loose nearby`; }
     setText(st, text); b.dataset.tone = tone; b.title = title + (i === cargoUi.cur ? ' (G)' : '');
     meter.hidden = !(v.on && !v.closed && v.near);

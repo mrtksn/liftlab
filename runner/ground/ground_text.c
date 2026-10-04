@@ -73,6 +73,14 @@ int gnd_text(gnd_state *G, gnd_text_in *I, char *s, double t, char *reply, int r
     if (a < 0 || (!all && (!num(w[1], &x) || x < 1 || x > 8 || x != floor(x)))) snprintf(reply, (size_t)rn, "latch N|all open|close|toggle: N from 1 to 8: not sent");
     else { float v[2] = { all ? -1.0f : (float)(x - 1), (float)a }; int r = gnd_command(G, RC_CMD_LATCH, v, 2);
       snprintf(reply, (size_t)rn, r ? "too many commands waiting" : "latch %s: %s%s", w[1], w[2], r || gnd_link_up(G, t) ? "" : " (once the link is back)"); }
+  } else if (!strcmp(w[0], "pickup") && n >= 4) {          /* fly the hook onto a thing at X Y Z (its top, from home) and close latch N */
+    double x, y, z, l = 1; int r;
+    if (!num(w[1], &x) || !num(w[2], &y) || !num(w[3], &z) || (n >= 5 && (!num(w[4], &l) || l < 1 || l > 8 || l != floor(l)))) snprintf(reply, (size_t)rn, "pickup X Y Z [LATCH]: the thing's top, metres from home, and the latch 1 to 8: not sent");
+    else { float top[3] = { (float)x, (float)y, (float)z };
+      r = gnd_pickup(G, top, (int)l - 1, t);
+      if (r == -3) snprintf(reply, (size_t)rn, "pickup: no attitude from the drone to work out where its hook goes: not sent");
+      else if (r) snprintf(reply, (size_t)rn, r == -1 ? "too many commands waiting" : "pickup: out of range: not sent");
+      else snprintf(reply, (size_t)rn, "pickup at %.2f %.2f %.2f with latch %d%s", x, y, z, (int)l, gnd_link_up(G, t) ? "" : " (once the link is back)"); }
   } else if (!strcmp(w[0], "calibrate")) { float c = 1; snprintf(reply, (size_t)rn, gnd_command(G, RC_CMD_LEARN, &c, 1) ? "too many commands waiting" : "asked the learning to calibrate"); }
   else if (!strcmp(w[0], "cmd") && n >= 2) {
     char *e; long id = strtol(w[1], &e, 10); float v[6]; int m = 0, bad = e == w[1] || *e || id < 1 || id > 255 || n - 2 > 6;

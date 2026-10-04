@@ -24,14 +24,18 @@
 #include <stdint.h>
 #include "fc_core.h"
 #include "nav_core.h"
+#include "pickup_core.h"
 
 enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD, RC_HOME };
 /* Ground-station commands (CRSF 0x80/0xD1: command, sequence 1–255, up to 6 values as 16-bit integers × rc_cmd_scale):
  *   GOTO   x y z [m from home], heading [rad]: fly there
  *   LEARN  code: a learning command (learn_core.h: 1 calibrate, 2 stop, 3 fly on the description, 4 on the learned)
  *   LATCH  latch (0…, −1 all), action (0 open, 1 close, 2 toggle): for the cargo task (cargo_core.h), on whichever
- *          board runs it; the navigation ignores it */
-enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3 };
+ *          board runs it; the navigation ignores it
+ *   PICKUP x y z [m from home], heading [rad], latch: fly the hub to x y z (below the floor if need be), facing
+ *          heading, hold still and have the cargo task close the latch, then climb (pickup_core.h). The sticks,
+ *          hold, home, a go-to or the link lost stop it */
+enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4 };
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 #define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'
@@ -54,6 +58,7 @@ typedef struct {
   int have_target, fly, arm, level;
   int hold_was, home_was; uint32_t cmd_seen;
   int learn_req;                          /* a LEARN command came: its code, for the learning (the board passes it on) */
+  pickup_state pk;                        /* a PICKUP under way (its requests to the cargo task: pk.nreq, the board passes them on) */
   int lost;                               /* the link is lost (flying home if it was flying) */
   int landed_was;                         /* the navigation had landed by itself at the last step */
   char msg[64]; int said;                 /* something to tell the pilot (said: new since last read) */

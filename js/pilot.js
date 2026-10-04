@@ -37,6 +37,7 @@ function pilotStep(dt) {
   const l = (isHeld('left') ? 1 : 0) - (isHeld('right') ? 1 : 0);
   const u = (isHeld('up') ? 1 : 0) - (isHeld('down') ? 1 : 0);
   const y = (isHeld('yawL') ? 1 : 0) - (isHeld('yawR') ? 1 : 0);
+  if (brt.pickup && (f || l || u || y)) pickupStop();   // the keys take it back from a pickup (with a radio, the drone sees the sticks)
   const psi = setpoint.yaw * D2R;
   let hx = f * Math.cos(psi) - l * Math.sin(psi), hy = f * Math.sin(psi) + l * Math.cos(psi);
   const hn = Math.hypot(hx, hy); if (hn > 1) { hx /= hn; hy /= hn; }
