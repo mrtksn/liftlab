@@ -2,7 +2,7 @@
   --bg:#E6EBF0; --panel:#F6F8FA; --panel-2:#EDF1F5; --ink:#15202B; --ink-2:#3A4755; --muted:#637284;
   --line:#CFD7E0; --line-strong:#AEB9C6;
   --accent:#2B55C4; --accent-ink:#FFFFFF; --accent-soft:#DCE4F7;
-  --cargo:#A0662A; --cable:#9A3AA6; --grav:#8A5A2B; --mass:#5F6B77; --frame:#3A4552; --wind:#1F7E86; --torque:#D6337A;
+  --wing:#B9C6D6; --wing-f:#6741D9; --cargo:#A0662A; --cable:#9A3AA6; --grav:#8A5A2B; --mass:#5F6B77; --frame:#3A4552; --wind:#1F7E86; --torque:#D6337A;
   --sensor:#5E7F12; --swing:#D08600; --ax-x:#D2412F; --ax-y:#2C9A47; --ax-z:#2F62D8; --good:#157046; --warn:#8A5A0E; --bad:#C0392F; --good-soft:#DDF0E6; --warn-soft:#F6EAD3; --bad-soft:#F6DEDB;
   --viewport:#DCE3EA; --grid:#C6CFD9; --grid-strong:#A3B0BE; --bldg:#EEF1F4; --bldg-edge:#8E9CAB;
   --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
@@ -15,7 +15,7 @@
     --bg:#0D1217; --panel:#141B22; --panel-2:#1A232C; --ink:#E2E8EE; --ink-2:#B9C4CF; --muted:#8392A2;
     --line:#25303B; --line-strong:#384654;
     --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
-    --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
+    --wing:#56657A; --wing-f:#A48BFA; --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
     --sensor:#A9CF5A; --swing:#F2B544; --ax-x:#F2705F; --ax-y:#5CCB76; --ax-z:#7FA3F7; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
     --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F; --bldg:#26323E; --bldg-edge:#4E6072;
     color-scheme:dark;
@@ -25,7 +25,7 @@
   --bg:#0D1217; --panel:#141B22; --panel-2:#1A232C; --ink:#E2E8EE; --ink-2:#B9C4CF; --muted:#8392A2;
   --line:#25303B; --line-strong:#384654;
   --accent:#7A9CF0; --accent-ink:#0D1217; --accent-soft:#1E2A45;
-  --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
+  --wing:#56657A; --wing-f:#A48BFA; --cargo:#D9A066; --cable:#D58BE0; --grav:#D4A06A; --mass:#8C98A5; --frame:#AEB9C5; --wind:#5CC3CB; --torque:#F77FB0;
   --sensor:#A9CF5A; --swing:#F2B544; --ax-x:#F2705F; --ax-y:#5CCB76; --ax-z:#7FA3F7; --good:#48B884; --warn:#E3A948; --bad:#EE6B5F; --good-soft:#15301F; --warn-soft:#352914; --bad-soft:#3A1B18;
   --viewport:#0F161D; --grid:#1D2833; --grid-strong:#33424F; --bldg:#26323E; --bldg-edge:#4E6072;
   color-scheme:dark;

@@ -7,7 +7,7 @@ let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
 function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, push: false, tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
-function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true }, o)); }
+function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true, aero: 'prism', inc: 0 }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
 const r3 = v => +v.toFixed(3);
 const PRESETS = {
@@ -60,6 +60,11 @@ const PRESETS = {
       mkHang('Bag', 0, 0.032, r3(-0.035 + LATCH_HOOK[2]), { length: 0.35, mass: 0.25, parent: hook.id }));
     const sn = defaultSensors(); Object.assign(sn[3], fixDefaults('rtk'), { quality: 'rtk', name: 'RTK GPS' });   // (to line the hook up on a parcel: plain GPS wanders half a metre)
     return { frame: 0.45, comps: c.concat(sn), mode: 'tilt' }; } },
+  wingquad: { label: 'Quad with a wing', build() {   // a quad with a wing over it: it lifts in forward flight, which the flight computers aren't told about
+    const r = 0.2; const c = [45, 135, 225, 315].map((a, i) => mkMotor('M' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { spin: i % 2 ? -1 : 1 }));
+    c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] }),
+      mkMass('Wing', 0, 0, 0.06, { shape: 'box', size: [0.1, 0.8, 0.01], mass: 0.07, aero: 'wing', inc: 15 }));   // (chord clear of the props; 15° of incidence: a quad leans 10–15° nose down to cruise, and the wing should still lift)
+    return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   tiltquad: { label: 'Tilt-rotor quad (thrust vectoring)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].flatMap((a, i) => mkServoMotor('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360 }, { spin: i % 2 ? -1 : 1, tmax: 6 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
@@ -107,14 +112,43 @@ function rotorNow(c, ang = angleTrue) { const P = poseOf(c, ang); return { p: P.
 function wrenchCol(pos, d, spin, kappa, cog) { const w = run('rotorWrench', d, sub(pos, cog), 1, spin, kappa); return [w.F[0], w.F[1], w.F[2], w.tau[0], w.tau[1], w.tau[2]]; }
 const scl6 = (c, s) => c.map(x => x * s);
 
+/* ───────── shapes in the air ───────── */
+// Every solid part is a prism (drag on the face it shows the air: bluffDrag) or a wing (lift and drag: wingAero):
+// the frame (cfg.frame.aero) and each rigid mass (c.aero). A wing is a box: chord along X, span along Y, thickness
+// along Z, tipped by its incidence (inc, degrees, leading edge up). The flight computers aren't told: to them it's
+// an oddly shaped body.
+const FRAME_BOX = [0.12, 0.12, 0.04];
+const frameWing = () => cfg.frame.aero === 'wing';
+const frameDims = () => frameWing() ? [cfg.frame.chord || 0.25, cfg.frame.span || 0.8, cfg.frame.thick || 0.03] : FRAME_BOX;
+function incR(deg) { const a = -(deg || 0) * D2R, c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }   // leading edge (+X) up by deg
+// The frame's shape, as a design keeps it.
+const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0 });
+function setFrameShape(o) {
+  o = o || {}; const n = (v, d, lo, hi) => isFinite(+v) ? clamp(+v, lo, hi) : d;
+  Object.assign(cfg.frame, { aero: o.aero === 'wing' ? 'wing' : 'prism', span: n(o.span, 0.8, 0.1, 4), chord: n(o.chord, 0.25, 0.05, 1.5), thick: n(o.thick, 0.03, 0.005, 0.2), inc: n(o.inc, 0, -20, 20) });
+}
+const isWing = c => c.type === 'mass' && c.aero === 'wing' && c.shape === 'box';
+const massRot = c => c.type === 'mass' && c.inc ? incR(c.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const frameRot = () => frameWing() && cfg.frame.inc ? incR(cfg.frame.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+// The frontal area a prism shows along its X, Y and Z [m²].
+function frontalAreas(c) {
+  if (c.shape === 'sphere') { const a = Math.PI * c.radius ** 2; return [a, a, a]; }
+  if (c.shape === 'cylinder') { const s = 2 * c.radius * c.length; return [s, s, Math.PI * c.radius ** 2]; }
+  return [c.size[1] * c.size[2], c.size[0] * c.size[2], c.size[0] * c.size[1]];
+}
+// A box's eight corners (rest, body axes), turned by its incidence.
+const boxCorners = (pos, size, R) => [-1, 1].flatMap(x => [-1, 1].flatMap(y => [-1, 1].map(z => add(pos, m3v(R, [x * size[0] / 2, y * size[1] / 2, z * size[2] / 2])))));
+
 /* ───────── mass properties ───────── */
 function boxI(m, a, b, c) { return [m * (b * b + c * c) / 12, 0, 0, 0, m * (a * a + c * c) / 12, 0, 0, 0, m * (a * a + b * b) / 12]; }
 function shapeI(c) {
   const m = c.mass;
   if (c.shape === 'sphere') { const I = 0.4 * m * c.radius * c.radius; return [I, 0, 0, 0, I, 0, 0, 0, I]; }
   if (c.shape === 'cylinder') { const r = c.radius, L = c.length, ix = m * (3 * r * r + L * L) / 12; return [ix, 0, 0, 0, ix, 0, 0, 0, m * r * r / 2]; }
-  return boxI(m, c.size[0], c.size[1], c.size[2]);
+  const I = boxI(m, c.size[0], c.size[1], c.size[2]), R = massRot(c);
+  return c.inc ? m3m(m3m(R, I), m3T(R)) : I;
 }
+const frameI = () => boxI(cfg.frame.mass, ...frameDims());
 // Mass, CoG and inertia with every part where its joints put it: the true angles for the physics, the
 // angles the flight software believes for its model.
 // A thin rod's inertia about its middle: m L²/12 across it, nothing along it.
@@ -122,7 +156,7 @@ function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; 
 // The truth is what's on the drone now (a load dropped or picked up, cargo.js); the model is the design.
 function massProps(which) {
   const ang = which === 'truth' ? angleTrue : angleSeen;
-  const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: boxI(cfg.frame.mass, 0.12, 0.12, 0.04) }];
+  const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() }];
   for (const c of which === 'truth' ? liveComps() : cfg.comps) {
     const pose = () => poseOf(c, ang);
     if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items.push({ m: c.mass, r: pose().p, I: null });
@@ -214,7 +248,7 @@ const PDT = 0.0005;
 function contactPoints() {
   const on = c => (MB && MB.of.get(c.id)) || 0;
   const pts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }];
-  for (const x of [-0.06, 0.06]) for (const y of [-0.06, 0.06]) for (const z of [-0.02, 0.02]) pts.push({ rest: [x, y, z], b: 0, r: 0 });
+  for (const p of boxCorners([0, 0, 0], frameDims(), frameRot())) pts.push({ rest: p, b: 0, r: 0 });   // the hub's corners (a wing's tips)
   for (const c of liveComps()) {
     const b = on(c);
     if (c.type === 'motor' || c.type === 'joint') {
@@ -223,7 +257,7 @@ function contactPoints() {
     } else if (c.type === 'mass') {
       const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2;
       pts.push({ rest: add(c.pos, [0, 0, -hz]), b, r: 0 });
-      if (c.shape === 'box') { for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) pts.push({ rest: add(c.pos, [x * c.size[0] / 2, y * c.size[1] / 2, z * c.size[2] / 2]), b, r: 0 }); }
+      if (c.shape === 'box') for (const p of boxCorners(c.pos, c.size, massRot(c))) pts.push({ rest: p, b, r: 0 });
       else if (c.shape === 'sphere') pts.push({ rest: c.pos.slice(), b, r: c.radius });
       else pts.push({ rest: add(c.pos, [0, 0, c.length / 2 - c.radius]), b, r: c.radius }, { rest: add(c.pos, [0, 0, -c.length / 2 + c.radius]), b, r: c.radius });
     } else if (c.type === 'link') pts.push({ rest: linkTip(c), b, r: 0 }, { rest: c.pos.slice(), b, r: 0 }, { rest: add(c.pos, scl(linkDir(c), c.length / 2)), b, r: 0.008 });
@@ -236,9 +270,9 @@ function contactPoints() {
 let cPts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }], cReach = 0.3;   // how far from the hub any part (or prop tip) reaches
 const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // prop radius [m]
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
-function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area)
-  const parts = [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
-  for (const c of liveComps()) if (c.type === 'mass') parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
+function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area); a wing meets it in wingAero
+  const parts = frameWing() ? [] : [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
+  for (const c of liveComps()) if (c.type === 'mass' && !isWing(c)) parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
   return parts;
 }
 function crash(why) { if (S.crashed) return; S.crashed = why; for (const a of act.values()) { a.Tcmd = 0; a.u = 0; } onCrash(); }
@@ -387,6 +421,17 @@ function dynamics(dt) {
   S.rotors = rotors;
   for (const part of washParts()) { const P = posed(part.b, part.rest); push(part.b, run('wakeLoad', run('wakeVelocity', P, rotors), part.area), P); }
   const dr = run('bodyDrag', S.v, wv, S.w); push(0, m3v(RT, dr.F), [0, 0, 0]); pushT(0, dr.tau);
+  // Shapes in the air: each wing's lift and drag (in the wind, its own motion and the rotors' wash), each blunt part's drag.
+  S.aero = [];
+  const aeroPart = (b, P, Rw, wing, dims, areas) => {
+    const air = sub(m3v(RT, wv), mbPointVel(K, b, P)), u = m3v(m3T(Rw), wing ? add(air, run('wakeVelocity', P, rotors)) : air);
+    let F, at = P;
+    if (wing) { const w = run('wingAero', u, dims[0], dims[1]); F = m3v(Rw, w.F); at = add(P, m3v(Rw, [w.xcp, 0, 0])); }
+    else F = m3v(Rw, run('bluffDrag', u, areas));
+    push(b, F, at); if (wing) S.aero.push({ b, P: at, F });
+  };
+  if (frameWing()) aeroPart(0, [0, 0, 0], frameRot(), true, frameDims());
+  for (const c of liveComps()) if (c.type === 'mass') { const b = MB.of.get(c.id) || 0; aeroPart(b, posed(b, c.pos), m3m(K.Rb[b], massRot(c)), isWing(c), c.size, isWing(c) ? null : frontalAreas(c)); }
 
   // Hanging payloads on cables.
   for (const c of liveComps()) {

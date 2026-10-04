@@ -165,6 +165,32 @@ function rotorAero(T, R, vAxial, vInPlane, h) {
   return { T: T * k, H: scl(vInPlane, cH * T) };
 }
 
+function wingAero(u, chord, span) {
+  // A wing in the air u [m/s] (the air's velocity past it, in the wing's own axes: x toward the leading edge, y along
+  // the span, z up from its top). Lift rises with the angle of attack up to a stall at about 15°, then falls off to
+  // what a flat plate gives; drag is a base drag, plus the lift's own (induced), plus a flat plate's once stalled.
+  // Returns the force [N] in the wing's axes, and how far ahead of the wing's middle it acts (centre of pressure, m:
+  // the quarter chord while the flow is attached, the middle once stalled).
+  const rho = 1.225, S = chord * span, AR = span / Math.max(1e-3, chord);
+  const V = Math.hypot(u[0], u[2]); if (V < 1e-3) return { F: [0, 0, 0], xcp: chord / 4 };
+  const a = Math.atan2(u[2], -u[0]);                      // angle of attack: air from below and ahead is positive
+  const cla = 2 * Math.PI / (1 + 2 / AR), stall = 15 * Math.PI / 180;
+  const sa = Math.sin(a), ca = Math.cos(a);
+  const att = 1 / (1 + Math.exp((Math.abs(Math.asin(sa)) - stall) / 0.035));   // 1 attached … 0 stalled (blended)
+  const cl = att * cla * Math.asin(sa) * Math.sign(ca || 1) + (1 - att) * 2 * sa * ca;
+  const cd = 0.02 + att * cl * cl / (Math.PI * 0.8 * AR) + (1 - att) * 1.9 * sa * sa;
+  const q = 0.5 * rho * V * V * S, d = [u[0] / V, 0, u[2] / V], l = [d[2], 0, -d[0]];   // drag along the air, lift across it
+  const F = [q * (cd * d[0] + cl * l[0]), 0.05 * 0.5 * rho * Math.abs(u[1]) * u[1] * S, q * (cd * d[2] + cl * l[2])];   // (and a little drag along the span)
+  return { F, xcp: chord / 4 * att };
+}
+
+function bluffDrag(u, areas) {
+  // A blunt part (a box, a battery, a hub) in the air u [m/s], its own axes: each face's drag, as a box's
+  // (Cd 1.05), on the frontal area it shows that way [m²].
+  const rho = 1.225, cd = 1.05, V = nrm(u);
+  return [0, 1, 2].map(i => 0.5 * rho * cd * areas[i] * V * u[i]);
+}
+
 function wakeLoad(w, area) {
   // Force on a part with frontal area [m²] sitting in wake air moving at w [m/s]
   return scl(w, 0.5 * 1.225 * 1.1 * area * nrm(w));
@@ -1118,6 +1144,16 @@ const LAW_DEFS = [
     doc: 'Linear drag on the airframe and a little rotational damping.',
     args: [['v', 'velocity, world [m/s]'], ['wind', 'wind velocity, world [m/s]'], ['w', 'angular velocity, body [rad/s]']], returns: '{ F: force, world; tau: torque, body }',
     shape: { F: 3, tau: 3 }, sample: () => [[1, 0, 0], [0, 0, 0], [0, 0, 0.5]] },
+  { key: 'wingAero', group: 'plant', fn: wingAero, title: 'Wing lift and drag',
+    math: [`α = atan2(<i>u</i><sub>z</sub>, −<i>u</i><sub>x</sub>), &nbsp;<i>C</i><sub>L</sub> = 2π α / (1 + 2/AR) &nbsp;below the stall (15°), then a flat plate's 2 sin α cos α`, `<i>C</i><sub>D</sub> = 0.02 + <i>C</i><sub>L</sub>²/(0.8 π AR) &nbsp;(then a plate's 1.9 sin²α), &nbsp;<i>L</i>, <i>D</i> = ½ρ<i>V</i>²<i>S C</i><sub>L</sub>, <i>C</i><sub>D</sub>`],
+    doc: 'Every part shaped as a wing (the frame, a rigid mass) in the air it meets: the wind, its own motion and the rotors\' wash. Lift across the airflow, drag along it, acting at the quarter chord (the middle once stalled). Physics only: the flight computers don\'t know about wings; they meet them as an oddly shaped body.',
+    args: [['u', 'air past the wing, its axes (x leading edge, y span, z up) [m/s]'], ['chord', 'chord [m]'], ['span', 'span [m]']], returns: '{ F: force, wing axes [N]; xcp: centre of pressure ahead of the middle [m] }',
+    shape: { F: 3, xcp: 1 }, sample: () => [[-8, 0, 0.7], 0.2, 0.8] },
+  { key: 'bluffDrag', group: 'plant', fn: bluffDrag, title: 'Drag on blunt parts',
+    math: [`<i>F</i><sub><i>i</i></sub> = ½ρ <i>C</i><sub>d</sub> <i>A</i><sub><i>i</i></sub> |${V('u')}| <i>u</i><sub><i>i</i></sub>, &nbsp;<i>C</i><sub>d</sub> = 1.05`],
+    doc: 'Every part shaped as a prism (rigid masses, and the frame unless it is a wing): drag on the face it shows the air, by direction. The frame also has its general drag (Aerodynamic drag).',
+    args: [['u', 'air past the part, its axes [m/s]'], ['areas', 'frontal area seen along x, y, z [m²]']], returns: 'force, the part\'s axes [N]',
+    shape: 3, sample: () => [[-5, 1, 0], [0.004, 0.008, 0.01]] },
   { key: 'cableTension', group: 'plant', fn: cableTension, title: 'Cable tension',
     math: [`<i>T</i><sub>c</sub> = max(0, <i>k</i>δ + <i>c</i>δ̇) &nbsp;if δ > 0, otherwise 0`, `<i>k</i> = 15800 <i>m</i><sub>p</sub>, &nbsp;<i>c</i> = 0.5 √(<i>k m</i><sub>p</sub>)`],
     doc: 'δ is how far the cable is stretched beyond its length. The tension pulls the payload toward the anchor and the anchor toward the payload.',
@@ -1324,5 +1360,5 @@ const LAW_OVERVIEW = [
 const LAW_CHAIN = {
   ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
   super: ['actuatorHealth', 'faultDecision', 'flightPolicy', 'liftMargin'],
-  plant: ['batteryModel', 'thermalModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
+  plant: ['batteryModel', 'thermalModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'wingAero', 'bluffDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };
