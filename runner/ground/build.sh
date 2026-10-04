@@ -5,5 +5,5 @@
 set -e
 cd "$(dirname "$0")"
 ${CC:-cc} -O2 -Wall -Wextra -Wno-unused-parameter -I.. -I../fc -o dfb_ground \
-  dfb_ground.c ground_core.c ground_text.c rn_builtin_ground.c ../pi/serial_baud.c ../fc/tlm_core.c ../fc/tlm_crsf.c ../fc/crsf.c ../fc/rc_core.c ../rn_host.c ../rn.c -lm
+  dfb_ground.c ground_core.c ground_text.c rn_builtin_ground.c ../pi/serial_baud.c ../fc/tlm_core.c ../fc/tlm_crsf.c ../fc/crsf.c ../fc/rc_core.c ../fc/pickup_core.c ../rn_host.c ../rn.c -lm
 echo "built dfb_ground"

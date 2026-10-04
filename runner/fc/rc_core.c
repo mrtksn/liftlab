@@ -15,7 +15,7 @@ int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c) {
   return 0;
 }
 
-float rc_cmd_scale(int cmd, int k) { return cmd == RC_CMD_GOTO ? (k < 3 ? 100.0f : k == 3 ? 1000.0f : 1.0f) : 1.0f; }
+float rc_cmd_scale(int cmd, int k) { return cmd == RC_CMD_GOTO || cmd == RC_CMD_PICKUP ? (k < 3 ? 100.0f : k == 3 ? 1000.0f : 1.0f) : 1.0f; }
 
 void rc_pilot_init(rc_pilot *P) { char *p = (char *)P; for (unsigned i = 0; i < sizeof *P; i++) p[i] = 0; }
 
@@ -30,7 +30,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
   int ok = rc_link_ok(in, t);
   /* the link: lost in flight, the navigation flies home and lands; back, it holds where it is */
   if (!ok && in->frames && !P->lost) {
-    P->lost = 1;
+    P->lost = 1; pickup_cancel(&P->pk, "radio link lost");
     if ((P->fly || N->fly_land) && o->have_home && !N->landed) { N->rc_rth = 1; say(P, N->fly_land ? "radio link lost: landing" : "radio link lost: flying home to land"); }
     else { P->arm = 0; P->fly = 0; say(P, "radio link lost"); }
   }
@@ -62,9 +62,15 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
         P->target[0] = clampf_(in->cmd_v[0], -BOX_XY, BOX_XY); P->target[1] = clampf_(in->cmd_v[1], -BOX_XY, BOX_XY);
         P->target[2] = clampf_(in->cmd_v[2], BOX_ZLO, BOX_ZHI); P->heading = in->cmd_v[3]; P->have_target = 1;
         for (int k = 0; k < 3; k++) P->vref[k] = 0;
+        pickup_cancel(&P->pk, "a go-to came");
       } else if (in->cmd == RC_CMD_LEARN) P->learn_req = (int)in->cmd_v[0];
+      else if (in->cmd == RC_CMD_PICKUP) {
+        if (!o->have_home || !P->fly) say(P, "pickup: not flying");
+        else if (!pickup_start(&P->pk, in->cmd_v, in->cmd_v[3], (int)(in->cmd_v[4] + 0.5f), o, t)) P->have_target = 1;
+      }
     }
     int hold = in->ch[RC_HOLD] > 0.5f, home = in->ch[RC_HOME] > 0.5f;
+    if ((hold && !P->hold_was) || (home && !P->home_was)) pickup_cancel(&P->pk, hold ? "hold" : "home");
     if (hold && !P->hold_was && o->have_home) { for (int k = 0; k < 3; k++) { P->target[k] = o->p[k]; P->vref[k] = 0; } P->target[2] = clampf_(P->target[2], BOX_ZLO, BOX_ZHI); }
     if (home && !P->home_was) { P->target[0] = P->target[1] = 0; P->target[2] = 1.5f; for (int k = 0; k < 3; k++) P->vref[k] = 0; }
     P->hold_was = hold; P->home_was = home;
@@ -80,7 +86,17 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
     float c = cosf(P->heading), s = sinf(P->heading), hx = f * c + r * s, hy = f * s - r * c, hn = sqrtf(hx * hx + hy * hy);
     if (hn > 1) { hx /= hn; hy /= hn; }
     want[0] = hx * lim; want[1] = hy * lim; want[2] = u * L[1];
+    if (f || r || u || yaw) pickup_cancel(&P->pk, "the sticks moved");
   }
+  if (own || !P->fly) pickup_cancel(&P->pk, own ? "the drone is flying home or landing by itself" : "the fly switch is off");
+  if (pickup_active(&P->pk)) {                                     /* a pickup flies the target (and may go below the floor) */
+    nav_sp k; pickup_step(&P->pk, o, t, dt, &k);
+    for (int i = 0; i < 3; i++) { P->target[i] = k.target[i]; P->vref[i] = 0; sp->target[i] = k.target[i]; sp->vref[i] = k.vref[i]; }
+    P->heading = sp->heading = k.heading; sp->fly = 1;
+    if (P->pk.said) { P->pk.said = 0; say(P, P->pk.msg); }
+    return P->arm && !N->landed;
+  }
+  if (P->pk.said) { P->pk.said = 0; say(P, P->pk.msg); }
   float dv = RC_ACCEL * dt;
   for (int k = 0; k < 3; k++) P->vref[k] += clampf_(want[k] - P->vref[k], -dv, dv);
   if (own) for (int k = 0; k < 3; k++) P->vref[k] = 0;

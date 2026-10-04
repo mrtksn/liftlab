@@ -33,6 +33,8 @@
  *   heading DEG | hold | home | status
  *   calibrate | stop | learned | description | keep on | keep off | throw | learning | health
  *   latch N open | latch N close | latch N toggle | latch all open | latches   (with --latch; N from 1)
+ *   pickup X Y Z [N]: fly the hook onto a thing whose top is at X Y Z [m] from home, close latch N (1) and climb
+ *     (fc/pickup_core.h; --hook DX,DY,DZ: where the hook is from the hub, body axes, 0,0,-0.06 by default)
  * (throw: hold it level and arm it first; throw it upward and it flies itself from there.)
  *
  * Build:  sh runner/pi/build.sh
@@ -207,7 +209,7 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
 
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
-  int elrs_rate = 250, elrs_ratio = 4; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000;
+  int elrs_rate = 250, elrs_ratio = 4; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -217,6 +219,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
     else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--elrs")) sscanf(argv[++i], "%d,%d", &elrs_rate, &elrs_ratio);
+    else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
@@ -269,6 +272,7 @@ int main(int argc, char **argv) {
   double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0, fc_state_t = 0, t_start = now_s(); float fc_state = 0;
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
+  static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
   for (;;) {
     struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
@@ -287,7 +291,14 @@ int main(int argc, char **argv) {
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
-          char reply[600]; if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; }
+          char reply[600]; float px, py, pz; int pl = 1;
+          if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
+            float hd = P.sp.heading, c = cosf(hd), sn = sinf(hd), spot[3] = { px - (c * hook[0] - sn * hook[1]), py - (sn * hook[0] + c * hook[1]), pz - hook[2] + 0.03f };
+            if (!P.fly) snprintf(reply, sizeof reply, "pickup: take off first");
+            else if (pickup_start(&PKt, spot, hd, pl - 1, &o, t)) snprintf(reply, sizeof reply, "%s", PKt.msg);
+            else { PKt.said = 0; snprintf(reply, sizeof reply, "pickup: flying over it, then down onto it; any other command stops it"); }
+            in_control = 1;
+          } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; pickup_cancel(&PKt, "another command"); PKt.said = 0; }
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
         s = nl + 1;
@@ -342,14 +353,20 @@ int main(int argc, char **argv) {
       int radio = rc_link_ok(&RCI, t) || RP.lost, radio_arm = 0; nav_sp rsp = P.sp;
       if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
         if (RP.learn_req) { int c = RP.learn_req; RP.learn_req = 0; if (have_learn) { learn_command(&LS, c); printf("radio: learning command %d\n", c); } } }
-      if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; }
+      if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; pickup_cancel(&PKt, "the radio has it"); PKt.said = 0; }
+      else if (pickup_active(&PKt)) { if (!P.fly) pickup_cancel(&PKt, "not flying"); else pickup_step(&PKt, &o, t, dt, &P.sp); }
+      if (PKt.said) { PKt.said = 0; printf("%s\n", PKt.msg); tlm_text(&TS, 6, PKt.msg); }
+      for (int w = 0; w < 2; w++) {                                    /* the pickups' requests to the cargo task */
+        const pickup_state *K = w ? &PKt : &RP.pk; if (K->nreq == pk_seen[w]) continue; pk_seen[w] = K->nreq;
+        if (CG.n) cargo_command(&CG, K->req_latch, K->req_act, "pickup"); else printf("pickup: no latches here (--latch): it can't close one\n");
+      }
       int e = nav_step(&N, &in, &P.sp, dt, &o);
       if (e < 0) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; }
       else {
         { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
         if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
         if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
-        if (!radio) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
+        if (!radio && !pickup_active(&PKt)) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
         last_sp = P.sp;
         /* nothing to step on (no attitude in this frame): in the air no new command, the ESP32 flies on the last one */
         /* started (again) while the drone flies: our pilot knows nothing yet (disarmed), and a command from it would

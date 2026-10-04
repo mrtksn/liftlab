@@ -163,12 +163,13 @@ EXPORT("nav_set") void nav_set_(int n) { nav_set(&N, fr, n); }
 /* ── the telemetry task and the pilot's radio ── */
 static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
 static int tlm_local, elrs_rate = 250, elrs_ratio = 4;
+static pickup_state PK; static double nav_clock; static uint32_t pk_seen_r, pk_seen_l;   /* the pickup without a radio (below) */
 static nav_out last_o; static nav_sp last_sp; static int have_nav_out;
 static uint8_t rbuf[2048];                 /* the receiver's UART, both ways */
 EXPORT("rbuf_ptr") uint8_t *rbuf_ptr(void) { return rbuf; }
 /* local: this board has the radio receiver (runs the telemetry task); rate, ratio: the ExpressLRS link's */
 EXPORT("tlm_setup") void tlm_setup(int local, int rate, int ratio) {
-  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
+  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP); pickup_init(&PK); pk_seen_r = pk_seen_l = 0;
   char *p = (char *)&RCI; for (unsigned i = 0; i < sizeof RCI; i++) p[i] = 0;
   p = (char *)&CP; for (unsigned i = 0; i < sizeof CP; i++) p[i] = 0;
   tlm_local = local; elrs_rate = rate; elrs_ratio = ratio; have_nav_out = 0;
@@ -239,6 +240,10 @@ EXPORT("gnd_tick") int gnd_tick(int held, int has, float roll, float pitch, floa
 EXPORT("gnd_from_radio") void gnd_from_radio_(int n, double t) { gnd_from_radio(&GND, rbuf, n, t); }
 /* 0, −1 too many waiting, −2 out of range or not a number (nothing queued) */
 EXPORT("gnd_goto") int gnd_goto_(float x, float y, float z, float h) { return gnd_goto(&GND, x, y, z, h); }
+/* a pickup: the hook's place on the drone (body axes), then the thing's top from home and the latch: as gnd_pickup */
+EXPORT("gnd_pickup") int gnd_pickup_(float hx, float hy, float hz, float x, float y, float z, int latch, double t) {
+  float top[3] = { x, y, z }; GND.C.hook[0] = hx; GND.C.hook[1] = hy; GND.C.hook[2] = hz; return gnd_pickup(&GND, top, latch, t);
+}
 EXPORT("gnd_command") int gnd_command_(int cmd, int n) { return gnd_command(&GND, cmd, fr, n); }   /* values in fr */
 /* a latching button (gnd_setup's latch) set on or off, whatever its button last did: the state, or −1 */
 EXPORT("gnd_latch") int gnd_latch_(int b, int on) { return gnd_latch(&GND, b, on); }
@@ -250,6 +255,29 @@ EXPORT("gnd_msg_text") char *gnd_msg_text(int i) { return GND.V.msg[i % GND_MSGS
 EXPORT("gnd_msg_sev") int gnd_msg_sev(int i) { return GND.V.msg[i % GND_MSGS].sev; }
 EXPORT("gnd_msg_t") double gnd_msg_t(int i) { return GND.V.msg[i % GND_MSGS].t; }
 EXPORT("gnd_why_text") const char *gnd_why_text_(int w) { return w >= 0 && w < GND_WHY_N ? gnd_why_text[w] : ""; }
+
+/* ── the pickup (pickup_core.h): the radio's (rc_pilot) or, without a radio, the simulator's pilot's ── */
+/* start one without a radio: the hub's spot from home, heading [rad], latch. 0, or −1 (pk_msg_ptr says why) */
+EXPORT("pickup_cmd") int pickup_cmd(float x, float y, float z, float heading, int latch) {
+  float s[3] = { x, y, z };
+  if (!have_nav_out || !last_o.have_home) { PK.phase = 0; return -1; }
+  return pickup_start(&PK, s, heading, latch, &last_o, nav_clock);
+}
+EXPORT("pickup_stop") void pickup_stop(void) { pickup_cancel(&PK, "the pilot"); pickup_cancel(&RP.pk, "the pilot"); }
+/* the one under way (the radio's, or ours): phase (0 none), then in fr the target x y z and the latch */
+EXPORT("pk_view") int pk_view(void) {
+  const pickup_state *K = pickup_active(&RP.pk) ? &RP.pk : &PK;
+  fr[0] = K->tgt[0]; fr[1] = K->tgt[1]; fr[2] = K->tgt[2]; fr[3] = (float)K->latch; return K->phase;
+}
+/* a request to the cargo task, once: 1 + 4 latch + action (1 close), or 0 */
+EXPORT("pk_req") int pk_req(void) {
+  if (RP.pk.nreq != pk_seen_r) { pk_seen_r = RP.pk.nreq; return 1 + 4 * RP.pk.req_latch + RP.pk.req_act; }
+  if (PK.nreq != pk_seen_l) { pk_seen_l = PK.nreq; return 1 + 4 * PK.req_latch + PK.req_act; }
+  return 0;
+}
+/* what ours said (the radio's goes with the radio's messages): 1 if new, the text at pk_msg_ptr */
+EXPORT("pk_said") int pk_said(void) { int s = PK.said; PK.said = 0; return s; }
+EXPORT("pk_msg_ptr") char *pk_msg_ptr(void) { return PK.msg; }
 
 static int nav_run(nav_sp *sp_radio);
 EXPORT("nav_tick") int nav_tick(void) { return nav_run(0); }
@@ -279,7 +307,9 @@ static int nav_run(nav_sp *sp_radio) {
   for (int i = 0; i < 3; i++) sp.vref[i] = a[k++];
   sp.heading = a[k++]; sp.fly = a[k++] > 0.5f;
   float dt = a[k++];
+  nav_clock += dt;
   if (sp_radio) sp = *sp_radio;
+  else if (pickup_active(&PK)) { if (!sp.fly) pickup_cancel(&PK, "not flying"); else pickup_step(&PK, &last_o, nav_clock, dt, &sp); }
   int e = nav_step(&N, &in, &sp, dt, &o);
   last_o = o; last_sp = sp; have_nav_out = 1;
   float *p = nio + NIO_IN;

@@ -159,7 +159,7 @@ const brt = {
   t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0, nextCargo: 0, cargoN: 0,
   gnd: null, gndErr: '', gndOk: false,   // the command module's instance (while the drone has a radio); gndOk: its program runs (stickInput, groundAlerts)
   pilot: { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 },
-  fcState: 0, fcWhy: '', navWhy: '', out: null, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
+  fcState: 0, fcWhy: '', navWhy: '', out: null, pickup: 0, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
 };
 const FC_STATES = ['disarmed', 'armed', 'failsafe', 'crashed', 'motor test'];
 // learn_core.h commands
@@ -212,7 +212,7 @@ function boardsStart() {
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
-  brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
+  brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
@@ -338,6 +338,11 @@ function cargoTick() {
   cargoDrive(w.cargo_tick(0.02, brt.t, loaded, sw));
   const n = w.cargo_nmsg(); if (n !== brt.cargoN) { brt.cargoN = n; cargoLog(`${b.name}: ${cstr(w, w.cargo_msg_ptr())}`, 'board'); }
 }
+// Stop a pickup: with a radio, as a pilot would (the hold switch); without, on the navigation's board.
+function pickupStop() {
+  if (brt.gnd) { radioHold(); return; }
+  const b = boardOf('nav'), w = b && brt.ready && brt.inst.get(b.id); if (w) w.pickup_stop();
+}
 // A latch command from the pilot (the buttons on the view, G): with a radio it goes up the link as a LATCH command
 // (the command module queues it), otherwise straight to the cargo task's board, as over a cable. latch: 0… or −1 all;
 // action: 0 open, 1 close, 2 toggle. Returns '' or why it can't.
@@ -363,6 +368,7 @@ function deliverFrames() {
     if (m.kind === 'exc') w.fc_exc(n);
     else if (m.kind === 'tlm') w.tlm_unpack(n, brt.t);
     else if (m.kind === 'rc') w.rc_unpack(n, brt.t);
+    else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
     else if (m.kind === 'model') { if (coreB && m.to.id === coreB.id) w.fc_model(n); if (superB && m.to.id === superB.id) w.super_model(n); }
     else if (m.kind === 'set') {
       if (coreB && m.to.id === coreB.id) { w.fc_set(n); setJointView(m.data); }
@@ -500,10 +506,19 @@ function boardsControl(dt) {
     const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 7).subarray(41);
     brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err };
     if (tw) {
-      brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5 }; if (o[20] > 0.5) rnEvent(`${navB.name}: ${cstr(nav, nav.rc_msg_ptr())}`, 'warn'); gsSyncTarget();
+      brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5 };
+      if (o[20] > 0.5) { const m = cstr(nav, nav.rc_msg_ptr()); if (m.startsWith('pickup')) cargoLog(`${navB.name}: ${m}`, 'board'); else rnEvent(`${navB.name}: ${m}`, 'warn'); }
+      gsSyncTarget();
       const lr = nav.rc_learn_req(); if (lr) { const lname = Object.keys(LN_CMD).find(k => LN_CMD[k] === lr); if (lname) { boardsLearnCmd(lname); rnEvent(`${navB.name}: the radio asked the learning to ${lname === 'calibrate' ? 'calibrate' : lname}`, ''); } }   // (on the Pi, dfb_pi passes it on in-process)
     }
     if (brt.navOut.haveHome && !brt.home) brt.home = S.p.slice();   // where it took off: the nav's home, in the world
+    {   // a pickup (pickup_core.c): its request to close the latch goes to the cargo task's board; its target is the one shown
+      const pr = nav.pk_req(), cgB = boardOf('cargo');
+      if (pr && cgB) sendFrame(navB, cgB, 'cargo', [(pr - 1) >> 2, (pr - 1) & 3]);
+      if (!tw && nav.pk_said()) cargoLog(`${navB.name}: ${cstr(nav, nav.pk_msg_ptr())}`, 'board');
+      brt.pickup = nav.pk_view(); const v = new Float32Array(nav.memory.buffer, nav.fr_ptr(), 4);
+      if (brt.pickup && !tw && brt.home) { setpoint.x = brt.home[0] + v[0]; setpoint.y = brt.home[1] + v[1]; setpoint.z = brt.home[2] + v[2]; }
+    }
     brt.navReady = brt.navOut.ready;
     if (S.steps % 400 === 0 || err) brt.navWhy = cstr(nav, nav.nav_why_ptr());
     // the command it sends the flight core (as dfb_pi.c does): arm, fly, the acceleration and heading
@@ -596,8 +611,8 @@ function gsSyncTarget() {
 function autoPilot(dt, navigated) {
   const P = brt.pilot; P.t += dt;
   const att = brt.out && brt.out.attOk, throwing = !!thr;
-  if (P.phase === 'ground' && P.t > 0.6 && att) { P.arm = 1; P.phase = 'arming'; P.t = 0; }
-  if (P.phase === 'arming' && P.t > 0.2) {
+  if (P.phase === 'ground' && P.t > 0.3 && att) { P.arm = 1; P.phase = 'arming'; P.t = 0; }
+  if (P.phase === 'arming' && (P.t > 0.2 || (brt.fcState === 1 && P.t > 0.02))) {   // (on as soon as it's armed)
     if (brt.fcState !== 1) { if (P.t > 2) { P.phase = 'ground'; P.arm = 0; P.t = 0; } return; }   // didn't arm (the reason is shown): switch off and try again
     if (throwing) { P.phase = 'hand'; P.t = 0; P.fly = navigated ? 1 : 0; P.thr = navigated ? 0 : 0.5; pilotLearnCmd('throw'); return; }
     P.phase = 'takeoff'; P.t = 0; P.fly = navigated ? 1 : 0; P.thr = navigated ? 0 : 0.85;

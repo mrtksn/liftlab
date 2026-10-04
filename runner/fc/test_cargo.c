@@ -4,11 +4,13 @@
  *   cc -O2 -I.. -o test_cargo test_cargo.c cargo_core.c tlm_core.c tlm_crsf.c tlm_sources.c crsf.c rc_core.c -lm */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "cargo_core.h"
 #include "rc_core.h"
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
 #include "crsf.h"
+#include "pickup_core.h"
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -92,6 +94,48 @@ int main(void) {
   tlm_from_cargo(&T, &C, 1.1); CHECK(T.qn == 1, "not again");
   uint8_t out[64]; int fl = tlm_crsf.item(&T, TLM_CARGO, out);
   CHECK(fl == 4 + 3 + 6 && out[2] == CRSF_EXT && out[3] == CRSF_EXT_ITEM && out[4] == TLM_CARGO && out[5] == 3 && out[11] == (2 | 4 | 8), "CRSF item frame (%d bytes)", fl);
+
+  /* the pickup: a drone that follows its target with a lag (and a little sway), over a spot 3 m away */
+  {
+    pickup_state K; pickup_init(&K); nav_out o; memset(&o, 0, sizeof o); o.have_home = 1; o.p[2] = 1.5f;
+    nav_sp sp; float spot[3] = { 3, 1, 0.2f };
+    CHECK(pickup_start(&K, spot, 0.5f, 1, &o, 0) == 0 && K.phase == PK_OVER && K.z_over > 1.49f && K.z_over < 1.51f, "starts over it, as high as it is (1.5 m): z %g", K.z_over);
+    float minz = 9; int closed_at = -1, saw[5] = { 0 }; double t = 0;
+    for (; t < 40 && pickup_active(&K); t += 0.01) {
+      pickup_step(&K, &o, t, 0.01f, &sp); saw[K.phase] = 1;
+      for (int k = 0; k < 3; k++) { float v = (sp.target[k] - o.p[k]) * 2.5f; v = v > 1.5f ? 1.5f : v < -1.5f ? -1.5f : v; o.v[k] = v; o.p[k] += v * 0.01f; }
+      if (o.p[2] < minz) minz = o.p[2];
+      if (K.nreq == 1 && closed_at < 0) closed_at = (int)(t * 100);
+    }
+    CHECK(saw[PK_OVER] && saw[PK_DOWN] && saw[PK_CLOSE] && saw[PK_UP] && !pickup_active(&K) && K.done_ok, "over, down, close, up, done (%.1f s): %s", t, K.msg);
+    CHECK(K.nreq == 1 && K.req_latch == 1 && K.req_act == 1 && closed_at > 0, "asked once to close latch 2, at %.1f s", closed_at / 100.0);
+    CHECK(minz > 0.2f - PK_TOL && sp.heading == 0.5f, "never below the spot (lowest %.3f) and facing the way it was told", minz);
+    CHECK(o.p[2] > 1.3f && fabsf(o.p[0] - 3) < 0.1f, "climbed back over it: %.2f %.2f %.2f", o.p[0], o.p[1], o.p[2]);
+    /* a drone that can't hold still over it gives up, without closing */
+    pickup_init(&K); memset(&o, 0, sizeof o); o.have_home = 1; o.p[2] = 1;
+    pickup_start(&K, spot, 0, 0, &o, 0);
+    for (t = 0; t < 60 && pickup_active(&K); t += 0.01) {
+      pickup_step(&K, &o, t, 0.01f, &sp);
+      for (int k = 0; k < 3; k++) { o.v[k] = (sp.target[k] - o.p[k]) * 2; o.p[k] += o.v[k] * 0.01f; }
+      o.p[0] += 0.08f * sinf((float)t * 3) * 0.01f * 3; o.v[0] = 0.24f * cosf((float)t * 3);   /* swaying in the wind */
+    }
+    CHECK(!K.done_ok && K.nreq == 0 && !strcmp(K.msg, "pickup gave up"), "swaying: gives up after %.0f s, closes nothing: %s", PK_GIVEUP, K.msg);
+    CHECK(pickup_start(&K, (float[]){ 40, 0, 1 }, 0, 0, &o, 0) == -1 && !pickup_active(&K), "a spot outside the box is refused: %s", K.msg);
+    /* by radio: PICKUP through CRSF, the radio's pilot flies it; the sticks stop it */
+    rc_pilot RP; rc_pilot_init(&RP); nav_state N; memset(&N, 0, sizeof N); rc_input ri; memset(&ri, 0, sizeof ri);
+    crsf_parser Q; memset(&Q, 0, sizeof Q); uint8_t fb[64];
+    float ch[16] = { 0, 0, 0, 0, 1, 0, 1, -1, -1, 0, 0, 0, 0, 0, 0, 0 };
+    memset(&o, 0, sizeof o); o.have_home = 1; o.p[2] = 1.5f; o.fly = 1;
+    double rt = 1; nav_sp rs; memset(&rs, 0, sizeof rs);
+    for (int i = 0; i < 20; i++, rt += 0.02) { int m = crsf_rc(fb, CRSF_ADDR_FC, ch); for (int j = 0; j < m; j++) tlm_crsf_input(&Q, fb[j], &ri, rt); rc_pilot_step(&RP, &ri, rt, &N, &o, 0.02f, &rs); }
+    float pv[5] = { 2, -1, 0.1f, 1.0f, 0 }; int m = tlm_crsf_cmd(fb, RC_CMD_PICKUP, 3, pv, 5); for (int j = 0; j < m; j++) tlm_crsf_input(&Q, fb[j], &ri, rt);
+    m = crsf_rc(fb, CRSF_ADDR_FC, ch); for (int j = 0; j < m; j++) tlm_crsf_input(&Q, fb[j], &ri, rt);
+    rc_pilot_step(&RP, &ri, rt, &N, &o, 0.02f, &rs);
+    CHECK(pickup_active(&RP.pk) && fabsf(rs.target[0] - 2) < 0.01f && fabsf(rs.target[1] + 1) < 0.01f && fabsf(rs.heading - 1) < 0.01f, "the radio's PICKUP: over the spot, facing 1 rad (%g %g, %g)", rs.target[0], rs.target[1], rs.heading);
+    ch[RC_PITCH] = 0.6f; rt += 0.02; m = crsf_rc(fb, CRSF_ADDR_FC, ch); for (int j = 0; j < m; j++) tlm_crsf_input(&Q, fb[j], &ri, rt);
+    rc_pilot_step(&RP, &ri, rt, &N, &o, 0.02f, &rs);
+    CHECK(!pickup_active(&RP.pk) && strstr(RP.msg, "sticks"), "the stick stops it: %s", RP.msg);
+  }
 
   printf(fails ? "cargo: %d FAILED\n" : "cargo: ok\n", fails);
   return fails != 0;

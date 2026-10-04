@@ -2,6 +2,7 @@
 #include "ground_core.h"
 #include "rc_core.h"
 #include "tlm_crsf.h"
+#include "wasm_math.h"
 
 const char *const gnd_why_text[GND_WHY_N] = { "", "no telemetry", "weak link", "battery low", "battery very low", "returning home", "landing",
   "failsafe", "crashed", "the drone hears no radio", "telemetry slow (the link has little room for it)",
@@ -12,7 +13,7 @@ static int fin(float x) { return x == x && x < 3e38f && x > -3e38f; }
 static void say(gnd_state *G, const char *s) { int i = 0; for (; s[i] && i < (int)sizeof G->why - 1; i++) G->why[i] = s[i]; G->why[i] = 0; }
 static void zero(void *p, unsigned n) { char *c = (char *)p; while (n--) *c++ = 0; }
 
-void gnd_config_default(gnd_config *c) { c->latch = 0; c->rc_period = 0.004f; c->cmd_gap = 0.15f; c->seq0 = 0; c->resume = 0; }
+void gnd_config_default(gnd_config *c) { c->latch = 0; c->rc_period = 0.004f; c->cmd_gap = 0.15f; c->seq0 = 0; c->resume = 0; c->hook[0] = c->hook[1] = 0; c->hook[2] = -0.06f; }
 #define SWITCHES (GB(GB_ARM) | GB(GB_FLY))                /* what the switch warning holds back */
 
 int gnd_init(gnd_state *G, rn_host *H, const gnd_config *c) {
@@ -55,6 +56,14 @@ int gnd_goto(gnd_state *G, float x, float y, float z, float heading) {
   for (int i = 0; i < 3; i++) if (!fin(v[i]) || v[i] > GND_GOTO_MAX || v[i] < -GND_GOTO_MAX) return -2;
   if (G->qn) { int k = (G->qh + G->qn - 1) % GND_QN; if (G->q[k].cmd == RC_CMD_GOTO) { for (int i = 0; i < 4; i++) G->q[k].v[i] = v[i]; G->q[k].n = 4; G->q[k].t = G->t_now; return 0; } }
   return gnd_command(G, RC_CMD_GOTO, v, 4);
+}
+int gnd_pickup(gnd_state *G, const float top[3], int latch, double t) {
+  if (G->V.t_att < 0 || t - G->V.t_att > 2) return -3;
+  float h = G->V.yaw, c = cosf(h), s = sinf(h), *k = G->C.hook;
+  float v[5] = { top[0] - (c * k[0] - s * k[1]), top[1] - (s * k[0] + c * k[1]), top[2] - k[2] + GND_PICKUP_CLEAR, h, (float)latch };
+  for (int i = 0; i < 3; i++) if (!fin(v[i]) || v[i] > GND_GOTO_MAX || v[i] < -GND_GOTO_MAX) return -2;
+  if (latch < 0 || latch > 7) return -2;
+  return gnd_command(G, RC_CMD_PICKUP, v, 5);
 }
 int gnd_latch(gnd_state *G, int b, int on) {
   if (b < 0 || b >= GB_N || !(G->C.latch & GB(b))) return -1;

@@ -583,6 +583,46 @@ function renderMass() {
   syncKv($('#massKv'), rows);
 }
 const goForm = () => showTab('form');
+// The launch banner: from a reset to flying, what the drone is doing and waiting for (as a game shows it), and why
+// it's stuck when it is (a refusal to arm, a position that won't settle). It fades once it flies.
+const launchUi = { key: '', flyT: null };
+function renderLaunch() {
+  const box = $('#liftoff'); if (!box) return;
+  const P = brt.pilot, nav = hasTask('nav'), throwing = launchMode === 'throw' && hasTask('learn');
+  const steps = ['Computers', 'Level', 'Armed', ...(nav ? ['Position'] : []), throwing ? 'Thrown' : 'Airborne'];
+  let k = -1, title = '', sub = '', tone = '';
+  if (P.phase !== 'flying') launchUi.flyT = null;
+  const starting = !brt.err || /^starting/.test(brt.err);
+  if (editMode || S.crashed) title = '';
+  else if (!cargo.power) { title = 'No power'; sub = 'The battery is off the drone. Reset (R) to start again.'; tone = 'bad'; }
+  else if (!brt.ready) { k = 0; title = starting ? 'Starting up' : 'Can\'t start'; sub = starting ? 'Loading the flight program onto each board' : brt.err; tone = starting ? '' : 'bad'; }
+  else if (P.phase === 'ground') { k = 1; title = 'Levelling'; sub = 'The flight core\'s attitude settles while it stands still'; }
+  else if (P.phase === 'arming') {
+    k = 2; title = 'Arming';
+    if (P.t > 0.15 && brt.fcState !== 1) { sub = 'It won\'t arm: ' + (brt.fcWhy || 'no reason given') + '. Trying again.'; tone = 'warn'; } else sub = 'The motors spin up to idle';
+  } else if (P.phase === 'takeoff' && nav && brt.navOut && !brt.navOut.ready) {
+    const refs = [sensorsOf('fix').length ? 'GPS' : '', sensorsOf('flow').length ? 'optical flow' : '', sensorsOf('baro').length ? 'barometer' : ''].filter(Boolean).join(', ') || 'sensors';
+    k = 3; title = 'Finding its position'; sub = `The navigation's estimate settles on its ${refs} · ${P.t.toFixed(1)} s`;
+    if (P.t > 8) { sub += ' (a long wait: is a sensor missing, or its signal lost?)'; tone = 'warn'; }
+  } else if (P.phase === 'takeoff') {
+    const h0 = brt.home ? brt.home[2] : spawnAt[2], h = Math.max(0, (est.havePos ? est.p[2] : S.p[2]) - h0), to = Math.max(0.1, setpoint.z - h0);
+    k = steps.length - 1; title = 'Taking off'; sub = `${h.toFixed(1)} of ${to.toFixed(1)} m`;
+  } else if (P.phase === 'hand') { k = steps.length - 1; title = !thr ? 'Caught' : thr.phase === 'hand' ? 'In the hand' : thr.phase === 'toss' ? 'Throw!' : 'Catching itself'; sub = flightPhaseText(); }
+  else if (P.phase === 'flying') {
+    if (launchUi.flyT == null) launchUi.flyT = S.t;
+    if (S.t - launchUi.flyT < 1.5) { k = steps.length; title = 'Flying'; tone = 'good'; sub = nav ? 'The keys move its target; G works the latches' : 'Angle mode: the keys lean it'; }
+  } else if (P.phase === 'landed') { title = 'Landed'; sub = flightPhaseText() + ' · R starts again'; }
+  box.hidden = !title;
+  box.classList.toggle('fade', P.phase === 'flying' && launchUi.flyT != null && S.t - launchUi.flyT > 1.0);
+  if (!title) return;
+  setText($('#liftoffTitle'), title); setText($('#liftoffSub'), sub);
+  for (const t of ['warn', 'bad', 'good']) box.classList.toggle(t, tone === t);
+  const key = steps.join() + '|' + k;
+  if (key !== launchUi.key) {
+    launchUi.key = key; const ol = $('#liftoffSteps'); ol.textContent = ''; ol.hidden = k < 0;
+    steps.forEach((s, i) => ol.append(el('li', { class: i < k ? 'done' : i === k ? 'now' : '', text: s })));
+  }
+}
 function updateLive() {
   const chips = [], chip = (key, src, text, tone, go) => chips.push({ key, src, text, tone, go });
   if (S.crashed) chip('crash', 'sim', 'Crashed', 'bad'); else {
@@ -1050,6 +1090,7 @@ function boot() {
     envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
     renderGs();
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); }
+    renderLaunch();
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
