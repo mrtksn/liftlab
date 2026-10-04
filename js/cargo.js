@@ -91,8 +91,8 @@ const looseGrab = L => looseAt(L, [0, 0, 0]);
 // The world items, as loose bodies resting where they're set.
 function spawnItems() {
   for (const it of cargoWorld.items) {
-    const sz = (it.size || [0.1, 0.1, 0.08]).map(v => clamp(+v || 0.05, 0.02, 0.5));
-    const box = mkMass(it.name || 'Parcel', 0, 0, -sz[2] / 2, { mass: clamp(+it.mass || 0.2, 0.01, 5), size: sz, known: false, cargo: true });
+    const sz = (it.size || [0.1, 0.1, 0.08]).map(v => Math.max(0.005, +v || 0.05));   // (any size or mass you type; above zero)
+    const box = mkMass(it.name || 'Parcel', 0, 0, -sz[2] / 2, { mass: Math.max(0.001, +it.mass || 0.2), size: sz, known: false, cargo: true });
     const L = looseBody(box.name, [box]), x = it.at ? +it.at[0] || 0 : 1, y = it.at ? +it.at[1] || 0 : 0;
     const ground = terrain.boxes.length ? surfaceBelow([x, y, 100]) : 0;
     L.p = [x, y, ground + sz[2] / 2 + 0.002]; L.asleep = true; L.box = null;

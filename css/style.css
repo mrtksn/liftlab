@@ -855,3 +855,50 @@ select.pending{border-color:var(--warn);border-style:dashed}
 .rtabs button{font-size:12.5px;padding:9px 6px 8px;letter-spacing:.07em}
 .rtabs button.alert::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad)}
 .rpane{display:flex;flex-direction:column}
+/* the status strip on top of the readouts: fixed tiles, one line of warnings (ui.js updateLive) */
+.status{padding:10px 12px 10px;border-bottom:1px solid var(--line);gap:8px;flex:none}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.tile{display:grid;grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto auto;column-gap:8px;align-items:center;padding:7px 9px 7px 8px;border:1px solid var(--line);border-left:3px solid var(--line-strong);border-radius:7px;background:var(--panel);text-align:left;font:inherit;color:inherit;min-width:0;height:64px;box-sizing:border-box}
+button.tile{cursor:pointer}
+button.tile:hover{background:var(--panel-2)}
+button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tile .ti{grid-row:1/4;width:20px;height:20px;color:var(--muted)}
+.tile .tk{font-family:var(--f-display);font-weight:600;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);line-height:1.1}
+.tile .tv{font-family:var(--f-display);font-weight:600;font-size:16px;line-height:1.15;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .ts{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;min-height:1.25em}
+.tile.good{border-left-color:var(--good)} .tile.good .ti{color:var(--good)}
+.tile.warn{border-left-color:var(--warn)} .tile.warn .ti,.tile.warn .tv{color:var(--warn)}
+.tile.bad{border-left-color:var(--bad);background:var(--bad-soft)} .tile.bad .ti,.tile.bad .tv{color:var(--bad)}
+.tile.accent{border-left-color:var(--accent)} .tile.accent .ti,.tile.accent .tv{color:var(--accent)}
+.alerts{margin:0;font-size:12px;line-height:18px;height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.alerts.warn{color:var(--warn)} .alerts.bad{color:var(--bad)} .alerts.info{color:var(--ink-2)}
+/* the readouts' tabs: folder tabs with icons */
+.rtabs{display:flex;gap:3px;padding:7px 8px 0;background:var(--panel-2);border-bottom:1px solid var(--line);margin-top:0}
+.rtabs button{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 4px 7px;border:1px solid transparent;border-bottom:0;border-radius:7px 7px 0 0;margin-bottom:-1px;font-size:12px;letter-spacing:.05em;color:var(--muted)}
+.rtabs button svg{width:15px;height:15px;flex:none}
+.rtabs button:hover{color:var(--ink-2);background:color-mix(in srgb,var(--panel) 50%,transparent)}
+.rtabs button[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--ink);border-bottom:1px solid var(--panel)}
+/* the key to the source tags: one quiet line until opened */
+#telemetry > .src-legend summary .src{display:none}
+#telemetry > .src-legend summary{padding:6px 12px;color:var(--muted)}
+#telemetry > .src-legend summary::before{content:"ⓘ";margin-right:4px}
+/* the Health tab, calmer (health-ui.js) */
+.h-top .h-count{font-size:12px;color:var(--good)}
+.h-top .h-count.bad{color:var(--bad);font-weight:600}
+.h-how summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none}
+.h-how summary::before{content:"ⓘ ";}
+.h-how summary::-webkit-details-marker{display:none}
+.h-how[open] summary{margin-bottom:4px}
+.h-list{gap:2px}
+.h-group{font-family:var(--f-display);font-weight:600;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:8px 0 2px}
+.h-row{padding:5px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);grid-template-columns:minmax(52px,auto) minmax(28px,1fr) 34px minmax(56px,auto) auto}
+.h-name{display:inline-flex;align-items:center;gap:6px}
+.h-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--good)}
+.h-dot.warn{background:var(--warn)} .h-dot.bad{background:var(--bad)}
+.h-state{text-align:right}
+.h-sub:empty{display:none}
+.h-sub{padding-left:14px}
+.rtabs button{flex-direction:column;gap:2px;padding:6px 2px 5px;font-size:11px;letter-spacing:.06em;line-height:1.1}
+.rtabs button svg{width:17px;height:17px}
+.rtabs button.alert::after{position:absolute;margin:-2px 0 0 18px}
+.rtabs button{position:relative}

@@ -229,11 +229,15 @@ function summary(c) {
 // typed values may go further, up to hmin/hmax. `get`/`set` work in SI units, the box shows d.k × value.
 // A typed value outside the limits is clamped, and a note beside the box says so for a moment. d.ends: words
 // for the two ends of the slider (the scale), shown under it. d.int: whole numbers only.
+// A number: a slider over the usual range, and a box where you can type anything past it (a 200 kg payload, a
+// 3 m rod). Typing keeps only what makes sense physically: no zero or negative for something that must be positive
+// (a mass, a size), fractions and percentages within their range (d.hard: a field whose range is real).
 function numField(id, d, get, set) {
-  const k = d.k || 1, lo = d.hmin ?? d.min, hi = d.hmax ?? d.max, inK = x => +(x * k).toFixed(6);
+  const frac = d.hard || d.u === '%' || (d.min === 0 && d.max === 1);
+  const k = d.k || 1, lo = frac ? (d.hmin ?? d.min) : d.min >= 0 ? 0 : -Infinity, hi = frac ? (d.hmax ?? d.max) : Infinity, pos = !frac && d.min > 0, inK = x => +(x * k).toFixed(6);
   const show1 = x => String(+(x * k).toFixed(d.dp));
   const onGrid = x => Math.abs(x / d.step - Math.round(x / d.step)) < 1e-6;   // (a min off the step grid would move where the arrow keys step to)
-  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(inK(d.step)), min: onGrid(lo) ? String(inK(lo)) : null, max: String(inK(hi)), 'aria-label': `${d.label}${d.u ? ' in ' + d.u : ''}`, inputmode: 'decimal' });
+  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(inK(d.step)), min: isFinite(lo) && onGrid(lo) ? String(inK(lo)) : null, max: isFinite(hi) ? String(inK(hi)) : null, 'aria-label': `${d.label}${d.u ? ' in ' + d.u : ''}`, inputmode: 'decimal' });
   const rng = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step });
   const note = el('span', { class: 'clampnote', role: 'status' }); let noteT = 0;
   const say = t => { clearTimeout(noteT); note.textContent = t; if (t) noteT = setTimeout(() => { note.textContent = ''; }, 2500); };
@@ -243,8 +247,10 @@ function numField(id, d, get, set) {
   num.addEventListener('input', () => {
     const t = num.value; let v = parseFloat(t) / k; if (t === '' || !isFinite(v)) return;
     let why = '';
+    if (pos && v <= 0) { say('must be above 0'); return; }
     if (v > hi) { v = hi; why = `max ${show1(hi)}`; } else if (v < lo) { v = lo; why = `min ${show1(lo)}`; }
     if (d.int && Math.round(v) !== v) { v = Math.round(v); why = why || 'whole numbers'; }
+    if (!why && (v > d.max || v < d.min)) why = 'past the slider';
     say(why); rng.value = String(v); set(v);
   });
   num.addEventListener('change', () => show(get()));                       // tidy the box once typing is done
@@ -567,8 +573,8 @@ function refreshEnvelope() {
 }
 function renderEnvelope() {
   const r = envRes; if (!r) return;
-  const p = $('#verdict'), pc = 'pill ' + r.verdict; if (p.className !== pc) p.className = pc; setText(p.querySelector('span'), r.title); setText($('#verdictWhy'), r.why);
-  setText($('#envSpace'), r.k === 6 ? '6-axis (stay level)' : mode === 'mixed' ? '4-axis (mixed)' : '4-axis (tilt body)');
+  setTile('tileAir', r.title, r.k === 6 ? '6-axis (stay level)' : mode === 'mixed' ? '4-axis (mixed)' : '4-axis (tilt body)', r.verdict, `${r.title}: ${r.why} (the Control tab has the headroom on each axis)`);
+  setText($('#verdictWhy'), r.title + '. ' + r.why);
   const box = $('#env'), sig = r.head ? r.labels.join('|') : '-';
   if (box._sig !== sig) {   // the rows are built once per set of axes; the bars and numbers update in place
     box._sig = sig; box.textContent = ''; box._rows = [];
@@ -603,6 +609,7 @@ function renderMass() {
   syncKv($('#massKv'), rows);
 }
 const goForm = () => showTab('form');
+$('#tileCode').addEventListener('click', goForm);
 // The launch banner: from a reset to flying, what the drone is doing and waiting for (as a game shows it), and why
 // it's stuck when it is (a refusal to arm, a position that won't settle). It fades once it flies.
 const launchUi = { key: '', flyT: null };
@@ -643,25 +650,47 @@ function renderLaunch() {
     steps.forEach((s, i) => ol.append(el('li', { class: i < k ? 'done' : i === k ? 'now' : '', text: s, title: s })));
   }
 }
+// The status strip on top of the readouts: four tiles that are always there (so nothing below moves), and one line of
+// warnings. Tones: good, warn, bad, or none.
+function setTile(id, value, sub, tone, title) {
+  const t = $('#' + id), cls = 'tile' + (tone ? ' ' + tone : ''); if (t.className !== cls) t.className = cls;
+  setText(t.querySelector('.tv'), value); setText(t.querySelector('.ts'), sub);
+  if (title != null && t.title !== title) t.title = title;
+}
 function updateLive() {
-  const chips = [], chip = (key, src, text, tone, go) => chips.push({ key, src, text, tone, go });
-  if (S.crashed) chip('crash', 'sim', 'Crashed', 'bad'); else {
-    const last = hist.err.length ? hist.err[hist.err.length - 1] : 0;
-    if (hasTask('nav') && brt.pilot.phase === 'flying') chip('hold', 'sim', last < 60 ? 'Holding target' : 'Getting there', last < 60 ? 'good' : 'warn');   // GPS alone is good to a few tens of cm
-    if (brt.out && brt.out.sat) chip('sat', 'board', 'Motor at limit', 'warn');
-    if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) chip('slack', 'sim', 'Cable slack', 'warn');
+  {   // flight
+    const last = hist.err.length ? hist.err[hist.err.length - 1] : 0, P = flightPhaseText();
+    if (S.crashed) setTile('tileFly', 'Crashed', S.crashed, 'bad', S.crashed);
+    else if (brt.err && !brt.ready) setTile('tileFly', 'Not running', brt.err, 'bad', brt.err);
+    else {
+      const flying = brt.pilot.phase === 'flying', sub = flying && hasTask('nav') ? (last < 60 ? 'holding its target' : `${Math.round(last)} cm off target`) : brt.fcState !== 1 && brt.fcWhy ? brt.fcWhy : hasTask('nav') ? '' : 'angle mode (no navigation)';
+      setTile('tileFly', P.charAt(0).toUpperCase() + P.slice(1), sub, brt.fcState === 3 ? 'bad' : flying ? (hasTask('nav') && last >= 60 ? 'warn' : 'good') : '', `${P}${sub ? ': ' + sub : ''}`);   // (GPS alone is good to a few tens of cm)
+    }
   }
-  const ed = editedLaws(), bad = ed.filter(L => L.status === 'error');
-  if (bad.length) chip('laws', 'you', `${bad.length} formula error${bad.length > 1 ? 's' : ''}`, 'bad', goForm);
-  else if (ed.length) chip('laws', 'you', `${ed.length} formula${ed.length > 1 ? 's' : ''} edited`, 'accent', goForm);
-  if (S.aero && S.aero.length && !S.crashed) {   // the wings' pull, which the flight computers don't know about
-    const F = S.aero.reduce((s, e) => add(s, e.F), [0, 0, 0]), f = nrm(F), w = truth.m * G;
-    if (f > 0.05) chip('aero', 'sim', `Wings ${f.toFixed(1)} N (${Math.round(100 * f / w)}% of its weight)`, f > 0.3 * w ? 'warn' : '');
+  {   // battery
+    const soc = Math.max(0, S.batt.soc ?? 1), b = battCfg();
+    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S`, !cargo.power ? 'bad' : soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : 'good', !cargo.power ? 'No battery on the drone' : null);
+    const f = $('#battFill'); if (f) f.setAttribute('width', (10.8 * clamp(cargo.power ? soc : 0, 0, 1)).toFixed(2));
   }
-  const soc = Math.max(0, S.batt.soc ?? 1); chip('batt', 'sim', `Battery ${Math.round(soc * 100)}% · ${(S.battV || 0).toFixed(1)} V`, soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : '');
-  if (brt.err && !brt.ready) chip('board', 'board', brt.err, 'bad', goForm);
-  else chip('board', 'board', `${flightPhaseText()}${brt.fcState !== 1 && brt.fcWhy ? ' · ' + brt.fcWhy : ''}`, brt.fcState === 3 ? 'bad' : '');
-  syncChips($('#liveChips'), chips);
+  {   // formulas
+    const ed = editedLaws(), bad = ed.filter(L => L.status === 'error').length, nb = computers().boards.length;
+    setTile('tileCode', bad ? `${bad} stopped` : ed.length ? `${ed.length} edited` : 'Defaults', `${nb} board${nb === 1 ? '' : 's'}`, bad ? 'bad' : ed.length ? 'accent' : '');
+  }
+  {   // warnings: one line, the most pressing first
+    const w = [];
+    if (!S.crashed) {
+      const sv = brt.superView; if (sv && sv.mode > 0) w.push(['bad', 'supervisor: ' + (MODE_TXT[sv.mode] || MODE_TXT[0])[0].toLowerCase()]);
+      if (typeof anyBroken === 'function' && anyBroken()) w.push(['bad', 'a part is broken (Health)']);
+      if (brt.out && brt.out.sat) w.push(['warn', 'a motor at its limit']);
+      if (pend.size && [...pend.values()].some(p => p.Tn <= 0.01)) w.push(['warn', 'cable slack']);
+      if (S.aero && S.aero.length) {   // the wings' pull, which the flight computers don't know about
+        const F = S.aero.reduce((s, e) => add(s, e.F), [0, 0, 0]), f = nrm(F), wt = truth.m * G;
+        if (f > 0.05) w.push([f > 0.3 * wt ? 'warn' : '', `wings ${f.toFixed(1)} N (${Math.round(100 * f / wt)}% of its weight)`]);
+      }
+    }
+    const L = $('#liveAlerts'), txt = w.length ? w.map(x => x[1]).join(' · ') : 'No warnings', cls = 'alerts' + (w.length ? ' ' + (w.some(x => x[0] === 'bad') ? 'bad' : w.some(x => x[0] === 'warn') ? 'warn' : 'info') : '');
+    if (L.className !== cls) L.className = cls; if (L.dataset.t !== txt) { L.dataset.t = txt; L.textContent = (w.length ? '⚠ ' : '✓ ') + txt; L.title = txt; }
+  }
   const R = qmat(S.q); const { hub } = hubState(R);
   setText($('#hudTime'), `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`);
   setText($('#hudPos'), `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`);
