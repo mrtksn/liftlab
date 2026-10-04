@@ -40,8 +40,9 @@ function breakMenu(options, onPick, label, key) {   // a menu: nothing breaks un
 const anyBroken = () => [...hs.values()].some(s => s.loss > 0.004 || s.dead || s.prop || s.jam != null || s.limp) || hb.fade > 0.005 || hb.cellsLost > 0 || hb.cut;
 function healthRow(key, name, menu) {
   const bar = el('i'), temp = el('span', { class: 'h-temp' }), state = el('span', { class: 'h-state' }), sub = el('span', { class: 'h-sub' });
-  const row = el('div', { class: 'h-row' }, el('span', { class: 'h-name', title: 'Its true temperature and state (simulated)' }, srcDot('sim'), name), el('span', { class: 'h-bar' }, bar), temp, state, menu || el('span'), sub);
-  HEALTH.rows.set(key, { row, bar, temp, state, sub });
+  const dot = el('i', { class: 'h-dot' });
+  const row = el('div', { class: 'h-row' }, el('span', { class: 'h-name', title: 'Its true temperature and state (simulated)' }, dot, name), el('span', { class: 'h-bar', title: 'Temperature, up to its limit' }, bar), temp, state, menu || el('span'), sub);
+  HEALTH.rows.set(key, { row, bar, temp, state, sub, dot });
   return row;
 }
 function buildHealth() { keepFocus(buildHealth1); }
@@ -52,11 +53,16 @@ function buildHealth1() {
   repair.addEventListener('click', () => { if (repair.getAttribute('aria-disabled') === 'true') return; repairAll(); renderHealth(true); });
   const sb = typeof boardOf === 'function' ? boardOf('super') : null;
   mode.hidden = !sb;
-  box.append(el('div', { class: 'h-top' }, el('span', { class: 'lbl', text: sb ? 'Supervisor' : '' }), mode, repair),
-    sb ? el('p', { class: 'hint', id: 'supWhy', text: `The health supervisor runs on ${sb.name} at 10 Hz, on the flight core's data stream over the link and the health sensors wired to it. Each part: its true temperature and state (simulated), then what the drone's sensors say and what the supervisor did (on board).` }) : el('p', { class: 'hint', text: 'Each part: its true temperature and state (simulated), and what the drone\'s sensors say. Break any of them to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
-  const list = el('div', { class: 'h-list' });
+  const how = el('details', { class: 'h-how' }, el('summary', { text: 'How to read this' }),
+    el('p', { class: 'hint', id: 'supWhy', text: sb ? `Each row is a part: the dot and the words are its true state (simulated), the bar its temperature up to its limit. The line under it, when there is one, is what the drone's own sensors read and what the health supervisor (on ${sb.name}, 10 times a second, from the flight core's data and the health sensors) did about it. Break a part to see what the flight code does.`
+      : 'Each row is a part: the dot and the words are its true state (simulated), the bar its temperature up to its limit; the line under it, what the drone\'s own sensors read. Break a part to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
+  box.append(el('div', { class: 'h-top' }, el('span', { class: 'lbl', text: sb ? 'Supervisor' : 'No supervisor' }), mode, el('span', { class: 'h-count', id: 'hCount' }), repair), how);
+  const list = el('div', { class: 'h-list' }), group = t => list.append(el('span', { class: 'h-group', text: t }));
+  if (actuators().length) group('Motors');
   for (const c of actuators()) list.append(healthRow(c.id, c.name, breakMenu([['stop', 'Stop it'], ['loss', `Lose ${c.failLoss ?? 50}% thrust`], ['prop', 'Break its prop']], v => breakDevice(c, v), 'Break ' + c.name, c.id)));
+  if (joints().length) group('Servos');
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name, j.id)));
+  group('Power');
   list.append(healthRow('batt', 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
   box.append(list, el('span', { class: 'lbl', text: 'What happened' }), el('ol', { class: 'h-log', id: 'supLog' }));
   HEALTH.sig = healthSig();
@@ -75,6 +81,7 @@ function renderHealth(force) {
     const r = HEALTH.rows.get(key); if (!r) return;
     r.bar.style.width = (clamp(frac, 0, 1.2) / 1.2 * 100).toFixed(1) + '%'; r.bar.style.background = tempColor(frac);
     setText(r.temp, tempTxt); setText(r.state, stateTxt); const sc = 'h-state ' + (tone || ''); if (r.state.className !== sc) r.state.className = sc;
+    const dc = 'h-dot ' + (tone || 'good'); if (r.dot.className !== dc) r.dot.className = dc;
     // the line under: [source, text] parts, each with its dot (sources.js); rebuilt only when it changes
     const sk = JSON.stringify(subTxt); if (r.subKey === sk) return; r.subKey = sk; r.sub.textContent = '';
     for (const [src, t] of subTxt) if (t) r.sub.append(el('span', { class: 'src-part' }, srcDot(src), t));
@@ -83,9 +90,10 @@ function renderHealth(force) {
   actuators().forEach((c, i) => {
     const s = hs.get(c.id) || { T: ambient(), loss: 0 }, lim = c.tmaxC ?? 120, r = hread.m.get(c.id) || {}, e = sv && sv.motors[i];
     const truth = s.prop ? ['prop broken', 'bad'] : s.dead ? ['stopped', 'bad'] : s.loss > 0.004 ? [`−${Math.round(s.loss * 100)}% thrust${s.cause === 'burned out' || s.T > lim ? ' (heat)' : ''}`, 'warn'] : ['working', ''];
-    const seen = r.T != null ? ['sensor', `sensor ${Math.round(r.T)}°`] : e && e.temp != null && r.I != null ? ['board', `est. ${Math.round(e.temp)}° from ESC current`] : ['calc', 'temperature not measured'];
-    const did = !e ? '' : !e.on ? 'removed from the table' : [e.eff < 0.99 || e.eff > 1.01 ? `table ×${e.eff.toFixed(2)}` : '', e.cap < 0.995 ? `capped at ${Math.round(e.cap * 100)}%` : ''].filter(Boolean).join(', ') || 'OK';
-    put(c.id, (s.T - ambient()) / Math.max(10, lim - ambient()), `${Math.round(s.T)} °C`, truth[0], truth[1], [seen, ['board', did ? 'supervisor: ' + did : '']]);
+    const seen = r.T != null ? ['sensor', `reads ${Math.round(r.T)}°`] : e && e.temp != null && r.I != null ? ['board', `ESC est. ${Math.round(e.temp)}°`] : ['calc', ''];
+    const did = !e ? '' : !e.on ? 'removed from the table' : [e.eff < 0.99 || e.eff > 1.01 ? `table ×${e.eff.toFixed(2)}` : '', e.cap < 0.995 ? `capped at ${Math.round(e.cap * 100)}%` : ''].filter(Boolean).join(', ');
+    const off = Math.abs((r.T ?? (e && e.temp)) - s.T) >= 3;   // (the reading worth a line only when it's off the truth, or the part's in trouble)
+    put(c.id, (s.T - ambient()) / Math.max(10, lim - ambient()), `${Math.round(s.T)}°`, truth[0], truth[1], [off || truth[1] ? seen : ['calc', ''], ['board', did ? 'supervisor: ' + did : truth[1] && e && e.on ? 'supervisor: not spotted' : '']]);
   });
   joints().forEach((j, k) => {
     const s = hs.get(j.id) || {}, d = sv && sv.joints[k], bad = s.limp || s.jam != null;
@@ -96,8 +104,8 @@ function renderHealth(force) {
     const b = battCfg(), r = hread.b, soc = S.batt && S.batt.soc != null ? S.batt.soc : 1;
     const truth = hb.cut ? ['cut out', 'bad'] : hb.lvc ? ['ESCs cut (low voltage)', 'bad'] : hb.cellsLost ? [`${hb.cellsLost} cell${hb.cellsLost > 1 ? 's' : ''} lost`, 'bad'] : hb.fade > 0.005 ? [`worn ${Math.round(hb.fade * 100)}%`, 'warn'] : ['working', ''];
     const seen = [r.V != null ? `${r.V.toFixed(1)} V` : 'no voltage sensor', r.I != null ? `${r.I.toFixed(0)} A` : '', r.T != null ? `${Math.round(r.T)}°` : ''].filter(Boolean).join(' · ');
-    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)} °C`, truth[0], truth[1],
-      [['sim', `${Math.round(Math.max(0, soc) * 100)}% charge`], ['sensor', `sensors: ${seen}`], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
+    put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)}°`, truth[0], truth[1],
+      [['sim', `${Math.round(Math.max(0, soc) * 100)}%`], ['sensor', seen], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
   if (pill.className !== 'pill ' + m[1]) pill.className = 'pill ' + m[1]; setText(pill.querySelector('span'), sv ? m[0] : 'Off');
@@ -116,6 +124,10 @@ function renderHealth(force) {
     for (const l of all) log.append(el('li', { class: l.tone }, srcDot(l.src), el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
     if (!all.length) log.append(el('li', { class: 'muted', text: 'Nothing yet.' }));
   }
-  setText($('#healthSmall'), sv ? (mode ? m[0].toLowerCase() : 'all normal') : 'the parts');
+  {   // the true count of parts in trouble, whatever the supervisor has noticed
+    const n = [...hs.values()].filter(x => x.loss > 0.004 || x.dead || x.prop || x.jam != null || x.limp).length + (hb.cut || hb.cellsLost || hb.lvc ? 1 : 0);
+    const t = n ? `${n} part${n > 1 ? 's' : ''} in trouble` : 'all working'; setText($('#hCount'), t); $('#hCount').className = 'h-count' + (n ? ' bad' : '');
+    const sb = typeof boardOf === 'function' ? boardOf('super') : null; setText($('#healthSmall'), sb ? 'supervisor on ' + sb.name : 'no supervisor');
+  }
 }
 renderBattery();
