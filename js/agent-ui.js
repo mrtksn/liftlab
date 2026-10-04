@@ -187,6 +187,7 @@ function agentRenderFeed(th) {
       if (it.name === 'set_formula' && a.code) d.append(el('pre', { class: 'ai-pre', text: a.code }));
       else if (it.args && it.args !== '{}') d.append(el('pre', { class: 'ai-pre', text: it.args }));
       d.append(el('pre', { class: 'ai-pre out', text: it.text }));
+      if (it.img) d.append(el('img', { class: 'ai-img', src: it.img, alt: 'What it saw: the 3D view' }));
       F.append(d);
       if (it.confirm) F.append(el('div', { class: 'ai-ask' }, el('span', { text: it.confirm.text }),
         el('button', { class: 'btn primary', type: 'button', text: 'Apply', onclick: () => it.confirm.resolve(true) }),
@@ -219,7 +220,11 @@ function settingsView() {
   const budget = numField('aiBudget', { label: 'Requests this session, at most', min: 1, max: 1000, step: 1, u: '', dp: 0, int: true }, () => C.budget, v => { C.budget = Math.round(v); agentSave(); agentUi(); });
   const beh = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'While it works' }),
     chk('aiPause', 'Pause the simulation while the AI thinks (a trigger can keep it flying)', 'pauseThinking'),
-    chk('aiAsk', 'Ask me before it changes a formula', 'askFormulas'), budget.node,
+    chk('aiAsk', 'Ask me before it changes a formula', 'askFormulas'),
+    chk('aiSee', 'The model can see images: let it look at the 3D view', 'canSee'),
+    chk('aiJs', 'Let it run its own JavaScript in the page, for anything the tools don\'t reach', 'allowJs'),
+    el('p', { class: 'hint', text: 'Its own JavaScript has the whole page: it could change anything, and read your API key from it. Turn it on for a model and endpoint you trust.' }),
+    chk('aiAskJs', 'Ask me before it runs JavaScript', 'askJs'), budget.node,
     el('p', { class: 'hint', id: 'aiUse' }),
     el('div', { class: 'ai-row' }, el('button', { class: 'btn', type: 'button', text: 'Reset the count', onclick: () => { agent.used = 0; agent.tokens = { in: 0, out: 0 }; agentUi(); } })),
     el('p', { class: 'hint', text: 'Each request to the model counts; a turn with tools takes several (at most 16). Airframe and computer changes go into Undo; a formula change has its own Undo in the chat.' }));

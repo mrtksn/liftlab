@@ -8,7 +8,10 @@ const ENV_RANGE = { wind: [0, 15], windDir: [-180, 180], turb: [0, 1], spread: [
 const num = (x, d) => (typeof x === 'number' && isFinite(x) ? x : d);
 const obj = (props, req = []) => ({ type: 'object', properties: props, required: req, additionalProperties: false });
 const kindOf = c => c.type === 'sensor' ? c.kind : c.type === 'mass' && isWing(c) ? 'wing' : c.type;
-const partBrief = c => ({ id: c.id, type: kindOf(c), name: c.name, on: parentOf(c) ? parentOf(c).id : 'frame', pos: c.pos.map(v => Math.round(v * 1000) / 1000), mass: c.mass });
+const partBrief = c => ({ id: c.id, type: kindOf(c), name: c.name, on: parentOf(c) ? parentOf(c).id : 'frame', pos: c.pos.map(v => Math.round(v * 1000) / 1000), mass: c.mass,
+  ...(c.type === 'motor' ? { max_thrust_N: c.tmax, spin: c.spin > 0 ? 'CCW' : 'CW', pusher: !!c.push, tilt: c.tilt || 0, az: c.az || 0, prop_m: propR(c) * 2 } : {}),
+  ...(c.type === 'joint' ? { mode: c.mode, range: c.range, hinge_az: c.hingeAz, hinge_el: c.hingeEl } : {}),
+  ...(c.type === 'mass' ? { shape: c.shape, size: c.size, aero: c.aero, battery: c.battery || undefined } : {}), ...(c.type === 'sensor' ? { kind: c.kind } : {}) });
 function partOf(id) { const c = cfg.comps.find(x => x.id === +id || x.name === id); if (!c) throw new Error(`no part ${JSON.stringify(id)} (get_airframe lists them)`); return c; }
 
 // Run the simulation for a while, at its speed (or as fast as it goes), stopping early on a crash, a condition, or Stop.

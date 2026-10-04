@@ -938,3 +938,4 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .fold > summary > span{white-space:nowrap;flex:none}
 .ftabs button{letter-spacing:.02em;font-size:10.5px;overflow:hidden}
 .ftabs button > span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-img{display:block;max-width:100%;border-radius:6px;border:1px solid var(--line);margin-top:4px}
