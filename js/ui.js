@@ -472,12 +472,14 @@ function carryAlong(c) {
 }
 function structural() {
   for (const c of cfg.comps) snapHolder(c); recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); refreshEnvelope(); renderMass(); save(); }
-function addComp(type) {
-  const n = cfg.comps.filter(c => c.type === type).length + 1; let c;
+// Add a part of a kind, where place says (place-ui.js): { on: a holder } on a servo, rod or latch, { above: a part }
+// between that part and what it hangs on, or nothing: on the frame, at a default place.
+function addComp(type, place = null) {
+  const n = cfg.comps.filter(c => c.type === type).length + 1; let c, root = null;
   if (type === 'motor') c = mkMotor('Motor ' + n, 0.3, 0, 0.02);
   else if (type === 'link') c = mkLink('Rod ' + (links().length + 1), 0, 0, -0.03);
   else if (type === 'joint') c = mkJoint('Servo ' + (joints().length + 1), -0.3, 0, 0.02, { hingeAz: 90 });
-  else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; }
+  else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; root = pr[0]; }
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
   else if (type === 'latch') c = mkLatch('Latch ' + n, 0, 0, -0.04);
@@ -487,10 +489,13 @@ function addComp(type) {
     const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03] }[type];
     c = mkSensor(type, SENSOR_KINDS[type] + ' ' + k, ...at);
   }
-  cfg.comps.push(c); openSet.add(c.id); structural();
+  cfg.comps.push(c); placeNew(root || c, place);
+  if (type === 'latch') latchNeedsBoard();
+  openSet.add(c.id); for (let p = parentOf(c); p; p = parentOf(p)) foldSet.delete(p.id);   // (open, and what it's on unfolded)
+  structural();
   requestAnimationFrame(() => { const card = document.querySelector(`[data-id="${c.id}"]`); if (card) card.scrollIntoView({ block: 'nearest' }); });
+  return c;
 }
-document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => addComp(b.dataset.add)));
 
 /* ───────── telemetry ───────── */
 let actRows = new Map(), envRes = null;

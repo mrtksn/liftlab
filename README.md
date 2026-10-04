@@ -225,6 +225,8 @@ The simulator's own controller looks shakier: about 6°/s even in still air. Tha
 
 A **servo joint** is a hinge mounted on the frame, on a rod or on another joint. A **rod / lever** is a rigid stick with a mass; whatever you attach to it rides at its far end. Anything can be attached to either: motors, rigid masses, cable payloads, sensors, rods and further joints. Chaining them builds an arm: shoulder servo → upper-arm rod → elbow servo → forearm rod → hand and camera. **+ Motor on servo** adds a joint with a motor at the same point, the usual tilt-rotor.
 
+**Adding a part asks where it goes.** Each **+** button opens the airframe as a tree (the frame, then each servo, rod and latch, indented the way the parts list indents them). Pick **on Frame**, or **on** a servo, rod or latch, and the part is attached there. A servo, a rod or a latch can also go **between** a part and what it hangs on: with a rod on the frame and a motor on the rod, *between Rod 1 and M1* puts a latch in there, the motor hanging from it. Nothing moves: the latch's hook goes at the motor's top, a servo's pivot at the part, a rod from where the part hung to the part, and the part keeps its place. Esc closes the list.
+
 **The parts list is the attachment tree.** The frame is at the top. Each servo or rod shows what it carries, indented beneath it with guide lines, and can be folded away. You attach things by dragging:
 - **Onto a servo or rod:** drag a part by its grip (⠿) onto it to attach it there.
 - **Onto Frame:** to take a part off.
@@ -280,9 +282,9 @@ Tests (quad unless noted):
 
 ## Cargo: dropping things and picking them up
 
-A **latch** is a part like any other (Attach → **Latch (drop, grab)**): a hook, a gripper or an electromagnet, mounted on the frame, a rod or a servo. Anything can hang from it: a parcel, a cable payload, a whole arm, a motor, the battery. Drag a part onto it in the list (or set its **Attached to**) and it hangs from the hook, its top at the hook.
+A **latch** is a part like any other (Attach → **Latch (drop, grab)**): a hook, a gripper or an electromagnet, mounted on the frame, a rod or a servo. Anything can hang from it: a parcel, a cable payload, a whole arm, a motor, the battery. Add a part on it (or **between** a part and what it hangs on) and it hangs from the hook, its top at the hook. Drag a part that's already there onto it in the list (or set its **Attached to**) and it hangs from it where it is: nothing moves.
 
-**Letting go.** A board runs the **Cargo** task (Computers tab) and drives the latches. Opened in flight, a latch takes its open/close time (0.15 s by default); half open, everything under it falls away together as one loose body, keeping the drone's speed and spin at that moment. A cable payload falls as a ball of its own, from where it was swinging. The drone is lighter at once; the flight core isn't told (it flies on the airframe it was given until the next reset, as for any change in flight), so its integrators take up the difference. Drop a motor and the flight core still commands it; drop the IMU and it has nothing to fly on.
+**Letting go.** A board runs the **Cargo** task (Computers tab) and drives the latches. Adding a latch puts the task on the flight controller if no board has it; a design without it (one saved before this) says so on the latch's button, and pressing it adds the task there (the flight restarts with it). Opened in flight, a latch takes its open/close time (0.15 s by default); half open, everything under it falls away together as one loose body, keeping the drone's speed and spin at that moment. A cable payload falls as a ball of its own, from where it was swinging. The drone is lighter at once; the flight core isn't told (it flies on the airframe it was given until the next reset, as for any change in flight), so its integrators take up the difference. Drop a motor and the flight core still commands it; drop the IMU and it has nothing to fly on.
 
 **Picking up.** Opened again, a latch shows how far the nearest loose thing is: a dashed line from its hook to that thing's grab point (the middle of its top), green within the latch's **reach**, grey further away, and the same distance on its button. Close it with something within reach and that thing snaps under the hook, in the drone's axes, and the drone carries it from then on (the two share their momentum). Closed with nothing in reach, it just closes. Loose things include whatever the drone dropped and the **things to pick up** set in the Cargo section of the right panel: boxes with a name, a mass, a size and a place (from the start point), resting on whatever is under them. They're in the world only when the airframe has a latch.
 
@@ -594,6 +596,7 @@ If its formulas fail and even its built-in program can't answer, the raw sticks 
 | `js/pilot.js` | Keyboard and on-screen flight controls |
 | `js/sources.js` | The tags that say where each readout comes from (simulated, sensor, on board, telemetry, command module, vs truth, calculated, you) |
 | `js/cargo.js` | Latches, loose bodies in the world, dropping and picking up, power from the battery: what's on the drone now, as an overlay on the design |
+| `js/place-ui.js` | Where a new part goes: the list each + button opens, putting a part on a holder or between two |
 | `js/cargo-ui.js` | The latch buttons on the view (G), how far the nearest loose thing is, the Cargo section |
 | `js/crsf.js` | CRSF as the simulated radio modules handle it: frames, the parser, channel and link-statistics frames; the names of the drone's telemetry items |
 | `js/elrs.js` | The simulated ExpressLRS link (packets, signal, telemetry slots, the two modules), the command module's inputs, and the Ground station's copy of its view |

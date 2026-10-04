@@ -22,6 +22,7 @@ const PK_PHASE = ['', 'flying over it', 'coming down', 'closing', 'climbing'];
 function cargoAct(i) {
   const l = latches()[i]; if (!l) return;
   cargoUi.cur = i;
+  if (!hasTask('cargo')) { latchNeedsBoard(); cargoBarSync(); return; }   // (a latch no board drives: give it one; the flight restarts with it)
   if (brt.pickup) { pickupStop(); cargoSay(`${l.name}: pickup stopped`); cargoBarSync(); return; }
   const v = latchView(l), fetch = v.on && !v.closed && !v.moving && v.near && !v.near.ok && v.near.d < FETCH_MAX;
   const why = fetch ? cargoFetch(l, i, v.near.L) : pilotCargoCmd(i, 2);   // (toggle: the cargo task knows which way it's driving it)
@@ -85,7 +86,7 @@ function cargoBarSync() {
     b.disabled = !v.on || !cargo.power;
   });
   const say = $('#cargoSay');
-  if (say) setText(say, !cargo.power ? 'no power: the battery is off the drone' : !hasTask('cargo') && ls.length ? 'no board runs the Cargo task (Computers tab)' : performance.now() - cargoUi.sayT < 4000 ? cargoUi.say : '');
+  if (say) setText(say, !cargo.power ? 'no power: the battery is off the drone' : !hasTask('cargo') && ls.length ? 'no board drives the latches: press to put the Cargo task on the flight controller' : performance.now() - cargoUi.sayT < 4000 ? cargoUi.say : '');
 }
 
 /* ───────── the Cargo section (right panel) ───────── */
