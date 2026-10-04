@@ -243,12 +243,37 @@ function controlStep(dt) {
 /* ───────── physics ───────── */
 const PDT = 0.0005;
 // Where the airframe can touch the ground or a building: small spheres (rest point, radius r) on the body
-// that carries them, posed each step. The hub's corners, each motor and servo, the arms out to them, every
-// corner of a box mass, rods along their length, and the sensors.
+// that carries them, posed each step. The hub, each motor and servo, the arms out to them, every box mass,
+// rods along their length, and the sensors.
+//
+// A box is its corners while it's small. A bigger one (a wing, a long battery, the frame as a wing) is spread over
+// its whole surface, so a building's edge can't pass between its corners: a thin plate as spheres as thick as it
+// across its middle, a solid box as points across each face, no more than about BOX_STEP apart.
+const BOX_STEP = 0.05, BOX_SMALL = 0.12, BOX_THIN = 0.03;
+function boxPoints(c0, size, R) {
+  const big = Math.max(...size);
+  if (big <= BOX_SMALL) return boxCorners(c0, size, R).map(p => ({ rest: p, r: 0 }));
+  const step = Math.max(BOX_STEP, big / 16), n = size.map(s => Math.max(2, Math.ceil(s / step) + 1));
+  const at = (i, k) => (n[k] === 1 ? 0 : (i / (n[k] - 1) - 0.5) * size[k]);
+  const out = [], seen = new Set(), put = (x, r) => { const k = x.map(v => v.toFixed(4)).join(); if (!seen.has(k)) { seen.add(k); out.push({ rest: add(c0, m3v(R, x)), r }); } };
+  const thin = [0, 1, 2].reduce((a, k) => (size[k] < size[a] ? k : a), 0);
+  if (size[thin] <= BOX_THIN) {   // a plate: its middle sheet, as spheres as thick as it
+    const [u, v] = [0, 1, 2].filter(k => k !== thin);
+    for (let i = 0; i < n[u]; i++) for (let j = 0; j < n[v]; j++) { const x = [0, 0, 0]; x[u] = at(i, u); x[v] = at(j, v); put(x, size[thin] / 2); }
+    return out;
+  }
+  for (let k = 0; k < 3; k++) {   // a solid box: a grid on each pair of faces (the edges and corners among them)
+    const [u, v] = [0, 1, 2].filter(q => q !== k);
+    for (const sgn of [-0.5, 0.5]) for (let i = 0; i < n[u]; i++) for (let j = 0; j < n[v]; j++) {
+      const x = [0, 0, 0]; x[k] = sgn * size[k]; x[u] = at(i, u); x[v] = at(j, v); put(x, 0);
+    }
+  }
+  return out;
+}
 function contactPoints() {
   const on = c => (MB && MB.of.get(c.id)) || 0;
   const pts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }];
-  for (const p of boxCorners([0, 0, 0], frameDims(), frameRot())) pts.push({ rest: p, b: 0, r: 0 });   // the hub's corners (a wing's tips)
+  for (const p of boxPoints([0, 0, 0], frameDims(), frameRot())) pts.push({ ...p, b: 0 });   // the hub (or the body as a wing)
   for (const c of liveComps()) {
     const b = on(c);
     if (c.type === 'motor' || c.type === 'joint') {
@@ -257,7 +282,7 @@ function contactPoints() {
     } else if (c.type === 'mass') {
       const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2;
       pts.push({ rest: add(c.pos, [0, 0, -hz]), b, r: 0 });
-      if (c.shape === 'box') for (const p of boxCorners(c.pos, c.size, massRot(c))) pts.push({ rest: p, b, r: 0 });
+      if (c.shape === 'box') for (const p of boxPoints(c.pos, c.size, massRot(c))) pts.push({ ...p, b });
       else if (c.shape === 'sphere') pts.push({ rest: c.pos.slice(), b, r: c.radius });
       else pts.push({ rest: add(c.pos, [0, 0, c.length / 2 - c.radius]), b, r: c.radius }, { rest: add(c.pos, [0, 0, -c.length / 2 + c.radius]), b, r: c.radius });
     } else if (c.type === 'link') pts.push({ rest: linkTip(c), b, r: 0 }, { rest: c.pos.slice(), b, r: 0 }, { rest: add(c.pos, scl(linkDir(c), c.length / 2)), b, r: 0.008 });

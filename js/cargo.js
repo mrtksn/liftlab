@@ -70,7 +70,7 @@ function looseBody(name, parts, kind = 'rigid') {
     else if (c.type === 'link') items.push({ m: c.mass, r: add(c.pos, scl(linkDir(c), c.length / 2)), I: rodI(c) });
     else items.push({ m: c.mass || 0.01, r: c.pos, I: I0 });
     if (c.type === 'mass') {
-      if (c.shape === 'box') for (const p of boxCorners(c.pos, c.size, massRot(c))) pts.push({ r: p, rad: 0 });
+      if (c.shape === 'box') for (const p of boxPoints(c.pos, c.size, massRot(c))) pts.push({ r: p.rest, rad: p.r });
       else if (c.shape === 'sphere') pts.push({ r: c.pos.slice(), rad: c.radius });
       else pts.push({ r: add(c.pos, [0, 0, c.length / 2 - c.radius]), rad: c.radius }, { r: add(c.pos, [0, 0, -c.length / 2 + c.radius]), rad: c.radius });
     } else if (c.type === 'link') pts.push({ r: c.pos.slice(), rad: 0.006 }, { r: linkTip(c), rad: 0.009 });

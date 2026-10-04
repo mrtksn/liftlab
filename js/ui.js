@@ -1057,6 +1057,28 @@ $('.tabs').addEventListener('keydown', e => {   // arrow keys move between the t
   if (j < 0) return; e.preventDefault(); showTab(TABS[j][1]); $('#' + TABS[j][0]).focus();
 });
 
+// The readouts (right panel): the airframe check stays on top; the rest in tabs. Health shows a dot while something is
+// broken, failing or overheating, or the supervisor has stepped in, since the panel isn't always in view.
+const RTABS = ['flight', 'health', 'control', 'world'];
+function showRtab(k) {
+  if (!RTABS.includes(k)) k = 'flight';
+  for (const t of RTABS) { const b = $('#rtab-' + t); b.setAttribute('aria-selected', String(t === k)); b.tabIndex = t === k ? 0 : -1; $('#rpane-' + t).hidden = t !== k; }
+  if (k === 'flight') requestAnimationFrame(drawChart);   // (a hidden canvas has no size to draw at)
+  if (k === 'health' && typeof renderHealth === 'function') renderHealth(true);
+  try { localStorage.setItem('drone-force-bench-v1-rtab', k); } catch (e) {}
+}
+for (const t of RTABS) $('#rtab-' + t).addEventListener('click', () => showRtab(t));
+$('.rtabs').addEventListener('keydown', e => {
+  const i = RTABS.findIndex(t => 'rtab-' + t === e.target.id); if (i < 0) return;
+  const j = e.key === 'ArrowRight' ? (i + 1) % RTABS.length : e.key === 'ArrowLeft' ? (i - 1 + RTABS.length) % RTABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? RTABS.length - 1 : -1;
+  if (j < 0) return; e.preventDefault(); showRtab(RTABS[j]); $('#rtab-' + RTABS[j]).focus();
+});
+try { showRtab(localStorage.getItem('drone-force-bench-v1-rtab') || 'flight'); } catch (e) { showRtab('flight'); }
+function syncRtabAlerts() {
+  const sv = brt.superView, hot = (typeof anyBroken === 'function' && anyBroken()) || (sv && sv.mode > 0);
+  const b = $('#rtab-health'); b.classList.toggle('alert', !!hot); b.title = hot ? 'Something is broken or failing, or the supervisor has stepped in' : 'The parts, the supervisor and the state estimate';
+}
+
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';
 function save() {
@@ -1139,7 +1161,7 @@ function boot() {
     if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
     envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
     renderGs();
-    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); }
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); }
     renderLaunch();
     updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
   }

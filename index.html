@@ -305,75 +305,89 @@
         <p id="verdictWhy"></p>
         <div class="chips" id="liveChips"></div>
       </section>
-      <section class="sec" id="cargoSec" hidden>
-        <h2 data-src="sim you">Cargo <small>latches, things to pick up</small></h2>
-        <div id="cargoBody"></div>
-      </section>
-      <section class="sec" id="healthSec">
-        <h2 data-src="sim sensor board">Health <small id="healthSmall">supervisor</small></h2>
-        <div id="healthBody"></div>
-      </section>
-      <section class="sec">
-        <h2 data-src="cmp">State estimate <small id="estMode"></small></h2>
-        <div class="chips" id="senseChips"></div>
-        <dl class="kv" id="estKv"></dl>
-      </section>
-      <section class="sec" id="learnSec">
-        <h2 data-src="board">Learning <small id="learnSmall"></small></h2>
-        <p class="hint" id="learnWhere"></p>
-        <div class="field-row">
-          <span class="lbl" id="modelLbl">The flight core flies on</span>
-          <div class="seg seg-sm" role="group" aria-labelledby="modelLbl">
-            <button type="button" id="useDesc" aria-pressed="true">Description</button>
-            <button type="button" id="useLearned" aria-pressed="false">Learned</button>
+      <div class="tabs rtabs" role="tablist" aria-label="Readouts">
+        <button type="button" role="tab" id="rtab-flight" aria-controls="rpane-flight" aria-selected="true" tabindex="0" title="What it does now: the actuators, the traces, the cargo">Flight</button>
+        <button type="button" role="tab" id="rtab-health" aria-controls="rpane-health" aria-selected="false" tabindex="-1" title="The parts, the supervisor and the state estimate">Health</button>
+        <button type="button" role="tab" id="rtab-control" aria-controls="rpane-control" aria-selected="false" tabindex="-1" title="Learning, allocation, headroom and mass">Control</button>
+        <button type="button" role="tab" id="rtab-world" aria-controls="rpane-world" aria-selected="false" tabindex="-1" title="The target and the environment">World</button>
+      </div>
+      <div class="rpane" id="rpane-flight" role="tabpanel" aria-labelledby="rtab-flight">
+        <section class="sec">
+          <h2 data-src="board sim">Actuator commands</h2>
+          <p class="hint"><span class="nowrap"><i class="src-dot src-board" title="On board: the drone's command"></i>bar: the throttle the drone commands</span>; <span class="nowrap"><i class="src-dot src-sim" title="Simulated: what really happens"></i>tick: the real thrust</span>; servos: real angle → commanded</p>
+          <div class="acts" id="acts"></div>
+        </section>
+        <section class="sec">
+          <h2 data-src="sim cmp board">Traces <small>last 10 s</small></h2>
+          <canvas id="chart" aria-label="Tilt, position error, attitude estimate error and peak motor load over the last 10 seconds"></canvas>
+        </section>
+        <section class="sec" id="cargoSec" hidden>
+          <h2 data-src="sim you">Cargo <small>latches, things to pick up</small></h2>
+          <div id="cargoBody"></div>
+        </section>
+      </div>
+      <div class="rpane" id="rpane-health" role="tabpanel" aria-labelledby="rtab-health" hidden>
+        <section class="sec" id="healthSec">
+          <h2 data-src="sim sensor board">Health <small id="healthSmall">supervisor</small></h2>
+          <div id="healthBody"></div>
+        </section>
+        <section class="sec">
+          <h2 data-src="cmp">State estimate <small id="estMode"></small></h2>
+          <div class="chips" id="senseChips"></div>
+          <dl class="kv" id="estKv"></dl>
+        </section>
+      </div>
+      <div class="rpane" id="rpane-control" role="tabpanel" aria-labelledby="rtab-control" hidden>
+        <section class="sec" id="learnSec">
+          <h2 data-src="board">Learning <small id="learnSmall"></small></h2>
+          <p class="hint" id="learnWhere"></p>
+          <div class="field-row">
+            <span class="lbl" id="modelLbl">The flight core flies on</span>
+            <div class="seg seg-sm" role="group" aria-labelledby="modelLbl">
+              <button type="button" id="useDesc" aria-pressed="true">Description</button>
+              <button type="button" id="useLearned" aria-pressed="false">Learned</button>
+            </div>
+            <span class="field-note" id="learnedWhy">Learned: calibrate first</span>
           </div>
-          <span class="field-note" id="learnedWhy">Learned: calibrate first</span>
-        </div>
-        <div class="learn-actions">
-          <button class="btn primary" type="button" id="calBtn">Calibrate</button>
-          <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
-          <label class="check" for="holdPulses" title="While one motor is pulsed, the others keep their throttle, so the controller's corrections don't blur which motor did what"><input type="checkbox" id="holdPulses" checked> Freeze other motors during pulses</label>
-        </div>
-        <div class="calprog" id="calProg" hidden><div class="calbar"><i id="calFill"></i></div><span id="calStage"></span></div>
-        <p class="hint" id="learnMsg">Calibrate runs about 10 seconds of small test moves while hovering, learns what each actuator really does, then flies on it.</p>
-        <div class="throw-opts">
-          <span class="lbl">Throw start</span>
-          <div id="throwFields"></div>
-          <label class="check" for="thenCal"><input type="checkbox" id="thenCal" checked> Refine with a hover calibration after the catch</label>
-          <p class="hint" id="throwHint"></p>
-        </div>
-        <span class="lbl has-src" data-src="cmp">How close each learned effect is to the truth</span>
-        <div class="match" id="matchRows"></div>
-        <span class="lbl has-src" data-src="board">Actuator response (from the tests)</span>
-        <div id="respRows"></div>
-      </section>
-      <section class="sec">
-        <h2 data-src="board sim">Actuator commands</h2>
-        <p class="hint"><span class="nowrap"><i class="src-dot src-board" title="On board: the drone's command"></i>bar: the throttle the drone commands</span>; <span class="nowrap"><i class="src-dot src-sim" title="Simulated: what really happens"></i>tick: the real thrust</span>; servos: real angle → commanded</p>
-        <div class="acts" id="acts"></div>
-      </section>
-      <section class="sec">
-        <h2 data-src="you">Allocation <small id="allocSmall"></small></h2>
-        <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself. Each is a pull weighed against the others: 0 turns it off, 0.2 is the strongest (the defaults are 0.02, 0.02 and 0.01).</p>
-        <div id="allocFields"></div>
-      </section>
-      <section class="sec">
-        <h2 data-src="calc">Control headroom <small>beyond hover</small></h2>
-        <div class="ehead"><span></span><span>− side</span><span>+ side</span></div>
-        <div class="env" id="env"></div>
-      </section>
-      <section class="sec">
-        <h2 data-src="sim cmp board">Traces <small>last 10 s</small></h2>
-        <canvas id="chart" aria-label="Tilt, position error, attitude estimate error and peak motor load over the last 10 seconds"></canvas>
-      </section>
-      <section class="sec">
-        <h2 data-src="calc">Mass properties</h2>
-        <dl class="kv" id="massKv"></dl>
-      </section>
-      <section class="sec">
-        <h2 data-src="you">Target &amp; environment</h2>
-        <div class="sp" id="spFields"></div>
-      </section>
+          <div class="learn-actions">
+            <button class="btn primary" type="button" id="calBtn">Calibrate</button>
+            <label class="check" for="keepLearn"><input type="checkbox" id="keepLearn" checked> Keep learning in flight</label>
+            <label class="check" for="holdPulses" title="While one motor is pulsed, the others keep their throttle, so the controller's corrections don't blur which motor did what"><input type="checkbox" id="holdPulses" checked> Freeze other motors during pulses</label>
+          </div>
+          <div class="calprog" id="calProg" hidden><div class="calbar"><i id="calFill"></i></div><span id="calStage"></span></div>
+          <p class="hint" id="learnMsg">Calibrate runs about 10 seconds of small test moves while hovering, learns what each actuator really does, then flies on it.</p>
+          <div class="throw-opts">
+            <span class="lbl">Throw start</span>
+            <div id="throwFields"></div>
+            <label class="check" for="thenCal"><input type="checkbox" id="thenCal" checked> Refine with a hover calibration after the catch</label>
+            <p class="hint" id="throwHint"></p>
+          </div>
+          <span class="lbl has-src" data-src="cmp">How close each learned effect is to the truth</span>
+          <div class="match" id="matchRows"></div>
+          <span class="lbl has-src" data-src="board">Actuator response (from the tests)</span>
+          <div id="respRows"></div>
+        </section>
+        <section class="sec">
+          <h2 data-src="you">Allocation <small id="allocSmall"></small></h2>
+          <p class="hint">When a move can be made more than one way, these decide how. They never trade away any of the move itself. Each is a pull weighed against the others: 0 turns it off, 0.2 is the strongest (the defaults are 0.02, 0.02 and 0.01).</p>
+          <div id="allocFields"></div>
+        </section>
+        <section class="sec">
+          <h2 data-src="calc">Control headroom <small>beyond hover</small></h2>
+          <div class="ehead"><span></span><span>− side</span><span>+ side</span></div>
+          <div class="env" id="env"></div>
+        </section>
+        <section class="sec">
+          <h2 data-src="calc">Mass properties</h2>
+          <dl class="kv" id="massKv"></dl>
+        </section>
+      </div>
+      <div class="rpane" id="rpane-world" role="tabpanel" aria-labelledby="rtab-world" hidden>
+        <section class="sec">
+          <h2 data-src="you">Target &amp; environment</h2>
+          <div class="sp" id="spFields"></div>
+        </section>
+      </div>
     </aside>
   </main>
 </div>
