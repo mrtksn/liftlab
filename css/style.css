@@ -850,3 +850,8 @@ select.pending{border-color:var(--warn);border-style:dashed}
 /* Steering: its three choices share the row (no gap at the end) */
 #steerSec .seg{display:flex}
 #steerSec .seg button{flex:1}
+/* the readouts' tabs (right panel) */
+.rtabs{position:sticky;top:0;margin-top:2px}
+.rtabs button{font-size:12.5px;padding:9px 6px 8px;letter-spacing:.07em}
+.rtabs button.alert::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad)}
+.rpane{display:flex;flex-direction:column}
