@@ -223,12 +223,12 @@ function rotationBetween(a, b) {   // smallest rotation taking unit a to unit b
 }
 // Attach a part to a holder (or to the frame with null). On a rod a part goes to the rod's far end; on a
 // servo it goes onto the servo's output: a motor or rod right on the pivot (a tilt-rotor, an arm), anything
-// else just below it; on a latch it hangs from the hook, its top at the hook. A servo given its first motor is
-// there to steer it, so it's handed to the allocator.
+// else just below it; on a latch it stays where it is (a latch holds what is hung on it, wherever that is). A servo
+// given its first motor is there to steer it, so it's handed to the allocator.
 function attachTo(c, a) {
   const firstMotor = a && a.type === 'joint' && c.type === 'motor' && !motorsUnder(a).length;
   c.parent = a ? a.id : null;
-  const to = !a ? null : a.type === 'link' ? linkTip(a) : a.type === 'latch' ? add(hookOf(a), [0, 0, -topOf(c)])
+  const to = !a || a.type === 'latch' ? null : a.type === 'link' ? linkTip(a)
     : c.type === 'motor' || c.type === 'link' ? a.pos : add(a.pos, [0, 0, -0.04]);
   if (to) { const d = sub(to, c.pos); c.pos = to.map(v => +v.toFixed(4)); shiftSubtree(c, d); }
   if (firstMotor && a.mode === 'manual') a.mode = 'auto';

@@ -109,7 +109,7 @@
           <button class="btn" type="button" data-add="link" title="A stick or lever: attach it to a servo, then attach parts to its far end"><b>+</b>Rod / lever</button>
           <button class="btn" type="button" data-add="mass"><b>+</b>Rigid mass</button>
           <button class="btn" type="button" data-add="hang"><b>+</b>Mass on cable</button>
- <button class="btn" type="button" data-add="wing" title="A wing: lift and drag in the air (the flight computers aren't told about it)"><b>+</b>Wing</button>
+          <button class="btn" type="button" data-add="wing" title="A wing: lift and drag in the air (the flight computers aren't told about it)"><b>+</b>Wing</button>
           <button class="btn" type="button" data-add="latch" title="A hook or gripper: what hangs from it can be dropped in flight, and it can pick things up"><b>+</b>Latch (drop, grab)</button>
         </div>
         <span class="lbl">Sensors</span>
@@ -120,7 +120,7 @@
           <button class="btn" type="button" data-add="fix"><b>+</b>Position fix</button>
           <button class="btn wide" type="button" data-add="flow"><b>+</b>Optical flow + rangefinder</button>
         </div>
-        <p class="hint">Body axes: X forward, Y left, Z up. Positions are measured from the frame hub. Press Edit (E) to select parts in the 3D view and drag them into place. In the list, drag a part onto a servo or rod to attach it.</p>
+        <p class="hint">Body axes: X forward, Y left, Z up. Positions are measured from the frame hub. Press Edit (E) to select parts in the 3D view and drag them into place. Each + asks where the part goes: on the frame, on a servo, rod or latch, or (servos, rods, latches) in between a part and what it hangs on. In the list, drag a part onto a servo, rod or latch to move it there.</p>
       </section>
       <section class="sec">
         <div id="frameMassSlot"></div>
@@ -395,6 +395,7 @@
 <script src="js/pilot.js"></script>
 <script src="js/computers-ui.js"></script>
 <script src="js/ui.js"></script>
+<script src="js/place-ui.js"></script>
 <script src="js/cargo-ui.js"></script>
 <script src="js/health-ui.js"></script>
 <script src="js/designs.js"></script>

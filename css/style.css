@@ -741,3 +741,12 @@ select.pending{border-color:var(--warn);border-style:dashed}
 }
 
 .gs-cargo{flex-wrap:wrap;gap:6px}
+/* where a new part goes (place-ui.js) */
+.place-menu{position:absolute;left:14px;right:14px;z-index:30;max-height:min(60vh,420px);overflow:auto;background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;padding:6px 0 8px;box-shadow:0 6px 24px color-mix(in srgb,var(--ink) 18%,transparent);display:flex;flex-direction:column;font-family:var(--f-body)}
+.place-head{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:4px 10px 6px}
+.place-opt{all:unset;box-sizing:border-box;display:block;width:100%;padding:5px 10px;font-size:12.5px;color:var(--ink);cursor:pointer;border-left:2px solid transparent;overflow-wrap:anywhere}
+.place-opt:hover,.place-opt:focus-visible{background:color-mix(in srgb,var(--ink) 7%,transparent);border-left-color:var(--accent)}
+.place-opt .kind{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);margin-left:4px}
+.place-opt.between{color:var(--ink-2);font-size:12px}
+.place-opt .ins{color:var(--muted)}
+.place-menu .hint{margin:6px 10px 0}
