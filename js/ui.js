@@ -620,7 +620,7 @@ function renderLaunch() {
   const key = steps.join() + '|' + k;
   if (key !== launchUi.key) {
     launchUi.key = key; const ol = $('#liftoffSteps'); ol.textContent = ''; ol.hidden = k < 0;
-    steps.forEach((s, i) => ol.append(el('li', { class: i < k ? 'done' : i === k ? 'now' : '', text: s })));
+    steps.forEach((s, i) => ol.append(el('li', { class: i < k ? 'done' : i === k ? 'now' : '', text: s, title: s })));
   }
 }
 function updateLive() {
