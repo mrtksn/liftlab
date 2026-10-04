@@ -21,6 +21,7 @@ const LAYERS = [
   { key: 'trail', label: 'Trail', group: 'Flight', on: true, tip: 'The path flown' },
   { key: 'est', label: 'Estimate', group: 'Flight', on: true, tip: 'Where the flight software thinks the drone is' },
   { key: 'target', label: 'Target', group: 'Flight', on: true, tip: 'The position the drone is flying to' },
+  { key: 'heading', label: 'Forward', group: 'Flight', on: true, tip: 'A level arrow beside the drone: the way the forward key (and stick) moves it' },
   { key: 'grid', label: 'Ground grid', group: 'Scene', on: true, tip: 'The grid on the ground' },
   { key: 'shadow', label: 'Shadow', group: 'Scene', on: true, tip: 'A shadow on whatever is under the drone, to judge its height' },
   { key: 'readouts', label: 'Readouts', group: 'Scene', on: true, tip: 'Position, speed and torque numbers, top left' },
@@ -41,7 +42,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
 let grid = null; const drone = new THREE.Group(); scene.add(drone);
 const worldFx = new THREE.Group(); scene.add(worldFx);
-let mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
+let headArrow = null, mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 let tqNetGlyph = null, tqWantArrow = null, tqRotor = [];   // torque: net about the centre of mass, the controller's wish, per rotor
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), anim: null };
 const EL_MAX = Math.PI / 2 - 0.002;
@@ -102,6 +103,8 @@ function buildMaterials() {
     bldgEdge: new THREE.LineBasicMaterial({ color: colorOf('--bldg-edge') }),
     bldgEdgeFade: new THREE.LineBasicMaterial({ color: colorOf('--bldg-edge'), transparent: true, opacity: 0.3, depthWrite: false }),
     shadow: new THREE.MeshBasicMaterial({ color: colorOf('--ink'), transparent: true, opacity: 0.2, depthWrite: false }),
+    nose: new THREE.MeshBasicMaterial({ color: colorOf('--ax-x'), side: THREE.DoubleSide }),
+    heading: new THREE.MeshBasicMaterial({ color: colorOf('--ax-x'), transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
     stub: new THREE.MeshBasicMaterial({ color: colorOf('--bad') }),
     cargo: new THREE.MeshStandardMaterial({ color: colorOf('--cargo'), roughness: 0.8 }),
     wing: new THREE.MeshStandardMaterial({ color: colorOf('--wing'), roughness: 0.5, metalness: 0.1 }),
@@ -257,7 +260,12 @@ function rebuildDrone() {
   const comps = viewComps();
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
   { const d = frameDims(), fm = new THREE.Mesh(frameWing() ? airfoilGeo(d[0], d[1], d[2]) : new THREE.BoxGeometry(...d), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); drone.add(fm); }   // the hub, or the body as a wing
-  const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
+  {   // the front: a red arrow on the hub (red as the X axis), pointing forward
+    const d = frameDims(), hx = d[0] / 2, top = (frameWing() ? d[2] * 0.6 : d[2] / 2) + 0.002, L = Math.max(0.05, hx * 0.9), w = Math.min(0.03, Math.max(0.016, d[1] * 0.18));
+    const sh = new THREE.Shape(); sh.moveTo(hx + 0.03, 0); sh.lineTo(hx + 0.03 - L, w); sh.lineTo(hx + 0.03 - L * 0.62, 0); sh.lineTo(hx + 0.03 - L, -w); sh.closePath();
+    const nose = new THREE.Mesh(new THREE.ShapeGeometry(sh), mats.nose); nose.position.z = top; nose.userData.noPick = true; drone.add(nose);
+    const tip = rod([hx, 0, 0], [hx + 0.035, 0, 0], 0.005, mats.nose); if (tip) { tip.userData.noPick = true; drone.add(tip); }
+  }
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
   const js = comps.filter(c => c.type === 'joint').sort((a, b) => chainOf(a).length - chainOf(b).length);
   const holder = c => { const j = parentJoint(c); return j ? { g: jointGroups.get(j.id), o: j.pos } : { g: drone, o: [0, 0, 0] }; };
@@ -454,7 +462,7 @@ function torqueGlyph(color, tube, opacity = 1, onTop = false) {   // onTop: seen
   return g;
 }
 function buildWorldFx() {
-  for (const o of [gravArrow, windArrow, spMarker, trailLine, tqNetGlyph, tqNetGlyph && tqNetGlyph.userData.axis, tqWantArrow, ...tqRotor]) if (o) { worldFx.remove(o); o.traverse(x => x.geometry && x.geometry.dispose()); }
+  for (const o of [gravArrow, windArrow, spMarker, headArrow, trailLine, tqNetGlyph, tqNetGlyph && tqNetGlyph.userData.axis, tqWantArrow, ...tqRotor]) if (o) { worldFx.remove(o); o.traverse(x => x.geometry && x.geometry.dispose()); }
   const tqCol = colorOf('--torque');
   tqNetGlyph = torqueGlyph(tqCol, 0.045, 0.95, true);
   worldFx.add(tqNetGlyph);
@@ -471,6 +479,10 @@ function buildWorldFx() {
   spMarker.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 49 }, (_, i) => { const a = i / 48 * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * 0.09, Math.sin(a) * 0.09, 0); })), mats.sp));
   spMarker.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), mats.sp));
   worldFx.add(spMarker);
+  {   // level around the drone, the way forward moves it: a unit arrow from just outside the props, scaled to the airframe
+    const sh = new THREE.Shape(); sh.moveTo(1, -0.07); sh.lineTo(1.45, -0.07); sh.lineTo(1.45, -0.2); sh.lineTo(1.8, 0); sh.lineTo(1.45, 0.2); sh.lineTo(1.45, 0.07); sh.lineTo(1, 0.07); sh.closePath();
+    headArrow = new THREE.Mesh(new THREE.ShapeGeometry(sh), mats.heading); headArrow.renderOrder = 2; worldFx.add(headArrow);
+  }
   trailLine = new THREE.Line(new THREE.BufferGeometry(), mats.trail); worldFx.add(trailLine);
   for (const v of pendVis.values()) { v.line.material = mats.cable; v.ball.material = mats.payload; }
 }
@@ -572,6 +584,11 @@ function updateScene() {
   }
   updateCargoVis(live); updateAeroVis(R, live);
   ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
+  headArrow.visible = live && view.heading && !S.crashed;
+  if (headArrow.visible) {   // with navigation the keys move along the heading it holds; without (angle mode) they lean the body: its own heading
+    const yaw = hasTask('nav') ? setpoint.yaw * D2R : droneYaw(), s = Math.max(0.12, cReach * 0.85);
+    headArrow.position.set(...hub); headArrow.rotation.set(0, 0, yaw); headArrow.scale.set(s, s, 1);   // level, at the drone's height, whatever its tilt
+  }
   spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
