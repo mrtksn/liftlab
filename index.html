@@ -78,6 +78,7 @@
         <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true" tabindex="0">Airframe</button>
         <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false" tabindex="-1">Computers <span class="count" id="editedCount" hidden></span></button>
         <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false" tabindex="-1" aria-label="Ground station" title="Ground station: what comes down the radio">Ground</button>
+        <button type="button" role="tab" id="tabAi" aria-controls="paneAi" aria-selected="false" tabindex="-1" aria-label="AI agent" title="An AI agent that can fly, build and tune the simulated drone">AI</button>
       </div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
@@ -139,6 +140,7 @@
       </div>
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
       <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden></div>
+      <div class="pane ai" id="paneAi" role="tabpanel" aria-labelledby="tabAi" hidden></div>
     </aside>
 
     <section class="view" aria-label="3D view">
@@ -407,6 +409,9 @@
 <script src="js/boards.js"></script>
 <script src="js/gs-widgets.js"></script>
 <script src="js/gs-ui.js"></script>
+<script src="js/agent.js"></script>
+<script src="js/agent-tools.js"></script>
+<script src="js/agent-ui.js"></script>
 <script>boot();</script>
 </body>
 </html>

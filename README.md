@@ -302,6 +302,26 @@ The drone doesn't know where things are, or where its own hook is: whoever asks 
 
 **The cargo task** (`runner/fc/cargo_core.c`, the same C on every board) takes the pilot's commands (the radio's LATCH command, text commands, or another board's), drives each latch open or closed and gives it its travel time. With a load switch (a microswitch in the hook; on by default) it knows whether something hangs from it, and says so: "latch 1 open: load released", "open but still loaded: stuck?", "closed: holding a load", "closed: nothing in it". It never lets go on its own; a board that restarts drives its latches as they were set up (closed, normally), so a reset in flight doesn't drop the load. Its state goes down the radio as the **cargo** telemetry item. On a Raspberry Pi, `dfb_pi --latch pwm0,gpio17` drives a servo on a hardware PWM channel or an on/off line (below).
 
+## AI agent
+
+The **AI** tab (left panel) connects an AI model that can do what you do here: read the state, fly, rebuild the airframe, move tasks between boards, rewrite formulas, change the wind, break parts, and run the simulation to see what happened. It works on the simulator only: the page has no link to a real drone.
+
+**Connection.** Any OpenAI-compatible chat API: pick OpenAI, OpenRouter, Ollama or LM Studio (on this computer), or another, then the base URL, the API key and the model (**Load models** lists what the endpoint has, and checks the key). Use a model that can call tools. The page sends requests straight from your browser to that endpoint; the key goes nowhere else. It's kept until the tab closes, or in this browser if you tick **Remember**. A server on this computer must allow requests from a web page (CORS; for Ollama, start it with `OLLAMA_ORIGINS=*`).
+
+**The chat.** Ask in words: "fly a 2 m square at 2 m height and say how well it held the corners", "add a wing and see how it flies in 5 m/s wind", "make the position control softer", "find out why it crashes when M2 stops". Each tool it uses shows as a line you can open to see what it sent and got back. Its tools:
+
+- **Reading:** the state (position, attitude, target, battery, wind, the airframe check, edited or stopped formulas, latches, recent events), the last 120 s of telemetry (10 samples a second), the airframe and any part, the computers, the formulas and their code.
+- **Building:** add a part (on the frame, on a servo, rod or latch, or between a part and what it hangs on, as the + buttons do), change a part's fields, attach, remove, set the frame mass, steering and battery, load a layout, set the boards and their tasks.
+- **Formulas:** replace one (it's test-called first; an error goes back to the model and nothing changes) or reset it.
+- **Flying and the world:** reset, pause, run, speed, throw, calibrate; go to a point, hold, home; open, close or fetch with a latch; wind, turbulence, light, terrain; break a motor, servo or the battery, repair all.
+- **Waiting:** run the simulation for a number of seconds, in real time or as fast as it goes, optionally until a condition holds (`err < 0.1`), and report the range of height, distance to target and tilt, and what happened.
+
+**Undoing it.** Airframe and computer changes go into Undo like your own. A formula change has its own **Undo** under its line in the chat. Settings can make it ask before every formula change (Apply / Don't, in the chat).
+
+**While it thinks** the simulation pauses (it picks up where it was when the answer comes); untick it in Settings to keep it running. A turn takes at most 16 rounds of tools. Every request counts against the session's budget (60 by default, in Settings, with the tokens used so far), so a loop can't run away with your API credit.
+
+**Triggers** ask the AI on their own when something happens: it crashes, the battery falls below a level, it's further from the target than a distance, it tilts more than an angle, a formula stops with an error, every N seconds while flying, or an expression of your own over the telemetry (`alt < 0.5 && flying`, `err > 1 && batt < 40`). They're checked 10 times a simulated second; one fires when its condition turns true, with its message and the state at that moment, and not again within its gap. **Keep flying** lets the simulation run while the AI thinks about it, as a real drone would have to, instead of pausing.
+
 ## Designs, undo and redo
 
 The **Design** section at the top of the Airframe panel:
@@ -597,6 +617,9 @@ If its formulas fail and even its built-in program can't answer, the raw sticks 
 | `js/sources.js` | The tags that say where each readout comes from (simulated, sensor, on board, telemetry, command module, vs truth, calculated, you) |
 | `js/cargo.js` | Latches, loose bodies in the world, dropping and picking up, power from the battery: what's on the drone now, as an overlay on the design |
 | `js/place-ui.js` | Where a new part goes: the list each + button opens, putting a part on a holder or between two |
+| `js/agent.js` | The AI agent: the connection, the conversation with the model and its tools, the telemetry it reads, the triggers |
+| `js/agent-tools.js` | The agent's tools: each a description for the model and a call into the simulator |
+| `js/agent-ui.js` | The AI tab: the chat, the triggers, the connection and settings |
 | `js/cargo-ui.js` | The latch buttons on the view (G), how far the nearest loose thing is, the Cargo section |
 | `js/crsf.js` | CRSF as the simulated radio modules handle it: frames, the parser, channel and link-statistics frames; the names of the drone's telemetry items |
 | `js/elrs.js` | The simulated ExpressLRS link (packets, signal, telemetry slots, the two modules), the command module's inputs, and the Ground station's copy of its view |
