@@ -1034,13 +1034,13 @@ function popover(btn, pop) {
 popover($('#tKeys'), $('#keysPop'));
 
 /* ───────── tabs ───────── */
-const TABS = [['tabAir', 'air'], ['tabForm', 'form'], ['tabGs', 'gs']];
+const TABS = [['tabAir', 'air'], ['tabForm', 'form'], ['tabGs', 'gs'], ['tabAi', 'ai']];
 function showTab(which) {
-  if (!['air', 'form', 'gs'].includes(which)) which = 'air';
-  const form = which === 'form', gsT = which === 'gs';
+  if (!['air', 'form', 'gs', 'ai'].includes(which)) which = 'air';
+  const form = which === 'form', gsT = which === 'gs', ai = which === 'ai';
   for (const [id, k] of TABS) { const t = $('#' + id); t.setAttribute('aria-selected', String(k === which)); t.tabIndex = k === which ? 0 : -1; }
-  $('#paneAir').hidden = which !== 'air'; $('#paneForm').hidden = !form; $('#paneGs').hidden = !gsT;
-  $('.work').classList.toggle('wide', form || gsT);
+  $('#paneAir').hidden = which !== 'air'; $('#paneForm').hidden = !form; $('#paneGs').hidden = !gsT; $('#paneAi').hidden = !ai;
+  $('.work').classList.toggle('wide', form || gsT || ai);
   if (gsT) renderGs(true);
   try { localStorage.setItem(LS + '-tab', which); } catch (e) {}
 }
