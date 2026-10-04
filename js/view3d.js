@@ -8,7 +8,8 @@ const LAYERS = [
   { key: 'thrust', label: 'Thrust', group: 'Forces', on: true, tip: 'Each rotor\'s thrust, along its axis' },
   { key: 'weight', label: 'Weight', group: 'Forces', on: true, tip: 'Gravity at the true centre of mass' },
   { key: 'wind', label: 'Wind', group: 'Forces', on: true, tip: 'Wind direction and strength' },
-  { key: 'aero', label: 'Wing forces', group: 'Forces', on: true, tip: 'Each wing\'s lift and drag together, where it acts' },
+  { key: 'lift', label: 'Wing lift', group: 'Forces', on: true, tip: 'Each wing\'s lift: across the air past it, from where it acts' },
+  { key: 'drag', label: 'Wing drag', group: 'Forces', on: true, tip: 'Each wing\'s drag: along the air past it, from where it acts' },
   { key: 'rtorque', label: 'Rotor torque', group: 'Torque', on: false, tip: 'Each rotor\'s reaction torque on the frame, opposite to its spin: what makes the drone yaw (Q toggles torque)' },
   { key: 'ntorque', label: 'Net torque', group: 'Torque', on: false, tip: 'Everything turning the drone about its centre of mass, smoothed (Q toggles torque)' },
   { key: 'want', label: 'Wanted torque', group: 'Torque', on: false, tip: 'What the controller asked for, to compare with the net torque' },
@@ -166,6 +167,24 @@ function updateCity(hub) {
     shadowMesh.material.opacity = 0.28 * clamp(1 - h / (bigWorld() ? 60 : 8), 0.08, 1);
   }
 }
+// A wing as it looks: a cambered airfoil (NACA 2-4-xx: 2% camber at 40% of the chord, its thickness from the wing's),
+// leading edge toward +X, stretched along the span (Y), centred on the part.
+function airfoilGeo(chord, span, thick) {
+  const t = clamp(thick / chord, 0.04, 0.24), m = 0.02, p = 0.4, N = 28, up = [], lo = [];
+  for (let i = 0; i <= N; i++) {
+    const x = (1 - Math.cos(Math.PI * i / N)) / 2;                // more points near the leading and trailing edges
+    const yt = 5 * t * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1036 * x ** 4);
+    const yc = x < p ? m / (p * p) * (2 * p * x - x * x) : m / ((1 - p) ** 2) * (1 - 2 * p + 2 * p * x - x * x);
+    const dy = x < p ? 2 * m / (p * p) * (p - x) : 2 * m / ((1 - p) ** 2) * (p - x), th = Math.atan(dy);
+    up.push([x - yt * Math.sin(th), yc + yt * Math.cos(th)]); lo.push([x + yt * Math.sin(th), yc - yt * Math.cos(th)]);
+  }
+  const zMid = (Math.max(...up.map(q => q[1])) + Math.min(...lo.map(q => q[1]))) / 2;   // (centred on its thickness)
+  const sh = new THREE.Shape(), P = q => [chord * (0.5 - q[0]), chord * (q[1] - zMid)];
+  sh.moveTo(...P(up[N])); for (let i = N - 1; i >= 0; i--) sh.lineTo(...P(up[i])); for (let i = 1; i <= N; i++) sh.lineTo(...P(lo[i]));
+  const g = new THREE.ExtrudeGeometry(sh, { depth: span, bevelEnabled: false, curveSegments: 1 });
+  g.rotateX(Math.PI / 2); g.translate(0, span / 2, 0); g.computeVertexNormals();
+  return g;
+}
 const m4of = R => new THREE.Matrix4().set(R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1);
 function rod(a, b, r, mat) {
   const va = new THREE.Vector3(...a), vb = new THREE.Vector3(...b); const len = va.distanceTo(vb); if (len < 1e-4) return null;
@@ -237,7 +256,7 @@ function rebuildDrone() {
   droneShown = cargo.rev + ':' + (typeof editMode !== 'undefined' && editMode);
   const comps = viewComps();
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
-  { const fm = new THREE.Mesh(new THREE.BoxGeometry(...frameDims()), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); drone.add(fm); }   // the hub, or the body as a wing
+  { const d = frameDims(), fm = new THREE.Mesh(frameWing() ? airfoilGeo(d[0], d[1], d[2]) : new THREE.BoxGeometry(...d), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); drone.add(fm); }   // the hub, or the body as a wing
   const nose = rod([0.06, 0, 0], [0.1, 0, 0], 0.006, mats.ink); if (nose) drone.add(nose);
   // Parts on a servo joint live inside that joint's group, which turns about the hinge; nested joints nest.
   const js = comps.filter(c => c.type === 'joint').sort((a, b) => chainOf(a).length - chainOf(b).length);
@@ -290,7 +309,7 @@ function rebuildDrone() {
       let geo;
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
       else if (c.shape === 'cylinder') geo = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
-      else geo = new THREE.BoxGeometry(...c.size);
+      else geo = isWing(c) ? airfoilGeo(...c.size) : new THREE.BoxGeometry(...c.size);
       const m = new THREE.Mesh(geo, c.cargo ? mats.cargo : isWing(c) ? mats.wing : c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
       if (c.inc) m.setRotationFromMatrix(m4of(massRot(c)));
     } else if (c.type === 'latch') {   // a hook: its body, and a jaw that swings open (updateScene)
@@ -338,16 +357,29 @@ function buildGhost() {   // outline of where the flight software thinks the dro
   const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mats.ghost); ls.computeLineDistances(); ghost.add(ls);
   worldFx.add(ghost);
 }
-/* ───────── wings: each one's lift and drag together, as an arrow from where it acts ───────── */
-const aeroArrows = [];
+/* ───────── wings: each one's lift and drag, as arrows from where they act ───────── */
+// Lift (across the air past the wing) and drag (along it), each smoothed over 0.1 s like the torques, and sized like
+// the thrust arrows (a few cm per newton), so they compare with them. Seen through the airframe.
+const aeroVis = { arrows: [], sm: [] };
+function aeroArrow(col) {
+  const a = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, col, 0.035, 0.022);
+  for (const o of [a.line, a.cone]) { o.userData.noPick = true; o.material.depthTest = false; o.material.transparent = true; o.renderOrder = 19; }
+  worldFx.add(a); return a;
+}
 function updateAeroVis(R, live) {
-  const list = live && view.aero && !S.crashed ? (S.aero || []) : [];
-  while (aeroArrows.length < list.length) { const a = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, colorOf('--wing-f'), 0.035, 0.022); a.traverse(o => { o.userData.noPick = true; }); worldFx.add(a); aeroArrows.push(a); }
-  aeroArrows.forEach((a, i) => {
-    const e = list[i], m = e ? nrm(e.F) : 0; a.visible = m > 0.02; if (!a.visible) return;
-    const p = add(S.p, m3v(R, e.P)), d = scl(m3v(R, e.F), 1 / m);
-    a.position.set(p[0], p[1], p[2]); a.setDirection(tmpV.set(d[0], d[1], d[2])); a.setLength(0.05 + Math.min(0.6, m * 0.04), 0.035, 0.022);
+  const list = live && !S.crashed ? (S.aero || []) : [];
+  while (aeroVis.arrows.length < list.length) aeroVis.arrows.push({ L: aeroArrow(colorOf('--lift')), D: aeroArrow(colorOf('--drag')) });
+  aeroVis.arrows.forEach((ar, i) => {
+    const e = list[i]; if (!e) { ar.L.visible = ar.D.visible = false; return; }
+    const s = aeroVis.sm[i] = aeroVis.sm[i] || { L: e.L.slice(), D: e.D.slice() }, k = 0.15;
+    s.L = add(s.L, scl(sub(e.L, s.L), k)); s.D = add(s.D, scl(sub(e.D, s.D), k));
+    const p = add(S.p, m3v(R, e.P));
+    for (const [key, a, f, on] of [['L', ar.L, s.L, view.lift], ['D', ar.D, s.D, view.drag]]) {
+      const m = nrm(f); a.visible = on && m > 0.03; if (!a.visible) continue;
+      const d = scl(m3v(R, f), 1 / m); a.position.set(p[0], p[1], p[2]); a.setDirection(tmpV.set(d[0], d[1], d[2])); a.setLength(0.05 + Math.min(0.8, m * 0.035), 0.035, 0.022);
+    }
   });
+  if (!list.length) aeroVis.sm.length = 0;
 }
 
 /* ───────── cargo: loose bodies, the latches' jaws, how far an open latch is from what it could grab ───────── */
@@ -356,8 +388,8 @@ function looseGroup(L) {   // its parts, drawn at rest in the body's own axes (o
   const g = new THREE.Group(), at = (m, p) => { m.position.set(...p); g.add(m); };
   for (const c of L.parts) {
     if (c.type === 'mass') {
-      const geo = c.shape === 'sphere' ? new THREE.SphereGeometry(c.radius, 20, 14) : c.shape === 'cylinder' ? new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2) : new THREE.BoxGeometry(...c.size);
-      at(new THREE.Mesh(geo, c.origin == null ? mats.cargo : mats.mass), c.pos);
+      const geo = c.shape === 'sphere' ? new THREE.SphereGeometry(c.radius, 20, 14) : c.shape === 'cylinder' ? new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2) : isWing(c) ? airfoilGeo(...c.size) : new THREE.BoxGeometry(...c.size);
+      const mm = new THREE.Mesh(geo, c.origin == null ? mats.cargo : isWing(c) ? mats.wing : mats.mass); if (c.inc) mm.setRotationFromMatrix(m4of(massRot(c))); at(mm, c.pos);
     } else if (c.type === 'motor') {
       const mg = new THREE.Group(); mg.quaternion.setFromUnitVectors(Z, new THREE.Vector3(...mountDir(c)));
       mg.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));

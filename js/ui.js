@@ -662,6 +662,13 @@ function updateLive() {
     const t = S.tq, f = x => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
     setText($('#hudTq'), view.readouts && (view.rtorque || view.ntorque || view.want) && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '');
   }
+  {   // the wings, together: lift, drag, and the angle of attack and airspeed (the biggest wing's)
+    const A = !S.crashed && !editMode && S.aero && S.aero.length ? S.aero : null;
+    if (A && view.readouts && (view.lift || view.drag)) {
+      const Lv = m3v(R, A.reduce((s, e) => add(s, e.L), [0, 0, 0])), L = nrm(Lv), D = nrm(A.reduce((s, e) => add(s, e.D), [0, 0, 0])), big = A.reduce((a, e) => nrm(e.F) > nrm(a.F) ? e : a);
+      setText($('#hudWing'), `wing${A.length > 1 ? 's' : ''} · lift ${L.toFixed(2)} N ${L < 0.01 ? '' : Lv[2] >= 0 ? 'up' : 'down'} · drag ${D.toFixed(2)} N · α ${big.alpha.toFixed(0)}°${Math.abs(big.alpha) > 15 && Math.abs(big.alpha) < 165 ? ' (stalled)' : ''} · air ${big.V.toFixed(1)} m/s`);
+    } else setText($('#hudWing'), '');
+  }
   $('#kbdHint').hidden = document.hasFocus();
   syncSp(); syncAllocFields();
   updateActs(); updateAllocInfo(); renderEst(); if (hasTask('learn')) renderLearn();

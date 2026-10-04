@@ -428,7 +428,11 @@ function dynamics(dt) {
     let F, at = P;
     if (wing) { const w = run('wingAero', u, dims[0], dims[1]); F = m3v(Rw, w.F); at = add(P, m3v(Rw, [w.xcp, 0, 0])); }
     else F = m3v(Rw, run('bluffDrag', u, areas));
-    push(b, F, at); if (wing) S.aero.push({ b, P: at, F });
+    push(b, F, at);
+    if (wing) {   // for the view: drag is the part along the air past it, lift the rest (across it); its angle of attack and airspeed
+      const a = m3v(Rw, u), V = nrm(a), dh = V > 1e-6 ? scl(a, 1 / V) : [0, 0, 0], D = scl(dh, dot(F, dh));
+      S.aero.push({ b, P: at, F, L: sub(F, D), D, alpha: Math.atan2(u[2], -u[0]) * R2D, V: Math.hypot(u[0], u[2]) });
+    }
   };
   if (frameWing()) aeroPart(0, [0, 0, 0], frameRot(), true, frameDims());
   for (const c of liveComps()) if (c.type === 'mass') { const b = MB.of.get(c.id) || 0; aeroPart(b, posed(b, c.pos), m3m(K.Rb[b], massRot(c)), isWing(c), c.size, isWing(c) ? null : frontalAreas(c)); }
