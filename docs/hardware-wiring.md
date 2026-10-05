@@ -1,8 +1,8 @@
 # Hardware wiring and custom drivers
 
-Computers → Hardware wiring lists every motor, servo and sensor in the airframe. Assign a board, select a signal GPIO or sensor driver/address, and configure that board’s shared I²C SDA/SCL pins. In-use output pins are disabled; conflicting bus/output assignments, duplicate addresses, chip PWM limits and invalid calibrations are reported before settings are sent. GPIO numbers are chip GPIOs (BCM on Pi), not connector positions.
+Computers → Hardware wiring is organized into device cards: motors and servos, sensors, cargo latches, power and radio. Each card shows Board → Connection → GPIOs, with a device driver and address where needed. I²C SDA/SCL selectors appear on every I²C sensor card; changing them updates the shared bus for that board. Calibration, board timing and C source are folded into advanced settings. In-use output pins are disabled; conflicting bus/output assignments, duplicate addresses, chip PWM limits and invalid calibrations are reported before settings are sent. GPIO numbers are chip GPIOs (BCM on Pi), not connector positions.
 
-Wiring and custom C source are stored inside `computers.wiring` in the design. Browser storage, named designs, exported/shared design JSON, undo and redo include them. Older designs retain inferred defaults: actuators/IMU/compass/barometer follow the flight core; GPS/flow follow navigation. Explicit board IDs survive board deletion; a connection to a deleted board stays disconnected rather than moving to another board.
+Wiring and custom C source are stored inside `computers.wiring` in the design. Browser storage, named designs, exported/shared design JSON, undo and redo include them. Older designs retain inferred defaults: actuators/IMU/compass/barometer follow the flight core; GPS/flow follow navigation; latches follow cargo. Explicit board IDs survive board deletion; a connection to a deleted board stays disconnected rather than moving to another board.
 
 ## Connections and profiles
 
@@ -11,6 +11,12 @@ Select **Use 10DOF module: MPU6050 + BMP180 + HMC5883L** to configure the three 
 The built-in firmware now detects MPU6050-family IMUs, BMP280/BME280, BMP180/BMP085, and HMC5883L (when selected). MPU bypass exposes the compass on modules with auxiliary I²C wiring. HMC overflow/no-data/read failures are rejected; compass samples expire after 100 ms. Compass bias is in microtesla, with separate XYZ scale correction; the mounting matrix maps sensor axes into body axes. This is manual calibration, not automatic magnetic calibration. QMC5883L and the MPU9250’s AK8963 are different devices and need other drivers.
 
 Motor output settings describe **standard PWM ESCs**, not direct motor power: frequency, minimum/maximum pulse. Servo rows define centre pulse and microseconds per radian; negative scaling reverses direction. DShot, direct brushed H-bridges and other output protocols need additional drivers. Physical motor/prop/servo response is configured in Airframe; simulator models remain separate from sensor register code.
+
+Battery voltage uses an ADC1 GPIO and a resistor-divider ratio; ExpressLRS uses a pair of RX/TX GPIOs on the flight-core ESP running telemetry (receiver TX → board RX). These settings are now part of the design and sent by Install; sending hardware settings replaces battery/radio assignments previously entered manually. Command-module buttons, stick ADCs, LED/buzzer and transmitter UART pins are also saved in the design and used by its installation guide.
+
+Pi latch cards offer hardware PWM on GPIO 18/19 (channels 0/1) or digital on/off. The cargo task must run on that Pi. Install derives the `--latch pwmN,gpioN,dry` list in airframe order; disconnected latches stay `dry` and hold their current position in the simulator. PWM uses the existing shared closed/open pulses of 1000/2000 µs. Digital GPIO drives an external latch switch/driver.
+
+Pi board-link, GPS and radio cards use serial device paths. `/dev/serial0` maps to fixed GPIO 14 TX / 15 RX; a USB adapter uses no Pi GPIO. The default flight link reserves GPIO 14/15; moving it to a USB serial path frees them. Duplicate serial ports and GPIO claims are rejected. ESP UART0 pins remain fixed by chip.
 
 Real outputs and onboard IMU/barometer/compass drivers currently live on the flight-core ESP. Other board assignments can be planned and are flagged as unsupported for deployment. NMEA GPS uses a Pi serial device path. Pi I²C sensors, distributed motor outputs and optical-flow hardware are not implemented. The simulator only feeds the flight core sensors assigned to its board; motor outputs assigned elsewhere/off are held off.
 
@@ -22,7 +28,7 @@ Profiles: `imu=driver,address`, `baro=driver,address`, `mag=driver,address`. Dri
 
 ## Custom C driver editor
 
-Each flight board has a folded **Custom low-level sensor drivers (C)** editor, with MPU6050, BMP180, HMC5883L and combined 10DOF presets. Load a preset, edit, and **Save driver code in design**. Choose **Custom C driver** on each corresponding sensor row. Saving source does not execute or compile it.
+Each flight board has a folded **custom sensor drivers (C)** editor under Board settings & custom code, with MPU6050, BMP180, HMC5883L and combined 10DOF presets. Load a preset, edit, and **Save driver code in design**. Choose **Custom C driver** on each corresponding sensor row. Saving source does not execute or compile it.
 
 Export `custom_sensors.h`, copy it to `runner/fc/esp32/main/custom_sensors.h` and rebuild with ESP-IDF 5.3.2:
 
@@ -35,10 +41,20 @@ In Install, choose **Use firmware files from this computer**, select the bootloa
 
 The interface uses `custom_read(address, register, buffer, length)` and `custom_write(address, register, value)` (0 success, -1 failure). Register transactions are limited to 7-bit addresses 8–119 and reads of 1–64 bytes. Driver init returns 0 success. IMU read returns 0 success and sets `have_gyro`; barometer/compass read returns 1 only for a new sample, 0 otherwise. Units: gyro rad/s, acceleration m/s², relative height m, compass µT in sensor axes. Mounting/bias/scale are applied afterwards; custom IMU gyro bias is measured at startup. Use `esp_timer_get_time()` for conversion deadlines. Do not delay/block inside read callbacks; init runs before flight tasks start.
 
-These are native C drivers with access to the firmware, not sandboxed programs. They must be compiled and tested for timing and sensor units. The browser simulation uses its existing sensor models; it does not execute these C register drivers. A single compiled header serves the board; separate custom implementations for multiple sensors of the same kind need firmware extensions.
+These are native C drivers with access to the firmware, not sandboxed programs. They must be compiled and tested for timing and sensor units. Unsaved editor drafts survive pin changes within the current design; loading another design clears them. Save driver code to include it in exported designs.
+
+The browser simulation uses its existing sensor models; it does not execute these C register drivers. A single compiled header serves the board; separate custom implementations for multiple sensors of the same kind need firmware extensions.
 
 ## Validation
 
 `node tools/test_hardware_wiring.js` checks profiles, pin/address conflicts, persistence and board-ID stability. `node tools/test_board_install.js` checks bundles and installation sequencing. Compile/run `tools/test_sensor_drivers.c` to check the Bosch BMP180 published pressure example, nonblocking conversion sequence, MPU units/bypass, HMC axis ordering/overflow, and I²C failures. `python3 tools/sync_driver_presets.py --check` prevents the browser presets drifting from the compiled template.
 
 Firmware compilation and fake-register tests have passed; physical sensors and flight are untested. Datasheet references: [Bosch BMP180](https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf), [Honeywell HMC5883L](https://cdn.sparkfun.com/datasheets/Sensors/Magneto/HMC5883L-FDS.pdf).
+
+## Why C compilation is not in the browser yet
+
+C compilation in a browser is possible: [Wasmer demonstrates Clang running in WebAssembly](https://wasmer.io/posts/clang-in-browser). This project currently contains the compiled flight controller and a formula compiler, but no C compiler/runtime toolchain for editor source.
+
+There are two distinct outputs: a WebAssembly driver for browser tests, and native ESP firmware built against ESP-IDF for the selected chip. A browser driver additionally needs simulated I²C registers, conversion timing and device responses; the current sensor models produce measurements rather than emulate registers. WebAssembly output cannot be flashed as the ESP application. ESP32/S3 use Xtensa, while C3 uses RISC-V ([Espressif toolchains](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf-tools.html)).
+
+Follow-up architecture: load a C compiler on demand in a worker, compile against a small portable driver interface, run against virtual register buses with time limits and diagnostics, then provide a chip-specific firmware build path. Pure GitHub Pages currently provides neither that compiler nor an ESP-IDF build service. Custom SPI, UART and ADC sensor drivers need additional firmware interfaces; the current C callbacks expose I²C.

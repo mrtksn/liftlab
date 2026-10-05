@@ -196,7 +196,7 @@ function cargoStep(dt) {
 // What each latch's load switch says: something is under it.
 const latchLoaded = l => onBoard(l) && liveUnder(l).length > 0;
 // The boards drive the latches (boards.js): bit i of mask closed, for the design's latches in order.
-function cargoDrive(mask) { latches().forEach((l, i) => { const st = cargo.lat.get(l.id); if (st) st.drive = mask & (1 << i) ? 1 : 0; }); }
+function cargoDrive(mask) { const b=boardOf('cargo');latches().forEach((l, i) => { const st = cargo.lat.get(l.id); if (st) st.drive = b && wiredTo(l)===b ? (mask & (1 << i) ? 1 : 0) : null; }); }
 
 // A loose thing at rest is solid to the drone and to other falling things, as a box round it (the drone can stand on
 // a parcel or knock its props on it; it doesn't push it about). terrainContacts takes these like the buildings.

@@ -1046,3 +1046,21 @@ html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100
 .hw-board .btn { max-width: 100%; white-space: normal; text-align: left; }
 .hw-fields select { max-width: 100%; }
 .hw-driver .inst-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Device-first wiring cards. */
+.hw-group { margin: 18px 0; }
+.hw-group h3 { font-size: 13px; margin: 0 0 6px; }
+.hw-device { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.hw-device-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 10px; }
+.hw-kind { font-size: 11px; color: var(--muted); }
+.hw-device > .hw-field { margin: 8px 0; }
+.hw-device .hw-field { flex: 1 1 120px; min-width: 0; }
+.hw-device .hw-field input { width: 100%; }
+.hw-device select, .hw-device .btn, .hw-advanced select, .hw-preset-btn { max-width: 100%; }
+.hw-connection { font-weight: 500; color: var(--ink); }
+.hw-owner { margin: 8px 0; font-size: 12px; }
+.hw-advanced { margin: 12px 0; }
+.hw-advanced summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.hw-advanced > .hw-field { margin: 8px 0; }
+.hw-advanced .btn, .hw-device .btn, .hw-preset-btn { white-space: normal; text-align: left; }
+.hw-advanced .inst-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.hw-advanced .code { margin-top: 10px; }

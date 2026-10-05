@@ -103,6 +103,7 @@ async function removeDesign(id) {
 }
 
 function designLoaded(id, name) {   // after a design is opened, or a preset loaded (id null)
+  if(typeof HW_UI!=='undefined')HW_UI.drafts.clear();
   designs.cur = id; designs.name = name || ''; designs.preset = null; designs.pendingClean = true;
   const inp = document.getElementById('designName'); if (inp) inp.value = designs.name;
 }

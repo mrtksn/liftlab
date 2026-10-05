@@ -237,6 +237,7 @@ function espDesign(t, edited) {
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
+    instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. Receiver UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}.`),
     instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in <b>Hardware wiring</b> in Computers. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
     el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
@@ -253,8 +254,9 @@ function espDesign(t, edited) {
   return instStep(2, 'Send this design', ...kids);
 }
 function espGroundWiring(profile) {
-  return instStep(2, 'Wire it up', instPara('The command module is set up by typing its settings (below, once connected): which pins go to the ExpressLRS transmitter module, the buttons, the sticks, a buzzer. Each takes effect after <code>save</code> and <code>reboot</code>.'),
-    cmdBox(profile.ground + '\nset latch=arm,fly\nsave\nreboot', 'the settings'),
+  const errors=groundHardwareErrors(computers());
+  return instStep(2, 'Wire it up', instPara('Choose transmitter, button, stick and buzzer GPIOs in <b>Hardware wiring</b> in Computers. These saved settings take effect after <code>save</code> and <code>reboot</code>.'),
+    ...(errors.length?errors.map(text=>el('p',{class:'bad',text})):[cmdBox(groundHardwareSettings(computers()), 'the settings')]),
     instPara(`<code>tx=TX,RX</code>: to the module's CRSF input, then from its output; one pin for a module bay's single wire. Buttons connect to ground; sticks use free ADC1 pins (${profile.adc.join(', ')}). Keep all assignments distinct. ${profile.chip === 'esp32' ? 'On WROVER modules 16/17 belong to PSRAM; choose other pins.' : 'Native USB, flash/PSRAM and boot strap pins are reserved.'}`, 'hint'));
 
 }
@@ -432,8 +434,8 @@ async function espFlash(name, profile, prog, msg) {
 /* ───────── Raspberry Pi ───────── */
 function piInputs(fields, onChange) {
   const box = el('div', { class: 'inst-pins' });
-  for (const [k, label, def, hint] of fields) {
-    const inp = el('input', { type: 'text', value: instPref(k, def), spellcheck: 'false', autocomplete: 'off', 'aria-label': label, title: hint || '' });
+  for (const [k, label, def, hint, owned] of fields) {
+    const inp = el('input', { type: 'text', value: owned?def:instPref(k, def), readonly:owned?'readonly':null, spellcheck: 'false', autocomplete: 'off', 'aria-label': label, title: hint || '' });
     inp.addEventListener('input', () => { instSave(k, inp.value.trim()); onChange(); });
     box.append(el('label', {}, el('span', { text: label }), inp));
   }
@@ -450,15 +452,17 @@ async function pastePack(files, after) {
   return lines.join('\n');
 }
 function piGuide(t, K) {
+  const plan=boardWiringPlan(t);
+  if(plan.errors.length)return [instStep(1,'Fix hardware connections',instPara('Change the connections in Hardware wiring before installing.'),...plan.errors.map(text=>el('p',{class:'bad',text})))];
   const tasks = t.tasks, learnOrSuper = tasks.includes('learn') || tasks.includes('super');
   const gpsSensor=sensorsOf('fix').find(c=>wiredTo(c)===t);
   const fix = sensorsOf('fix').some(c => wiredTo(c) === t) && tasks.includes('nav'), nL = latches().length, cargo = tasks.includes('cargo') && nL > 0, radio = tasks.includes('tlm');
   const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
-  if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'A USB GPS: /dev/ttyUSB0 or /dev/ttyACM0']);
-  fields.push(['link', 'Link to the ESP32', '/dev/serial0', '/dev/serial0 for the GPIO pins, /dev/ttyUSB0 for a USB cable to the ESP32']);
-  if (cargo) fields.push(['latch', 'Latch outputs', ['pwm0', 'pwm1', 'gpio17', 'gpio27', 'gpio22', 'gpio23', 'gpio24', 'gpio25'].slice(0, nL).join(','), 'pwmN: a servo on hardware PWM channel N; gpioN: an on/off line']);
-  if (radio) fields.push(['crsf', 'Receiver port', K.label === 'Raspberry Pi 4' ? '/dev/ttyAMA1' : '/dev/ttyUSB1', 'The ExpressLRS receiver\'s serial port on the Pi']);
+  if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in Hardware wiring',true]);
+  fields.push(['link', 'Link to the ESP32', hardwareBus(computers(),t).linkPort||'/dev/serial0', 'Change the serial connection in Hardware wiring',true]);
+  if (cargo) fields.push(['latch', 'Latch outputs', piLatchSettings(computers(),cfg.comps,t), 'Saved GPIO/PWM connections from Hardware wiring',true]);
+  if (radio) fields.push(['crsf', 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in Hardware wiring',true]);
   const need = ['nav', ...(learnOrSuper ? ['airframe', 'pi'] : [])];
   const cmds = {};
   const out = [];
@@ -470,16 +474,19 @@ function piGuide(t, K) {
   for (const n of notes) out.push(el('p', { class: 'inst-note', text: n }));
   const inputs = piInputs(fields, () => refresh());
   out.push(el('div', { class: 'inst-safety' }, el('b', { text: 'Your Pi' }), inputs));
-  const v = k => instPref(k, (fields.find(f => f[0] === k) || [])[2] || '');
-  // the steps
-  out.push(instStep(1, 'Wire it to the flight controller', instPara(core ? `To <b>${core.name}</b> (${BOARD_KINDS[core.kind].label}), on its USB serial port's pins. Both sides are 3.3 V: no level shifter.` : 'To the flight controller, on its USB serial port\'s pins.'),
-    el('table', { class: 'inst-files' }, el('tbody', {},
+  const v = k => {const f=fields.find(f=>f[0]===k)||[];return f[4]?f[2]:instPref(k,f[2]||'');};
+  // The saved connection determines the wiring and which Pi interfaces need enabling.
+  const gpioLink=v('link')==='/dev/serial0',gpioSerial=gpioLink || (fix && v('gps')==='/dev/serial0') || (radio && v('crsf')==='/dev/serial0');
+  const pwmCargo=cargo && /pwm/.test(v('latch'));
+  out.push(instStep(1, 'Wire it to the flight controller',
+    gpioLink ? instPara(core ? `To <b>${core.name}</b> (${BOARD_KINDS[core.kind].label}), on its UART0 pins. Both sides are 3.3 V: no level shifter.` : 'To the flight controller’s UART0 pins.') : instPara(`Connect the flight controller to the Pi with a USB serial cable. The saved link is <code>${v('link')}</code>; this connection uses no Pi GPIO.`),
+    ...(gpioLink ? [el('table', { class: 'inst-files' }, el('tbody', {},
       el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX0)` })),
       el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: `Flight controller GPIO ${linkPins[0]} (TX0)` })),
       el('tr', {}, el('td', { text: 'Pi pin 6 (GND)' }), el('td', { text: '—' }), el('td', { text: 'ESP32 GND' })))),
-    instPara('Those are the same pins as the ESP32\'s USB port, so unplug its USB cable while the Pi is connected. With a free USB port on the Pi, a USB cable to the ESP32 does the same: set the link above to <code>/dev/ttyUSB0</code>.', 'hint')));
-  cmds.serial = cmdBox('', 'the serial port commands');
-  out.push(instStep(2, 'Turn on its serial port', instPara(`It frees the Pi's main serial port for the link: no login console on it, and Bluetooth moved off it (on a Zero W, Zero 2 W or Pi 4 it has that port, and the other one is too unsteady at 921600 baud). Then it restarts.`), cmds.serial));
+      instPara('These are also connected to the ESP32’s USB serial adapter: unplug that USB cable while the Pi is wired here. A USB serial connection instead can be selected in Hardware wiring.', 'hint')] : [])));
+  cmds.serial = cmdBox('', 'the interface setup commands');
+  out.push(instStep(2, 'Prepare its interfaces', instPara(gpioSerial ? 'Free the Pi GPIO UART from the login console and Bluetooth, grant GPIO/serial access, then restart.' : 'Grant GPIO/USB serial access, then restart. The saved USB connections do not need the Pi GPIO UART.'), cmds.serial));
   cmds.copy = cmdBox('', 'the copy command'); cmds.clone = cmdBox('', 'the clone command');
   out.push(instStep(3, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder (where <code>index.html</code> is):'), cmds.copy,
     instPara('Or, if the Pi can reach the repository itself (a private one needs your GitHub login on the Pi):', 'hint'), cmds.clone));
@@ -503,12 +510,15 @@ function piGuide(t, K) {
     const host = v('host') || 'pi@raspberrypi.local';
     out[0].querySelectorAll('.inst-host').forEach(n => { n.textContent = host; });
     cmds.serial.code.textContent = [
-      'sudo raspi-config nonint do_serial_cons 1    # no login console on it',
-      'sudo raspi-config nonint do_serial_hw 0      # the port itself on',
-      'CFG=/boot/firmware/config.txt; [ -f $CFG ] || CFG=/boot/config.txt',
-      'grep -q "^dtoverlay=disable-bt" $CFG || echo "dtoverlay=disable-bt" | sudo tee -a $CFG    # Bluetooth off the port' + (bt ? '' : ' (nothing to do on a Zero without W)'),
-      'sudo systemctl disable hciuart 2>/dev/null; true',
-      ...(cargo && /pwm/.test(v('latch')) ? ['grep -q "^dtoverlay=pwm-2chan" $CFG || echo "dtoverlay=pwm-2chan" | sudo tee -a $CFG    # hardware PWM for the latches (GPIO 18, 19)'] : []),
+      ...(gpioSerial ? [
+        'sudo raspi-config nonint do_serial_cons 1    # no login console on it',
+        'sudo raspi-config nonint do_serial_hw 0      # the port itself on',
+        'CFG=/boot/firmware/config.txt; [ -f $CFG ] || CFG=/boot/config.txt',
+        'grep -q "^dtoverlay=disable-bt" $CFG || echo "dtoverlay=disable-bt" | sudo tee -a $CFG    # Bluetooth off the port' + (bt ? '' : ' (nothing to do on a Zero without W)'),
+        'sudo systemctl disable hciuart 2>/dev/null; true'] : []),
+      ...(pwmCargo ? [
+        ...(!gpioSerial ? ['CFG=/boot/firmware/config.txt; [ -f $CFG ] || CFG=/boot/config.txt'] : []),
+        'grep -q "^dtoverlay=pwm-2chan" $CFG || echo "dtoverlay=pwm-2chan" | sudo tee -a $CFG    # hardware PWM for the latches (GPIO 18, 19)'] : []),
       'sudo usermod -aG dialout,gpio $USER',
       'sudo reboot'].join('\n');
     cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;

@@ -76,7 +76,7 @@ function fixComputers(C) {
   C = C && Array.isArray(C.boards) ? JSON.parse(JSON.stringify(C)) : defaultComputers();
   C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
-  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
+  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24), ...(g.wiring?{wiring:g.wiring}:{}) };
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));

@@ -165,7 +165,7 @@ function buildComputers() {
       el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module. Here it runs on the far side of the simulated link: your keys are its buttons.' }),
       el('div', { class: 'boards', id: 'groundCard' })),
     el('section', { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
-    el('section', { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Assign each motor, servo and sensor to a board. Pick signal pins, a shared sensor bus and the hardware driver. Wiring is saved with this design.' }), el('div', { id: 'hardwareRows' })),
+    el('section', { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'For each device: choose its board, check its connection type, then pick the GPIOs you will wire. Connections are saved with this design and used by Install.' }), el('div', { id: 'hardwareRows' })),
     el('div', { id: 'taskLaws' }),
     el('section', { class: 'sec', id: 'rnBox' },
       el('h2', { text: 'The flight program', 'data-src': 'board' }),
@@ -227,7 +227,7 @@ function renderComputers1(full) {
     COMP.sig = sig;
     const list = $('#boardList'); list.textContent = '';
     for (const b of C.boards) {
-      const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = cfg.comps.filter(c => ['motor','joint','sensor'].includes(c.type) && wiredTo(c) === b);
+      const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = cfg.comps.filter(c => ['motor','joint','sensor','latch'].includes(c.type) && wiredTo(c) === b);
       const name = nameBox(b.name, 'Board name', 'bname-' + b.id, v => renameComputer(C2 => { const x = C2.boards.find(y => y.id === b.id); if (x) x.name = (v || K.label).slice(0, 24); }));
       const kind = el('select', { 'aria-label': 'Board', id: 'bkind-' + b.id }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
       commitSelect(kind, v => { if (v === b.kind) return; const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = v; setComputers(C2, 'kind'); }, 'Press Enter to change the board: it starts the flight again');
@@ -253,7 +253,7 @@ function renderComputers1(full) {
         el('p', { class: 'board-note', text: K.note }),
         el('dl', { class: 'kv board-kv' },
           el('dt', { text: 'Runs' }), el('dd', { text: runs }),
-          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : []), ...(b.tasks.includes('cargo') ? latches().map(l => l.name) : [])].join(', ') || '—' }),
+          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
           ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
         ex, errLine(b.id)));
