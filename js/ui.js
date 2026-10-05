@@ -1051,12 +1051,12 @@ const SHOW_PRESETS = {
   Phone: () => Object.fromEntries(LAYERS.map(L => [L.key, ['thrust', 'spin', 'target', 'heading', 'grid', 'shadow', 'trail', 'servo'].includes(L.key)])),   // a small screen: the drone and where it's going, no panels over it
 };
 // The layout: Phone (a one-line header, the flight pads with Home and Poke, no Keys, a lean view) or Full. Auto picks Phone
-// when the page loads in a view taller than it is wide. What you pick in the Show menu is kept, and each layout keeps
-// its own choice of what the view draws.
+// while the view is taller than it is wide, or 640 px wide or less, and follows the window as it turns or is resized. What
+// you pick in the Show menu is kept, and each layout keeps its own choice of what the view draws.
 const UIMODE_LS = 'drone-force-bench-ui';
 let uiPref = 'auto'; try { const m = localStorage.getItem(UIMODE_LS); if (m === 'phone' || m === 'full') uiPref = m; } catch (e) {}
-const autoPhone = window.innerHeight > window.innerWidth;
-const phoneMode = () => uiPref === 'phone' || (uiPref === 'auto' && autoPhone);
+const autoPhone = () => window.innerHeight > window.innerWidth || window.innerWidth <= 640;
+const phoneMode = () => uiPref === 'phone' || (uiPref === 'auto' && autoPhone());
 const showKey = () => SHOW_LS + (phoneMode() ? '-phone' : '');
 function showSave() { try { localStorage.setItem(showKey(), JSON.stringify(Object.fromEntries(LAYERS.map(L => [L.key, view[L.key]])))); } catch (e) {} }
 function showLoad() {   // this layout's layers: as you left them, or its preset
@@ -1071,6 +1071,8 @@ function applyUiMode() {
   const n = document.getElementById('uiNow'); if (n) n.textContent = uiPref === 'auto' ? `now: ${phoneMode() ? 'phone' : 'full'}` : '';
 }
 function setUiMode(m) { uiPref = m; try { localStorage.setItem(UIMODE_LS, m); } catch (e) {} applyUiMode(); }
+{ let t = 0; window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(() => {   // (Auto: a phone turned, a window resized)
+  if (uiPref === 'auto' && phoneMode() !== document.documentElement.classList.contains('phone')) applyUiMode(); }, 150); }); }
 function showApply() {   // buttons, legend keys and readouts follow the layers
   for (const b of document.querySelectorAll('#showMenu [data-key]')) b.setAttribute('aria-pressed', String(!!view[b.dataset.key]));
   const torque = view.rtorque || view.ntorque || view.want;
