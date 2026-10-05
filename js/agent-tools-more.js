@@ -113,10 +113,12 @@ Object.assign(AGENT_TOOLS, {
     params: obj({ aero: { type: 'string', enum: ['prism', 'wing'] }, span: { type: 'number' }, chord: { type: 'number' }, thick: { type: 'number' }, inc: { type: 'number' } }),
     run: a => { setFrameShape({ ...frameShapeOf(), ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)) }); renderFrameShape(); undoKey = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); return frameShapeOf(); } },
 
-  designs: { desc: 'Saved designs: list them, save the airframe under a name, open one (by name or id; the airframe on screen is replaced, and it can be undone), undo or redo an airframe change.',
-    params: obj({ action: { type: 'string', enum: ['list', 'save', 'open', 'undo', 'redo'] }, name: { type: 'string' }, id: { type: 'string' } }, ['action']),
+  designs: { desc: 'Saved designs: list them, save the airframe under a name, open one (by name or id; the airframe on screen is replaced, and it can be undone), undo or redo an airframe change, share (a link with the whole design in it), or open_shared (a link or code someone shared).',
+    params: obj({ action: { type: 'string', enum: ['list', 'save', 'open', 'undo', 'redo', 'share', 'open_shared'] }, name: { type: 'string' }, id: { type: 'string' }, code: { type: 'string' } }, ['action']),
     run: async a => {
       if (a.action === 'list') return { current: designs.name || null, designs: designs.list.map(d => ({ id: d.id, name: d.name, saved: new Date(d.savedAt).toISOString().slice(0, 16) })) };
+      if (a.action === 'share') { const code = await designCode(a.name || designs.name || 'Untitled design'); return { link: shareBase() + '#' + SHARE_KEY + code, code_length: code.length }; }
+      if (a.action === 'open_shared') { const ok = await openDesignCode(a.code || '', 'a shared code'); return ok ? { opened: designs.name, parts: cfg.comps.length } : { error: 'the person chose to keep the airframe on screen' }; }
       if (a.action === 'undo') { undoStep(); return { undone: true }; } if (a.action === 'redo') { redoStep(); return { redone: true }; }
       if (a.action === 'save') { $('#designName').value = a.name || designs.name || 'Untitled design'; await saveDesign(); return { saved: designs.name }; }
       const d = designs.list.find(x => x.id === a.id || x.name === a.name); if (!d) throw new Error('no such design (list them)');

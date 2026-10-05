@@ -154,7 +154,11 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
   const o = JSON.parse(text);
   const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode } : o;
   if (!d || !Array.isArray(d.comps) || !d.comps.every(c => c && typeof c.type === 'string' && Array.isArray(c.pos))) throw new Error('not a design');
-  return { name: (o.name || '').toString().slice(0, 60), design: { frame: d.frame, frameShape: d.frameShape, comps: d.comps, mode: d.mode } };
+  const keep = { frame: d.frame, frameShape: d.frameShape, comps: d.comps, mode: d.mode };   // (and the rest of the drone, when the file has it)
+  if (d.battery && typeof d.battery === 'object') keep.battery = d.battery;
+  if (d.computers && Array.isArray(d.computers.boards)) keep.computers = d.computers;
+  if (d.laws && typeof d.laws === 'object') keep.laws = Object.fromEntries(Object.entries(d.laws).filter(([k, v]) => typeof v === 'string' && LAWS[k]));
+  return { name: (o.name || '').toString().slice(0, 60), design: keep };
 }
 async function importDesign(file) {
   try {
