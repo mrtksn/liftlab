@@ -127,7 +127,6 @@ const FD = {
   az: { label: 'Tilt toward (azimuth)', path: ['az'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   prop: { label: 'Prop radius', path: ['prop'], min: 0.03, max: 0.25, hmax: 0.6, step: 0.005, u: 'm', dp: 3 },
   tmax: { label: 'Max thrust', hmax: 200,  path: ['tmax'], min: 0.5, max: 30, step: 0.5, u: 'N', dp: 1 },
-  kappa: { label: 'Drag torque ratio κ', path: ['kappa'], min: 0, max: 0.06, step: 0.001, u: 'm', dp: 3 },
   fm: { label: 'Prop efficiency (figure of merit)', path: ['fm'], min: 0.3, max: 0.85, step: 0.01, u: '', dp: 2 },
   storque: { label: 'Servo stall torque · hidden', path: ['torque'], min: 0.05, max: 5, hmax: 40, step: 0.05, u: 'N·m', dp: 2 },
   slag: { label: 'Servo command delay · hidden', path: ['lag'], min: 0, max: 0.15, step: 0.005, u: 'ms', dp: 0, k: 1000 },
@@ -293,6 +292,17 @@ function slider(c, key) {
   if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(f.refresh);
   return f.node;
 }
+// What follows from a motor's prop, thrust rating and efficiency (sim.js propOmega, kappaOf): how fast it spins at
+// full thrust, its drag torque ratio κ (also its yaw), and what it costs to make half its thrust.
+function propInfo(c) {
+  const p = el('p', { class: 'hint derived' });
+  const put = () => {
+    const w = Math.pow(c.tmax / 2, 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
+    setText(p, `From the prop: ${Math.round(propOmega(c) * 60 / (2 * Math.PI)).toLocaleString()} rpm at full thrust · drag torque ratio κ ${kappaOf(c).toFixed(4)} m (its yaw) · ${Math.round(w)} W of air power at half thrust`);
+  };
+  put(); if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(put);
+  return p;
+}
 function refreshCard(c) {
   for (const f of cardRefresh.get(c.id) || []) f();
   const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
@@ -332,7 +342,7 @@ function compBody(c) {
   const pushSel = () => selectF(c, 'push', 'Prop', [['false', 'Pulls (tractor)'], ['true', 'Pushes (pusher)']], rerender);
   const rerender = () => keepFocus(() => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
   if (c.type === 'motor') {
-    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), slider(c, 'kappa'), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
+    b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), propInfo(c), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('span', { class: 'lbl', text: 'Heat, sensing and failure' }),
       checkF(c, 'tsens', 'Temperature sensor on the motor'), checkF(c, 'telem', 'ESC telemetry (reports rpm and current)'),
       slider(c, 'tmaxC'), slider(c, 'cool'), checkF(c, 'failHeat', 'Overheating damages it'),
@@ -456,6 +466,7 @@ function edited(c, key) {
     c.quality = 'custom'; const q = document.getElementById(`f-${c.id}-quality`); if (q) q.value = 'custom';
   }
   if (isHolder(c)) carryAlong(c);
+  if (c.type === 'motor' && (key === 'prop' || key === 'tmax' || key === 'fm')) refreshCard(c);   // (what follows from the prop)
   const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
   recomputeProps(); if (c.type === 'hang' && (key === 'cable' || key === 'x' || key === 'y' || key === 'z')) reseatPend(c);
   cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save();
@@ -907,9 +918,11 @@ function buildSp() {
 /* ───────── header ───────── */
 // Start from a layout or one of your saved designs: a menu, so nothing loads until you pick one.
 const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left', title: 'Start from a layout (Blank is a bare frame) or one of your saved designs',
-  items: () => [...Object.entries(PRESETS).map(([k, p]) => ({ value: 'p:' + k, label: p.label, group: 'Layouts', hint: p.blank ? 'opens the editor' : null })),
-    ...(typeof designs !== 'undefined' ? designs.list : []).map(d => ({ value: 'd:' + d.id, label: d.name || 'Untitled design', group: 'My designs', cur: d.id === designs.cur }))],
+  items: () => [...Object.entries(PRESETS).map(([k, p]) => ({ value: 'p:' + k, label: p.label, group: 'Layouts', hint: p.blank ? 'opens the editor' : null, cur: typeof designs !== 'undefined' && !designs.name && designs.preset === k })),
+    ...(typeof designs !== 'undefined' ? designs.list : []).map(d => ({ value: 'd:' + d.id, label: d.name || 'Untitled design', group: 'My designs', cur: d.id === designs.cur })),
+    { value: 'x:paste', label: 'Open a shared design…', group: 'Shared with you', hint: 'paste a link or a code' }],
   onPick: v => {
+    if (v === 'x:paste') { openShare(true); return; }
     if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
     else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
   } });
@@ -921,7 +934,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
   setLaws({});   // (and the formulas as they come)
-  designLoaded(null, ''); afterLoad();
+  designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
 function afterLoad() {
@@ -1143,7 +1156,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designPreset: typeof designs !== 'undefined' ? designs.preset : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -1152,7 +1165,7 @@ function migrateComps(comps) {
   comps = migrateTiltParts(comps);   // saved before servo joints existed
   for (const c of comps) if (c.type === 'motor' && !c.prop) withProp(c);
   for (const c of comps) {   // saved before the hidden hardware traits existed
-    if (c.type === 'motor') delete c.curve;   // the throttle curve now comes from the motor physics
+    if (c.type === 'motor') { delete c.curve; delete c.kappa; }   // the throttle curve, and the prop's drag (κ), now come from the motor and prop physics
     if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
     if (c.type === 'motor') { c.push = !!c.push; for (const [k, v] of Object.entries({ tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50 })) if (c[k] == null) c[k] = v; }
     if (c.type === 'joint' && !c.failMode) c.failMode = 'jam';
@@ -1193,7 +1206,7 @@ function load() {
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
     cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
-    bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
+    bootDesign = { cur: s.designCur || null, name: s.designName || '', preset: PRESETS[s.designPreset] ? s.designPreset : null, clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
     return true;
   }
   return false;

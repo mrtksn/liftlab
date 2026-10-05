@@ -5,7 +5,7 @@
 /* ───────── configuration ───────── */
 let uid = 1;
 const base = o => Object.assign({ id: uid++ }, o);
-function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, kappa: 0.016, spin: 1, push: false, tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
+function mkMotor(name, x, y, z, o = {}) { return withProp(base(Object.assign({ type: 'motor', name, pos: [x, y, z], tilt: 0, az: 0, tmax: 6, spin: 1, push: false, tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50, tau: 0.03, pitch: 'fixed', fm: 0.6, mass: 0.06, health: 100, healthKnown: true }, o))); }
 function withProp(c) { if (!c.prop) c.prop = +clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2).toFixed(3); return c; }
 function mkMass(name, x, y, z, o = {}) { return base(Object.assign({ type: 'mass', name, pos: [x, y, z], shape: 'box', mass: 0.2, size: [0.08, 0.05, 0.03], radius: 0.04, length: 0.1, known: true, aero: 'prism', inc: 0 }, o)); }
 function mkHang(name, x, y, z, o = {}) { return base(Object.assign({ type: 'hang', name, pos: [x, y, z], length: 0.5, mass: 0.15, known: true }, o)); }
@@ -25,8 +25,8 @@ const PRESETS = {
       ...mkServoMotor('Tail', -r, 0, 0.02, { hingeAz: 0, range: 30, rate: 300 }, { spin: 1, tmax: 7 })];
     c.push(mkMass('Battery', 0.02, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.4, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
   heli: { label: 'Main lifter + 4 steering motors', build() {
-    const c = [mkMotor('Main', 0, 0, 0.06, { tmax: 22, kappa: 0.03, mass: 0.22, spin: 1, tau: 0.06, prop: 0.2 })]; const r = 0.26;
-    [0, 90, 180, 270].forEach((a, i) => c.push(...mkServoMotor('S' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 45, rate: 300 }, { tmax: 4, kappa: 0.012, spin: i % 2 ? 1 : -1 })));
+    const c = [mkMotor('Main', 0, 0, 0.06, { tmax: 22, mass: 0.22, spin: 1, tau: 0.06, prop: 0.2 })]; const r = 0.26;
+    [0, 90, 180, 270].forEach((a, i) => c.push(...mkServoMotor('S' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 45, rate: 300 }, { tmax: 4, spin: i % 2 ? 1 : -1 })));
     c.push(mkMass('Battery', 0, 0, -0.04, { battery: true, mass: 0.3, size: [0.12, 0.05, 0.035] }));
     const sn = defaultSensors(); sn[1].pos = [-0.12, -0.12, 0.08];   // compass on a boom, away from the big main motor
     return { frame: 0.5, comps: c.concat(sn), mode: 'tilt' }; } },
@@ -36,9 +36,9 @@ const PRESETS = {
     // which the tail rotor on the boom pushes against.
     const pitch = mkJoint('Head pitch servo', 0, 0, 0.14, { hingeAz: 90, range: 15, rate: 300, torque: 2 });
     const roll = mkJoint('Head roll servo', 0, 0, 0.14, { hingeAz: 0, range: 15, rate: 300, torque: 2, parent: pitch.id });
-    const main = mkMotor('Main rotor', 0, 0, 0.14, { tmax: 24, prop: 0.3, kappa: 0.035, tau: 0.1, pitch: 'collective', mass: 0.2, spin: 1, parent: roll.id });
+    const main = mkMotor('Main rotor', 0, 0, 0.14, { tmax: 24, prop: 0.3, tau: 0.1, pitch: 'collective', mass: 0.2, spin: 1, parent: roll.id });
     const boom = mkLink('Tail boom', -0.03, 0, 0.04, { az: 180, el: 0, length: 0.45, mass: 0.05 });
-    const tail = mkMotor('Tail rotor', -0.48, 0, 0.04, { tilt: 90, az: -90, tmax: 4, prop: 0.06, kappa: 0.012, tau: 0.02, mass: 0.04, spin: 1, parent: boom.id });
+    const tail = mkMotor('Tail rotor', -0.48, 0, 0.04, { tilt: 90, az: -90, tmax: 4, prop: 0.06, tau: 0.02, mass: 0.04, spin: 1, parent: boom.id });
     const c = [pitch, roll, main, boom, tail, mkMass('Battery', 0.105, 0, -0.04, { battery: true, mass: 0.3, size: [0.12, 0.05, 0.035] }),   // battery forward, to balance the tail
       mkMass('Landing skids', 0.02, 0, -0.12, { mass: 0.06, size: [0.32, 0.2, 0.012] })];   // it stands on these, the tail rotor clear of the ground
     const sn = defaultSensors(); sn[1].pos = [-0.25, 0, 0.07];   // compass back along the boom, away from the main motor
@@ -294,6 +294,16 @@ function contactPoints() {
 }
 let cPts = [{ rest: [0, 0, -0.03], b: 0, r: 0 }], cReach = 0.3;   // how far from the hub any part (or prop tip) reaches
 const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // prop radius [m]
+// A prop, from its size, the thrust it's rated for and how efficient it is (momentum theory). A typical multirotor
+// prop makes thrust T = Ct·ρ·n²·D⁴ (n revolutions a second, D its diameter, Ct ≈ 0.10), so the rated thrust sets how
+// fast it spins at full throttle. The power it takes is the ideal power to push that air down, T^1.5/√(2ρA), over its
+// figure of merit (0.5–0.7 for real props): P = κ·T·Ω, so its drag torque is κ·T with
+//   κ = √Ct · D / (2π · FM · √(π/2))   [m]
+// the same at every thrust. κ also sets the yaw the props can make (their reaction torque), so the controller's
+// description uses it too. A bigger prop spins slower and costs less power for the same thrust.
+const PROP_CT = 0.10, AIR_RHO = 1.225;
+const propOmega = c => 2 * Math.PI * Math.sqrt(c.tmax / (PROP_CT * AIR_RHO * (2 * propR(c)) ** 4));   // full-thrust speed [rad/s]
+const kappaOf = c => Math.sqrt(PROP_CT) * 2 * propR(c) / (2 * Math.PI * clamp(c.fm || 0.6, 0.2, 0.95) * Math.sqrt(Math.PI / 2));
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area); a wing meets it in wingAero
   const parts = frameWing() ? [] : [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
@@ -316,7 +326,7 @@ function stepGusts(dt) {
 // limits the current to twice the full-thrust current.
 const V_NOM = 16;   // pack voltage the max thrust is rated at (a charged 4S pack under load)
 function motorParams(c) {
-  const Om = 180 / propR(c), kT = c.tmax / (Om * Om), kap = Math.max(1e-4, c.kappa), kQ = kap * kT, Qm = kap * c.tmax;
+  const Om = propOmega(c), kT = c.tmax / (Om * Om), kap = Math.max(1e-4, kappaOf(c)), kQ = kap * kT, Qm = kap * c.tmax;
   const Ke = 0.8 * V_NOM / Om, R = 0.2 * V_NOM * Ke / Qm, Oh = Math.sqrt(0.4) * Om;
   return { Om, kT, kQ, Ke, R, J: Math.max(0.005, c.tau || 0.03) * (Ke * Ke / R + 2 * kQ * Oh), iMax: 2 * Qm / Ke };
 }
@@ -333,7 +343,7 @@ const trueBend = c => c && isCollective(c) ? 0 : clamp((0.5 - (steadyX(0.5, S.ba
 const isCollective = c => c.pitch === 'collective';
 const GOV = 0.85;                                        // governed speed, as a fraction of the fixed-pitch full speed
 function collectiveLoad(c, mp, col) {                    // thrust and drag coefficients at blade pitch col (0–1)
-  const Og = GOV * mp.Om, kT = c.tmax / (Og * Og), kQf = Math.max(1e-4, c.kappa) * c.tmax / (Og * Og);
+  const Og = GOV * mp.Om, kT = c.tmax / (Og * Og), kQf = Math.max(1e-4, kappaOf(c)) * c.tmax / (Og * Og);
   return { Og, kT: kT * col, kQ: kQf * (0.3 + 0.7 * col ** 1.5) };
 }
 // One step of a motor: speed from the throttle (fixed pitch), or pitch from the command with the governor
@@ -602,16 +612,16 @@ function envelopeCalc() {
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
     if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)
-      gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c); })()), lo: 0, hi: c.tmax * h });
+      gens.push({ g: toK((() => { const n = rotorNow(c, restAngle); return wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), truth.c); })()), lo: 0, hi: c.tmax * h });
       let grid = [new Map()];   // every combination of its servos' angles, 7 steps across each range (49 at most)
       for (const j of js) { const R = j.range * D2R, st = js.length > 1 ? 4 : 7; grid = grid.flatMap(g => Array.from({ length: st }, (_, i) => new Map([...g, [j.id, -R + 2 * R * i / (st - 1)]]))); }
-      sets.push(grid.map(g => { const n = rotorNow(c, x => g.has(x.id) ? g.get(x.id) : restAngle(x)); return toK(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c)).map(x => x * c.tmax * h); }));
+      sets.push(grid.map(g => { const n = rotorNow(c, x => g.has(x.id) ? g.get(x.id) : restAngle(x)); return toK(wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), truth.c)).map(x => x * c.tmax * h); }));
       for (const j of js) {
-        const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c); };
+        const at = th => { const n = rotorNow(c, x => x === j ? th : restAngle(x)); return wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), truth.c); };
         const e = 1e-3, sb = Math.sin(j.range * D2R) * c.tmax * h;
         gens.push({ g: toK(at(e).map((v, i) => (v - at(-e)[i]) / (2 * e))), lo: -sb, hi: sb });
       }
-    } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, spinOf(c), c.kappa, truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
+    } else { const n = rotorNow(c); const g = toK(wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), truth.c)); gens.push({ g, lo: 0, hi: c.tmax * h }); sets.push([g.map(x => x * c.tmax * h)]); }
   }
   let mp = 0, treq = [0, 0, 0];
   for (const c of liveComps()) if (c.type === 'hang') { mp += c.mass; treq = add(treq, crs(sub(posNow(c), truth.c), scl(nb, c.mass * G))); }

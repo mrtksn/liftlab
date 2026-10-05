@@ -61,7 +61,7 @@ window.addEventListener('keydown', e => {
 });
 
 /* ───────── saved designs ───────── */
-const designs = { list: [], cur: null, name: '', savedSnap: null, baseSnap: null, col: null, where: 'browser' };
+const designs = { list: [], cur: null, name: '', preset: null, savedSnap: null, baseSnap: null, col: null, where: 'browser' };   // preset: the layout it started from (until saved under a name)
 // Changed and not saved: different from how it was loaded (a layout, a design, a file) and from its last save.
 const designChanged = () => { const s = designSnap(); return s !== designs.baseSnap && !(designs.cur && s === designs.savedSnap); };
 const LSD = 'drone-force-bench-v1-designs';
@@ -103,7 +103,7 @@ async function removeDesign(id) {
 }
 
 function designLoaded(id, name) {   // after a design is opened, or a preset loaded (id null)
-  designs.cur = id; designs.name = name || ''; designs.pendingClean = true;
+  designs.cur = id; designs.name = name || ''; designs.preset = null; designs.pendingClean = true;
   const inp = document.getElementById('designName'); if (inp) inp.value = designs.name;
 }
 async function saveDesign() {
@@ -114,7 +114,7 @@ async function saveDesign() {
   const ok = await storeDesign(rec);
   btn.disabled = false;
   if (!ok) return;
-  designs.cur = rec.id; designs.name = name; inp.value = name; designs.savedSnap = designs.baseSnap = designSnap();
+  designs.cur = rec.id; designs.name = name; designs.preset = null; inp.value = name; designs.savedSnap = designs.baseSnap = designSnap();
   designNote(same ? `Updated “${name}”.` : `Saved “${name}”.`);
   renderDesigns();
 }
@@ -207,6 +207,15 @@ function renderDesignState() {
   if (designs.pendingClean) { designs.pendingClean = false; designs.savedSnap = designs.cur ? designSnap() : null; designs.baseSnap = designSnap(); }
   const dirty = !designs.cur || designs.savedSnap !== designSnap();
   st.textContent = designs.cur ? (dirty ? 'unsaved changes' : 'saved') : '';
+  syncAirLabel();
+}
+// The Airframe button in the header says what's on screen: the saved design's name, or the layout it started from,
+// with * once it's changed. Share works for anything but a layout as it comes (there's nothing to share there).
+function syncAirLabel() {
+  const P = designs.preset && PRESETS[designs.preset], changed = designChanged();
+  const base = designs.name || (P ? P.label.replace(/\s*\(.*\)\s*$/, '') : 'Untitled design'), txt = base + (changed ? '*' : '');
+  const b = document.querySelector('#presetSlot .mb-btn'); if (b) { const s = b.querySelector('span'); if (s && s.textContent !== txt) s.textContent = txt; b.title = `${designs.name || (P ? P.label : 'Untitled design')}${changed ? ' (changed since it was opened or saved)' : ''}. Pick a layout or one of your saved designs.`; b.setAttribute('aria-label', 'Airframe: ' + b.title); }
+  const sh = document.getElementById('designShare'); if (sh) { const off = !!P && !designs.name && !changed; sh.disabled = off; sh.title = off ? 'A layout as it comes: change it or open a design to share it (or open a shared one from the Layouts menu)' : 'Share this design with a link'; }
 }
 const designSummary = d => {
   const cs = d.design.comps, n = t => cs.filter(c => c.type === t).length, parts = [];
@@ -238,7 +247,8 @@ function renderDesigns() {
   renderDesignState();
 }
 function initDesigns(boot) {
-  if (boot) { designs.cur = boot.cur; designs.name = boot.name; $('#designName').value = boot.name; designs.savedSnap = boot.cur && boot.clean ? designSnap() : null; }
+  if (boot) { designs.cur = boot.cur; designs.name = boot.name; designs.preset = boot.name ? null : boot.preset || null; $('#designName').value = boot.name; designs.savedSnap = boot.cur && boot.clean ? designSnap() : null; }
+  else designs.preset = 'quadx';   // (a first visit opens on the Quad X layout)
   if (!boot || !boot.edited) designs.baseSnap = designSnap();   // the airframe on screen is as it was loaded
   $('#designSave').addEventListener('click', saveDesign);
   $('#designName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveDesign(); } });
