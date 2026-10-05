@@ -3,7 +3,6 @@
 // threads (your chats, and a Triggers group, each trigger with its own thread), a thread with the model and the tokens
 // it used in its header, and Settings (the connection, to change or remove, and how the agent behaves).
 
-function refreshLawCard(key) { const c = lawCards.get(key); if (c) { c.ta.value = LAWS[key].src; fitTa(c.ta); refreshLaw(key); } }
 
 const aiUi = { built: false, view: 'list', editConn: false, draft: null, msg: '', msgTone: '', models: [] };
 const kfmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);

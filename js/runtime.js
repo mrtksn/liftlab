@@ -110,3 +110,20 @@ function resetLaw(key) {
   notifyLaw(key);
 }
 const editedLaws = () => Object.values(LAWS).filter(L => L.src.trim() !== L.defSrc.trim());
+// The formulas are part of a design: its edited ones, by key (the rest at their defaults).
+const lawSet = () => Object.fromEntries(editedLaws().map(L => [L.def.key, L.src]));
+// Put a design's formulas in place: each it names, edited as it says (one that won't compile is kept, marked as an
+// error, the default running); every other back to its default. Quietly: one design change is one undo step.
+function setLaws(map) {
+  map = map || {};
+  const quiet = typeof undo !== 'undefined', was = quiet && undo.restoring; if (quiet) undo.restoring = true;
+  try {
+    for (const [key, L] of Object.entries(LAWS)) {
+      const want = typeof map[key] === 'string' ? map[key] : null;
+      if (want == null) { if (L.src.trim() !== L.defSrc.trim() || L.status !== 'default') resetLaw(key); continue; }
+      if (want.trim() === L.src.trim() && L.status !== 'error') continue;
+      try { applyLaw(key, want); } catch (e) { L.fn = L.def.fn; L.src = want; L.status = 'error'; L.err = e.message; notifyLaw(key); }
+    }
+  } finally { if (quiet) undo.restoring = was; }
+  if (typeof refreshLawCard === 'function') for (const key of Object.keys(LAWS)) refreshLawCard(key);
+}
