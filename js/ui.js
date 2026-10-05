@@ -1050,8 +1050,27 @@ const SHOW_PRESETS = {
   'Drone only': () => Object.fromEntries(LAYERS.map(L => [L.key, L.key === 'grid'])),
   Phone: () => Object.fromEntries(LAYERS.map(L => [L.key, ['thrust', 'spin', 'target', 'heading', 'grid', 'shadow', 'trail', 'servo'].includes(L.key)])),   // a small screen: the drone and where it's going, no panels over it
 };
-const smallScreen = () => window.matchMedia('(max-width:640px)').matches;
-function showSave() { try { localStorage.setItem(SHOW_LS, JSON.stringify(Object.fromEntries(LAYERS.map(L => [L.key, view[L.key]])))); } catch (e) {} }
+// The layout: Phone (a one-line header, the flight pads with Home and Poke, no Keys, a lean view) or Full. Auto picks Phone
+// when the page loads in a view taller than it is wide. What you pick in the Show menu is kept, and each layout keeps
+// its own choice of what the view draws.
+const UIMODE_LS = 'drone-force-bench-ui';
+let uiPref = 'auto'; try { const m = localStorage.getItem(UIMODE_LS); if (m === 'phone' || m === 'full') uiPref = m; } catch (e) {}
+const autoPhone = window.innerHeight > window.innerWidth;
+const phoneMode = () => uiPref === 'phone' || (uiPref === 'auto' && autoPhone);
+const showKey = () => SHOW_LS + (phoneMode() ? '-phone' : '');
+function showSave() { try { localStorage.setItem(showKey(), JSON.stringify(Object.fromEntries(LAYERS.map(L => [L.key, view[L.key]])))); } catch (e) {} }
+function showLoad() {   // this layout's layers: as you left them, or its preset
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(showKey()) || 'null'); } catch (e) {}
+  Object.assign(view, (phoneMode() ? SHOW_PRESETS.Phone : SHOW_PRESETS.Defaults)());
+  if (saved) for (const L of LAYERS) if (typeof saved[L.key] === 'boolean') view[L.key] = saved[L.key];
+}
+function applyUiMode() {
+  document.documentElement.classList.toggle('phone', phoneMode());
+  showLoad(); showApply();
+  for (const b of document.querySelectorAll('[data-uimode]')) b.setAttribute('aria-pressed', String(b.dataset.uimode === uiPref));
+  const n = document.getElementById('uiNow'); if (n) n.textContent = uiPref === 'auto' ? `now: ${phoneMode() ? 'phone' : 'full'}` : '';
+}
+function setUiMode(m) { uiPref = m; try { localStorage.setItem(UIMODE_LS, m); } catch (e) {} applyUiMode(); }
 function showApply() {   // buttons, legend keys and readouts follow the layers
   for (const b of document.querySelectorAll('#showMenu [data-key]')) b.setAttribute('aria-pressed', String(!!view[b.dataset.key]));
   const torque = view.rtorque || view.ntorque || view.want;
@@ -1061,7 +1080,7 @@ function showApply() {   // buttons, legend keys and readouts follow the layers
     const k = el.dataset.layer; el.hidden = !(k === 'torque' ? torque : view[k]);
   }
   $('#legend').hidden = !view.legend;
-  const n = LAYERS.filter(L => view[L.key] !== L.on).length;
+  const base = typeof phoneMode === 'function' && phoneMode() ? SHOW_PRESETS.Phone() : null, n = LAYERS.filter(L => view[L.key] !== (base ? base[L.key] : L.on)).length;   // (changed from this layout's own starting set)
   $('#tShow').firstChild.textContent = n ? `Show (${n} changed) ` : 'Show ';
 }
 function setLayers(next) { for (const L of LAYERS) if (L.key in next) view[L.key] = !!next[L.key]; showApply(); showSave(); }
@@ -1069,20 +1088,19 @@ function toggleTorque() {   // Q: rotor and net torque together
   const on = !(view.rtorque || view.ntorque); setLayers({ rtorque: on, ntorque: on });
 }
 (function buildShowMenu() {
-  let saved = null; try { saved = JSON.parse(localStorage.getItem(SHOW_LS) || 'null'); if (saved) for (const L of LAYERS) if (typeof saved[L.key] === 'boolean') view[L.key] = saved[L.key]; } catch (e) {}
-  if (!saved && smallScreen()) Object.assign(view, SHOW_PRESETS.Phone());   // (a first visit on a phone: the Phone preset)
   const menu = $('#showMenu'), btn = $('#tShow');
   const groups = [...new Set(LAYERS.map(L => L.group))];
-  menu.innerHTML = groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
+  menu.innerHTML = `<div class="show-grp"><span class="lbl">Layout</span><div class="show-layout"><div class="seg seg-sm" role="group" aria-label="Layout">${[['auto', 'Auto'], ['phone', 'Phone'], ['full', 'Full']].map(([k, l]) => `<button type="button" data-uimode="${k}" aria-pressed="false" title="${{ auto: 'Phone when the page opens taller than it is wide, Full otherwise', phone: 'A one-line header, the flight pads with Home and Poke, a lean view', full: 'Everything' }[k]}">${l}</button>`).join('')}</div><span class="hint" id="uiNow"></span></div></div>` + groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
     LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn tog" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
     + `<div class="show-grp show-presets"><span class="lbl">Presets</span><div class="show-btns">${Object.keys(SHOW_PRESETS).map(p => `<button type="button" class="btn" data-preset="${p}">${p}</button>`).join('')}</div></div>`;
   menu.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.key) setLayers({ [b.dataset.key]: !view[b.dataset.key] });
     else if (b.dataset.preset) setLayers(SHOW_PRESETS[b.dataset.preset]());
+    else if (b.dataset.uimode) setUiMode(b.dataset.uimode);
   });
   popover(btn, menu);
-  showApply();
+  applyUiMode();
 })();
 // A button that shows a panel under it (the Show menu, the keys): Escape or a click elsewhere closes it.
 function popover(btn, pop) {

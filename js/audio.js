@@ -133,7 +133,6 @@ function setSound(on) {
   if (snd.on) { sndStart(); snd.last = { fc: brt.fcState, crash: !!S.crashed }; for (const c of actuators()) snd.last['p' + c.id] = !!(hs.get(c.id) || {}).prop; }
   else if (snd.ctx) { snd.master.gain.setTargetAtTime(0, snd.ctx.currentTime, 0.03); setTimeout(() => { if (!snd.on && snd.ctx) snd.ctx.suspend(); }, 200); }
   const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.classList.toggle('on', snd.on); b.title = snd.on ? 'Sound is on: click to mute (M)' : 'Sound is off: turn it on to hear the motors, servos, latches and crashes (M)';
-  b.querySelector('.snd-on').hidden = !snd.on; b.querySelector('.snd-off').hidden = snd.on;
 }
 $('#tSound').addEventListener('click', () => setSound(!snd.on));
 window.addEventListener('keydown', e => { if (e.code === 'KeyM' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !typingIn(e.target) && !document.querySelector('dialog[open]')) setSound(!snd.on); });
