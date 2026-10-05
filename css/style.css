@@ -995,6 +995,7 @@ html.phone .crash,html.phone .liftoff{bottom:200px}
 /* Install on a real board (js/install-ui.js) */
 .install-dlg{width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto}
 .install-dlg > .hint{margin:-2px 0 10px}
+#installTitle:focus{outline:none}
 .install-dlg h3{margin:0;display:flex;align-items:center;gap:8px;font-family:var(--f-display);font-weight:600;font-size:15px;letter-spacing:.02em}
 .install-dlg p{max-width:none}
 .install-dlg code{font-family:var(--f-mono);font-size:.9em}

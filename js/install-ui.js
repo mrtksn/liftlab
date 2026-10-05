@@ -156,6 +156,7 @@ function openInstall(target) {
   else if (target === 'ground') body.append(...groundPiGuide(K));
   else body.append(...piGuide(target, K));
   if (!dlg.open) dlg.showModal();
+  dlg.scrollTop = 0; $('#installTitle').focus();   // start at the top, not at its first input
 }
 function closeInstall() {
   if (INST.busy) { instMsg($('#installBusy'), 'Wait until it finishes: unplugging or closing now leaves the board half written (it can be flashed again).', 'bad'); return; }
@@ -212,7 +213,7 @@ function espGuide(t) {
   };
   send.addEventListener('click', sendLine); line.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendLine(); } });
   if (!serialOk) [conn, send, line].forEach(x => { x.disabled = true; });
-  out.push(instStep(ground ? 3 : 4, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : 'What it says over USB: its events, and twice a second what it\'s doing. Settings are typed without <code>set</code> or with it: <code>motors=25,26,27,14</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is.'),
+  out.push(instStep(3, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : 'What it says over USB: its events, and twice a second what it\'s doing. Settings are typed without <code>set</code> or with it: <code>motors=25,26,27,14</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is.'),
     el('div', { class: 'inst-row' }, conn, baud), live, con, el('div', { class: 'inst-row inst-line' }, line, send)));
   out.push(espManual(t, ground, fwName, edited));
   INST.log = []; instConnUi();
@@ -237,7 +238,7 @@ function espDesign(t, edited) {
     instPara('Once the firmware is on, send it the design over the same cable. Both are kept on the board: send them again only when the design or the wiring changes.'),
     el('div', { class: 'inst-row' }, sendAf),
     instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. The defaults avoid the pins that upset booting; the ones it can drive are ${ESP_OUT_PINS.join(', ')}.`),
-    el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), el('label', {}, el('span', { text: 'Servos' }), sp)), map,
+    el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
   ];
   if (edited.length) {
