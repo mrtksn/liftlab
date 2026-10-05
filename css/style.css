@@ -878,9 +878,10 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .ftabs button:hover{color:var(--ink-2);background:color-mix(in srgb,var(--panel) 50%,transparent)}
 .ftabs button[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--ink);border-bottom:1px solid var(--panel)}
 /* the key to the source tags: one quiet line until opened */
-#telemetry > .src-legend summary .src{display:none}
-#telemetry > .src-legend summary{padding:6px 12px;color:var(--muted)}
-#telemetry > .src-legend summary::before{content:"ⓘ";margin-right:4px}
+.src-legend summary .src{display:none}
+.src-legend summary{padding:6px 12px;color:var(--muted)}
+.src-legend summary::before{content:"ⓘ";margin-right:4px}
+.pane > .src-legend{border-bottom:1px solid var(--line);flex:none}
 /* the Health tab, calmer (health-ui.js) */
 .h-top .h-count{font-size:12px;color:var(--good)}
 .h-top .h-count.bad{color:var(--bad);font-weight:600}
@@ -908,9 +909,6 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .info-more{display:none}
 .sec.show-info .info-more{display:block}
 .sec h2 .srcs{gap:3px}
-.sec h2 .srcs .src{font-size:0;border:0;padding:0;background:none;gap:0}
-.sec h2 .srcs .src i{width:7px;height:7px}
-.lbl.has-src .srcs .src{font-size:0;border:0;padding:0;background:none;gap:0}
 .btn.sm{padding:3px 9px;font-size:12.5px}
 .design-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
 .design-gap{flex:1}
@@ -933,8 +931,8 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .fold.throw-opts{display:block;gap:0;padding:0 14px;margin:0 -14px;border-top:1px solid var(--line)}
 #learnSec > .fold:last-of-type{border-bottom:1px solid var(--line)}
 .fold[open] > .check{margin-bottom:8px}
-.sec h2 > .srcs{order:0;flex-basis:auto;align-self:center}
-.lbl.has-src{flex-wrap:nowrap}
+.sec h2 > .srcs{order:3;flex-basis:100%;align-self:flex-start;margin-top:2px}
+.lbl.has-src{flex-wrap:wrap}
 .fold > summary > span{white-space:nowrap;flex:none}
 .ftabs button{letter-spacing:.02em;font-size:10.5px;overflow:hidden}
 .ftabs button > span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
