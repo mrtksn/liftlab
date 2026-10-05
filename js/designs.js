@@ -31,14 +31,19 @@ function markDesign() {
 }
 function restoreSnap(s) {
   const d = JSON.parse(s);
+  let restart = false;
   undo.restoring = true;
   try {
     cfg.frame.mass = d.frame; setFrameShape(d.frameShape); cfg.comps = d.comps; cfg.battery = { ...defaultBattery(), ...(d.battery || {}) }; uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
-    if (d.computers) { cfg.computers = fixComputers(d.computers); if (typeof syncFlightUi === 'function') syncFlightUi(); }
+    if (d.computers) {   // (other boards or tasks: they start again, as when you change them yourself)
+      const was = JSON.stringify(computers()); cfg.computers = fixComputers(d.computers); if (typeof syncFlightUi === 'function') syncFlightUi();
+      if (JSON.stringify(cfg.computers) !== was) { brt.sig = null; restart = true; }
+    }
     if (typeof renderBattery === 'function') renderBattery();
     setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof edit !== 'undefined' && edit.sel != null) selectComp(compById(edit.sel) ? edit.sel : null);
   } finally { undo.restoring = false; }
+  if (restart) doReset();
   undo.lastKey = null; renderUndo(); renderDesignState();
 }
 function undoStep() { if (undo.i > 0) { undo.i--; restoreSnap(undo.stack[undo.i]); } }
