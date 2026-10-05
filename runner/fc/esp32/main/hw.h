@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "fc_core.h"
 
-#define HW_VERSION 5
+#define HW_VERSION 6
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -23,9 +23,14 @@ typedef struct {
   int8_t imu_driver, baro_driver, mag_driver; /* -1 disabled, 0 auto, 1/2 named, 3 custom C */
   uint8_t imu_addr, baro_addr, mag_addr; /* 0 auto, otherwise 7-bit I2C address */
   float mag_matrix[9], mag_bias[3], mag_scale[3]; /* sensor axes -> body; bias in microtesla */
+  /* Appended: v2–v5 blobs retain their layout and migrate to ESC defaults. */
+  uint8_t motor_driver[FC_MAX_MOTORS]; /* 0 ESC pulse PWM, 1 active-high brushed MOSFET duty PWM */
+  uint8_t motor_max_pct[FC_MAX_MOTORS]; /* brushed duty ceiling, 1–100%; ESC ignores it */
+  int32_t brushed_hz;                 /* one shared brushed timer frequency, 1000–30000 Hz */
 } hw_config;
 
 void hw_defaults(hw_config *c);
+int hw_check(const hw_config *c, char *err, int errn);
 int hw_load(hw_config *c);                         /* from flash; defaults if none. 0 ok */
 int hw_save(const hw_config *c);
 /* Apply one "key=value" setting (see flight.c's help); the wiring as a whole is checked too (no pin used twice).
@@ -52,11 +57,11 @@ int hw_baro_read(float *alt);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
 
-/* outputs: throttles 0–1 (and exactly the ESC's minimum pulse when disarmed), servo angles in rad */
+/* outputs: throttles 0–1; zero becomes ESC minimum pulse or MOSFET zero duty, servo angles in rad */
 int hw_outputs_init(const hw_config *c, char *log, int logn);
 int hw_outputs_ok(int n_motors, int n_servos, char *why, int whyn);   /* 1 if each of them has a working output */
 void hw_outputs_set(const fc_out *o, int n_motors, int n_servos);
-void hw_outputs_safe(void);   /* every ESC at its minimum pulse */
+void hw_outputs_safe(void);   /* ESC minimum pulses, MOSFETs at zero duty */
 
 /* battery: pack volts, 0 if not wired */
 int hw_battery_init(const hw_config *c);

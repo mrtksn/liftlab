@@ -1,9 +1,9 @@
 name: Board firmware and host programs
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
   pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -44,3 +44,9 @@ jobs:
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/fc -Irunner tools/test_sensor_drivers.c -lm -o /tmp/test-sensors
           /tmp/test-sensors
+      - name: Motor output and legacy wiring tests
+        run: |
+          for chip in ESP32 ESP32S3 ESP32C3; do
+            cc -Wall -Wextra -Werror -fsanitize=undefined -DCONFIG_IDF_TARGET_$chip=1 -Itools/pwm-stubs -Irunner -Irunner/fc tools/test_motor_outputs.c -lm -o /tmp/test-motors
+            /tmp/test-motors
+          done

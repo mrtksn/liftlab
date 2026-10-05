@@ -21,13 +21,13 @@ function hardwarePart(C, c, comps) {
   const list = comps.filter(x => x.type === c.type && (c.type !== 'sensor' || x.kind === c.kind));
   const index = list.findIndex(x => x.id === c.id);
   const choices = c.type === 'sensor' && DEVICE_PROFILES[c.kind];
-  const driver = c.type==='latch' ? (saved.driver || (index<2?'pwm':'gpio')) : saved.driver && choices && choices[saved.driver] ? saved.driver : choices ? Object.keys(choices)[0] : 'pwm';
+  const driver = c.type==='motor' ? (saved.driver||'pwm') : c.type==='latch' ? (saved.driver || (index<2?'pwm':'gpio')) : saved.driver && choices && choices[saved.driver] ? saved.driver : choices ? Object.keys(choices)[0] : 'pwm';
   return { ...saved, board: owner ? owner.id : null, pin: Number.isInteger(saved.pin) ? saved.pin : c.type==='latch' ? [18,19,17,27,22,23,24,25][index]??-1 : p ? (c.type === 'motor' ? p.motors : p.servos)[index] ?? -1 : -1,
     driver, address: Number.isInteger(saved.address) ? saved.address : choices ? choices[driver].addresses[0] || 0 : 0 };
 }
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
-  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, ...s };
+  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, ...s };
 }
 function hardwareInputPins(kind) { const p=ESP_PROFILES[kind];return !p?PI_GPIO_PINS:kind==='esp32'?[...p.pins,34,35,36,37,38,39]:p.pins; }
 function hardwarePinClaims(C,comps,b) {
@@ -61,13 +61,14 @@ function groundHardwareErrors(C) {
 }
 function hardwarePlan(C, comps, b) {
   const profile = ESP_PROFILES[b.kind], bus = hardwareBus(C,b), errors = [], warnings = [], motors = [], servos = [], sensors = {};
-  const servoConfigs=[];
+  const servoConfigs=[],motorConfigs=[];
   const core = C.boards.find(x => x.tasks.includes('core'));
   for (const c of comps.filter(x => ['motor','joint','sensor'].includes(x.type))) {
     const p = hardwarePart(C,c,comps);
     if (c.type === 'motor' || c.type === 'joint') {
       if (!core || p.board !== core.id) errors.push(c.name + ': motor/servo output must be on the flight-core board; distributed outputs are not implemented');
       (c.type === 'motor' ? motors : servos).push(p.pin);
+      if(c.type==='motor'){const maxDuty=p.maxDuty??100;if(!['pwm','brushed'].includes(p.driver))errors.push(c.name+': unsupported motor driver');if(!Number.isInteger(maxDuty)||maxDuty<1||maxDuty>100)errors.push(c.name+': duty limit must be an integer from 1–100%');motorConfigs.push({driver:p.driver,maxDuty});}
       if(c.type==='joint') { const center=p.center??1500,scale=p.usPerRad??(500/(Math.PI/4)); if(!Number.isFinite(center) || center<800 || center>2200 || !Number.isFinite(scale) || Math.abs(scale)<100 || Math.abs(scale)>2000) errors.push(c.name+': invalid servo pulse calibration');servoConfigs.push({center,scale}); }
     } else if (p.board === b.id) {
       if (sensors[c.kind]) errors.push(c.name + ': real firmware supports one sensor per kind on this bus');
@@ -94,6 +95,7 @@ function hardwarePlan(C, comps, b) {
       if (!def.addresses.includes(s.address)) errors.push(s.name + ': address is not supported by the chosen driver');
       if (def.id >= 0 && s.address) { if (seen.has(s.address)) errors.push('Two sensors use the same I²C address'); seen.add(s.address); }
     }
+    if(!Number.isInteger(bus.brushedHz)||bus.brushedHz<1000||bus.brushedHz>30000)errors.push('Brushed PWM frequency must be 1000–30000 Hz');
     if (!Number.isInteger(bus.escHz) || bus.escHz<50 || bus.escHz>490 || bus.escMin<800 || bus.escMax>2200 || bus.escMax-bus.escMin<500 || bus.escMax>1000000/bus.escHz-100) errors.push('Invalid ESC PWM frequency or pulse range');
   }
   if(profile && !b.tasks.includes('core') && b.tasks.includes('tlm') && bus.crsfRx>=0)errors.push('Receiver: standalone ESP radio firmware is not implemented; use the flight-core ESP or a telemetry Pi');
@@ -111,18 +113,24 @@ function hardwarePlan(C, comps, b) {
   for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port && !/^\/[A-Za-z0-9_./-]+$/.test(p.port))errors.push(c.name+': use a serial device path such as /dev/ttyUSB0');}
   if(bus.receiverPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.receiverPort))errors.push('Receiver: use a serial device path such as /dev/ttyUSB1');
   if(bus.linkPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.linkPort))errors.push('Flight-controller link: use a serial device path such as /dev/serial0');
-  return {bus,motors,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings};
+  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings};
 }
 function hardwareSettings(plan) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
-  const {bus,motors,servos,sensors}=plan;
+  const {bus,motors,servos,sensors,motorConfigs}=plan;
   const lines=['servos=','motors=','battery=-1','crsf=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax,'esc_hz='+bus.escHz];
+  lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
   return lines;
+}
+// The same duty ceiling applies to simulated physical actuation and the native MOSFET adapter.
+function hardwareMotorThrottle(C,c,t) {
+  const p=C.wiring?.parts?.[c.id]||{},limit=p.driver==='brushed'?(p.maxDuty??100)/100:1;
+  return Number.isFinite(t)?Math.max(0,Math.min(t,limit,1)):0;
 }
 const partWiring = c => hardwarePart(computers(),c,cfg.comps);
 const boardWiringPlan = b => hardwarePlan(computers(),cfg.comps,b);

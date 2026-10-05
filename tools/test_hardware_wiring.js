@@ -66,3 +66,14 @@ vm.runInContext('cargoDrive(1);this.latchDrive=cargo.lat.get(20).drive;',ctx);as
 C.wiring.parts[20].board=1;
 vm.runInContext('cargoDrive(1);this.latchDrive=cargo.lat.get(20).drive;',ctx);assert.equal(ctx.latchDrive,null);
 console.log('Serial reassignment and disconnected cargo latch checks passed.');
+
+vm.runInContext('this.motorThrottle=hardwareMotorThrottle;',ctx);
+C.wiring.parts[1]={driver:'brushed',maxDuty:60};C.wiring.parts[2]={driver:'pwm'};
+p=A.hardwarePlan(C,parts,C.boards[0]);assert.equal(p.motorConfigs[0].driver,'brushed');assert.equal(p.motorConfigs[1].driver,'pwm');
+assert.ok(A.hardwareSettings(p).includes('motor_driver=1,0,0,0'));assert.ok(A.hardwareSettings(p).includes('motor_max=60,100,100,100'));assert.ok(A.hardwareSettings(p).includes('brushed_hz=20000'));
+assert.equal(ctx.motorThrottle(C,parts[0],1),.6);assert.equal(ctx.motorThrottle(C,parts[0],.25),.25);assert.equal(ctx.motorThrottle(C,parts[0],NaN),0);assert.equal(ctx.motorThrottle(C,parts[1],1),1);
+const brushedDesign=A.readDesignFile(JSON.stringify({frame:.45,comps:parts,computers:C})).design;assert.equal(brushedDesign.computers.wiring.parts[1].driver,'brushed');assert.equal(brushedDesign.computers.wiring.parts[1].maxDuty,60);
+C.wiring.parts[1].maxDuty=0;assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('duty limit')));C.wiring.parts[1].maxDuty=60;
+C.wiring.parts[1].driver='hbridge';assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('unsupported motor driver')));C.wiring.parts[1].driver='brushed';
+C.wiring.boards[1].brushedHz=50000;assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('Brushed PWM frequency')));C.wiring.boards[1].brushedHz=20000;
+console.log('Motor profile checks passed: mixed-driver export, duty clipping, design persistence and invalid settings.');

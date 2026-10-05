@@ -798,9 +798,9 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 ### Safety
 
-- **At power-on** every ESC gets its minimum pulse.
+- **At power-on** every ESC gets its minimum pulse; MOSFET-driven brushed motors get zero duty.
 - **Arming** needs all of these: the arm switch seen off since the last disarm (so nothing re-arms by itself), an airframe loaded, a working output for each of its motors and servos, a gyro, a settled attitude, less than 15° of tilt, the throttle stick at the bottom, and, when a battery sense wire is set, a reading that fits the pack.
-- **Disarmed**, the motors get the minimum pulse and the servos go back to their set angles (a helicopter's swashplate is levelled while its rotor runs down: left tilted on the ground, the spinning disc can roll it over). The motor test spins one motor, at most at 30%, for 3 s from when it starts (it stops sooner if commands stop); another test needs the test switched off first.
+- **Disarmed**, ESC motors get the minimum pulse and MOSFET-driven brushed motors get zero duty and the servos go back to their set angles (a helicopter's swashplate is levelled while its rotor runs down: left tilted on the ground, the spinning disc can roll it over). The motor test spins one motor, at most at 30%, for 3 s from when it starts (it stops sooner if commands stop); another test needs the test switched off first.
 - **Commands** are clamped to their ranges; one with a number that isn't finite is ignored.
 - **Link lost:** 0.5 s without a command. At idle (throttle at the bottom, most likely on the ground) it disarms. Otherwise it goes to the failsafe and levels:
   - **With a barometer** it descends at 1 m/s and disarms once it asks to sink but its height stays put for 1.5 s (landed). The barometer also measures the accelerometer's bias in flight (a few hundredths of a g from vibration or temperature is normal), so the speed it flies on is right.
@@ -820,7 +820,8 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 **Compass (optional):** an HMC5883L on the same bus, selected explicitly. The 10DOF preset configures MPU6050 + BMP180 + HMC5883L at 0x68, 0x77 and 0x1e; adjust mounting and compass calibration to the real module. QMC5883L and AK8963 require different drivers.
 
-**ESCs**
+**Motor drivers**
+- Each motor selects PWM ESC or brushed MOSFET in Computers → Hardware wiring. MOSFET mode has a gate GPIO, shared 1–30 kHz frequency and individual duty ceiling; mixed modes are supported. Use an external power stage, gate pulldown and flyback protection. Updated flight firmware is required. See [wiring details and limits](docs/hardware-wiring.md).
 - The pin examples below are for the original ESP32; S3/C3 defaults and limits are shown in Hardware wiring and [the board guide](docs/boards.md).
 - Standard PWM ESCs, 1000–2000 µs at 400 Hz.
 - Default pins: motors 1–8 on GPIO 25, 26, 27, 14, 32, 33, 4, 13. Motors 9–12 can go on free pins too; they share the servos' 8 channels.

@@ -10,7 +10,13 @@ Select **Use 10DOF module: MPU6050 + BMP180 + HMC5883L** to configure the three 
 
 The built-in firmware now detects MPU6050-family IMUs, BMP280/BME280, BMP180/BMP085, and HMC5883L (when selected). MPU bypass exposes the compass on modules with auxiliary I²C wiring. HMC overflow/no-data/read failures are rejected; compass samples expire after 100 ms. Compass bias is in microtesla, with separate XYZ scale correction; the mounting matrix maps sensor axes into body axes. This is manual calibration, not automatic magnetic calibration. QMC5883L and the MPU9250’s AK8963 are different devices and need other drivers.
 
-Motor output settings describe **standard PWM ESCs**, not direct motor power: frequency, minimum/maximum pulse. Servo rows define centre pulse and microseconds per radian; negative scaling reverses direction. DShot, direct brushed H-bridges and other output protocols need additional drivers. Physical motor/prop/servo response is configured in Airframe; simulator models remain separate from sensor register code.
+Each motor card selects **PWM ESC** or **Brushed motor · MOSFET**. ESCs use the board’s pulse frequency and minimum/maximum width. MOSFETs use a gate-control GPIO, shared board frequency (1000–30000 Hz, default 20000 Hz) and individual duty ceiling (1–100%). Modes may be mixed on one flight-core ESP. Servos keep their own 50 Hz timer; motor count and servo count still share the chip’s channel limit.
+
+MOSFET mode is active-high and runs in one direction. It switches an external power stage; the motor never connects directly to a GPIO. Use a gate driver or a MOSFET suitable for the GPIO’s 3.3 V drive, external gate pulldown, common ground and flyback protection appropriate to the motor circuit. The external pulldown holds the gate off before firmware takes control. Software starts with a low gate and zero duty, stops unused motors, and shuts outputs down on peripheral failures. ESCs retain their minimum pulse when stopped. The flight core’s controlled-descent failsafe remains active; crash/disarm cutoffs and hardware shutdown yield zero MOSFET duty.
+
+MOSFET output uses 10-bit PWM (0–1023); ESC/servo pulses use 14-bit timers on the APB clock. The frequency is shared across MOSFET motors on the board, while duty ceilings are individual. A duty ceiling clips the requested output; controller allocation, headroom estimates and native learning telemetry currently use the full motor model/requested throttle. Match the Airframe motor model to the actual motor/prop and validate reduced authority separately. H-bridge direction control, DShot and custom motor protocols remain unsupported.
+
+Servo rows define centre pulse and microseconds per radian; negative scaling reverses direction. Physical motor/prop/servo response is configured in Airframe; simulator models remain separate from sensor register code.
 
 Battery voltage uses an ADC1 GPIO and a resistor-divider ratio; ExpressLRS uses a pair of RX/TX GPIOs on the flight-core ESP running telemetry (receiver TX → board RX). These settings are now part of the design and sent by Install; sending hardware settings replaces battery/radio assignments previously entered manually. Command-module buttons, stick ADCs, LED/buzzer and transmitter UART pins are also saved in the design and used by its installation guide.
 
@@ -22,9 +28,9 @@ Real outputs and onboard IMU/barometer/compass drivers currently live on the fli
 
 ## Sending a design
 
-Install the new chip-specific firmware, then send hardware settings and reboot, then send the airframe. The installer and manual commands use the saved wiring. Firmware checks each setting independently and refuses reserved pins/conflicts; a failed sequence may leave pending settings changed but does not save them or alter running wiring. `show` reports pending/running wiring, sensor profile numbers and detected chips.
+MOSFET mode requires the updated chip-specific flight firmware (wiring version 6). Old saved designs and old flash wiring default to PWM ESCs. Keep MOSFET motor power disconnected while flashing/configuring; send the saved driver settings and restart before applying motor power. Factory/reset ESC pulses are not a zero-duty MOSFET signal. Install the new chip-specific firmware, then send hardware settings and reboot, then send the airframe. The installer and manual commands use the saved wiring. Firmware checks each setting independently and refuses reserved pins/conflicts; a failed sequence may leave pending settings changed but does not save them or alter running wiring. `show` reports pending/running wiring, sensor profile numbers and detected chips.
 
-Profiles: `imu=driver,address`, `baro=driver,address`, `mag=driver,address`. Drivers are -1 off, 0 auto, 1 MPU/BMP280/HMC, 2 LIS3DH/BMP180 (not compass), 3 custom C. Address 0 uses the driver’s defaults. `i2c=SDA,SCL`; `mag_matrix=` nine row-major rotation values; `mag_bias=` three offsets; `mag_scale=` three scale factors. Existing version-4 saved firmware wiring migrates to version 5; existing IMU/barometer auto-detection remains, compass starts disabled.
+Profiles: `imu=driver,address`, `baro=driver,address`, `mag=driver,address`. Drivers are -1 off, 0 auto, 1 MPU/BMP280/HMC, 2 LIS3DH/BMP180 (not compass), 3 custom C. Address 0 uses the driver’s defaults. `motor_driver=` lists 0 ESC / 1 MOSFET in airframe order; `motor_max=` lists duty ceilings in percent; `brushed_hz=` sets the shared duty-PWM frequency. Empty driver/ceiling lists reset to ESC/100% defaults. `i2c=SDA,SCL`; `mag_matrix=` nine row-major rotation values; `mag_bias=` three offsets; `mag_scale=` three scale factors. Existing version-2 through version-5 saved firmware wiring migrates to version 6; existing IMU/barometer auto-detection remains, compass starts disabled.
 
 ## Custom C driver editor
 
@@ -46,6 +52,8 @@ These are native C drivers with access to the firmware, not sandboxed programs. 
 The browser simulation uses its existing sensor models; it does not execute these C register drivers. A single compiled header serves the board; separate custom implementations for multiple sensors of the same kind need firmware extensions.
 
 ## Validation
+
+`tools/test_motor_outputs.c` compiles the production configuration/output modules against mocked GPIO/LEDC calls for ESP32/S3/C3. It checks mixed timers, zero-duty startup/shutdown, duty ceilings, invalid commands, failed setup/writes, channel limits and versioned flash migration. These host tests run in CI alongside chip firmware builds; they do not verify physical waveforms.
 
 `node tools/test_hardware_wiring.js` checks profiles, pin/address conflicts, persistence and board-ID stability. `node tools/test_board_install.js` checks bundles and installation sequencing. Compile/run `tools/test_sensor_drivers.c` to check the Bosch BMP180 published pressure example, nonblocking conversion sequence, MPU units/bypass, HMC axis ordering/overflow, and I²C failures. `python3 tools/sync_driver_presets.py --check` prevents the browser presets drifting from the compiled template.
 

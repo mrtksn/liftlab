@@ -1,0 +1,14 @@
+#ifndef TEST_SOC_CAPS_H
+#define TEST_SOC_CAPS_H
+#define SOC_GPIO_PIN_COUNT 64
+#if CONFIG_IDF_TARGET_ESP32
+#define SOC_LEDC_SUPPORT_HS_MODE 1
+#define SOC_LEDC_CHANNEL_NUM 8
+#else
+#if CONFIG_IDF_TARGET_ESP32C3
+#define SOC_LEDC_CHANNEL_NUM 6
+#else
+#define SOC_LEDC_CHANNEL_NUM 8
+#endif
+#endif
+#endif

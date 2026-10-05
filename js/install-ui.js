@@ -227,7 +227,7 @@ function espDesign(t, edited) {
   const map = el('ol', { class: 'inst-map' });
   const redraw = () => {
     map.textContent = ''; const m = mp.value.split(/[,\s]+/).filter(Boolean), s = sp.value.split(/[,\s]+/).filter(Boolean);
-    acts.forEach((c, i) => map.append(el('li', {}, el('b', { text: c.name }), ` → GPIO ${m[i] ?? '?'}`, m[i] == null ? el('span', { class: 'bad', text: ' (no pin: it won\'t arm)' }) : null)));
+    acts.forEach((c, i) => map.append(el('li', {}, el('b', { text: c.name }), ` → GPIO ${m[i] ?? '?'} · ${wiring.motorConfigs[i]?.driver==='brushed'?'MOSFET, '+wiring.bus.brushedHz+' Hz, max '+wiring.motorConfigs[i].maxDuty+'%':'PWM ESC'}`, m[i] == null ? el('span', { class: 'bad', text: ' (no pin: it won\'t arm)' }) : null)));
     js.forEach((j, i) => map.append(el('li', {}, el('b', { text: j.name }), ` (servo) → GPIO ${s[i] ?? '?'}`, s[i] == null ? el('span', { class: 'bad', text: ' (no pin: it won\'t arm)' }) : null)));
   };
   mp.addEventListener('input', redraw); sp.addEventListener('input', redraw); redraw();
@@ -236,6 +236,7 @@ function espDesign(t, edited) {
   sendAf.addEventListener('click', () => espSendAirframe(msg));
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
+    ...(wiring.motorConfigs.some(m=>m.driver==='brushed')?[el('p',{class:'inst-note',text:'For MOSFET motors, keep motor power disconnected until these saved driver settings have been sent and the board has restarted. Factory/default wiring uses ESC pulses, which are not a stopped MOSFET signal.'})]:[]),
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
     instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. Receiver UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}.`),
     instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in <b>Hardware wiring</b> in Computers. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),

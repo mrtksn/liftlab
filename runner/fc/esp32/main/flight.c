@@ -210,6 +210,9 @@ static void flight_task(void *arg) {
       portENTER_CRITICAL(&mux); memcpy(nav_box, nb, sizeof nb); nav_new = 1; portEXIT_CRITICAL(&mux);
     }
     if (F.have_airframe) hw_outputs_set(&OUT, F.A.n_motors, F.A.n_joints); else hw_outputs_safe();
+    if(F.have_airframe && outputs_ok && !hw_outputs_ok(F.A.n_motors,F.A.n_joints,outputs_why,sizeof outputs_why)) {
+      outputs_ok=0;F.state=FC_CRASHED;snprintf(F.why,sizeof F.why,"%s",outputs_why);memset(OUT.motor,0,sizeof OUT.motor);
+    }
     if (F.state != last_state || strcmp(F.why, last_why)) {
       char s[80]; snprintf(s, sizeof s, "%s: %s", fc_state_name(F.state), F.why); post(s);
       last_state = F.state; strcpy(last_why, F.why);
@@ -246,7 +249,7 @@ static void telemetry(void) {
   link_send(RN_LINK_TELEM, t, sizeof t);
 }
 static void setting(const char *line) {
-  char s[400];
+  char s[800];
   if (!strcmp(line, "show")) {
     hw_describe(&HW, s, sizeof s); report(s);
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);

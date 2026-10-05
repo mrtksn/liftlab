@@ -219,7 +219,7 @@ function setAuthority(rows) {
 }
 function servoReach(j) { const m = servoModelHat(j); return m.rate * Math.max(0.005, allocPrefs.horizon - m.lag); }
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
-function setThrottle(c, st, u, sent = u) { st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(sent, 0, 1) : steadyX(sent, S.battV) ** 2); }
+function setThrottle(c, st, u, sent = u) { if(computers().wiring?.parts?.[c.id]?.driver==='brushed'){u=hardwareMotorThrottle(computers(),c,u);sent=hardwareMotorThrottle(computers(),c,sent);} st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(sent, 0, 1) : steadyX(sent, S.battV) ** 2); }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
 function updateServoBelief(dt) {
   for (const j of joints()) {

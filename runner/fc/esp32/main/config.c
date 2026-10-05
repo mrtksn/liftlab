@@ -1,0 +1,147 @@
+/* Portable wiring defaults, settings validation and diagnostics. */
+#include "hw.h"
+#include "esp_board.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Default pins for an ESP32 DevKit (ESP32-WROOM-32): outputs that are free at boot (no strapping pins). */
+void hw_defaults(hw_config *c) {
+  memset(c, 0, sizeof *c);
+  c->version = HW_VERSION;
+  memset(c->motor_pin, -1, sizeof c->motor_pin); memset(c->servo_pin, -1, sizeof c->servo_pin);
+  static const int8_t mp[] = { LB_MOTOR_PINS }, sp[] = { LB_SERVO_PINS };
+  memcpy(c->motor_pin, mp, sizeof mp); memcpy(c->servo_pin, sp, sizeof sp);
+  memset(c->motor_max_pct,100,sizeof c->motor_max_pct);c->brushed_hz=20000;
+  c->esc_hz = 400; c->esc_min_us = 1000; c->esc_max_us = 2000;
+  for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
+  c->sda = LB_SDA; c->scl = LB_SCL;
+  c->batt_pin = -1; c->batt_divider = 11.0f;
+  c->rate_hz = LB_RATE; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
+  c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
+  c->crsf_rx = c->crsf_tx = -1; c->elrs_rate = 250; c->elrs_ratio = 4;
+}
+static int parse_list(const char *s, float *v, int max) {
+  int n = 0; char *end;
+  while (*s && n < max) { v[n] = strtof(s, &end); if (end == s) return -1; n++; s = end; while (*s == ',' || *s == ' ') s++; }
+  return *s ? -1 : n;
+}
+/* GPIOs an ESP32 (WROOM) can drive an output on: not the flash pins (6–11), not UART0 (1, 3), not input-only (34–39),
+ * and not the boot-strapping pins (0, 2, 5, 12, 15): something wired there can stop it booting, and some of them
+ * toggle during boot, which an ESC could take as a pulse. */
+static int pin_ok(int p) { return p == -1 || lb_output_pin(p); }
+/* The wiring as a whole: no pin used twice, the ESC's longest pulse fits its period. */
+int hw_check(const hw_config *c, char *err, int errn) {
+  for (int i = 0; i < FC_MAX_MOTORS; i++) if (!pin_ok(c->motor_pin[i])) { snprintf(err, errn, "reserved motor pin"); return -1; }
+  for (int i = 0; i < FC_MAX_JOINTS; i++) if (!pin_ok(c->servo_pin[i])) { snprintf(err, errn, "reserved servo pin"); return -1; }
+  if (!lb_output_pin(c->sda) || !lb_output_pin(c->scl) || (c->batt_pin >= 0 && !lb_adc_pin(c->batt_pin)) ||
+      (c->crsf_rx >= 0 && !lb_input_pin(c->crsf_rx)) || (c->crsf_tx >= 0 && !lb_output_pin(c->crsf_tx))) {
+    snprintf(err, errn, "reserved sensor or radio pin"); return -1;
+  }
+  const int ds[3]={c->imu_driver,c->baro_driver,c->mag_driver}; const int as[3]={c->imu_addr,c->baro_addr,c->mag_addr};
+  if(c->mag_driver==2) {snprintf(err,errn,"unknown compass driver");return -1;}
+  for(int i=0;i<3;i++) { if(ds[i]<-1 || ds[i]>3 || (as[i] && (as[i]<8 || as[i]>119))) { snprintf(err,errn,"invalid sensor driver/address"); return -1; }
+    for(int j=0;j<i;j++) if(ds[i]>=0 && ds[j]>=0 && as[i] && as[i]==as[j]) { snprintf(err,errn,"I2C address used twice"); return -1; } }
+  for(int i=0;i<3;i++) if(!isfinite(c->mag_bias[i]) || !isfinite(c->mag_scale[i]) || c->mag_scale[i]<0.01f || c->mag_scale[i]>100) { snprintf(err,errn,"invalid compass calibration"); return -1; }
+  for(int i=0;i<9;i++) if(!isfinite(c->mag_matrix[i]) || fabsf(c->mag_matrix[i])>1.001f) { snprintf(err,errn,"invalid compass rotation");return -1; }
+  for(int i=0;i<3;i++) for(int j=0;j<3;j++) { float dot=0;for(int k=0;k<3;k++) dot+=c->mag_matrix[3*i+k]*c->mag_matrix[3*j+k]; if(fabsf(dot-(i==j?1:0))>0.01f) { snprintf(err,errn,"compass matrix must be orthonormal");return -1; } }
+  if(c->esc_hz<50 || c->esc_hz>490 || c->esc_min_us<800 || c->esc_max_us>2200 || c->esc_max_us-c->esc_min_us<500) {snprintf(err,errn,"invalid ESC pulse timing");return -1;}
+  if(c->brushed_hz<1000 || c->brushed_hz>30000) {snprintf(err,errn,"brushed_hz: 1000 to 30000 Hz");return -1;}
+  for(int i=0;i<FC_MAX_MOTORS;i++)if(c->motor_driver[i]>1 || c->motor_max_pct[i]<1 || c->motor_max_pct[i]>100) {snprintf(err,errn,"invalid motor driver/duty ceiling");return -1;}
+  int used[SOC_GPIO_PIN_COUNT] = { 0 };
+  #define USE(p, what) do { int p_ = (p); if (p_ >= 0 && p_ < SOC_GPIO_PIN_COUNT) { if (used[p_]) { snprintf(err, errn, "GPIO %d is used twice (%s)", p_, what); return -1; } used[p_] = 1; } } while (0)
+  for (int i = 0; i < FC_MAX_MOTORS; i++) USE(c->motor_pin[i], "motor");
+  for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
+  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
+  #undef USE
+  int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
+  if (nm + ns > LB_PWM_OUTPUTS) { snprintf(err, errn, "%d motors and %d servos: this chip has %d PWM outputs", nm, ns, LB_PWM_OUTPUTS); return -1; }
+  if (c->esc_max_us > 1000000 / c->esc_hz - 100) { snprintf(err, errn, "at %d Hz an ESC pulse can be at most %d µs: lower esc_hz or esc_us", c->esc_hz, 1000000 / c->esc_hz - 100); return -1; }
+  return 0;
+}
+static int hw_set1(hw_config *c, const char *line, char *err, int errn);
+int hw_set(hw_config *c, const char *line, char *err, int errn) {
+  hw_config t = *c;
+  if (hw_set1(&t, line, err, errn) || hw_check(&t, err, errn)) return -1;
+  *c = t; return 0;
+}
+static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
+  char key[24]; const char *eq = strchr(line, '='); float v[FC_MAX_MOTORS]; int n;
+  if (!eq || eq - line >= (int)sizeof key) { snprintf(err, errn, "expected key=value"); return -1; }
+  memcpy(key, line, (size_t)(eq - line)); key[eq - line] = 0;
+  n = parse_list(eq + 1, v, FC_MAX_MOTORS);
+  for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
+  if (n < 0) { snprintf(err, errn, "%s: not a list of numbers", key); return -1; }
+  if (!strcmp(key,"imu") || !strcmp(key,"baro") || !strcmp(key,"mag")) {
+    if(n!=2 || v[0]!=(int)v[0] || v[0]<-1 || v[0]>3 || v[1]!=(int)v[1] || (v[1]!=0 && (v[1]<8 || v[1]>119))) { snprintf(err,errn,"sensor=driver,address (-1 off,0 auto,1/2 named,3 custom)");return -1; }
+    int8_t *d=!strcmp(key,"imu")?&c->imu_driver:!strcmp(key,"baro")?&c->baro_driver:&c->mag_driver;
+    uint8_t *a=!strcmp(key,"imu")?&c->imu_addr:!strcmp(key,"baro")?&c->baro_addr:&c->mag_addr; *d=(int8_t)v[0];*a=(uint8_t)v[1];
+  } else if (!strcmp(key,"mag_matrix") || !strcmp(key,"mag_bias") || !strcmp(key,"mag_scale")) {
+    int want=!strcmp(key,"mag_matrix")?9:3; if(n!=want) { snprintf(err,errn,"expected %d compass values",want);return -1; }
+    float *out=want==9?c->mag_matrix:!strcmp(key,"mag_bias")?c->mag_bias:c->mag_scale;memcpy(out,v,(size_t)want*sizeof(float));
+  } else if (!strcmp(key, "motors") || !strcmp(key, "servos")) {
+    int m = !strcmp(key, "motors"), max = m ? FC_MAX_MOTORS : FC_MAX_JOINTS; int8_t *pins = m ? c->motor_pin : c->servo_pin;
+    if (n > max) { snprintf(err, errn, "at most %d %s", max, key); return -1; }
+    for (int i = 0; i < n; i++) if (v[i] < 0 || !pin_ok((int)v[i])) { snprintf(err, errn, "GPIO %d is reserved or cannot drive an output on this chip", (int)v[i]); return -1; }
+    for (int i = 0; i < max; i++) pins[i] = i < n ? (int8_t)v[i] : -1;
+  } else if (!strcmp(key,"motor_driver") || !strcmp(key,"motor_max")) {
+    int driver=!strcmp(key,"motor_driver");uint8_t *dst=driver?c->motor_driver:c->motor_max_pct;
+    for(int i=0;i<n;i++)if(v[i]<(driver?0:1) || v[i]>(driver?1:100) || v[i]!=(int)v[i]) {snprintf(err,errn,driver?"motor_driver: 0 ESC, 1 MOSFET":"motor_max: integer duty percentages 1–100");return -1;}
+    for(int i=0;i<FC_MAX_MOTORS;i++)dst[i]=i<n?(uint8_t)v[i]:(driver?0:100);
+  } else if (!strcmp(key,"brushed_hz")) {
+    if(n!=1 || v[0]<1000 || v[0]>30000 || v[0]!=(int)v[0]) {snprintf(err,errn,"brushed_hz: integer 1000 to 30000 Hz");return -1;}
+    c->brushed_hz=(int32_t)v[0];
+  } else if (!strcmp(key, "esc_hz")) {
+    if (n != 1 || v[0] < 50 || v[0] > 490) { snprintf(err, errn, "esc_hz: 50 to 490 for standard PWM ESCs"); return -1; }
+    c->esc_hz = (int16_t)v[0];
+  } else if (!strcmp(key, "esc_us")) {
+    if (n != 2 || v[0] < 800 || v[1] > 2200 || v[1] - v[0] < 500) { snprintf(err, errn, "esc_us=min,max, e.g. 1000,2000"); return -1; }
+    c->esc_min_us = (int16_t)v[0]; c->esc_max_us = (int16_t)v[1];
+  } else if (!strcmp(key, "servo_center")) {
+    for (int i = 0; i < n && i < FC_MAX_JOINTS; i++) { if (v[i] < 800 || v[i] > 2200) { snprintf(err, errn, "servo_center: 800 to 2200 µs"); return -1; } c->servo_center_us[i] = (int16_t)v[i]; }
+  } else if (!strcmp(key, "servo_us_per_rad")) {
+    for (int i = 0; i < n && i < FC_MAX_JOINTS; i++) { if (fabsf(v[i]) < 100 || fabsf(v[i]) > 2000) { snprintf(err, errn, "servo_us_per_rad: 100 to 2000 (negative to reverse)"); return -1; } c->servo_us_per_rad[i] = v[i]; }
+  } else if (!strcmp(key, "i2c")) {
+    if (n != 2 || !pin_ok((int)v[0]) || !pin_ok((int)v[1]) || v[0] < 0 || v[1] < 0) { snprintf(err, errn, "i2c=sda,scl"); return -1; }
+    c->sda = (int8_t)v[0]; c->scl = (int8_t)v[1];
+  } else if (!strcmp(key, "battery")) {
+    if (n == 1 && v[0] == -1) c->batt_pin = -1;
+    else if (n != 2 || !lb_adc_pin((int)v[0]) || v[1] < 1 || v[1] > 30) { snprintf(err, errn, "battery=pin,divider with a free ADC1 pin (or battery=-1)"); return -1; }
+    else { c->batt_pin = (int8_t)v[0]; c->batt_divider = v[1]; }
+  } else if (!strcmp(key, "rate")) {
+    if (n != 1 || (v[0] != 250 && v[0] != 500 && v[0] != 1000)) { snprintf(err, errn, "rate: 250, 500 or 1000 Hz"); return -1; }
+    c->rate_hz = (int16_t)v[0];
+  } else if (!strcmp(key, "vref")) {
+    if (n != 1 || v[0] < 3 || v[0] > 60) { snprintf(err, errn, "vref: the pack voltage the airframe's thrust is for, e.g. 16 for 4S"); return -1; }
+    c->vref = v[0];
+  } else if (!strcmp(key, "baud")) {
+    if (n != 1 || (v[0] != 115200 && v[0] != 230400 && v[0] != 460800 && v[0] != 921600)) { snprintf(err, errn, "baud: 115200, 230400, 460800 or 921600 (the learning wants 921600)"); return -1; }
+    c->link_baud = (int32_t)v[0];
+  } else if (!strcmp(key, "crsf")) {
+    if (n == 1 && v[0] == -1) c->crsf_rx = c->crsf_tx = -1;
+    else if (n != 2 || !lb_input_pin((int)v[0]) || !pin_ok((int)v[1]) || v[1] < 0) { snprintf(err, errn, "crsf=rx,tx: free input and output pins (or crsf=-1)"); return -1; }
+    else { c->crsf_rx = (int8_t)v[0]; c->crsf_tx = (int8_t)v[1]; }
+  } else if (!strcmp(key, "elrs")) {
+    if (n != 2 || (v[0] != 50 && v[0] != 150 && v[0] != 250 && v[0] != 500) || v[1] < 2 || v[1] > 128) { snprintf(err, errn, "elrs=rate,ratio as set on the radio: 50, 150, 250 or 500 Hz; telemetry 1:2 to 1:128"); return -1; }
+    c->elrs_rate = (int16_t)v[0]; c->elrs_ratio = (int16_t)v[1];
+  } else if (!strcmp(key, "telemetry")) {
+    if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
+    c->telem_hz = (int16_t)v[0];
+  } else { snprintf(err, errn, "unknown setting %s", key); return -1; }
+  return 0;
+}
+void hw_describe(const hw_config *c, char *out, int n) {
+  int k=0;
+  #define APP(...) do {if(k<n){int w=snprintf(out+k,(size_t)(n-k),__VA_ARGS__);if(w>0)k+=w<n-k?w:n-k;}}while(0)
+  APP("motors=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%d",i?",":"",c->motor_pin[i]);
+  APP(" motor_driver=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%u",i?",":"",c->motor_driver[i]);
+  APP(" motor_max=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%u",i?",":"",c->motor_max_pct[i]);
+  APP(" brushed_hz=%ld servos=",(long)c->brushed_hz);for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_pin[i]);
+  APP(" esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d elrs=%d,%d servo_center=",
+      c->esc_hz,c->esc_min_us,c->esc_max_us,c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,c->elrs_rate,c->elrs_ratio);
+  for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_center_us[i]);
+  APP(" servo_us_per_rad=");for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%.0f",i?",":"",(double)c->servo_us_per_rad[i]);
+  #undef APP
+}
+

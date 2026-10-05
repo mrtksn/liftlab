@@ -29,7 +29,7 @@ function renderHardware() {
     return el('div',{class:'hw-fields'},...['sda','scl'].map(key=>pinPicker(b,c.name+' '+key.toUpperCase()+' GPIO','hw-'+key+'-'+c.id,bus[key],key,pinsFor(b),v=>editBoard(b,{[key]:Number(v)},key))));
   };
   const group=(title,description)=>{const node=el('div',{class:'hw-group'},el('h3',{text:title}),el('p',{class:'hint',text:description}));box.append(node);return node;};
-  const outputs=group('Motors & servos','Choose the board, then the signal GPIO. The signal controls an ESC or servo; it does not supply motor power.');
+  const outputs=group('Motors & servos','Choose the board, motor driver and signal GPIO. Motor power comes through an ESC or MOSFET stage; servos use a PWM signal.');
   const sensors=group('Sensors','Choose a device driver, then wire the pins shown. I²C sensors on one board share SDA and SCL; each needs its own address.');
   const core=C.boards.find(b=>b.tasks.includes('core'));
   if(core)sensors.append(el('button',{class:'btn hw-preset-btn',type:'button',id:'hw-10dof-'+core.id,text:'Use 10DOF module: MPU6050 + BMP180 + HMC5883L',onclick:()=>use10Dof(core)}));
@@ -43,9 +43,12 @@ function renderHardware() {
       else update({board:v==='off'?null:Number(v),...(c.type==='sensor'?{}:{pin:-1})});
     }));
     if(c.type==='motor'||c.type==='joint'){
-      const bus=owner&&hardwareBus(C,owner),card=hardwareCard(c.name,c.type==='motor'?'Motor':'Servo',c.type==='motor'?'PWM ESC signal':'PWM servo · 50 Hz',board);
-      if(owner)card.append(pinPicker(owner,c.name+' signal GPIO','hw-pin-'+c.id,p.pin,'part'+c.id,pinsFor(owner),v=>update({pin:Number(v)})));
-      if(c.type==='motor'&&bus)card.append(el('p',{class:'hint',text:bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs · timing in Board settings below'}));
+      const brushed=c.type==='motor'&&p.driver==='brushed';
+      const bus=owner&&hardwareBus(C,owner),card=hardwareCard(c.name,c.type==='motor'?'Motor':'Servo',c.type==='motor'?(brushed?'Duty PWM · active-high MOSFET':'PWM ESC signal'):'PWM servo · 50 Hz',board);
+      if(c.type==='motor')card.append(hardwareField('Motor driver',hardwareSelect(c.name+' motor driver','hw-motor-driver-'+c.id,[['pwm','PWM ESC'],['brushed','Brushed motor · MOSFET']],p.driver,v=>update({driver:v}))));
+      if(owner)card.append(pinPicker(owner,c.name+(brushed?' gate GPIO':' signal GPIO'),'hw-pin-'+c.id,p.pin,'part'+c.id,pinsFor(owner),v=>update({pin:Number(v)})));
+      if(brushed&&bus)card.append(hardwareNumber(c.name+' PWM frequency (Hz)',bus.brushedHz,v=>editBoard(owner,{brushedHz:v},'brushedHz'),1000,30000),hardwareNumber(c.name+' maximum duty (%)',p.maxDuty??100,v=>update({maxDuty:v}),1,100),el('p',{class:'hint',text:'Frequency is shared by MOSFET motors on this board. Active-high, one direction; zero duty when stopped. Use an external gate pulldown and a suitable MOSFET power stage with flyback protection. Set the motor’s thrust/response in Airframe.'}));
+      if(c.type==='motor'&&!brushed&&bus)card.append(el('p',{class:'hint',text:bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs · timing in Board settings below'}));
       if(c.type==='joint')card.append(hardwareDetails('servo'+c.id,'Pulse calibration',hardwareNumber(c.name+' centre µs',saved.center??1500,v=>update({center:v}),800,2200),hardwareNumber(c.name+' µs/radian',saved.usPerRad??(500/(Math.PI/4)),v=>update({usPerRad:v}),-2000,2000)));
       outputs.append(card);continue;
     }
@@ -53,7 +56,8 @@ function renderHardware() {
       cargo||=group('Cargo latches','A Pi can drive a servo latch with PWM or a switched latch with a digital GPIO. Set the cargo task to that Pi.');
       const card=hardwareCard(c.name,'Latch',p.driver==='pwm'?'PWM servo · 50 Hz':'Digital on/off · high = closed',board,
         hardwareField('Driver',hardwareSelect(c.name+' latch driver','hw-driver-'+c.id,[['pwm','PWM servo'],['gpio','Digital on/off']],p.driver,v=>update({driver:v,pin:v==='pwm'?18:-1}))));
-      if(owner)card.append(pinPicker(owner,c.name+' signal GPIO','hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
+      if(c.type==='motor')card.append(hardwareField('Motor driver',hardwareSelect(c.name+' motor driver','hw-motor-driver-'+c.id,[['pwm','PWM ESC'],['brushed','Brushed motor · MOSFET']],p.driver,v=>update({driver:v}))));
+      if(owner)card.append(pinPicker(owner,c.name+(brushed?' gate GPIO':' signal GPIO'),'hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
       card.append(el('p',{class:'hint',text:owner?.kind.startsWith('pi')?'PWM GPIO 18/19 uses Pi hardware PWM. Digital outputs control an external latch driver.':'Real latch drivers currently run on a Pi.'}));cargo.append(card);continue;
     }
     const defs=DEVICE_PROFILES[c.kind],def=defs[p.driver],i2c=['imu','baro','mag'].includes(c.kind),custom=p.driver==='custom';

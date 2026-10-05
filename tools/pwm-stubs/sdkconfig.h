@@ -1,0 +1,1 @@
+/* Host tests select their chip through compiler defines. */
