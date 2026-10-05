@@ -965,20 +965,29 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .hud-tl.bare > :not(.hud-sup){display:none}
 /* the header's ⋯ (phones only) */
 #hdrMore{display:none}
-@media (max-width:640px){
-  .bar:not(.open){flex-wrap:nowrap;align-items:center;gap:6px}
-  .bar:not(.open) .brand,.bar:not(.open) .hgroup > .lbl,.bar:not(.open) .mode-desc{display:none}
-  .bar:not(.open) .hgroup,.bar:not(.open) .hrow{display:contents}
-  .bar:not(.open) #resetBtn,.bar:not(.open) #launchSeg,.bar:not(.open) #speedSeg,.bar:not(.open) #terrainSel,.bar:not(.open) #terrainNew{display:none}
-  .bar:not(.open) #runBtn{order:-1}
-  .bar:not(.open) #presetSlot{flex:1;min-width:0;display:flex}
-  .bar:not(.open) #presetSlot .mb-btn{width:100%;justify-content:space-between}
-  #hdrMore{display:inline-flex;order:9;flex:none}
-  .bar.open #hdrMore{position:absolute;right:12px;top:10px}
-  .bar.open{position:relative}
-  /* no keyboard on a phone: no Keys button */
-  #tKeys{display:none}
-  /* the Show menu as a sheet from the bottom of the screen, so it fits */
-  .show-wrap .show-menu{position:fixed;left:8px;right:8px;bottom:8px;top:auto;width:auto;max-height:65vh;overflow:auto;z-index:60}
-}
-@media (hover:none) and (pointer:coarse){ #tKeys{display:none} }
+/* the phone layout (html.phone: ui.js uiMode) */
+html.phone .bar:not(.open){flex-wrap:nowrap;align-items:center;gap:6px}
+html.phone .bar:not(.open) .brand,html.phone .bar:not(.open) .hgroup > .lbl,html.phone .bar:not(.open) .mode-desc{display:none}
+html.phone .bar:not(.open) .hgroup,html.phone .bar:not(.open) .hrow{display:contents}
+html.phone .bar:not(.open) #resetBtn,html.phone .bar:not(.open) #launchSeg,html.phone .bar:not(.open) #speedSeg,html.phone .bar:not(.open) #terrainSel,html.phone .bar:not(.open) #terrainNew{display:none}
+html.phone .bar:not(.open) #runBtn{order:-1}
+html.phone .bar:not(.open) #presetSlot{flex:1;min-width:0;display:flex}
+html.phone .bar:not(.open) #presetSlot .mb-btn{width:100%;justify-content:space-between}
+html.phone #hdrMore{display:inline-flex;order:9;flex:none}
+html.phone .bar.open #hdrMore{position:absolute;right:12px;top:10px}
+html.phone .bar.open{position:relative}
+html.phone #tKeys{display:none}
+html.phone .show-wrap .show-menu{position:fixed;left:8px;right:8px;bottom:8px;top:auto;width:auto;max-height:65vh;overflow:auto;z-index:60}
+html.phone #tKeys,html.phone #kbdHint,html.phone .pk kbd,html.phone .pilot-acts kbd,html.phone .pilot-mid > .seg,html.phone [data-act="hold"]{display:none!important}
+html.phone .pilot{flex-wrap:wrap;row-gap:12px}
+html.phone .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
+html.phone .pad{grid-template-columns:repeat(3,34px);grid-template-rows:repeat(3,34px);gap:2px}
+html.phone .pad-cap{font-size:8.5px}
+html.phone .crash,html.phone .liftoff{bottom:200px}
+/* a touch screen has no keys: no Keys button, no key hints */
+@media (hover:none) and (pointer:coarse){ #tKeys,#kbdHint,.pk kbd,.pilot-acts kbd{display:none!important} }
+/* the sound button's icon follows the state (an svg ignores [hidden]: classes) */
+.snd-btn .snd-on{display:none}
+.snd-btn.on .snd-on{display:block}
+.snd-btn.on .snd-off{display:none}
+.show-layout{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
