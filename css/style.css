@@ -955,3 +955,5 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .icon-tog{padding:4px 8px;display:inline-flex;align-items:center}
 .icon-tog svg{width:16px;height:16px}
 .icon-tog::before{display:none}
+.ai-cont{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:8px 10px;border:1px solid var(--line-strong);border-left:3px solid var(--accent);border-radius:7px;background:var(--panel);font-size:12.5px;color:var(--ink-2)}
+.ai-cont > span{flex:1 1 100%}

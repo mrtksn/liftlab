@@ -195,6 +195,15 @@ function agentRenderFeed(th) {
         onclick: () => { try { it.undone = it.undo.run(); } catch (e) { it.undone = 'Couldn\'t undo: ' + e.message; } agentFeed({ who: 'note', text: it.undone }, th); } })));
       continue;
     }
+    if (it.who === 'cont') {   // stopped at the limit (or the budget): carry on, or leave it
+      const box = el('div', { class: 'ai-cont' }, el('span', { text: it.text + (it.used ? '' : it.budget ? ' Allow more and carry on?' : ' Carry on, or stop here?') }));
+      if (!it.used) box.append(
+        el('button', { class: 'btn primary', type: 'button', text: it.budget ? `Allow ${agent.cfg.budget} more and continue` : 'Continue', disabled: agent.busy ? '' : null, onclick: () => {
+          if (agent.busy) return; it.used = true; if (it.budget) { agent.cfg.budget += agent.cfg.budget; agentSave(); }
+          agentTurn(null, { thread: th, resume: true }); } }),
+        el('button', { class: 'btn', type: 'button', text: 'Stop here', onclick: () => { it.used = true; agentRenderFeed(th); } }));
+      F.append(box); continue;
+    }
     F.append(el('div', { class: 'ai-msg w-' + it.who + (it.tone ? ' t-' + it.tone : '') },
       it.who === 'trigger' ? el('b', { text: `⚡ ${it.t != null ? (+it.t).toFixed(1) + ' s · ' : ''}` }) : null, el('span', { text: it.text })));
   }
@@ -220,13 +229,14 @@ function settingsView() {
   const beh = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'While it works' }),
     chk('aiPause', 'Pause the simulation while the AI thinks (a trigger can keep it flying)', 'pauseThinking'),
     chk('aiAsk', 'Ask me before it changes a formula', 'askFormulas'),
+    numField('aiRounds', { label: 'Ask to continue after this many requests in one turn', min: 5, max: 200, step: 5, u: '', dp: 0, int: true }, () => C.roundLimit, v => { C.roundLimit = Math.round(v); agentSave(); }).node,
     chk('aiSee', 'The model can see images: let it look at the 3D view', 'canSee'),
     chk('aiJs', 'Let it run its own JavaScript in the page, for anything the tools don\'t reach', 'allowJs'),
     el('p', { class: 'hint', text: 'Its own JavaScript has the whole page: it could change anything, and read your API key from it. Turn it on for a model and endpoint you trust.' }),
     chk('aiAskJs', 'Ask me before it runs JavaScript', 'askJs'), budget.node,
     el('p', { class: 'hint', id: 'aiUse' }),
     el('div', { class: 'ai-row' }, el('button', { class: 'btn', type: 'button', text: 'Reset the count', onclick: () => { agent.used = 0; agent.tokens = { in: 0, out: 0 }; agentUi(); } })),
-    el('p', { class: 'hint', text: 'Each request to the model counts; a turn with tools takes several (at most 16). Airframe and computer changes go into Undo; a formula change has its own Undo in the chat.' }));
+    el('p', { class: 'hint', text: 'Each request to the model counts; a turn with tools takes several. Past the number above it stops with a Continue button, in case it\'s going round in circles. Airframe and computer changes go into Undo; a formula change has its own Undo in the chat.' }));
   const data = el('div', { class: 'ai-card' }, el('span', { class: 'lbl', text: 'Chats' }),
     el('p', { class: 'hint', text: 'Kept in this browser (the newest 30, and each trigger\'s).' }),
     el('div', { class: 'ai-row' }, el('button', { class: 'btn danger', type: 'button', text: 'Delete all chats', onclick: () => {
