@@ -5,7 +5,7 @@
 //
 // A turn: what you typed (or a trigger's message, with the state at that moment) goes to the model with the tools;
 // the model answers, or asks for tools; the page runs them and sends the results back; until it answers in words, or
-// it has used AGENT_ROUNDS rounds. Each request counts against the session's budget, so nothing can loop away with
+// it has made cfg.roundLimit requests in this turn, when it shows a Continue button (in case it's going round in circles). Each request counts against the session's budget, so nothing can loop away with
 // your API credit. The key stays in this browser and goes only to the endpoint you set.
 //
 // Triggers (agent-ui.js sets them up): conditions checked 10 times a simulated second (a crash, the battery low, far
@@ -14,7 +14,6 @@
 
 const AGENT_LS = 'dfb-agent', AGENT_KEY_LS = 'dfb-agent-key', AGENT_THREADS_LS = 'dfb-agent-threads';
 const AGENT_THREADS_MAX = 30;         // chats kept (the oldest go first); each trigger has its own as well
-const AGENT_ROUNDS = 16;              // tool rounds in one turn
 const AGENT_RESULT_MAX = 6000;        // characters of one tool result sent back
 const AGENT_CONTEXT_MAX = 90000;      // characters of conversation kept (the oldest turns are dropped)
 const AGENT_ENDPOINTS = {
@@ -27,7 +26,7 @@ const AGENT_ENDPOINTS = {
 
 const agent = {
   cfg: { connected: false, endpoint: 'openai', url: AGENT_ENDPOINTS.openai.url, model: AGENT_ENDPOINTS.openai.model, remember: false,
-    pauseThinking: true, askFormulas: false, budget: 60, temperature: 0.2, canSee: false, allowJs: false, askJs: true },
+    pauseThinking: true, askFormulas: false, budget: 200, roundLimit: 40, temperature: 0.2, canSee: false, allowJs: false, askJs: true },
   key: '',
   triggers: [],          // { id, kind, value, expr, msg, gap, keepFlying, on, fired, last }
   // Threads: each chat, and each trigger's (kind 'trigger', triggerId). msgs: the conversation as the API takes it
@@ -222,13 +221,17 @@ async function agentTurn(text, o = {}) {
   if (!agent.cfg.url || !agent.cfg.connected) { agentFeed({ who: 'note', tone: 'bad', text: 'Connect a model first.' }, th); return; }
   agent.busy = true; agent.abort = new AbortController(); agent.turn = th; agentUi();
   if (th.kind === 'chat' && th.title === 'New chat' && !o.trigger) th.title = text.replace(/\s+/g, ' ').slice(0, 60) + (text.length > 60 ? '…' : '');
-  agentFeed(o.trigger ? { who: 'trigger', text: triggerText(o.trigger) + (o.trigger.msg ? ': ' + o.trigger.msg : ''), t: S.t } : { who: 'you', text }, th);
-  th.msgs.push({ role: 'user', content: text });
+  if (!o.resume) {   // (a Continue picks the same turn up where it stopped: nothing new to say)
+    agentFeed(o.trigger ? { who: 'trigger', text: triggerText(o.trigger) + (o.trigger.msg ? ': ' + o.trigger.msg : ''), t: S.t } : { who: 'you', text }, th);
+    th.msgs.push({ role: 'user', content: text });
+  }
+  const limit = clamp(Math.round(agent.cfg.roundLimit || 40), 1, 1000);
   const pause = agent.cfg.pauseThinking && !o.keepFlying;
   agent.wasRunning = running;
   try {
-    for (let round = 0; round < AGENT_ROUNDS; round++) {
-      if (agent.used >= agent.cfg.budget) { agentFeed({ who: 'note', tone: 'bad', text: `The session's budget of ${agent.cfg.budget} requests is used up. Raise it in Settings to go on.` }); break; }
+    for (let round = 0; ; round++) {
+      if (agent.used >= agent.cfg.budget) { agentFeed({ who: 'cont', budget: true, text: `The session's budget of ${agent.cfg.budget} requests is used up.` }); break; }
+      if (round >= limit) { agentFeed({ who: 'cont', text: `${limit} requests in this turn and it hasn't finished.` }); break; }
       if (pause && running) { running = false; renderRun(); }
       agentTrim(th);
       const m = await agentRequest(th);
@@ -256,7 +259,6 @@ async function agentTurn(text, o = {}) {
         if (agent.abort.signal.aborted) throw new DOMException('stopped', 'AbortError');
       }
       if (images.length) th.msgs.push({ role: 'user', content: [{ type: 'text', text: 'The view you asked to look at:' }, ...images.map(u => ({ type: 'image_url', image_url: { url: u } }))] });
-      if (round === AGENT_ROUNDS - 1) agentFeed({ who: 'note', text: `Stopped after ${AGENT_ROUNDS} rounds of tools: say "go on" to continue.` });
     }
   } catch (e) {
     if (e.name === 'AbortError') agentFeed({ who: 'note', text: 'Stopped.' });
