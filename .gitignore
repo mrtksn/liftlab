@@ -2,7 +2,6 @@
 node_modules/
 runner/runner.wasm
 __pycache__/
-firmware/
 runner/bench/build/
 runner/bench/sdkconfig
 runner/bench/sdkconfig.old

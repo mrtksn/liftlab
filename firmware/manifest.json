@@ -1,0 +1,70 @@
+{
+ "built": "2026-10-05",
+ "commit": "51aaf9c",
+ "idf": "ESP-IDF v5.3.2",
+ "chip": "esp32",
+ "firmware": {
+  "flight": {
+   "dir": "esp32-flight",
+   "parts": [
+    [
+     4096,
+     "bootloader.bin"
+    ],
+    [
+     32768,
+     "partition-table.bin"
+    ],
+    [
+     65536,
+     "dfb_flight.bin"
+    ]
+   ],
+   "files": {
+    "bootloader.bin": {
+     "size": 26752,
+     "sha256": "b928f2e2a78de1909972606c781f24a1df2a2f6fa87491559ef427f8d3f62436"
+    },
+    "partition-table.bin": {
+     "size": 3072,
+     "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    "dfb_flight.bin": {
+     "size": 441776,
+     "sha256": "1bd61009c73045c0778dc328b2021ab161391908fd8abd75137a2387d163f44c"
+    }
+   }
+  },
+  "ground": {
+   "dir": "esp32-ground",
+   "parts": [
+    [
+     4096,
+     "bootloader.bin"
+    ],
+    [
+     32768,
+     "partition-table.bin"
+    ],
+    [
+     65536,
+     "dfb_ground.bin"
+    ]
+   ],
+   "files": {
+    "bootloader.bin": {
+     "size": 26752,
+     "sha256": "cf0c3b766e8fd36fb2a288795b9a645014172da6a9813f9a3df5ea2513b55e78"
+    },
+    "partition-table.bin": {
+     "size": 3072,
+     "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    "dfb_ground.bin": {
+     "size": 306880,
+     "sha256": "c9c6946189259db2affb5607e2e5af9b3625608517fc5b09f79f1d1ac77171b0"
+    }
+   }
+  }
+ }
+}

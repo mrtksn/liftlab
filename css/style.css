@@ -991,3 +991,45 @@ html.phone .crash,html.phone .liftoff{bottom:200px}
 .snd-btn.on .snd-on{display:block}
 .snd-btn.on .snd-off{display:none}
 .show-layout{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Install on a real board (js/install-ui.js) */
+.install-dlg{width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto}
+.install-dlg > .hint{margin:-2px 0 10px}
+#installTitle:focus{outline:none}
+.install-dlg h3{margin:0;display:flex;align-items:center;gap:8px;font-family:var(--f-display);font-weight:600;font-size:15px;letter-spacing:.02em}
+.install-dlg p{max-width:none}
+.install-dlg code{font-family:var(--f-mono);font-size:.9em}
+.inst-n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-family:var(--f-mono);font-size:12px}
+.inst-step{display:flex;flex-direction:column;gap:8px;padding:12px 0;border-top:1px solid var(--line)}
+.inst-step p,.inst-manual p{margin:0}
+.inst-note{border-left:3px solid var(--warn);background:var(--warn-soft);color:var(--ink)!important;padding:6px 10px;border-radius:0 6px 6px 0}
+.inst-safety{border:1px solid var(--line-strong);background:var(--panel-2);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:13px}
+.inst-safety ul{margin:4px 0 0;padding-left:18px}
+.inst-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.inst-pins{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px}
+.inst-pins label{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--ink-2);flex:1 1 200px;min-width:0}
+.inst-pins input,.inst-line input{font-family:var(--f-mono);font-size:12px;border:1px solid var(--line-strong);border-radius:6px;padding:5px 8px;background:var(--panel);color:var(--ink);min-width:0}
+.inst-line input{flex:1}
+.inst-map{margin:0;padding-left:22px;font-size:12.5px;color:var(--ink-2);columns:2 220px}
+.inst-map .bad,.inst-msg.bad{color:var(--bad)}
+.inst-msg.good{color:var(--good)}
+.inst-msg:empty{display:none}
+.install-dlg progress{width:100%;height:8px;accent-color:var(--accent)}
+.cmd{position:relative;border:1px solid var(--line);border-radius:6px;background:var(--panel-2)}
+.cmd pre{margin:0;padding:8px 70px 8px 10px;overflow:auto;max-height:220px;font-family:var(--f-mono);font-size:11.5px;line-height:1.5;white-space:pre}
+.cmd .btn{position:absolute;top:5px;right:5px;padding:2px 9px;font-size:12px}
+.inst-console{margin:0;height:150px;overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);padding:6px 8px;font-family:var(--f-mono);font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+.inst-console .ev{color:var(--accent)}
+.inst-console .me{color:var(--muted)}
+.inst-console .bad{color:var(--bad)}
+.inst-live{font-family:var(--f-mono);font-size:11px}
+.inst-live:empty{display:none}
+.inst-files{border-collapse:collapse;font-size:12.5px;width:100%}
+.inst-files td{border-top:1px solid var(--line);padding:5px 8px 5px 0;vertical-align:top}
+.inst-files td.mono{font-family:var(--f-mono);font-size:11.5px;white-space:nowrap}
+.inst-files a{font-family:var(--f-mono);font-size:11.5px;color:var(--accent)}
+.inst-manual{border-top:1px solid var(--line);padding-top:10px}
+.inst-manual summary{cursor:pointer;font-family:var(--f-display);font-weight:600;font-size:15px}
+.inst-manual[open]{display:flex;flex-direction:column;gap:8px}
+.inst-manual[open] summary{margin-bottom:2px}
+html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100dvh;margin:0;border-radius:0}

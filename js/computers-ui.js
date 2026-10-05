@@ -240,7 +240,7 @@ function renderComputers1(full) {
       const runs = b.tasks.length ? b.tasks.map(t => TASKS[t].label).join(' · ') : 'nothing yet (give it a task below)';
       const link = core && core.id !== b.id ? `Serial link to ${core.name}: ${(LINK_DELAY * 1000).toFixed(0)} ms each way` : C.boards.length > 1 ? 'The other boards talk to it over serial links' : '';
       const load = b.tasks.length ? `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(0)} KB of ${K.ramKB} KB` : ''}` : '';
-      const ex = el('div', { class: 'board-ex' });
+      const ex = el('div', { class: 'board-ex' }, el('button', { class: 'btn primary', type: 'button', id: 'binst-' + b.id, text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB and send it this design' : 'Put it on a real Pi: the steps and the commands to paste', onclick: () => openInstall(b) }));
       const xb = (what, text, title) => el('button', { class: 'btn', type: 'button', text, title, id: `bex-${b.id}-${what}`, onclick: e => boardsExport(what, e.currentTarget) });
       if (b.tasks.includes('core')) ex.append(xb('airframe', 'Export the airframe (.dfa)', 'What the flight core flies on: send it with fly.py airframe FILE.dfa'));
       if (b.tasks.includes('nav')) ex.append(xb('nav', 'Export the navigation config (.dnc)', K.mcu ? 'For the navigation on this board' : 'For dfb_pi on this Pi: ./dfb_pi --nav FILE.dnc'));
@@ -255,7 +255,7 @@ function renderComputers1(full) {
           el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : []), ...(b.tasks.includes('cargo') ? latches().map(l => l.name) : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
           ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
-        ex.childElementCount ? ex : el('span'), ex.childElementCount ? errLine(b.id) : null));
+        ex, errLine(b.id)));
     }
     $('#boardAdd').disabled = C.boards.length >= BOARD_MAX;
     renderGroundCard(C);
@@ -306,7 +306,7 @@ function renderGroundCard(C) {
       el('dt', { text: 'Wired to it' }), el('dd', { text: K.mcu ? 'buttons and sticks, a buzzer, the ExpressLRS transmitter module' : 'a gamepad, keys or your own code (UDP), the ExpressLRS transmitter module (USB serial)' }),
       el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `ExpressLRS radio to the receiver on ${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
       el('dt', {}, srcDot('calc'), 'Load'), el('dd', { text: `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(1)} KB of ${K.ramKB} KB` : ''}` })),
-    el('div', { class: 'board-ex' }, prog), errLine('g')));
+    el('div', { class: 'board-ex' }, el('button', { class: 'btn primary', type: 'button', id: 'ginst', text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB' : 'Build and run it on a real computer: the steps and the commands', onclick: () => openInstall('ground') }), prog), errLine('g')));
 }
 // An export that failed says why under its button (kept across a re-render of the cards).
 const errLine = key => { const e = COMP.exErr && String(COMP.exErr.key) === String(key) ? COMP.exErr.msg : ''; return el('p', { class: 'law-err board-err' + (e ? ' on' : ''), role: 'status', text: e }); };
