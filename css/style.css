@@ -951,3 +951,7 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 #designShare svg{width:16px;height:16px}
 #designShare:disabled{opacity:.4;cursor:default}
 #presetSlot .mb-btn > span:first-child{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the sound button (audio.js) */
+.icon-tog{padding:4px 8px;display:inline-flex;align-items:center}
+.icon-tog svg{width:16px;height:16px}
+.icon-tog::before{display:none}

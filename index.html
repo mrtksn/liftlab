@@ -177,6 +177,7 @@
         <button class="btn tog edit-btn" type="button" id="tEdit" aria-pressed="false" title="Select parts and move or rotate them in the view (E)">Edit</button>
         <button class="btn tog" type="button" id="tFollow" aria-pressed="true" title="Keep the camera on the drone as it flies. Off: it looks at the target">Follow drone</button>
         <button class="btn tog" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
+        <button class="btn tog icon-tog" type="button" id="tSound" aria-pressed="false" aria-label="Sound" title="Sound off: turn it on to hear the motors, servos, latches and crashes (M)"><svg class="snd-off" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="m10.5 6 3.5 4m0-4-3.5 4"/></svg><svg class="snd-on" hidden viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4"/></svg></button>
         <div class="show-wrap">
           <button class="btn" type="button" id="tShow" aria-expanded="false" aria-controls="showMenu" title="Choose what the view draws: forces, torque, trail, grid… (Q toggles torque)">Show <span aria-hidden="true">▾</span></button>
           <div class="show-menu" id="showMenu" role="group" aria-label="What the view shows" hidden></div>
@@ -208,6 +209,7 @@
             <div class="show-grp"><span class="lbl">View</span><dl>
               <dt><kbd>C</kbd></dt><dd>chase camera on, off</dd>
               <dt><kbd>Q</kbd></dt><dd>torque arrows on, off</dd>
+              <dt><kbd>M</kbd></dt><dd>sound on, off</dd>
               <dt><kbd>O</kbd> or <kbd>Num 5</kbd></dt><dd>perspective, orthographic</dd>
               <dt><kbd>V</kbd></dt><dd>step through Top, Front, Side, Iso</dd>
               <dt><kbd>Num 7</kbd> <kbd>1</kbd> <kbd>3</kbd></dt><dd>from above, the front, the right (with <kbd>Ctrl</kbd>: the opposite side)</dd>
@@ -460,6 +462,7 @@
 <script src="js/agent-tools.js"></script>
 <script src="js/agent-tools-more.js"></script>
 <script src="js/agent-ui.js"></script>
+<script src="js/audio.js"></script>
 <script>boot();</script>
 </body>
 </html>
