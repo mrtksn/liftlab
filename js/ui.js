@@ -620,6 +620,8 @@ function renderMass() {
   syncKv($('#massKv'), rows);
 }
 const goForm = () => showTab('form');
+// Phones: the header is one line (play/pause, the airframe, share) until ⋯ opens the rest.
+$('#hdrMore').addEventListener('click', () => { const o = $('#topBar').classList.toggle('open'); $('#hdrMore').setAttribute('aria-expanded', String(o)); });
 $('#tileCode').addEventListener('click', goForm);
 // The launch banner: from a reset to flying, what the drone is doing and waiting for (as a game shows it), and why
 // it's stuck when it is (a refusal to arm, a position that won't settle). It fades once it flies.
@@ -1046,11 +1048,15 @@ const SHOW_PRESETS = {
   Defaults: () => Object.fromEntries(LAYERS.map(L => [L.key, L.on])),
   All: () => Object.fromEntries(LAYERS.map(L => [L.key, true])),
   'Drone only': () => Object.fromEntries(LAYERS.map(L => [L.key, L.key === 'grid'])),
+  Phone: () => Object.fromEntries(LAYERS.map(L => [L.key, ['thrust', 'spin', 'target', 'heading', 'grid', 'shadow', 'trail', 'servo'].includes(L.key)])),   // a small screen: the drone and where it's going, no panels over it
 };
+const smallScreen = () => window.matchMedia('(max-width:640px)').matches;
 function showSave() { try { localStorage.setItem(SHOW_LS, JSON.stringify(Object.fromEntries(LAYERS.map(L => [L.key, view[L.key]])))); } catch (e) {} }
 function showApply() {   // buttons, legend keys and readouts follow the layers
   for (const b of document.querySelectorAll('#showMenu [data-key]')) b.setAttribute('aria-pressed', String(!!view[b.dataset.key]));
   const torque = view.rtorque || view.ntorque || view.want;
+  { const vb = document.querySelector('.view-box'); if (vb) vb.hidden = !view.viewctl; }
+  { const tl = document.querySelector('.hud-tl'); if (tl) tl.classList.toggle('bare', !view.readouts && !view.legend); }   // (no readouts and no legend: nothing but warnings top left)
   for (const el of document.querySelectorAll('.hud-tl [data-layer]')) {
     const k = el.dataset.layer; el.hidden = !(k === 'torque' ? torque : view[k]);
   }
@@ -1063,7 +1069,8 @@ function toggleTorque() {   // Q: rotor and net torque together
   const on = !(view.rtorque || view.ntorque); setLayers({ rtorque: on, ntorque: on });
 }
 (function buildShowMenu() {
-  try { const s = JSON.parse(localStorage.getItem(SHOW_LS) || 'null'); if (s) for (const L of LAYERS) if (typeof s[L.key] === 'boolean') view[L.key] = s[L.key]; } catch (e) {}
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(SHOW_LS) || 'null'); if (saved) for (const L of LAYERS) if (typeof saved[L.key] === 'boolean') view[L.key] = saved[L.key]; } catch (e) {}
+  if (!saved && smallScreen()) Object.assign(view, SHOW_PRESETS.Phone());   // (a first visit on a phone: the Phone preset)
   const menu = $('#showMenu'), btn = $('#tShow');
   const groups = [...new Set(LAYERS.map(L => L.group))];
   menu.innerHTML = groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${

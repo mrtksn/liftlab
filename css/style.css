@@ -957,3 +957,28 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .icon-tog::before{display:none}
 .ai-cont{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:8px 10px;border:1px solid var(--line-strong);border-left:3px solid var(--accent);border-radius:7px;background:var(--panel);font-size:12.5px;color:var(--ink-2)}
 .ai-cont > span{flex:1 1 100%}
+/* the sound button: an icon that shows the state; highlighted while there's sound (audio.js) */
+.snd-btn{padding:4px 8px;display:inline-flex;align-items:center;color:var(--muted)}
+.snd-btn svg{width:17px;height:17px}
+.snd-btn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+/* the readouts' corner with nothing to read (Show: no readouts, no legend) */
+.hud-tl.bare > :not(.hud-sup){display:none}
+/* the header's ⋯ (phones only) */
+#hdrMore{display:none}
+@media (max-width:640px){
+  .bar:not(.open){flex-wrap:nowrap;align-items:center;gap:6px}
+  .bar:not(.open) .brand,.bar:not(.open) .hgroup > .lbl,.bar:not(.open) .mode-desc{display:none}
+  .bar:not(.open) .hgroup,.bar:not(.open) .hrow{display:contents}
+  .bar:not(.open) #resetBtn,.bar:not(.open) #launchSeg,.bar:not(.open) #speedSeg,.bar:not(.open) #terrainSel,.bar:not(.open) #terrainNew{display:none}
+  .bar:not(.open) #runBtn{order:-1}
+  .bar:not(.open) #presetSlot{flex:1;min-width:0;display:flex}
+  .bar:not(.open) #presetSlot .mb-btn{width:100%;justify-content:space-between}
+  #hdrMore{display:inline-flex;order:9;flex:none}
+  .bar.open #hdrMore{position:absolute;right:12px;top:10px}
+  .bar.open{position:relative}
+  /* no keyboard on a phone: no Keys button */
+  #tKeys{display:none}
+  /* the Show menu as a sheet from the bottom of the screen, so it fits */
+  .show-wrap .show-menu{position:fixed;left:8px;right:8px;bottom:8px;top:auto;width:auto;max-height:65vh;overflow:auto;z-index:60}
+}
+@media (hover:none) and (pointer:coarse){ #tKeys{display:none} }

@@ -132,7 +132,7 @@ function setSound(on) {
   snd.on = !!on;
   if (snd.on) { sndStart(); snd.last = { fc: brt.fcState, crash: !!S.crashed }; for (const c of actuators()) snd.last['p' + c.id] = !!(hs.get(c.id) || {}).prop; }
   else if (snd.ctx) { snd.master.gain.setTargetAtTime(0, snd.ctx.currentTime, 0.03); setTimeout(() => { if (!snd.on && snd.ctx) snd.ctx.suspend(); }, 200); }
-  const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.title = snd.on ? 'Sound on: the motors, servos, latches and crashes, made from the simulation (M)' : 'Sound off: turn it on to hear the motors, servos, latches and crashes (M)';
+  const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.classList.toggle('on', snd.on); b.title = snd.on ? 'Sound is on: click to mute (M)' : 'Sound is off: turn it on to hear the motors, servos, latches and crashes (M)';
   b.querySelector('.snd-on').hidden = !snd.on; b.querySelector('.snd-off').hidden = snd.on;
 }
 $('#tSound').addEventListener('click', () => setSound(!snd.on));

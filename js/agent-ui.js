@@ -67,7 +67,7 @@ function connView() {
     field('Model', el('div', { class: 'ai-row' }, model, load, dl)),
     msg, el('div', { class: 'ai-row' }, connect, aiUi.editConn ? el('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => { aiUi.editConn = false; aiUi.draft = null; aiUi.msg = ''; agentRender(); } }) : null),
     E().noKey ? el('p', { class: 'hint', text: 'A server on this computer must allow requests from a web page (CORS). For Ollama, start it with OLLAMA_ORIGINS=*.' }) : null);
-  box.append(form, el('p', { class: 'hint ai-foot', text: 'It works on the simulator only: this page has no link to a real drone.' }));
+  box.append(form, el('p', { class: 'hint ai-foot', text: 'Private: the provider, the key and your chats are kept in this browser only. Nothing goes to us or anyone else; the page talks straight to the provider you pick, and only to run the agent. It works on the simulator only: this page has no link to a real drone.' }));
   return box;
 }
 
