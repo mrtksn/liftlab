@@ -306,6 +306,12 @@
         <p class="hint" id="shareOpenMsg" role="status"></p>
         <div class="ask-btns"><button class="btn" type="button" id="shareClose">Close</button><button class="btn primary" type="button" id="shareOpen">Open it</button></div>
       </dialog>
+      <dialog class="ask install-dlg" id="installDlg" aria-labelledby="installTitle">
+        <h2 id="installTitle">Install</h2>
+        <p class="hint" id="installSub"></p>
+        <div id="installBody"></div>
+        <div class="ask-btns"><button class="btn" type="button" id="installClose">Close</button></div>
+      </dialog>
       <dialog class="ask" id="saveAsk" aria-labelledby="saveAskTitle">
         <form method="dialog">
           <h2 id="saveAskTitle">Save this airframe first?</h2>
@@ -451,6 +457,7 @@
 <script src="js/health-ui.js"></script>
 <script src="js/designs.js"></script>
 <script src="js/share.js"></script>
+<script src="js/install-ui.js"></script>
 <script src="js/editor.js"></script>
 <script src="js/fc-export.js"></script>
 <script src="js/board-wasm.js"></script>
