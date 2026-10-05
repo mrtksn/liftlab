@@ -119,6 +119,8 @@ function refreshLaw(key) {
   refreshFormulaStatus();
   refreshLawRunner(key);
 }
+// A formula's card after its code changed from elsewhere (a design opened, an undo, the AI agent).
+function refreshLawCard(key) { const c = lawCards.get(key); if (c) { c.ta.value = LAWS[key].src; fitTa(c.ta); refreshLaw(key); } }
 function refreshFormulaStatus() {
   const ed = editedLaws(), bad = ed.filter(L => L.status === 'error').length;
   const badge = $('#editedCount'); badge.textContent = ed.length ? String(ed.length) : ''; badge.hidden = !ed.length; badge.className = 'count' + (bad ? ' bad' : '');

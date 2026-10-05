@@ -11,7 +11,7 @@
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
 const undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
-const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, computers: computers() });
+const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, computers: computers(), laws: lawSet() });
 const designSnap = () => JSON.stringify(designOf());
 
 // Called from save() after every change. Records a step when the design itself changed.
@@ -40,6 +40,7 @@ function restoreSnap(s) {
       if (JSON.stringify(cfg.computers) !== was) { brt.sig = null; restart = true; }
     }
     if (typeof renderBattery === 'function') renderBattery();
+    if (d.laws) setLaws(d.laws);
     setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof edit !== 'undefined' && edit.sel != null) selectComp(compById(edit.sel) ? edit.sel : null);
   } finally { undo.restoring = false; }
@@ -122,6 +123,7 @@ function applyDesign(d) {
   cfg.comps = migrateComps(JSON.parse(JSON.stringify(d.comps)));
   cfg.battery = { ...defaultBattery(), ...(d.battery || {}) };
   if (d.computers) cfg.computers = fixComputers(computersWithRadio(d.computers));   // (a design saved before boards keeps the ones you have)
+  if (d.laws) setLaws(d.laws);   // its formulas (a design saved before formulas were part of it keeps the ones you have)
   if (typeof syncFlightUi === 'function') setTimeout(syncFlightUi);
   uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
   setMode(['level', 'mixed'].includes(d.mode) ? d.mode : 'tilt', false); openSet.clear();

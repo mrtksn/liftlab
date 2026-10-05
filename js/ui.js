@@ -920,6 +920,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     if (PRESETS[key].cargoTask) C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo');
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
+  setLaws({});   // (and the formulas as they come)
   designLoaded(null, ''); afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
