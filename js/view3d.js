@@ -24,6 +24,7 @@ const LAYERS = [
   { key: 'heading', label: 'Forward', group: 'Flight', on: true, tip: 'A level arrow beside the drone: the way the forward key (and stick) moves it' },
   { key: 'grid', label: 'Ground grid', group: 'Scene', on: true, tip: 'The grid on the ground' },
   { key: 'shadow', label: 'Shadow', group: 'Scene', on: true, tip: 'A shadow on whatever is under the drone, to judge its height' },
+  { key: 'viewctl', label: 'View controls', group: 'Scene', on: true, tip: 'The axes and the camera buttons, top right (Persp/Ortho, Top, Front, Side, Iso)' },
   { key: 'readouts', label: 'Readouts', group: 'Scene', on: true, tip: 'Position, speed and torque numbers, top left' },
   { key: 'legend', label: 'Legend', group: 'Scene', on: true, tip: 'The colour key, top left' },
 ];
