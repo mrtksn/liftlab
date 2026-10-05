@@ -915,7 +915,11 @@ const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left
   } });
 $('#presetSlot').replaceWith(presetMenu.node); presetMenu.node.id = 'presetSlot';
 function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; setFrameShape(p.frameShape); cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear();
-  if (PRESETS[key].cargoTask && !hasTask('cargo')) { const C = JSON.parse(JSON.stringify(computers())); C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo'); cfg.computers = fixComputers(C); syncFlightUi(); }   // (its latch needs a board to drive it: the flight controller)
+  {   // the computers are part of the design: a layout comes with its own (the default boards; a layout with a latch has the Cargo task on the flight controller to drive it)
+    const C = PRESETS[key].computers ? PRESETS[key].computers() : defaultComputers();
+    if (PRESETS[key].cargoTask) C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo');
+    cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
+  }
   designLoaded(null, ''); afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
