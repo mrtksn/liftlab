@@ -1,4 +1,6 @@
-# Drone Force Bench
+# LiftLab
+
+Repository: [mrtksn/liftlab](https://github.com/mrtksn/liftlab). Existing `dfb_*` program names, saved-design formats and browser storage keys remain compatible with earlier versions.
 
 An interactive 3D simulator for a drone frame you can change while it flies. You attach motors, servo joints, rigid masses, masses on cables and sensors, anything on anything, and the controller works out the motor thrusts and servo angles needed to hold it steady. A flight-envelope check tells you whether the current layout can hover at all and how much control headroom is left on each axis.
 

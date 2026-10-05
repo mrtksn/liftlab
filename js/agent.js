@@ -165,7 +165,7 @@ const triggerText = T => T.kind === 'expr' ? T.expr : TRIGGER_KINDS[T.kind].labe
 /* ───────── the conversation ───────── */
 function agentSystem() {
   return [
-    'You are the AI agent inside Drone Force Bench, a browser simulator of a multirotor drone you can rebuild while it flies. You work on the SIMULATOR only.',
+    'You are the AI agent inside LiftLab, a browser simulator of a multirotor drone you can rebuild while it flies. You work on the SIMULATOR only.',
     'Axes: X forward, Y left, Z up, metres, from the world origin (the start point). Body axes on the airframe: the same, from the frame hub. Angles in degrees.',
     'Flight computers: boards (ESP32 microcontrollers, Raspberry Pi) run tasks: core (attitude, control, mixing), nav (position), learn, super (health), tlm (radio), cargo (latches). Each task runs formulas: JavaScript functions you can read and replace (same arguments, same kind of return value).',
     'Work in small steps and check: after a change, run the simulation for a few seconds (wait) and read the state. Read a formula (get_formula) before you replace it, and keep its signature.',
@@ -300,7 +300,7 @@ async function agentRequest(th) {
 function agentHeaders() {
   const h = { 'Content-Type': 'application/json' };
   if (agent.key) h.Authorization = 'Bearer ' + agent.key;
-  if (/openrouter\.ai/.test(agent.cfg.url)) h['X-Title'] = 'Drone Force Bench';
+  if (/openrouter\.ai/.test(agent.cfg.url)) h['X-Title'] = 'LiftLab';
   return h;
 }
 async function agentModels() {

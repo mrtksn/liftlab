@@ -162,7 +162,7 @@ static void link_task(void *arg) {
 void app_main(void) {
   esp_chip_info_t ci; esp_chip_info(&ci);
   uint32_t flash = 0; esp_flash_get_size(NULL, &flash);
-  printf("\n\nDrone Force Bench: step runner bench\nchip: %s rev %d.%d, %d cores, flash %u MB\n", CONFIG_IDF_TARGET, ci.revision / 100, ci.revision % 100, ci.cores, (unsigned)(flash >> 20));
+  printf("\n\nLiftLab: step runner bench\nchip: %s rev %d.%d, %d cores, flash %u MB\n", CONFIG_IDF_TARGET, ci.revision / 100, ci.revision % 100, ci.cores, (unsigned)(flash >> 20));
   printf("free heap %u bytes, largest block %u bytes\n", (unsigned)esp_get_free_heap_size(), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
   /* The built-in program alone first (in slot 0, before the slots are set up): its size decides the slots' size. */

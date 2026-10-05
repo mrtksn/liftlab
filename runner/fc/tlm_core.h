@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench telemetry: one interface every task publishes to, whatever carries the data to the ground.
+ * LiftLab telemetry: one interface every task publishes to, whatever carries the data to the ground.
  *
  * The tasks (flight core, navigation, learning, supervisor) put their latest values into a store as numbered items
  * (tlm_put) and short text messages (tlm_text): tlm_sources.c does that for each task. The board that runs the

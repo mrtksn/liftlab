@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench step runner.
+ * LiftLab step runner.
  *
  * Runs the flight formulas compiled by the simulator's step compiler (js/rn-compile.js). The same C builds for
  * the ESP32 (ESP-IDF), for a PC (the test harness) and for WebAssembly (the simulator flies on it).

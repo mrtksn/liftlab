@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench: brushed motor test on H-bridge boards (L9110S, L293D) with an ESP32-S3.
+ * LiftLab: brushed motor test on H-bridge boards (L9110S, L293D) with an ESP32-S3.
  *
  * Four motors, each on two driver inputs: PWM on one input and the other held low spins it one way; swapped,
  * the other way; both low lets it coast. Nothing spins until you type a command.
@@ -147,7 +147,7 @@ void app_main(void) {
   lines = xQueueCreate(8, sizeof(line_t));
   xTaskCreate(uart_task, "uart", 3072, NULL, 5, NULL);
   xTaskCreate(usb_task, "usb", 3072, NULL, 5, NULL);
-  say("\n\nDrone Force Bench motor test (ESP32-S3)\n"
+  say("\n\nLiftLab motor test (ESP32-S3)\n"
          "M1 GPIO4/5 (L9110S A), M2 GPIO6/7 (L9110S B), M3 GPIO15/16 (L293D A), M4 GPIO17/18 (L293D B)\n"
          "PROPELLERS OFF for the first tests. Type ? for help; Enter alone stops everything.\n");
   status();

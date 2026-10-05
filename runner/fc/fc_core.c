@@ -1,4 +1,4 @@
-/* Drone Force Bench flight controller: see fc_core.h. */
+/* LiftLab flight controller: see fc_core.h. */
 #include "fc_core.h"
 #include <stdarg.h>
 #if defined(__wasm__)                 /* the simulator's build: no C library, the page's Math */

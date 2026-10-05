@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench flight controller: the flight code around the formulas.
+ * LiftLab flight controller: the flight code around the formulas.
  *
  * Portable C, no hardware: the ESP32 firmware (fc/esp32) feeds it IMU samples and commands and drives the ESCs
  * and servos with what it returns, and the simulator flies the same code built to WebAssembly ("firmware in the

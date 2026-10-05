@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench step runner: the flight controller's side of loading programs.
+ * LiftLab step runner: the flight controller's side of loading programs.
  *
  * The firmware keeps three program slots:
  *   - the built-in program, compiled into the firmware (rn_builtin.c). It is always there to fall back to;

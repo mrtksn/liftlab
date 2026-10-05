@@ -217,7 +217,7 @@ static int drone_up(void) {
 void app_main(void) {
   if (nvs_flash_init() != ESP_OK) { nvs_flash_erase(); nvs_flash_init(); }
   cfg_load();
-  printf("\nDrone Force Bench command module (ESP32)\n");
+  printf("\nLiftLab command module (ESP32)\n");
   float *ar[3] = { arenas_[0], arenas_[1], arenas_[2] }, *po[3] = { pools_[0], pools_[1], pools_[2] }; int32_t *co[3] = { codes_[0], codes_[1], codes_[2] };
   int e = rn_host_init(&H, rn_builtin_ground_img, rn_builtin_ground_len, ar, 2048, co, 2048, po, 1024);
   gnd_config gc; gnd_config_default(&gc); gc.latch = C.latch; gc.seq0 = (uint8_t)esp_random();   /* (gnd_config.seq0) */

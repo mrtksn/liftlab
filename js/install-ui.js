@@ -500,7 +500,7 @@ function piGuide(t, K) {
       'sudo usermod -aG dialout,gpio $USER',
       'sudo reboot'].join('\n');
     cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;
-    cmds.clone.code.textContent = `git clone --depth 1 https://github.com/mrtksn/drone-force-bench.git ~/dfb`;
+    cmds.clone.code.textContent = `git clone --depth 1 https://github.com/mrtksn/liftlab.git ~/dfb`;
     cmds.build.code.textContent = 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/pi/build.sh';
     let files = []; try { files = need.map(w => instFile(w, t)); } catch (e) { cmds.files.code.textContent = '# This design can\'t be exported: ' + e.message; }
     if (files.length) cmds.files.code.textContent = await pastePack(files, 'sudo systemctl restart dfb 2>/dev/null; true');
@@ -508,7 +508,7 @@ function piGuide(t, K) {
       ...(!tasks.includes('learn') && learnOrSuper ? ['--no-learning'] : []), ...(!tasks.includes('super') && learnOrSuper ? ['--no-supervisor'] : []),
       ...(fix ? ['--gps ' + v('gps')] : []), ...(cargo ? ['--latch ' + v('latch')] : []), ...(radio ? ['--crsf ' + v('crsf')] : [])].join(' ');
     cmds.run.code.textContent = `cd ~/dfb && ./runner/pi/dfb_pi ${args}`;
-    cmds.svc.code.textContent = `sudo tee /etc/systemd/system/dfb.service > /dev/null <<EOF\n[Unit]\nDescription=Drone Force Bench: dfb_pi\nAfter=network.target\n\n[Service]\nUser=$USER\nWorkingDirectory=$HOME/dfb\nExecStart=$HOME/dfb/runner/pi/dfb_pi ${args}\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsudo systemctl daemon-reload\nsudo systemctl enable --now dfb`;
+    cmds.svc.code.textContent = `sudo tee /etc/systemd/system/dfb.service > /dev/null <<EOF\n[Unit]\nDescription=LiftLab: dfb_pi\nAfter=network.target\n\n[Service]\nUser=$USER\nWorkingDirectory=$HOME/dfb\nExecStart=$HOME/dfb/runner/pi/dfb_pi ${args}\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsudo systemctl daemon-reload\nsudo systemctl enable --now dfb`;
   };
   refresh();
   return out;

@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench navigation task: holds and moves the drone's position, on top of the flight core.
+ * LiftLab navigation task: holds and moves the drone's position, on top of the flight core.
  *
  * Portable C, like fc_core.c. It runs on the Raspberry Pi (pi/dfb_pi.c, talking to the ESP32 over the serial link) or
  * on the flight controller itself (beside fc_core, without a link), and the simulator flies the same code built to

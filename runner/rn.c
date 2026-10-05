@@ -1,4 +1,4 @@
-/* Drone Force Bench step runner: loader, checker, step loop and the built-in kernels. See rn.h. */
+/* LiftLab step runner: loader, checker, step loop and the built-in kernels. See rn.h. */
 #include "rn.h"
 #if defined(__wasm__)
 typedef __SIZE_TYPE__ size_t;

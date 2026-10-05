@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench on the Raspberry Pi: the navigation, the learning and the health supervisor.
+ * LiftLab on the Raspberry Pi: the navigation, the learning and the health supervisor.
  *
  * The same code the simulator runs for a Pi board (fc/nav_core.c, fc/learn_core.c, fc/super_core.c with the step
  * runner and the Pi's built-in program, rn_builtin_pi.c: the formulas of those three tasks). It talks to the ESP32

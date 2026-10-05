@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench health supervisor: watches for failing, weakening or overheating parts and changes how the drone
+ * LiftLab health supervisor: watches for failing, weakening or overheating parts and changes how the drone
  * flies, on a Raspberry Pi.
  *
  * Portable C like the other tasks; the Pi runs it (runner/pi/dfb_pi.c) and the simulator flies the same code built to

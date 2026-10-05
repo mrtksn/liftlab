@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench flight firmware for the ESP32.
+ * LiftLab flight firmware for the ESP32.
  *
  * Core 1: the control loop (1 kHz by default): the newest IMU sample → fc_step (fc_core.c, the flight formulas
  *   through the program slots) → ESC and servo pulses.
@@ -365,7 +365,7 @@ void app_main(void) {
   hw_load(&HW); HW_next = HW;
   char log[200];
   int oe = hw_outputs_init(&HW, log, sizeof log);
-  printf("\n\nDrone Force Bench flight controller\n%s\n", log);
+  printf("\n\nLiftLab flight controller\n%s\n", log);
   if (oe) printf("OUTPUTS DIDN'T START: motors stay off\n");
 
   int se = hw_sensors_init(&HW, &SENS, log, sizeof log);

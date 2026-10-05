@@ -1,5 +1,5 @@
 /*
- * Drone Force Bench learning task: learns what each motor and servo really does, on a Raspberry Pi.
+ * LiftLab learning task: learns what each motor and servo really does, on a Raspberry Pi.
  *
  * Portable C like fc_core.c and nav_core.c: the Pi runs it (runner/pi/dfb_pi.c) beside the navigation, talking to
  * the ESP32 over the serial link, and the simulator flies the same code built to WebAssembly. Its formulas
