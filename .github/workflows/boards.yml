@@ -1,9 +1,9 @@
 name: Board firmware and host programs
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test_board_install.js', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
   pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test_board_install.js', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_sensor_drivers.c', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -37,3 +37,10 @@ jobs:
         with:
           node-version: '20'
       - run: node tools/test_board_install.js
+      - run: node tools/test_hardware_wiring.js
+      - run: node tools/test_driver_presets.js
+      - run: python3 tools/sync_driver_presets.py --check
+      - name: Sensor driver register tests
+        run: |
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/fc -Irunner tools/test_sensor_drivers.c -lm -o /tmp/test-sensors
+          /tmp/test-sensors

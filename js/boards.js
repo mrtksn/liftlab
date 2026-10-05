@@ -78,7 +78,8 @@ function fixComputers(C) {
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
   C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
-  let id = 1; for (const b of C.boards) { b.id = id++; b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
+  const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
+  C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
   if (!C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
   C.radio = 1;
@@ -99,9 +100,7 @@ const boardName = b => b ? `${b.name}${b.name === BOARD_KINDS[b.kind].label ? ''
 // Which board a sensor is wired to. The IMU, compass and barometer (the GY-87 is all three) go to the flight core's
 // board; the GPS and the flow camera to the board that navigates (with no navigation they'd be unused).
 function wiredTo(c) {
-  const core = boardOf('core'), nav = boardOf('nav');
-  if (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'baro') return core;
-  return nav;
+  return hardwareOwner(computers(), c);
 }
 function setComputers(C, why) {
   cfg.computers = fixComputers(C); undoKey = 'computers:' + (why || '');
@@ -463,8 +462,8 @@ function boardsControl(dt) {
     b.set([...(est.haveImu ? est.fGyro : [0, 0, 0]), ...(est.haveImu ? est.fAccel : [0, 0, 0]), est.haveImu ? 1 : 0, coreDt, fc.vComp && hread.b.V > 1 ? hread.b.V : 0,
       baro ? drv.baro.alt : 0, baro ? 1 : 0, ...(drv.mag || [0, 0, 0]), drv.mag ? 1 : 0], 0);
     W.fc_tick();
-    acts.forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed ? 0 : b[IO_OUT + i]; setThrottle(c, st, u, u); } });
-    joints().forEach((j, k) => { const st = jst.get(j.id); if (st) st.thCmd = b[IO_OUT + 12 + k]; });
+    acts.forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed || wiredTo(c) !== coreB ? 0 : b[IO_OUT + i]; setThrottle(c, st, u, u); } });
+    joints().forEach((j, k) => { const st = jst.get(j.id); if (st && wiredTo(j) === coreB) st.thCmd = b[IO_OUT + 12 + k]; });
     const s = b.subarray(IO_STATE);
     est.q = [s[0], s[1], s[2], s[3]]; est.R = qmat(est.q); est.w = [s[4], s[5], s[6]];
     brt.out = { attOk: s[9] > 0.5, alt: s[14], haveAlt: s[15] > 0.5, vz: s[13], tau: [s[16], s[17], s[18]], sat: acts.some((c, i) => b[IO_OUT + i] >= 0.995) };

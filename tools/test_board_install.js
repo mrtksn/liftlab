@@ -33,7 +33,8 @@ const ctx = vm.createContext({ console, crypto: webcrypto, navigator: {}, Uint8A
     return { ok: true, json: async () => JSON.parse(b), arrayBuffer: async () => b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength) }; },
 });
 vm.runInContext(fs.readFileSync('js/board-hardware.js','utf8'),ctx);
-vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { firmwareParts, ESP_PROFILES, INST, espSendWiring };',ctx);
+vm.runInContext(fs.readFileSync('js/hardware.js','utf8'),ctx);
+vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { firmwareParts, ESP_PROFILES, INST, espSendWiring, hardwareSettings, boardWiringPlan };',ctx);
 (async () => {
   for (const p of Object.values(ctx.audit.ESP_PROFILES)) for (const role of ['flight','ground']) {
     const fw = await ctx.audit.firmwareParts(role,p);
@@ -47,15 +48,17 @@ vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { fir
     const b=fs.readFileSync('firmware/esp32-flight/'+name); return b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength); } }));
   ctx.audit.INST.files=files;
   await assert.rejects(ctx.audit.firmwareParts('flight',ctx.audit.ESP_PROFILES.s3),/different chip/);
-  ctx.audit.INST.target={kind:'s3'};
+  const target={id:1,kind:'s3',tasks:['core']};
+  ctx.audit.INST.target=target;ctx.cfg={comps:Array.from({length:4},(_,i)=>({id:i+1,type:'motor',name:'M'+(i+1)}))};ctx.computers=()=>({boards:[target]});
   ctx.actuators=()=>Array(4); ctx.joints=()=>[]; ctx.rnCrc32=()=>0;
-  ctx.answers=['set servos=', 'set motors=4,5,6,7', 'saved; reboot to use them', 'disarm first'];
+  const setReplies=ctx.audit.hardwareSettings(ctx.audit.boardWiringPlan(target)).map(l=>'set '+l);
+  ctx.answers=[...setReplies,'saved; reboot to use them','disarm first'];
   vm.runInContext('espSend = async () => answers.shift();',ctx);
   const msg={textContent:'',className:''};
   await ctx.audit.espSendWiring('4,5,6,7','',msg);
   assert.match(msg.textContent,/restart was not confirmed/);
   assert.match(msg.className,/bad/);
-  ctx.answers=['set servos=', 'set motors=4,5,6,7', 'saved; reboot to use them', 'rebooting'];
+  ctx.answers=[...setReplies,'saved; reboot to use them','rebooting'];
   await ctx.audit.espSendWiring('4,5,6,7','',msg);
   assert.match(msg.className,/good/);
   console.log('All board installation checks passed (3 chips × 2 roles, wrong-chip rejection, corruption, wiring limits).');

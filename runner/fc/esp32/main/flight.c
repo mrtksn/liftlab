@@ -92,7 +92,7 @@ static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1;
   /* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). */
-  if (SENS.imu == 1) {
+  if (SENS.imu == 1 || SENS.imu == 3) {
     for (int tries = 0; tries < 5; tries++) {
       double s[3] = { 0 }, s2[3] = { 0 }; int n = 0; fc_imu m;
       for (int k = 0; k < 500; k++) { if (!hw_imu_read(&m)) { for (int i = 0; i < 3; i++) { s[i] += m.gyro[i]; s2[i] += m.gyro[i] * m.gyro[i]; } n++; } vTaskDelay(pdMS_TO_TICKS(2)); }
@@ -103,13 +103,16 @@ static void sensor_task(void *arg) {
       post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
     }
   }
-  TickType_t last = xTaskGetTickCount(); int tb = 0;
+  TickType_t last = xTaskGetTickCount(); int tb = 0,tm=0; float mag[3]={0};int64_t mag_us=-1000000;
   for (;;) {
     vTaskDelayUntil(&last, period);
     fc_imu m; memset(&m, 0, sizeof m);
     int64_t us = esp_timer_get_time();
     if (hw_imu_read(&m)) memset(&m, 0, sizeof m);          /* a failed read: no gyro this sample */
-    float a; int nb = 0; if ((tb += period) >= 40) { tb = 0; nb = hw_baro_read(&a); }
+    float a; int nb = 0;
+    if(SENS.baro==2 || SENS.baro==3) nb=hw_baro_read(&a); else if ((tb += period) >= 40) { tb = 0; nb = hw_baro_read(&a); }
+    if((tm+=period)>=10) { tm=0;if(hw_mag_read(mag)) mag_us=us; }
+    m.have_mag=us-mag_us<100000;memcpy(m.mag,mag,sizeof mag);
     portENTER_CRITICAL(&imu_mux);
     imu_now = m; imu_us = us; imu_seq++; if (nb) { baro_alt = a; baro_new = 1; }
     portEXIT_CRITICAL(&imu_mux);
@@ -156,7 +159,7 @@ static void flight_task(void *arg) {
     portENTER_CRITICAL(&imu_mux); m = imu_now; us = imu_us; seq = imu_seq; nb = baro_new; baro_new = 0; m.baro_alt = baro_alt; portEXIT_CRITICAL(&imu_mux);
     if (seq == last_seq) { m.have_gyro = 0; us = t0; }  /* no new sample: none this step (5 ms of these in flight stops it) */
     m.have_baro = nb;                                  /* only a new barometer reading counts */
-    m.have_mag = 0;                                    /* no compass driver yet */
+    if(seq==last_seq && !m.have_gyro) m.have_mag=0;
     /* the time since the last step, as measured (a late step integrates the time that really passed) */
     float dt = (float)(us - last_us) * 1e-6f; last_us = us; last_seq = seq;
     dt = dt < 0.5f * dt0 ? 0.5f * dt0 : dt > 3 * dt0 ? 3 * dt0 : dt;
@@ -246,8 +249,9 @@ static void setting(const char *line) {
   char s[400];
   if (!strcmp(line, "show")) {
     hw_describe(&HW, s, sizeof s); report(s);
+    snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
     if (memcmp(&HW, &HW_next, sizeof HW)) { strcpy(s, "after a reboot: "); hw_describe(&HW_next, s + 16, sizeof s - 16); report(s); }
-    snprintf(s, sizeof s, "IMU: %s; barometer: %s; %s; flying program slot %d", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", F.have_airframe ? F.why : "no airframe", H.act);
+    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act);
     report(s); return;
   }
   if (F.state != FC_DISARMED) { report("disarm first"); return; }
@@ -372,6 +376,7 @@ void app_main(void) {
 
   int se = hw_sensors_init(&HW, &SENS, log, sizeof log);
   printf("IMU: %s\nbarometer: %s\n%s%s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none (the throttle stick sets vertical acceleration; the failsafe descent is rough)", log, log[0] ? "\n" : "");
+  printf("compass: %s\n",SENS.mag ? SENS.mag_name : "none");
   if (SENS.imu == 2) printf("The LIS3DH has no gyro: this board can't fly (it won't arm). Motor tests and telemetry work. Add an MPU-6050 (GY-521) for flying.\n");
   if (se) printf("no IMU: it won't arm\n");
   if (HW.batt_pin >= 0 && hw_battery_init(&HW)) printf("battery: GPIO %d isn't an ADC1 pin\n", HW.batt_pin);

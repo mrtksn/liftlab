@@ -159,12 +159,13 @@ function buildComputers() {
       el('button', { class: 'btn', type: 'button', id: 'boardAdd', text: 'Add', onclick: () => {
         const C = JSON.parse(JSON.stringify(computers())), kind = $('#boardKind').value;
         if (C.boards.length >= BOARD_MAX) return;
-        C.boards.push({ id: 99, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
+        C.boards.push({ id: C.nextBoardId || Math.max(...C.boards.map(b=>b.id))+1, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
       } }))),
     el('section', { class: 'sec', id: 'groundSec' }, el('h2', { text: 'On the ground', 'data-src': 'you' }),
       el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module. Here it runs on the far side of the simulated link: your keys are its buttons.' }),
       el('div', { class: 'boards', id: 'groundCard' })),
     el('section', { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
+    el('section', { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Assign each motor, servo and sensor to a board. Pick signal pins, a shared sensor bus and the hardware driver. Wiring is saved with this design.' }), el('div', { id: 'hardwareRows' })),
     el('div', { id: 'taskLaws' }),
     el('section', { class: 'sec', id: 'rnBox' },
       el('h2', { text: 'The flight program', 'data-src': 'board' }),
@@ -221,12 +222,12 @@ function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if (!COMP.built) return;
   const C = computers(), core = boardOf('core');
-  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + allSensors().map(c => c.kind).join(',');
+  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';');
   if (full || COMP.sig !== sig) {
     COMP.sig = sig;
     const list = $('#boardList'); list.textContent = '';
     for (const b of C.boards) {
-      const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = allSensors().filter(c => wiredTo(c) === b);
+      const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = cfg.comps.filter(c => ['motor','joint','sensor'].includes(c.type) && wiredTo(c) === b);
       const name = nameBox(b.name, 'Board name', 'bname-' + b.id, v => renameComputer(C2 => { const x = C2.boards.find(y => y.id === b.id); if (x) x.name = (v || K.label).slice(0, 24); }));
       const kind = el('select', { 'aria-label': 'Board', id: 'bkind-' + b.id }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
       commitSelect(kind, v => { if (v === b.kind) return; const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = v; setComputers(C2, 'kind'); }, 'Press Enter to change the board: it starts the flight again');
@@ -259,6 +260,7 @@ function renderComputers1(full) {
     }
     $('#boardAdd').disabled = C.boards.length >= BOARD_MAX;
     renderGroundCard(C);
+    renderHardware();
     // tasks: which board
     const rows = $('#taskRows'); rows.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {

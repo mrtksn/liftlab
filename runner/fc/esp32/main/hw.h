@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "fc_core.h"
 
-#define HW_VERSION 4
+#define HW_VERSION 5
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -20,6 +20,9 @@ typedef struct {
   int32_t link_baud;                               /* the Pi's serial link (and the USB port): 921600 for the learning */
   int8_t crsf_rx, crsf_tx;                         /* the radio receiver's UART (CRSF at 420000 baud): its TX to crsf_rx, −1: none */
   int16_t elrs_rate, elrs_ratio;                   /* the ExpressLRS packet rate [Hz] and telemetry ratio (1:n) set on the radio */
+  int8_t imu_driver, baro_driver, mag_driver; /* -1 disabled, 0 auto, 1/2 named, 3 custom C */
+  uint8_t imu_addr, baro_addr, mag_addr; /* 0 auto, otherwise 7-bit I2C address */
+  float mag_matrix[9], mag_bias[3], mag_scale[3]; /* sensor axes -> body; bias in microtesla */
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -36,8 +39,9 @@ int hw_airframe_save(const uint8_t *buf, uint32_t len);
 
 /* sensors */
 typedef struct {
-  int imu;                 /* 0 none, 1 MPU-6050 family (gyro + accelerometer), 2 LIS3DH (accelerometer only) */
-  int baro;                /* 0 none, 1 BMP280/BME280 */
+  int imu;                 /* 0 none, 1 MPU-6050 family (gyro + accelerometer), 2 LIS3DH (accelerometer only), 3 custom C */
+  int mag; char mag_name[32];
+  int baro;                /* 0 none, 1 BMP280/BME280, 2 BMP180, 3 custom C */
   char imu_name[40], baro_name[24];
 } hw_sensors;
 int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn);
@@ -45,6 +49,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn);
 int hw_imu_read(fc_imu *m);
 /* Barometer: start/finish a reading; height [m] above where it was switched on. Returns 1 when a new one came. */
 int hw_baro_read(float *alt);
+int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
 
 /* outputs: throttles 0–1 (and exactly the ESC's minimum pulse when disarmed), servo angles in rad */

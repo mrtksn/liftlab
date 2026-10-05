@@ -144,16 +144,17 @@ function mean3(list) { const s = list.reduce((a, b) => add(a, b), [0, 0, 0]); re
 function senseAndEstimate(dt) {
   for (const rt of sens.values()) while (rt.queue.length && rt.queue[0].t <= S.t + 1e-9) { const q = rt.queue.shift(); rt.latest = q.m; rt.ts = q.ts; rt.fresh = true; }
   const ready = kind => sensorsOf(kind).filter(c => onBoard(c) && sens.get(c.id) && sens.get(c.id).latest);   // (a sensor that fell off reads nothing)
-  const imus = ready('imu');
+  const core = boardOf('core');
+  const imus = ready('imu').filter(c => wiredTo(c) === core && core);
   est.haveImu = imus.length > 0;
   const drv = est.drv || (est.drv = {});
   if (est.haveImu) {
     est.fGyro = mean3(imus.map(c => sub(m3v(knownMount(c), sens.get(c.id).latest.gyro), c.known ? chainRateSeen(c) : [0, 0, 0])));   // minus its joints' own turning
     est.fAccel = mean3(imus.map(c => m3v(knownMount(c), sens.get(c.id).latest.accel)));
   }
-  const mags = ready('mag');
+  const mags = ready('mag').filter(c => wiredTo(c) === core && core);
   drv.mag = mags.length ? mean3(mags.map(c => m3v(knownMount(c), sens.get(c.id).latest))) : null;
-  const baros = ready('baro');
+  const baros = ready('baro').filter(c => wiredTo(c) === core && core);
   if (baros.length) { const fr = baros.filter(c => sens.get(c.id).fresh); if (fr.length) { drv.baro = { alt: fr.reduce((s, c) => s + sens.get(c.id).latest, 0) / fr.length }; drv.baroTs = Math.max(...fr.map(c => sens.get(c.id).ts)); } }
   else drv.baro = null;
   const fix = ready('fix').filter(c => !c.dropout)[0];

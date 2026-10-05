@@ -1033,3 +1033,16 @@ html.phone .crash,html.phone .liftoff{bottom:200px}
 .inst-manual[open]{display:flex;flex-direction:column;gap:8px}
 .inst-manual[open] summary{margin-bottom:2px}
 html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100dvh;margin:0;border-radius:0}
+
+/* Hardware wiring in the Computers tab. */
+.hw-board { margin: 10px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.hw-board summary { cursor: pointer; font-weight: 600; }
+.hw-fields, .hw-part-fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 8px 0; }
+.hw-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.hw-field input { width: 130px; }
+.hw-part { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.hw-part select, .hw-part input { max-width: 100%; }
+.hw-report p { margin: 8px 0; }
+.hw-board .btn { max-width: 100%; white-space: normal; text-align: left; }
+.hw-fields select { max-width: 100%; }
+.hw-driver .inst-code { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -165,7 +165,7 @@ function closeInstall() {
 /* ───────── ESP32 ───────── */
 function espGuide(t) {
   const ground = t === 'ground', fwName = ground ? 'ground' : 'flight', profile = instProfile(t);
-  INST.files = null;
+  INST.files = null; INST.customFirmware = false;
   const out = [], tasks = instTasks(t), edited = editedFor(tasks);
   const notes = [];
   if (!ground && !tasks.includes('core')) notes.push('The firmware is the flight controller\'s: on a board that doesn\'t run the flight core, it would fly nothing. Give this board the flight core, or use it for the command module.');
@@ -220,10 +220,10 @@ function espGuide(t) {
   return out;
 }
 function espDesign(t, edited) {
-  const profile = instProfile(t);
+  const profile = instProfile(t), wiring = boardWiringPlan(t);
   const acts = actuators(), js = joints(), msg = el('p', { class: 'hint inst-msg', role: 'status' });
-  const mp = el('input', { type: 'text', id: 'instMotors', value: profile.motors.slice(0, acts.length).join(','), spellcheck: 'false', 'aria-label': 'Motor pins' });
-  const sp = el('input', { type: 'text', id: 'instServos', value: profile.servos.slice(0, js.length).join(','), spellcheck: 'false', 'aria-label': 'Servo pins' });
+  const mp = el('input', { type: 'text', id: 'instMotors', value: wiring.motors.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Motor pins' });
+  const sp = el('input', { type: 'text', id: 'instServos', value: wiring.servos.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Servo pins' });
   const map = el('ol', { class: 'inst-map' });
   const redraw = () => {
     map.textContent = ''; const m = mp.value.split(/[,\s]+/).filter(Boolean), s = sp.value.split(/[,\s]+/).filter(Boolean);
@@ -232,12 +232,12 @@ function espDesign(t, edited) {
   };
   mp.addEventListener('input', redraw); sp.addEventListener('input', redraw); redraw();
   const sendAf = el('button', { class: 'btn primary', type: 'button', id: 'instSendAf', text: 'Send the airframe' });
-  const sendWire = el('button', { class: 'btn', type: 'button', id: 'instSendWire', text: 'Send the wiring (it restarts)' });
+  const sendWire = el('button', { class: 'btn', type: 'button', id: 'instSendWire', text: 'Send hardware settings (it restarts)' });
   sendAf.addEventListener('click', () => espSendAirframe(msg));
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
-    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. Default I2C is GPIO ${profile.i2c.join(', ')}. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
+    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in <b>Hardware wiring</b> in Computers. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
     el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
     el('div', { class: 'inst-row' }, sendAf),
@@ -247,6 +247,8 @@ function espDesign(t, edited) {
     sendP.addEventListener('click', () => espSendProgram(msg));
     kids.push(instPara(`You edited ${edited.join(', ')}. The board checks the new formulas, runs them beside its own for a second, then swaps; they last until it restarts (it always starts on its built-in ones), so send them after each power-up, or before a flight.`), el('div', { class: 'inst-row' }, sendP));
   }
+  if(Object.values(wiring.sensors).some(s=>s.driver==='custom')) { const ack=el('input',{type:'checkbox',id:'instCustomBuilt'});ack.addEventListener('change',()=>{INST.customFirmware=ack.checked;});kids.push(el('label',{class:'check'},ack,'This board already runs firmware rebuilt with this design’s custom C driver')); }
+  for(const text of [...wiring.errors,...wiring.warnings]) kids.push(el('p',{class:'inst-note',text}));
   kids.push(msg);
   return instStep(2, 'Send this design', ...kids);
 }
@@ -275,7 +277,7 @@ function espManual(t, ground, fwName, edited) {
     const dl = (what, text) => el('button', { class: 'btn', type: 'button', text, onclick: () => instDownload(what, t, msg) });
     kids.push(instPara('The design, sent with <code>runner/pi/fly.py</code> (<code>pip install pyserial</code>) from a computer or the Pi:'),
       el('div', { class: 'inst-row' }, dl('airframe', `${designBase()}.dfa: the airframe`), ...(edited.length ? [dl('program', `${designBase()}.rnp: the edited formulas`)] : [])), msg,
-      cmdBox(`python3 runner/pi/fly.py ${port} set servos= motors=${profile.motors.slice(0, actuators().length).join(',')}${joints().length ? ' servos=' + profile.servos.slice(0, joints().length).join(',') : ''}\npython3 runner/pi/fly.py ${port} save\npython3 runner/pi/fly.py ${port} reboot\npython3 runner/pi/fly.py ${port} airframe ${designBase()}.dfa${edited.length ? `\npython3 runner/pi/fly.py ${port} program ${designBase()}.rnp` : ''}\npython3 runner/pi/fly.py ${port} status`, 'the fly.py commands'),
+      cmdBox(`${hardwareSettings(boardWiringPlan(t)).map(line=>'python3 runner/pi/fly.py '+port+' set '+line).join('\n')}\npython3 runner/pi/fly.py ${port} save\npython3 runner/pi/fly.py ${port} reboot\npython3 runner/pi/fly.py ${port} airframe ${designBase()}.dfa${edited.length ? `\npython3 runner/pi/fly.py ${port} program ${designBase()}.rnp` : ''}\npython3 runner/pi/fly.py ${port} status`, 'the fly.py commands'),
       instPara('<code>.dfa</code>: the airframe the flight core flies on (each motor\'s force and torque, the servos, the mass and inertia, where the IMU sits), checked by the board and kept in its flash. <code>.rnp</code>: a program, the formulas compiled into the steps the board runs, with self-tests; it lasts until a restart. <code>fly.py PORT test 1 0.1</code> spins motor 1 at 10% for 2 s, props off.', 'hint'));
   } else kids.push(instPara('Its settings can also be typed in any serial terminal at 115200 baud (<code>screen PORT 115200</code>, the Arduino serial monitor).', 'hint'));
   return el('details', { class: 'inst-manual' }, el('summary', { text: 'What the files are, and doing it by hand' }), ...kids);
@@ -328,10 +330,13 @@ async function espSendAirframe(msg) {
   instMsg(msg, r === 'airframe loaded and saved' ? 'The board took the airframe and saved it.' : 'The board says: ' + r, r === 'airframe loaded and saved' ? 'good' : 'bad');
 }
 async function espSendWiring(motors, servos, msg) {
-  const lines = ['servos=', 'motors=' + motors.replace(/\s+/g, ''), ...(servos.trim() ? ['servos=' + servos.replace(/\s+/g, '')] : [])];
-  try { checkBoardWiring(instProfile(INST.target), motors, servos, actuators().length, joints().length); } catch (e) { instMsg(msg, e.message, 'bad'); return; }
+  const plan=boardWiringPlan(INST.target);
+  if(plan.errors.length) { instMsg(msg,plan.errors.join('; '),'bad');return; }
+  const custom=Object.values(plan.sensors).some(s=>s.driver==='custom');
+  if(custom && !INST.customFirmware) { instMsg(msg,'Custom C drivers require rebuilt firmware. Flash your custom .bin files first, then send these settings.','bad');return; }
+  const lines=hardwareSettings(plan);
   for (const l of lines) {
-    const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO/.test(s), 2000, msg, 'Sending ' + l);
+    const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_/.test(s), 2000, msg, 'Sending ' + l);
     if (r === null) { if (!/Couldn|Not conn/.test(msg.textContent)) instMsg(msg, 'No answer from the board.', 'bad'); return; }
     if (!/^set /.test(r)) { instMsg(msg, 'The board refused ' + l + ': ' + r, 'bad'); return; }
   }
@@ -410,6 +415,7 @@ async function espFlash(name, profile, prog, msg) {
       reportProgress: (i, written, size) => { done[i] = written / size * fw.parts[i].data.length; prog.value = done.reduce((a, b) => a + b, 0) / total; },
     });
     prog.value = 1;
+    INST.customFirmware = !!(INST.files && INST.files.length);
     await loader.after('hard_reset');
     say('Installed and checked: the board restarted on the new firmware.' + (name === 'flight' ? ' Now send it this design (step 2).' : ' Now connect and set up its wiring (step 2).'));
     msg.className = 'hint inst-msg good';
@@ -445,10 +451,11 @@ async function pastePack(files, after) {
 }
 function piGuide(t, K) {
   const tasks = t.tasks, learnOrSuper = tasks.includes('learn') || tasks.includes('super');
+  const gpsSensor=sensorsOf('fix').find(c=>wiredTo(c)===t);
   const fix = sensorsOf('fix').some(c => wiredTo(c) === t) && tasks.includes('nav'), nL = latches().length, cargo = tasks.includes('cargo') && nL > 0, radio = tasks.includes('tlm');
   const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
-  if (fix) fields.push(['gps', 'GPS port', '/dev/ttyUSB0', 'A USB GPS: /dev/ttyUSB0 or /dev/ttyACM0']);
+  if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'A USB GPS: /dev/ttyUSB0 or /dev/ttyACM0']);
   fields.push(['link', 'Link to the ESP32', '/dev/serial0', '/dev/serial0 for the GPIO pins, /dev/ttyUSB0 for a USB cable to the ESP32']);
   if (cargo) fields.push(['latch', 'Latch outputs', ['pwm0', 'pwm1', 'gpio17', 'gpio27', 'gpio22', 'gpio23', 'gpio24', 'gpio25'].slice(0, nL).join(','), 'pwmN: a servo on hardware PWM channel N; gpioN: an on/off line']);
   if (radio) fields.push(['crsf', 'Receiver port', K.label === 'Raspberry Pi 4' ? '/dev/ttyAMA1' : '/dev/ttyUSB1', 'The ExpressLRS receiver\'s serial port on the Pi']);

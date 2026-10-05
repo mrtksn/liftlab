@@ -31,3 +31,5 @@ C3 has few available pins: its default servo pins (3,10) are also the default ra
 With ESP-IDF 5.3.2 activated, run `sh tools/build_firmware.sh`. It builds both roles for each chip, writes `firmware/<chip>-<role>/`, and records offsets, sizes and SHA-256 in a version-2 manifest. It leaves sdkconfig/build products in `/tmp/liftlab-firmware-build` by default (`BUILD_DIR` overrides this). Rebuild firmware after changing C hardware profiles; original-ESP32 binaries cannot be reused for S3/C3. The installer also checks image chip IDs for locally selected files.
 
 Run `node tools/test_board_install.js` for manifest/image/wiring checks. `.github/workflows/boards.yml` compiles the six ESP combinations and host programs on Linux/macOS. Local compilation and browser tests do not establish flight stability, sensor compatibility or timing on a physical board. Bench-check outputs and loop timing with props removed before flight.
+
+Configure saved pins, sensor profiles and custom C drivers in Computers → Hardware wiring. See [hardware wiring and drivers](hardware-wiring.md).

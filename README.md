@@ -773,7 +773,7 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 **Telemetry and the radio's channels.** The board with the radio asks the other for its telemetry items (`RN_LINK_WANT` bit 2, twice a second) and gets them as `RN_LINK_TLM` frames. When the radio is on the ESP32 and the navigation on the Pi, the ESP32 passes what the receiver got (channels, link statistics, the ground station's last command, with its age) to the Pi as `RN_LINK_RC` 50 times a second, and the Pi's navigation flies on it (a command over a second old isn't acted on, so a board that restarts doesn't replay an old go-to); in angle mode the ESP32 flies on the sticks itself.
 
-**The compass** goes into the attitude estimator when there is one, so the heading doesn't drift; GPS navigation needs it. (The ESP32 firmware has no compass driver yet: on the drone, the heading drifts until it does.)
+**The compass** goes into the attitude estimator when there is one, so the heading doesn't drift; GPS navigation needs it. The ESP firmware supports an HMC5883L selected in Hardware wiring, with mounting and manual bias/scale calibration. Without a working compass, heading drifts.
 
 ### What it flies
 
@@ -784,7 +784,7 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
   
   Nothing about the layout is hard-coded in the firmware.
 - **Angle mode.** The sticks set the lean, from a level hover up to 35°, and the turn rate. The throttle stick is centred at 0.5:
-  - **with a barometer** (BMP280/BME280), it sets the climb or sink speed, up to 2 m/s, and the middle holds the height;
+  - **with a barometer** (BMP180/BMP280/BME280), it sets the climb or sink speed, up to 2 m/s, and the middle holds the height;
   - **without one**, it sets vertical acceleration, and the middle keeps the vertical speed.
   
   Either way the accelerometer trims the thrust until the drone accelerates as asked, so the airframe's weight needn't be exact. There's no horizontal position hold: that needs GPS or optical flow.
@@ -812,13 +812,16 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 ### Hardware
 
 **IMU**
-- An MPU-6050 (GY-521), MPU-6500 or MPU-9250 on I2C: SDA 21, SCL 22.
+- An MPU-6050 (GY-521), MPU-6500 or MPU-9250 on I²C. Default SDA/SCL: ESP32 21/22, S3 17/18, C3 0/1; configurable in Computers → Hardware wiring.
 - A LIS3DH is recognised, but it has no gyro, so a board with only a LIS3DH won't arm. It is still useful for motor tests and for checking the wiring.
 - At boot, if the drone stands still, the firmware measures the gyro's offset.
 
-**Barometer (optional):** a BMP280 or BME280 on the same bus.
+**Barometer (optional):** a BMP180/BMP085, BMP280 or BME280 on the same bus.
+
+**Compass (optional):** an HMC5883L on the same bus, selected explicitly. The 10DOF preset configures MPU6050 + BMP180 + HMC5883L at 0x68, 0x77 and 0x1e; adjust mounting and compass calibration to the real module. QMC5883L and AK8963 require different drivers.
 
 **ESCs**
+- The pin examples below are for the original ESP32; S3/C3 defaults and limits are shown in Hardware wiring and [the board guide](docs/boards.md).
 - Standard PWM ESCs, 1000–2000 µs at 400 Hz.
 - Default pins: motors 1–8 on GPIO 25, 26, 27, 14, 32, 33, 4, 13. Motors 9–12 can go on free pins too; they share the servos' 8 channels.
 - Only GPIO 4, 13, 14, 16–19, 21–23, 25–27, 32 and 33 are accepted for outputs. The boot-strapping pins (0, 2, 5, 12, 15) are refused: something wired there can stop the ESP32 booting, and some toggle during boot. A pin can't be used twice, and the longest ESC pulse must fit its period.
@@ -831,14 +834,14 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 
 **ExpressLRS receiver (optional):** set with `crsf=RX,TX`: the GPIO its TX goes to (an input-only pin, 34–39, works), then the one its RX goes to (`crsf=-1` for none). By default every output pin has a motor or servo, so free one first: on a quad, `motors=25,26,27,14` frees 32, 33, 4 and 13, then `crsf=35,33`. `elrs=250,4` must match the packet rate and telemetry ratio set on the radio, so the telemetry fits. Bind the receiver and set it to CRSF output as usual. Wiring saved by older firmware is kept, with no receiver.
 
-**Wiring settings:** the wiring is kept in flash. Change it with `fly.py PORT set …`, then `save` and `reboot`.
+**Wiring settings:** saved design assignments are sent from Install; see [hardware wiring and custom drivers](docs/hardware-wiring.md). The board keeps them in flash. Alternatively, change them with `fly.py PORT set …`, then `save` and `reboot`.
 
 **Tasks**
 
 | Core | Task | What it does |
 |---|---|---|
 | Core 1 | Control loop (1 kHz) | Runs the flight code |
-| Core 0 | Sensor task | Reads the IMU every step and the barometer at 25 Hz |
+| Core 0 | Sensor task | Reads the IMU every step, polls barometer conversions and the compass |
 | Core 0 | Link task | The Pi's commands, programs, airframe, settings and the learning's and supervisor's frames; telemetry at 20 Hz, and LTEL at up to 200 Hz while asked |
 | Core 0 | Radio task | With a receiver: its channels (sticks when flying in angle mode, otherwise passed to the Pi), the telemetry store and the CRSF telemetry, 200 times a second |
 
@@ -1016,3 +1019,5 @@ The attainable set of accelerations is the sum of what each rotor can make: anyt
 - Cargo: a loose thing is a rigid body with corner springs: it doesn't push the drone (a falling one passes through it), and the drone doesn't push one at rest. Loose things stack, but only on ones already at rest. Picking up snaps the thing under the hook in the drone's axes. The ESP32 flight firmware has no latch outputs yet: in the simulator any board can run the Cargo task, but on hardware only `dfb_pi --latch` drives latches so far.
 - The runner has run on an ESP32 bench (its self-tests, timings, and loading, rejecting and falling back from programs sent over USB), not in a drone yet.
 - In 32-bit floats the allocation can pick a different split between motors where several are equally good; the forces and torques it makes match.
+
+**Hardware wiring and sensor drivers.** The Computers tab now saves per-part board/GPIO assignments, shared I²C pins, device profiles/addresses and PWM calibration with the design. It includes a MPU6050/BMP180/HMC5883L 10DOF preset and a custom C sensor driver editor; edited drivers require an ESP-IDF rebuild. See [hardware wiring and custom drivers](docs/hardware-wiring.md).
