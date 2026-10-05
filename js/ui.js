@@ -918,9 +918,11 @@ function buildSp() {
 /* ───────── header ───────── */
 // Start from a layout or one of your saved designs: a menu, so nothing loads until you pick one.
 const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left', title: 'Start from a layout (Blank is a bare frame) or one of your saved designs',
-  items: () => [...Object.entries(PRESETS).map(([k, p]) => ({ value: 'p:' + k, label: p.label, group: 'Layouts', hint: p.blank ? 'opens the editor' : null })),
-    ...(typeof designs !== 'undefined' ? designs.list : []).map(d => ({ value: 'd:' + d.id, label: d.name || 'Untitled design', group: 'My designs', cur: d.id === designs.cur }))],
+  items: () => [...Object.entries(PRESETS).map(([k, p]) => ({ value: 'p:' + k, label: p.label, group: 'Layouts', hint: p.blank ? 'opens the editor' : null, cur: typeof designs !== 'undefined' && !designs.name && designs.preset === k })),
+    ...(typeof designs !== 'undefined' ? designs.list : []).map(d => ({ value: 'd:' + d.id, label: d.name || 'Untitled design', group: 'My designs', cur: d.id === designs.cur })),
+    { value: 'x:paste', label: 'Open a shared design…', group: 'Shared with you', hint: 'paste a link or a code' }],
   onPick: v => {
+    if (v === 'x:paste') { openShare(true); return; }
     if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
     else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
   } });
@@ -932,7 +934,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
   setLaws({});   // (and the formulas as they come)
-  designLoaded(null, ''); afterLoad();
+  designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
 function afterLoad() {
@@ -1154,7 +1156,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designPreset: typeof designs !== 'undefined' ? designs.preset : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -1204,7 +1206,7 @@ function load() {
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
     cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
-    bootDesign = { cur: s.designCur || null, name: s.designName || '', clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
+    bootDesign = { cur: s.designCur || null, name: s.designName || '', preset: PRESETS[s.designPreset] ? s.designPreset : null, clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
     return true;
   }
   return false;

@@ -37,8 +37,10 @@ async function openDesignCode(text, from) {
 const shareBase = () => location.href.split('#')[0];
 
 /* ───────── the dialog ───────── */
-async function openShare() {
-  const dlg = $('#shareDlg'), name = (($('#designName').value || '').trim()) || designs.name || 'Untitled design';
+async function openShare(pasteOnly = false) {
+  const dlg = $('#shareDlg'); dlg.classList.toggle('paste-only', !!pasteOnly);
+  if (pasteOnly) { $('#shareOpenMsg').textContent = ''; $('#shareIn').value = ''; dlg.showModal(); $('#shareIn').focus(); return; }
+  const name = (($('#designName').value || '').trim()) || designs.name || (designs.preset && PRESETS[designs.preset] ? PRESETS[designs.preset].label.replace(/\s*\(.*\)\s*$/, '') + ' (changed)' : 'Untitled design');
   setText($('#shareName'), name); $('#shareMsg').textContent = ''; $('#shareOpenMsg').textContent = ''; $('#shareIn').value = '';
   let code = '';
   try { code = await designCode(name); } catch (e) { $('#shareMsg').textContent = 'Couldn’t pack it: ' + e.message; }
@@ -55,7 +57,7 @@ async function copyText(t, what) {
   }
   $('#shareMsg').textContent = ok ? `${what} copied.` : `Couldn’t copy: select it and copy it yourself.`; $('#shareMsg').className = 'hint ' + (ok ? 'good' : 'bad');
 }
-$('#designShare').addEventListener('click', openShare);
+$('#designShare').addEventListener('click', () => openShare(false));
 $('#shareCopy').addEventListener('click', () => copyText($('#shareLink').value, 'The link'));
 $('#shareCopyCode').addEventListener('click', () => copyText($('#shareLink').dataset.code, 'The code'));
 $('#shareClose').addEventListener('click', () => $('#shareDlg').close());

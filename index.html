@@ -20,6 +20,7 @@
       <span class="lbl" id="grpAir">Airframe</span>
       <div class="hrow">
         <span id="presetSlot"></span>
+        <button class="btn icon" id="designShare" type="button" aria-label="Share this design" title="Share this design with a link"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="3.5" r="1.8"/><circle cx="12" cy="12.5" r="1.8"/><circle cx="4" cy="8" r="1.8"/><path d="m5.6 7.1 4.8-2.7M5.6 8.9l4.8 2.7"/></svg></button>
       </div>
     </div>
     <div class="hgroup" role="group" aria-labelledby="grpWorld">
@@ -82,7 +83,6 @@
           <span class="design-gap"></span>
           <button class="btn sm" id="designImport" type="button" title="Open a design file">Open…</button>
           <button class="btn sm" id="designExport" type="button" title="Save this design as a file">Export</button>
-          <button class="btn sm" id="designShare" type="button" title="Share this design with a link, or open one shared with you">Share</button>
           <input type="file" id="designFile" accept=".json,application/json" hidden>
         </div>
         <p class="note" id="designNote" role="status" hidden></p>
@@ -289,6 +289,7 @@
         <button class="btn" type="button" id="crashReset" title="Start the flight again (R)"><span id="crashResetLbl">Reset</span> <kbd>R</kbd></button>
       </div>
       <dialog class="ask share-dlg" id="shareDlg" aria-labelledby="shareTitle">
+        <div class="share-out">
         <h2 id="shareTitle">Share “<span id="shareName"></span>”</h2>
         <p>The whole design (the airframe, its computers and edited formulas) travels inside the link. Nothing is stored anywhere: the page that opens the link unpacks it.</p>
         <div class="share-row"><input type="text" id="shareLink" readonly aria-label="Link to this design" spellcheck="false"><button class="btn primary" type="button" id="shareCopy">Copy link</button></div>
@@ -296,6 +297,7 @@
         <p class="hint" id="shareLocal" hidden>This page is opened from a file, so the link points at it on this computer. Until the page is hosted somewhere, send the code: whoever has a copy of the page pastes it below.</p>
         <div class="share-row"><button class="btn" type="button" id="shareCopyCode">Copy the code only</button></div>
         <p class="hint" id="shareMsg" role="status"></p>
+        </div>
         <h2>Open a shared design</h2>
         <textarea id="shareIn" rows="3" placeholder="Paste a link or a code" aria-label="A shared link or code" spellcheck="false"></textarea>
         <p class="hint" id="shareOpenMsg" role="status"></p>

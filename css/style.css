@@ -946,3 +946,8 @@ button.tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .share-dlg textarea{width:100%;box-sizing:border-box;font-family:var(--f-mono);font-size:11.5px;border:1px solid var(--line-strong);border-radius:6px;padding:6px 8px;background:var(--panel);color:var(--ink);resize:vertical}
 .share-dlg .hint{margin:0 0 6px}
 .share-dlg .hint:empty{display:none}
+.share-dlg.paste-only .share-out{display:none}
+.share-dlg.paste-only h2{margin-top:0;padding-top:0;border-top:0}
+#designShare svg{width:16px;height:16px}
+#designShare:disabled{opacity:.4;cursor:default}
+#presetSlot .mb-btn > span:first-child{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
