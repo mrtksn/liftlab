@@ -1,0 +1,39 @@
+name: Board firmware and host programs
+on:
+  push:
+    paths: ['runner/**', 'js/board-hardware.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test_board_install.js', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+  pull_request:
+    paths: ['runner/**', 'js/board-hardware.js', 'js/install-ui.js', 'js/boards.js', 'js/computers-ui.js', 'tools/test_board_install.js', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  esp:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.3.2
+    strategy:
+      matrix:
+        chip: [esp32, esp32s3, esp32c3]
+        role: [fc, ground]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile firmware
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          cd runner/${{ matrix.role }}/esp32
+          idf.py -B /tmp/board-build -D SDKCONFIG=/tmp/board-build/sdkconfig -D IDF_TARGET=${{ matrix.chip }} build
+  host:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh runner/ground/build.sh
+      - if: runner.os == 'Linux'
+        run: sh runner/pi/build.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node tools/test_board_install.js

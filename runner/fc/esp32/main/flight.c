@@ -45,6 +45,7 @@
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
 #include "hw.h"
+#include "esp_board.h"
 
 extern const uint8_t *const rn_builtin_img;
 extern const uint32_t rn_builtin_len;
@@ -54,14 +55,14 @@ extern const uint32_t rn_builtin_len;
 #define IMG_CAP (40 * 1024)
 #define AIRFRAME_CAP 4096       /* the largest airframe (12 motors on 2 joints each, 8 servos) is 3.6 KB */
 #define LINK UART_NUM_0
-#define RADIO UART_NUM_2
+#define RADIO LB_RADIO_UART
 
 static hw_config HW, HW_next;            /* the wiring in use, and as it will be after a reboot */
 static hw_sensors SENS;
 static rn_host H;
 static fc_state F;
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-static void host_lock(void *c, int on) { if (on) portENTER_CRITICAL(&mux); else portEXIT_CRITICAL(&mux); }
+static void host_lock(void *c, int on) { if (on) { portENTER_CRITICAL(&mux); } else { portEXIT_CRITICAL(&mux); } }
 static TaskHandle_t flight_h;
 static int outputs_ok; static char outputs_why[64] = "outputs not wired";   /* every motor and servo of the airframe has a working output */
 
@@ -191,14 +192,15 @@ static void flight_task(void *arg) {
     rn_host_tick(&H, dt);
     fc_step(&F, &m, dt, vbatt, &OUT);
     static int lt_k = 0;                               /* LTEL: 200 Hz at 921600 baud, 100 at 460800, 50 slower */
-    int lt_every = HW.rate_hz / (HW.link_baud >= 921600 ? 200 : HW.link_baud >= 460800 ? 100 : 50);
-    if (++lt_k >= (lt_every > 0 ? lt_every : 1) && F.have_airframe && esp_timer_get_time() - want_us < 1000000) {
-      lt_k = 0; static float lt[FC_LTEL_MAX]; int n = fc_ltel(&F, lt);
+    lt_k += HW.link_baud >= 921600 ? 200 : HW.link_baud >= 460800 ? 100 : 50;
+    int lt_due = lt_k >= HW.rate_hz; if (lt_due) lt_k -= HW.rate_hz;
+    if (lt_due && F.have_airframe && esp_timer_get_time() - want_us < 1000000) { static float lt[FC_LTEL_MAX]; int n = fc_ltel(&F, lt);
       portENTER_CRITICAL(&mux); memcpy(ltel_box, lt, (size_t)n * 4); ltel_n = n; portEXIT_CRITICAL(&mux);
     }
-    static int nav_n = 0;
-    if (++nav_n >= HW.rate_hz / 100 && m.have_gyro) {   /* 100 Hz: attitude, rates, specific force (body), height */
-      nav_n = 0; float nb[16]; const float *Ri = F.A.imu_R;
+    static int nav_n = 0; nav_n += 100;
+    int nav_due = nav_n >= HW.rate_hz; if (nav_due) nav_n -= HW.rate_hz;
+    if (nav_due && m.have_gyro) {   /* 100 Hz: attitude, rates, specific force (body), height */
+      float nb[16]; const float *Ri = F.A.imu_R;
       nb[0] = (float)F.t; nb[1] = (float)F.state; for (int k = 0; k < 4; k++) nb[2 + k] = F.q[k]; for (int k = 0; k < 3; k++) nb[6 + k] = F.w[k];
       for (int k = 0; k < 3; k++) nb[9 + k] = F.have_airframe ? Ri[3 * k] * m.acc[0] + Ri[3 * k + 1] * m.acc[1] + Ri[3 * k + 2] * m.acc[2] : m.acc[k];
       nb[12] = F.have_alt ? F.alt_e : 0; nb[13] = (float)F.have_alt; nb[14] = (float)F.att_ok; nb[15] = 0;
@@ -402,13 +404,13 @@ void app_main(void) {
     printf("%s\n%s\n", F.why, outputs_ok ? "every motor and servo has an output" : outputs_why);
   } else printf("no airframe yet: send one from the simulator (fly.py airframe FILE.dfa)\n");
   if (!img_buf) { printf("no memory for the link: this build can't run here\n"); return; }
-  printf("control loop %d Hz on core 1; telemetry %d Hz; free heap %u bytes\n\n", HW.rate_hz, HW.telem_hz, (unsigned)esp_get_free_heap_size());
+  printf("control loop %d Hz on core %d; telemetry %d Hz; free heap %u bytes\n\n", HW.rate_hz, LB_FLIGHT_CPU, HW.telem_hz, (unsigned)esp_get_free_heap_size());
 
   printf("link: %ld baud from here on\n", (long)HW.link_baud); fflush(stdout); vTaskDelay(pdMS_TO_TICKS(20));
   uart_driver_install(LINK, 8192, 8192, 0, NULL, 0);
   uart_set_baudrate(LINK, (uint32_t)HW.link_baud);
   uart_vfs_dev_use_driver(LINK);
-  xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, 1);
+  xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU);
   xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);
   xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0);
   if (HW.crsf_rx >= 0) {

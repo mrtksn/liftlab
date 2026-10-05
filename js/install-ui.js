@@ -6,8 +6,6 @@
 // step-by-step guide with the commands to paste into its terminal (over SSH): the design's files travel inside them.
 
 const FW_DIR = 'firmware/';
-const ESP_MOTOR_PINS = [25, 26, 27, 14, 32, 33, 4, 13], ESP_SERVO_PINS = [16, 17, 18, 19, 23];   // the firmware's defaults (hw.c)
-const ESP_OUT_PINS = [4, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];                   // what it lets drive an output
 const LK = { PROGRAM: 1, STATUS: 2, AIRFRAME: 4, SETTING: 5, EVENT: 0x81, REPORT: 0x82, TELEM: 0x83 };
 const INST_STATES = ['disarmed', 'ARMED', 'FAILSAFE', 'CRASHED', 'motor test'];
 const INST = { target: null, conn: null, busy: false, fw: null, files: null, log: [] };
@@ -108,6 +106,7 @@ class BoardConn {
 
 /* ───────── which board, what it needs ───────── */
 const instKind = t => t === 'ground' ? computers().ground.kind : t.kind;
+const instProfile = t => ESP_PROFILES[instKind(t)];
 const instName = t => t === 'ground' ? computers().ground.name : t.name;
 const instTasks = t => t === 'ground' ? ['ground'] : t.tasks;
 const editedFor = tasks => rnTaskFormulas(tasks).filter(k => LAWS[k] && LAWS[k].status === 'edited');
@@ -151,8 +150,7 @@ function openInstall(target) {
   setText($('#installTitle'), `Install on a real board: ${instName(target)}`);
   setText($('#installSub'), `${K.label} · runs ${instTasks(target).map(t => t === 'ground' ? 'the command module' : TASKS[t].label).join(', ') || 'nothing yet'}`);
   const body = $('#installBody'); body.textContent = '';
-  if (kind === 'esp32') body.append(...espGuide(target));
-  else if (K.mcu) body.append(...otherMcu(target, K));
+  if (K.mcu) body.append(...espGuide(target));
   else if (target === 'ground') body.append(...groundPiGuide(K));
   else body.append(...piGuide(target, K));
   if (!dlg.open) dlg.showModal();
@@ -166,13 +164,15 @@ function closeInstall() {
 
 /* ───────── ESP32 ───────── */
 function espGuide(t) {
-  const ground = t === 'ground', fwName = ground ? 'ground' : 'flight';
+  const ground = t === 'ground', fwName = ground ? 'ground' : 'flight', profile = instProfile(t);
+  INST.files = null;
   const out = [], tasks = instTasks(t), edited = editedFor(tasks);
   const notes = [];
   if (!ground && !tasks.includes('core')) notes.push('The firmware is the flight controller\'s: on a board that doesn\'t run the flight core, it would fly nothing. Give this board the flight core, or use it for the command module.');
   if (!ground && tasks.includes('nav')) notes.push('The firmware doesn\'t run the navigation on the ESP32 yet: on the real drone, put the navigation on a Raspberry Pi (until then it flies in angle mode).');
   if (!ground && tasks.includes('cargo')) notes.push('The firmware has no latch outputs yet: on the real drone, the latches are driven from a Pi (dfb_pi --latch).');
   if (ground && edited.length) notes.push(`Your edits to ${edited.join(', ')} aren't loaded by the ESP32 command module yet: it runs its built-in formulas.`);
+  out.push(el('p', { class: 'inst-note', text: `${profile.label}: ${profile.outputs} total motor/servo PWM outputs; flight loop defaults to ${profile.rate} Hz. The running firmware communicates on UART0; use a USB-to-UART connector or adapter. Native USB can flash the chip, but does not carry this firmware’s design/console link. Check the module schematic before wiring.` }));
   out.push(instPara(`What goes on it: the ${ground ? 'command module' : 'flight controller'} firmware (the same C the simulator runs for this board), then ${ground ? 'its wiring, typed in below' : 'this design: the airframe, which board pins the motors and servos are on, and any formulas you edited'}.`));
   for (const n of notes) out.push(el('p', { class: 'inst-note', text: n }));
   out.push(el('div', { class: 'inst-safety' }, el('b', { text: 'Before you plug it in' }), el('ul', {},
@@ -185,15 +185,15 @@ function espGuide(t) {
   const erase = el('label', { class: 'check' }, el('input', { type: 'checkbox', id: 'instErase' }), 'Erase the whole board first (forgets the wiring and airframe it saved)');
   const go = el('button', { class: 'btn primary', type: 'button', id: 'instFlash', text: 'Install now over USB' });
   const pick = el('input', { type: 'file', multiple: '', accept: '.bin', hidden: '', id: 'instFiles' });
-  const pickBtn = el('button', { class: 'btn', type: 'button', text: 'Use firmware files from this computer…', title: `The three .bin files from firmware/esp32-${fwName}/` });
+  const pickBtn = el('button', { class: 'btn', type: 'button', text: 'Use firmware files from this computer…', title: `The three .bin files from firmware/${profile.chip}-${fwName}/` });
   pickBtn.addEventListener('click', () => pick.click());
   pick.addEventListener('change', () => { INST.files = [...pick.files]; instMsg(msg, INST.files.length ? `Using ${INST.files.map(f => f.name).join(', ')}.` : ''); });
-  go.addEventListener('click', () => espFlash(fwName, prog, msg));
+  go.addEventListener('click', () => espFlash(fwName, profile, prog, msg));
   if (!serialOk) { go.disabled = true; instMsg(msg, 'This browser can\'t reach USB ports: use Chrome or Edge on a computer (not a phone or tablet, not Safari or Firefox), or install by hand (below).', 'bad'); }
-  out.push(instStep(1, 'Install the firmware', instPara(`Plug the board in, press <b>Install now</b> and pick its port (<i>CP2102</i>, <i>CH340</i>, <i>USB Serial</i> or <i>USB JTAG</i>). It takes about half a minute. If it can't connect, hold the board's <b>BOOT</b> button while you press Install, and let go once it starts writing.`),
+  out.push(instStep(1, 'Install the firmware', instPara(`Plug the board in, press <b>Install now</b> and pick its port (<i>CP2102</i>, <i>CH340</i> or <i>USB Serial</i>). It takes about half a minute. If it can't connect, hold the board's <b>BOOT</b> button while you press Install, and let go once it starts writing.`),
     el('div', { class: 'inst-row' }, go, pickBtn, pick), erase, prog, msg));
   // 2: the design (or wiring for the command module)
-  out.push(ground ? espGroundWiring() : espDesign(t, edited));
+  out.push(ground ? espGroundWiring(profile) : espDesign(t, edited));
   // the board's messages
   const con = el('pre', { class: 'inst-console', id: 'instConsole', 'aria-live': 'polite' });
   const live = el('p', { class: 'hint inst-live', id: 'instLive' });
@@ -213,16 +213,17 @@ function espGuide(t) {
   };
   send.addEventListener('click', sendLine); line.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendLine(); } });
   if (!serialOk) [conn, send, line].forEach(x => { x.disabled = true; });
-  out.push(instStep(3, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : 'What it says over USB: its events, and twice a second what it\'s doing. Settings are typed without <code>set</code> or with it: <code>motors=25,26,27,14</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is.'),
+  out.push(instStep(3, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : `What it says over USB: its events, and twice a second what it's doing. Settings are typed without <code>set</code> or with it: <code>motors=${profile.motors.slice(0,4).join(',')}</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is.`),
     el('div', { class: 'inst-row' }, conn, baud), live, con, el('div', { class: 'inst-row inst-line' }, line, send)));
   out.push(espManual(t, ground, fwName, edited));
   INST.log = []; instConnUi();
   return out;
 }
 function espDesign(t, edited) {
+  const profile = instProfile(t);
   const acts = actuators(), js = joints(), msg = el('p', { class: 'hint inst-msg', role: 'status' });
-  const mp = el('input', { type: 'text', id: 'instMotors', value: ESP_MOTOR_PINS.slice(0, acts.length).join(','), spellcheck: 'false', 'aria-label': 'Motor pins' });
-  const sp = el('input', { type: 'text', id: 'instServos', value: ESP_SERVO_PINS.slice(0, js.length).join(','), spellcheck: 'false', 'aria-label': 'Servo pins' });
+  const mp = el('input', { type: 'text', id: 'instMotors', value: profile.motors.slice(0, acts.length).join(','), spellcheck: 'false', 'aria-label': 'Motor pins' });
+  const sp = el('input', { type: 'text', id: 'instServos', value: profile.servos.slice(0, js.length).join(','), spellcheck: 'false', 'aria-label': 'Servo pins' });
   const map = el('ol', { class: 'inst-map' });
   const redraw = () => {
     map.textContent = ''; const m = mp.value.split(/[,\s]+/).filter(Boolean), s = sp.value.split(/[,\s]+/).filter(Boolean);
@@ -235,11 +236,11 @@ function espDesign(t, edited) {
   sendAf.addEventListener('click', () => espSendAirframe(msg));
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
-    instPara('Once the firmware is on, send it the design over the same cable. Both are kept on the board: send them again only when the design or the wiring changes.'),
-    el('div', { class: 'inst-row' }, sendAf),
-    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. The defaults avoid the pins that upset booting; the ones it can drive are ${ESP_OUT_PINS.join(', ')}.`),
+    instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
+    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. Default I2C is GPIO ${profile.i2c.join(', ')}. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
     el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
+    el('div', { class: 'inst-row' }, sendAf),
   ];
   if (edited.length) {
     const sendP = el('button', { class: 'btn', type: 'button', id: 'instSendProg', text: 'Send the edited formulas' });
@@ -249,37 +250,35 @@ function espDesign(t, edited) {
   kids.push(msg);
   return instStep(2, 'Send this design', ...kids);
 }
-function espGroundWiring() {
+function espGroundWiring(profile) {
   return instStep(2, 'Wire it up', instPara('The command module is set up by typing its settings (below, once connected): which pins go to the ExpressLRS transmitter module, the buttons, the sticks, a buzzer. Each takes effect after <code>save</code> and <code>reboot</code>.'),
-    cmdBox('set tx=17,16\nset arm=25\nset fly=26\nset roll=34\nset pitch=35\nset throttle=32\nset yaw=33\nset buzzer=27\nset latch=arm,fly\nsave\nreboot', 'the settings'),
-    instPara('<code>tx=TX,RX</code>: the ESP32 pin to the module\'s CRSF input, then the one its replies come in on (one pin for a module bay\'s single wire: <code>tx=17,17</code>). A button goes from its pin to ground; a stick\'s wiper to an ADC pin (32–39), centred at power-on (<code>34i</code> inverts it). Not pins 1 and 3 (the USB serial) or 6–11 (the flash); on a WROVER board 16 and 17 are the PSRAM\'s, so pick others for <code>tx</code>.', 'hint'));
+    cmdBox(profile.ground + '\nset latch=arm,fly\nsave\nreboot', 'the settings'),
+    instPara(`<code>tx=TX,RX</code>: to the module's CRSF input, then from its output; one pin for a module bay's single wire. Buttons connect to ground; sticks use free ADC1 pins (${profile.adc.join(', ')}). Keep all assignments distinct. ${profile.chip === 'esp32' ? 'On WROVER modules 16/17 belong to PSRAM; choose other pins.' : 'Native USB, flash/PSRAM and boot strap pins are reserved.'}`, 'hint'));
+
 }
 function espManual(t, ground, fwName, edited) {
-  const dir = FW_DIR + 'esp32-' + fwName + '/', app = ground ? 'dfb_ground.bin' : 'dfb_flight.bin', src = ground ? 'runner/ground/esp32' : 'runner/fc/esp32';
+  const profile = instProfile(t);
+  const dir = FW_DIR + profile.chip + '-' + fwName + '/', app = ground ? 'dfb_ground.bin' : 'dfb_flight.bin', src = ground ? 'runner/ground/esp32' : 'runner/fc/esp32';
   const files = el('table', { class: 'inst-files' }, el('tbody', {},
-    ...[['bootloader.bin', '0x1000', 'Espressif\'s second-stage bootloader: starts the firmware.'],
+    ...[['bootloader.bin', '0x' + profile.boot.toString(16), 'Espressif\'s second-stage bootloader: starts the firmware.'],
       ['partition-table.bin', '0x8000', 'How the flash is divided: settings storage (nvs, at 0x9000, where the wiring and airframe are kept), and the app.'],
       [app, '0x10000', ground ? 'The command module itself: ground_core.c with the buttons, sticks and CRSF.' : 'The flight controller itself: fc_core.c, the step runner and its built-in formulas, the sensors, ESCs, servos and the link.']]
       .map(([f, at, what]) => el('tr', {}, el('td', {}, el('a', { href: dir + f, download: f, text: f })), el('td', { class: 'mono', text: at }), el('td', { text: what })))));
-  const kids = [instPara(`The firmware is three files, each written at its own place in the board's flash (<code>firmware/esp32-${fwName}/</code>):`), files];
+  const kids = [instPara(`The firmware is three files, each written at its own place in the board's flash (<code>firmware/${profile.chip}-${fwName}/</code>):`), files];
   const port = 'PORT';
   kids.push(instPara(`With Espressif's esptool (<code>pip install esptool</code>), in that folder. <code>${port}</code> is the board's port: <code>/dev/ttyUSB0</code> on Linux, <code>/dev/cu.usbserial-…</code> or <code>/dev/cu.SLAB_USBtoUART</code> on a Mac, <code>COM3</code> or similar on Windows:`),
-    cmdBox(`esptool.py --chip esp32 -p ${port} -b 460800 write_flash @flash_args`, 'the flash command'),
+    cmdBox(`esptool.py --chip ${profile.chip} -p ${port} -b 460800 write_flash @flash_args`, 'the flash command'),
     instPara('That keeps what the board saved. For a clean start, first <code>esptool.py -p PORT erase_flash</code>. To build it yourself instead (ESP-IDF 5.x):', 'hint'),
-    cmdBox(`cd ${src}\nidf.py set-target esp32\nidf.py -p ${port} build flash monitor`, 'the build command'));
+    cmdBox(`cd ${src}\nidf.py set-target ${profile.chip}\nidf.py -p ${port} build flash monitor`, 'the build command'));
   if (!ground) {
     const msg = el('p', { class: 'hint inst-msg', role: 'status' });
     const dl = (what, text) => el('button', { class: 'btn', type: 'button', text, onclick: () => instDownload(what, t, msg) });
     kids.push(instPara('The design, sent with <code>runner/pi/fly.py</code> (<code>pip install pyserial</code>) from a computer or the Pi:'),
       el('div', { class: 'inst-row' }, dl('airframe', `${designBase()}.dfa: the airframe`), ...(edited.length ? [dl('program', `${designBase()}.rnp: the edited formulas`)] : [])), msg,
-      cmdBox(`python3 runner/pi/fly.py ${port} airframe ${designBase()}.dfa\npython3 runner/pi/fly.py ${port} set motors=${ESP_MOTOR_PINS.slice(0, actuators().length).join(',')}${joints().length ? ' servos=' + ESP_SERVO_PINS.slice(0, joints().length).join(',') : ''}\npython3 runner/pi/fly.py ${port} save\npython3 runner/pi/fly.py ${port} reboot${edited.length ? `\npython3 runner/pi/fly.py ${port} program ${designBase()}.rnp` : ''}\npython3 runner/pi/fly.py ${port} status`, 'the fly.py commands'),
+      cmdBox(`python3 runner/pi/fly.py ${port} set servos= motors=${profile.motors.slice(0, actuators().length).join(',')}${joints().length ? ' servos=' + profile.servos.slice(0, joints().length).join(',') : ''}\npython3 runner/pi/fly.py ${port} save\npython3 runner/pi/fly.py ${port} reboot\npython3 runner/pi/fly.py ${port} airframe ${designBase()}.dfa${edited.length ? `\npython3 runner/pi/fly.py ${port} program ${designBase()}.rnp` : ''}\npython3 runner/pi/fly.py ${port} status`, 'the fly.py commands'),
       instPara('<code>.dfa</code>: the airframe the flight core flies on (each motor\'s force and torque, the servos, the mass and inertia, where the IMU sits), checked by the board and kept in its flash. <code>.rnp</code>: a program, the formulas compiled into the steps the board runs, with self-tests; it lasts until a restart. <code>fly.py PORT test 1 0.1</code> spins motor 1 at 10% for 2 s, props off.', 'hint'));
   } else kids.push(instPara('Its settings can also be typed in any serial terminal at 115200 baud (<code>screen PORT 115200</code>, the Arduino serial monitor).', 'hint'));
   return el('details', { class: 'inst-manual' }, el('summary', { text: 'What the files are, and doing it by hand' }), ...kids);
-}
-function otherMcu(t, K) {
-  return [instPara(`The ready firmware is for the original ESP32 (an ESP32-WROOM or WROVER DevKit). On an ${K.label} the pins and peripherals differ, so it isn't built for it yet: pick <b>ESP32</b> for this board to install it, or port <code>runner/fc/esp32</code> (its pins are in <code>hw.c</code>).`),
-    el('p', { class: 'inst-note', text: 'The ESP32\'s firmware can\'t go on it by mistake: the flasher checks which chip it is and stops.' })];
 }
 
 function instLog(s, cls) {
@@ -329,7 +328,8 @@ async function espSendAirframe(msg) {
   instMsg(msg, r === 'airframe loaded and saved' ? 'The board took the airframe and saved it.' : 'The board says: ' + r, r === 'airframe loaded and saved' ? 'good' : 'bad');
 }
 async function espSendWiring(motors, servos, msg) {
-  const lines = ['motors=' + motors.replace(/\s+/g, ''), ...(servos.trim() ? ['servos=' + servos.replace(/\s+/g, '')] : [])];
+  const lines = ['servos=', 'motors=' + motors.replace(/\s+/g, ''), ...(servos.trim() ? ['servos=' + servos.replace(/\s+/g, '')] : [])];
+  try { checkBoardWiring(instProfile(INST.target), motors, servos, actuators().length, joints().length); } catch (e) { instMsg(msg, e.message, 'bad'); return; }
   for (const l of lines) {
     const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO/.test(s), 2000, msg, 'Sending ' + l);
     if (r === null) { if (!/Couldn|Not conn/.test(msg.textContent)) instMsg(msg, 'No answer from the board.', 'bad'); return; }
@@ -337,7 +337,8 @@ async function espSendWiring(motors, servos, msg) {
   }
   const sv = await espSend(dfFrame(LK.SETTING, 'save'), s => /saved|couldn't save|disarm first/.test(s), 2000, msg, 'Saving');
   if (!sv || !/saved/.test(sv)) { instMsg(msg, 'It didn\'t save: ' + (sv || 'no answer'), 'bad'); return; }
-  await espSend(dfFrame(LK.SETTING, 'reboot'), s => /rebooting|disarm first/.test(s), 2000, msg, 'Restarting it');
+  const reboot = await espSend(dfFrame(LK.SETTING, 'reboot'), s => /rebooting|disarm first/.test(s), 2000, msg, 'Restarting it');
+  if (reboot !== 'rebooting') { instMsg(msg, 'Wiring saved, but restart was not confirmed: ' + (reboot || 'no answer'), 'bad'); return; }
   instMsg(msg, 'Saved: it restarted on the new wiring. Check it with show (below).', 'good');
 }
 async function espSendProgram(msg) {
@@ -356,32 +357,36 @@ function loadEsptool() {
   });
 }
 // The firmware's parts: from the page's firmware/ folder, or the files picked on this computer.
-async function firmwareParts(name) {
+async function firmwareParts(name, profile) {
   if (INST.files && INST.files.length) {
-    const want = [[0x1000, /bootloader/i], [0x8000, /partition/i], [0x10000, name === 'ground' ? /dfb_ground/i : /dfb_flight/i]];
+    const want = [[profile.boot, /bootloader/i], [0x8000, /partition/i], [0x10000, name === 'ground' ? /dfb_ground/i : /dfb_flight/i]];
     const parts = [];
     for (const [addr, re] of want) {
       const f = INST.files.find(x => re.test(x.name)); if (!f) throw new Error(`pick bootloader.bin, partition-table.bin and ${name === 'ground' ? 'dfb_ground.bin' : 'dfb_flight.bin'} together`);
-      parts.push({ address: addr, data: new Uint8Array(await f.arrayBuffer()), name: f.name });
+      const data = new Uint8Array(await f.arrayBuffer());
+      if (addr !== 0x8000) checkFirmwareImage(data, profile, f.name);
+      parts.push({ address: addr, data, name: f.name });
     }
     return { parts, about: 'files from this computer' };
   }
   let man;
   try { const r = await fetch(FW_DIR + 'manifest.json', { cache: 'no-cache' }); if (!r.ok) throw new Error(r.status); man = await r.json(); }
   catch (e) { throw new Error(location.protocol === 'file:' ? 'the page is opened as a file, so it can\'t read its firmware folder: open it from a web address (python3 -m http.server in its folder, then http://localhost:8000), or use “firmware files from this computer”' : 'couldn\'t load firmware/manifest.json'); }
-  const fw = man.firmware[name], parts = [];
+  const fw = man.targets && man.targets[profile.chip] && man.targets[profile.chip].firmware[name], parts = [];
+  if (!fw) throw new Error('No firmware bundle for ' + profile.label + ': rebuild tools/build_firmware.sh');
   for (const [addr, f] of fw.parts) {
     const r = await fetch(FW_DIR + fw.dir + '/' + f, { cache: 'no-cache' }); if (!r.ok) throw new Error('couldn\'t load ' + f);
     const data = new Uint8Array(await r.arrayBuffer()), want = fw.files[f];
     if (want && (data.length !== want.size || await sha256hex(data) !== want.sha256)) throw new Error(f + ' arrived damaged (its checksum doesn\'t match): reload the page and try again');
+    if (addr !== 0x8000) checkFirmwareImage(data, profile, f);
     parts.push({ address: addr, data, name: f });
   }
   return { parts, about: `built ${man.built} from ${man.commit}` };
 }
-async function espFlash(name, prog, msg) {
+async function espFlash(name, profile, prog, msg) {
   if (INST.busy) return;
   const erase = $('#instErase') && $('#instErase').checked;
-  let fw; try { instMsg(msg, 'Loading the firmware…'); fw = await firmwareParts(name); } catch (e) { instMsg(msg, 'Can\'t install: ' + e.message + '.', 'bad'); return; }
+  let fw; try { instMsg(msg, 'Loading the firmware…'); fw = await firmwareParts(name, profile); } catch (e) { instMsg(msg, 'Can\'t install: ' + e.message + '.', 'bad'); return; }
   let E; try { E = await loadEsptool(); } catch (e) { instMsg(msg, 'Can\'t install: ' + e.message + '.', 'bad'); return; }
   if (INST.conn) { await INST.conn.close(); INST.conn = null; instConnUi(); }
   let port = INST.port;
@@ -396,7 +401,7 @@ async function espFlash(name, prog, msg) {
     say('Connecting to the board (it restarts into its bootloader)…');
     await loader.main();
     const chip = loader.chip.CHIP_NAME;
-    if (chip !== 'ESP32') throw new Error(`this is an ${chip}; the firmware is for the original ESP32, so nothing was written`);
+    if (chip !== profile.label) throw new Error(`this is an ${chip}; you selected ${profile.label}, so nothing was written`);
     say(`${chip} found. ${erase ? 'Erasing it, then writing' : 'Writing'} the firmware (${fw.about})…`);
     const total = fw.parts.reduce((a, p) => a + p.data.length, 0), done = fw.parts.map(() => 0);
     await loader.writeFlash({
@@ -441,7 +446,7 @@ async function pastePack(files, after) {
 function piGuide(t, K) {
   const tasks = t.tasks, learnOrSuper = tasks.includes('learn') || tasks.includes('super');
   const fix = sensorsOf('fix').some(c => wiredTo(c) === t) && tasks.includes('nav'), nL = latches().length, cargo = tasks.includes('cargo') && nL > 0, radio = tasks.includes('tlm');
-  const core = boardOf('core'), bt = t.kind !== 'pizero';
+  const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
   if (fix) fields.push(['gps', 'GPS port', '/dev/ttyUSB0', 'A USB GPS: /dev/ttyUSB0 or /dev/ttyACM0']);
   fields.push(['link', 'Link to the ESP32', '/dev/serial0', '/dev/serial0 for the GPIO pins, /dev/ttyUSB0 for a USB cable to the ESP32']);
@@ -462,8 +467,8 @@ function piGuide(t, K) {
   // the steps
   out.push(instStep(1, 'Wire it to the flight controller', instPara(core ? `To <b>${core.name}</b> (${BOARD_KINDS[core.kind].label}), on its USB serial port's pins. Both sides are 3.3 V: no level shifter.` : 'To the flight controller, on its USB serial port\'s pins.'),
     el('table', { class: 'inst-files' }, el('tbody', {},
-      el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: 'ESP32 GPIO 3 (RX0)' })),
-      el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: 'ESP32 GPIO 1 (TX0)' })),
+      el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX0)` })),
+      el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: `Flight controller GPIO ${linkPins[0]} (TX0)` })),
       el('tr', {}, el('td', { text: 'Pi pin 6 (GND)' }), el('td', { text: '—' }), el('td', { text: 'ESP32 GND' })))),
     instPara('Those are the same pins as the ESP32\'s USB port, so unplug its USB cable while the Pi is connected. With a free USB port on the Pi, a USB cable to the ESP32 does the same: set the link above to <code>/dev/ttyUSB0</code>.', 'hint')));
   cmds.serial = cmdBox('', 'the serial port commands');
@@ -515,27 +520,27 @@ function piGuide(t, K) {
 }
 // The command module on a Pi or a Mac: dfb_ground, built from the source.
 function groundPiGuide(K) {
-  const mac = K.groundOnly, edited = editedFor(['ground']);
-  const fields = mac ? [] : [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
-  fields.push(['tx', 'Transmitter module port', mac ? '/dev/cu.usbserial-0001' : '/dev/ttyUSB0', 'The ExpressLRS transmitter module\'s USB serial port']);
+  const desktop = K.groundOnly, macOS = /Mac/.test(navigator.platform || ''), edited = editedFor(['ground']);
+  const fields = desktop ? [] : [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
+  fields.push(['tx', 'Transmitter module port', desktop && macOS ? '/dev/cu.usbserial-0001' : '/dev/ttyUSB0', 'The ExpressLRS transmitter module\'s USB serial port']);
   const v = k => instPref(k, (fields.find(f => f[0] === k) || [])[2] || '');
   const out = [], cmds = { copy: cmdBox('', 'the copy command'), build: cmdBox('', 'the build commands'), run: cmdBox('', 'the run command') };
-  out.push(instPara(`It runs <code>dfb_ground</code>, the command module's C (the same this simulator runs on the ground), wired to the ExpressLRS transmitter module over USB serial, with the terminal's keys, a gamepad or your own code over UDP.${mac ? ' Everything below is typed into a terminal on this computer.' : ''}`));
-  out.push(el('div', { class: 'inst-safety' }, el('b', { text: mac ? 'This computer' : 'Your Pi' }), piInputs(fields, () => refresh())));
-  if (!mac) out.push(instStep(1, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder:'), cmds.copy));
-  out.push(instStep(mac ? 1 : 2, 'Build it', instPara(mac ? 'In this repository\'s folder (it needs the Xcode command line tools: <code>xcode-select --install</code>):' : 'The compiler first, then dfb_ground:'), cmds.build));
+  out.push(instPara(`It runs <code>dfb_ground</code>, the command module's C (the same this simulator runs on the ground), wired to the ExpressLRS transmitter module over USB serial, with the terminal's keys, a gamepad or your own code over UDP.${desktop ? ' Everything below is typed into a terminal on this computer.' : ''}`));
+  out.push(el('div', { class: 'inst-safety' }, el('b', { text: desktop ? 'This computer' : 'Your Pi' }), piInputs(fields, () => refresh())));
+  if (!desktop) out.push(instStep(1, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder:'), cmds.copy));
+  out.push(instStep(desktop ? 1 : 2, 'Build it', instPara(desktop ? `In this repository's folder. ${macOS ? 'Install Xcode command line tools with <code>xcode-select --install</code> if needed.' : 'On Linux, install the C compiler with your package manager (Debian/Ubuntu: <code>sudo apt install build-essential</code>).'}` : 'The compiler first, then dfb_ground:'), cmds.build));
   const steps = [cmds.run, instPara('The keys: W/S climb and sink, A/D turn, the arrows move, Space holds, H flies home, R arms, T takes off and lands. <code>--joystick /dev/input/js0</code> reads a gamepad on Linux; UDP port 14561 takes text commands from scripts.', 'hint')];
   if (edited.length) {
     cmds.prog = cmdBox('', 'the program block');
-    steps.push(instPara(`You edited ${edited.join(', ')}: put the program next to it (paste this${mac ? ' in the repository\'s folder' : ''}), and it's in the command above.`), cmds.prog);
+    steps.push(instPara(`You edited ${edited.join(', ')}: put the program next to it (paste this${desktop ? ' in the repository\'s folder' : ''}), and it's in the command above.`), cmds.prog);
   }
-  out.push(instStep(mac ? 2 : 3, 'Run it', ...steps));
+  out.push(instStep(desktop ? 2 : 3, 'Run it', ...steps));
   const refresh = async () => {
     const host = v('host') || 'pi@raspberrypi.local';
     cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;
-    cmds.build.code.textContent = mac ? 'sh runner/ground/build.sh' : 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/ground/build.sh';
-    cmds.run.code.textContent = `${mac ? '' : 'cd ~/dfb && '}./runner/ground/dfb_ground --tx ${v('tx')} --keys${edited.length ? ' --program command-module.rnp' : ''}`;
-    if (cmds.prog) { try { const f = instFile('program', 'ground'); cmds.prog.code.textContent = (await pastePack([f])).replace('mkdir -p ~/dfb && cd ~/dfb', mac ? '# (in the repository\'s folder)' : 'mkdir -p ~/dfb && cd ~/dfb'); } catch (e) { cmds.prog.code.textContent = '# The formulas don\'t compile: ' + e.message; } }
+    cmds.build.code.textContent = desktop ? 'sh runner/ground/build.sh' : 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/ground/build.sh';
+    cmds.run.code.textContent = `${desktop ? '' : 'cd ~/dfb && '}./runner/ground/dfb_ground --tx ${v('tx')} --keys${edited.length ? ' --program command-module.rnp' : ''}`;
+    if (cmds.prog) { try { const f = instFile('program', 'ground'); cmds.prog.code.textContent = (await pastePack([f])).replace('mkdir -p ~/dfb && cd ~/dfb', desktop ? '# (in the repository\'s folder)' : 'mkdir -p ~/dfb && cd ~/dfb'); } catch (e) { cmds.prog.code.textContent = '# The formulas don\'t compile: ' + e.message; } }
   };
   refresh();
   return out;

@@ -48,11 +48,12 @@
 #include "soc/gpio_sig_map.h"
 #include "ground_core.h"
 #include "ground_text.h"
+#include "esp_board.h"
 
 extern const uint8_t *const rn_builtin_ground_img;
 extern const uint32_t rn_builtin_ground_len;
 #define CONSOLE UART_NUM_0
-#define TXU UART_NUM_2
+#define TXU LB_RADIO_UART
 
 /* ── the wiring ── */
 #define CFG_VERSION 1
@@ -65,10 +66,10 @@ typedef struct {
 } gcfg;
 static gcfg C, N;                  /* C: the wiring running now; N: as set since (saved, it runs after a reboot) */
 static void defaults(gcfg *c) {
-  memset(c, 0, sizeof *c); c->version = CFG_VERSION; c->tx = 17; c->rx = 16; c->baud = 400000;
+  memset(c, 0, sizeof *c); c->version = CFG_VERSION; c->tx = LB_TX; c->rx = LB_RX; c->baud = 400000;
   for (int i = 0; i < GB_N; i++) c->btn[i] = -1;
   for (int a = 0; a < GND_AXES; a++) c->ax[a] = -1;
-  c->span = 1800; c->buzzer = -1; c->led = 2; c->latch = GB(GB_ARM) | GB(GB_FLY);
+  c->span = 1800; c->buzzer = -1; c->led = LB_LED; c->latch = GB(GB_ARM) | GB(GB_FLY);
 }
 static void cfg_fix(gcfg *c);
 static void cfg_load(void) {
@@ -84,23 +85,38 @@ static int cfg_save(void) {
   esp_err_t e = nvs_set_blob(h, "cfg", &N, sizeof N); if (e == ESP_OK) e = nvs_commit(h); nvs_close(h); return e == ESP_OK ? 0 : -1;
 }
 /* pins: 1 and 3 are this console's; 6–11 the flash's; 20, 24, 28–31 aren't there; 34–39 only read */
-static int pin_ok(int p) { return p >= 0 && p <= 39 && p != 1 && p != 3 && !(p >= 6 && p <= 11) && p != 20 && p != 24 && !(p >= 28 && p <= 31); }
-static int pin_in(int p) { return p == -1 || pin_ok(p); }
-static int pin_out(int p) { return p == -1 || (pin_ok(p) && p < 34); }
-/* the module's line idles high on a full UART: on 12 at power-on that picks 1.8 V flash, and the ESP32 doesn't boot */
-static int pin_crsf(int p) { return p != 12; }
+static int pin_in(int p) {
+#if CONFIG_IDF_TARGET_ESP32
+  return p == -1 || (p >= 0 && p <= 39 && p != 1 && p != 3 && !(p >= 6 && p <= 11) && p != 20 && p != 24 && !(p >= 28 && p <= 31));
+#else
+  return p == -1 || lb_input_pin(p);
+#endif
+}
+static int pin_out(int p) { return pin_in(p) && (p == -1 || GPIO_IS_VALID_OUTPUT_GPIO(p)); }
+static int pin_crsf(int p) {
+#if CONFIG_IDF_TARGET_ESP32
+  return pin_out(p) && p >= 0 && p != 12;
+#else
+  return lb_output_pin(p);
+#endif
+}
 static const char *pin_note(int p) {
-  return p == 0 || p == 2 || p == 5 || p == 12 || p == 15 ? "a strapping pin (read at power-on to choose how the ESP32 boots): nothing may pull it then"
-       : p == 16 || p == 17 ? "on a WROVER board (with PSRAM) the PSRAM's: not there" : 0;
+#if CONFIG_IDF_TARGET_ESP32
+  return p == 0 || p == 2 || p == 5 || p == 12 || p == 15 ? "a strapping pin: do not pull it during boot"
+       : p == 16 || p == 17 ? "on a WROVER board these pins belong to PSRAM" : 0;
+#else
+  (void)p; return 0;
+#endif
 }
 /* a wiring saved by an older build that is refused now: that part back to its default, said */
 static void cfg_fix(gcfg *c) {
   gcfg d; defaults(&d); int bad = 0;
   if (!pin_out(c->tx) || !pin_in(c->rx) || c->tx < 0 || c->rx < 0 || !pin_crsf(c->tx) || !pin_crsf(c->rx) || (c->tx == c->rx && !pin_out(c->rx))) { c->tx = d.tx; c->rx = d.rx; bad = 1; }
+  for (int a = 0; a < GND_AXES; a++) if (c->ax[a] >= 0 && !lb_adc_pin(c->ax[a])) { c->ax[a] = -1; bad = 1; }
   for (int b = 0; b < GB_N; b++) if (!pin_in(c->btn[b])) { c->btn[b] = -1; bad = 1; }
   if (!pin_out(c->buzzer)) { c->buzzer = -1; bad = 1; }
   if (!pin_out(c->led)) { c->led = -1; bad = 1; }
-  if (bad) printf("the saved wiring had pins not taken now (1, 3 or 12 for the module): those are back to their defaults\n");
+  if (bad) printf("the saved wiring had reserved or unavailable pins: those are back to their defaults\n");
 }
 /* The wiring as set (N); what runs (C) changes only at the next power-on, so a half-done rewiring never flies. */
 static void show(char *o, int n) {
@@ -117,20 +133,20 @@ static int setting(char *kv, char *err, int en) {
   *e = 0; const char *k = kv, *v = e + 1; int x = atoi(v);
   static const char *const ax[4] = { "roll", "pitch", "throttle", "yaw" };
   if (!strcmp(k, "tx")) {
-    int a = -1, b = -1; if (sscanf(v, "%d,%d", &a, &b) != 2 || !pin_out(a) || !pin_in(b) || a < 0 || b < 0 || !pin_crsf(a) || !pin_crsf(b)) { snprintf(err, (size_t)en, "tx=OUT,IN: output-capable pins, not 1, 3 or 12 (one pin for both is fine: tx=17,17)"); return -1; }
+    int a = -1, b = -1; if (sscanf(v, "%d,%d", &a, &b) != 2 || !pin_out(a) || !pin_in(b) || a < 0 || b < 0 || !pin_crsf(a) || !pin_crsf(b)) { snprintf(err, (size_t)en, "tx=OUT,IN: available output pins (one pin for both is fine)"); return -1; }
     N.tx = (int8_t)a; N.rx = (int8_t)b; x = pin_note(a) ? a : b;
   }
   else if (!strcmp(k, "baud")) { if (x < 9600 || x > 5250000) { snprintf(err, (size_t)en, "baud: 9600 to 5250000"); return -1; } N.baud = x; }
   else if (!strcmp(k, "span")) { if (x < 100 || x > 2047) { snprintf(err, (size_t)en, "span: 100 to 2047"); return -1; } N.span = (int16_t)x; }
-  else if (!strcmp(k, "buzzer") || !strcmp(k, "led")) { if (!pin_out(x)) { snprintf(err, (size_t)en, "%.20s: an output pin (below 34), or -1", k); return -1; } if (k[0] == 'b') N.buzzer = (int8_t)x; else N.led = (int8_t)x; }
+  else if (!strcmp(k, "buzzer") || !strcmp(k, "led")) { if (!pin_out(x)) { snprintf(err, (size_t)en, "%.20s: an available output pin, or -1", k); return -1; } if (k[0] == 'b') N.buzzer = (int8_t)x; else N.led = (int8_t)x; }
   else if (!strcmp(k, "latch")) { N.latch = 0; char buf[128]; snprintf(buf, sizeof buf, "%s", v); char *sv; for (char *p = strtok_r(buf, ",", &sv); p; p = strtok_r(0, ",", &sv)) { int b = gnd_button(p); if (b >= 0) N.latch |= GB(b); } }
   else {
     for (int a = 0; a < GND_AXES; a++) if (!strcmp(k, ax[a])) {
-      if (x != -1 && (x < 32 || x > 39)) { snprintf(err, (size_t)en, "%.20s: an ADC pin, 32–39 (or -1)", k); return -1; }
+      if (x != -1 && !lb_adc_pin(x)) { snprintf(err, (size_t)en, "%.20s: an available ADC1 pin (or -1)", k); return -1; }
       N.ax[a] = (int8_t)x; N.ax_inv[a] = strchr(v, 'i') != 0; return 0;
     }
     int b = gnd_button(k); if (b < 0) { snprintf(err, (size_t)en, "no setting %.20s", k); return -1; }
-    if (!pin_in(x)) { snprintf(err, (size_t)en, "%.20s: not a usable pin (not 1 or 3: the USB port's; not 6–11: the flash's)", k); return -1; }
+    if (!pin_in(x)) { snprintf(err, (size_t)en, "%.20s: reserved or unavailable on this chip", k); return -1; }
     N.btn[b] = (int8_t)x;
   }
   if (strcmp(k, "latch") && strcmp(k, "baud") && strcmp(k, "span") && x >= 0 && pin_note(x)) snprintf(err, (size_t)en, "GPIO %d is %s", x, pin_note(x));
@@ -144,13 +160,13 @@ static int setting(char *kv, char *err, int en) {
 static int one_wire;
 static void wire_listen(void) {
   gpio_set_direction(C.tx, GPIO_MODE_INPUT); gpio_set_pull_mode(C.tx, GPIO_PULLDOWN_ONLY);
-  esp_rom_gpio_connect_in_signal(C.tx, U2RXD_IN_IDX, false);
+  esp_rom_gpio_connect_in_signal(C.tx, LB_RX_SIGNAL, false);
 }
 static void wire_talk(void) {
   gpio_set_pull_mode(C.tx, GPIO_FLOATING);
-  esp_rom_gpio_connect_in_signal(GPIO_MATRIX_CONST_ZERO_INPUT, U2RXD_IN_IDX, false);   /* (0, inverted: idle) */
+  esp_rom_gpio_connect_in_signal(GPIO_MATRIX_CONST_ZERO_INPUT, LB_RX_SIGNAL, false);   /* (0, inverted: idle) */
   gpio_set_level(C.tx, 0); gpio_set_direction(C.tx, GPIO_MODE_OUTPUT);                  /* (idle low, then the UART's) */
-  esp_rom_gpio_connect_out_signal(C.tx, U2TXD_OUT_IDX, false, false);
+  esp_rom_gpio_connect_out_signal(C.tx, LB_TX_SIGNAL, false, false);
 }
 static void to_module(const uint8_t *b, int n) {
   if (!one_wire) { uart_write_bytes(TXU, b, (size_t)n); return; }
@@ -160,7 +176,7 @@ static void to_module(const uint8_t *b, int n) {
 static adc_oneshot_unit_handle_t adc; static adc_channel_t ax_ch[GND_AXES]; static int ax_ok[GND_AXES]; static float ax_mid[GND_AXES];
 static void hw_init(void) {
   for (int b = 0; b < GB_N; b++) if (C.btn[b] >= 0) {
-    gpio_config_t g = { .pin_bit_mask = 1ULL << C.btn[b], .mode = GPIO_MODE_INPUT, .pull_up_en = C.btn[b] < 34 ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE };
+    gpio_config_t g = { .pin_bit_mask = 1ULL << C.btn[b], .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_IS_VALID_OUTPUT_GPIO(C.btn[b]) ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE };
     gpio_config(&g);
   }
   for (int p = 0; p < 2; p++) { int pin = p ? C.led : C.buzzer; if (pin >= 0) { gpio_reset_pin(pin); gpio_set_direction(pin, GPIO_MODE_OUTPUT); gpio_set_level(pin, 0); } }
@@ -231,7 +247,7 @@ void app_main(void) {
   printf("program: %s; %s\n", rn_error_text(e), G.why);
   hw_init();
   { char s[400]; show(s, sizeof s); printf("wiring: %s\n", s); }
-  if (C.tx == 16 || C.tx == 17 || C.rx == 16 || C.rx == 17) printf("(on a WROVER board, with PSRAM, GPIO 16 and 17 are the PSRAM's: there, set tx= to other pins)\n");
+  if (pin_note(C.tx) || pin_note(C.rx)) printf("(on a WROVER board, with PSRAM, GPIO 16 and 17 are the PSRAM's: there, set tx= to other pins)\n");
   printf("type \"show\", \"set key=value\", \"save\", \"reboot\", or a command (status, goto X Y Z, calibrate…)\n");
   if (one_wire) printf("one wire to the module (GPIO %d): inverted, half duplex, as a module bay's\n", C.tx);
   uart_driver_install(CONSOLE, 1024, 1024, 0, NULL, 0); uart_vfs_dev_use_driver(CONSOLE);

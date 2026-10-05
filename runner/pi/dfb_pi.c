@@ -74,9 +74,20 @@ static int open_serial(const char *dev, int baud) {
   int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd < 0) { perror(dev); return -1; }
   struct termios t; tcgetattr(fd, &t); cfmakeraw(&t);
-  speed_t sp = baud == 9600 ? B9600 : baud == 38400 ? B38400 : baud == 57600 ? B57600 : baud == 230400 ? B230400 : baud == 460800 ? B460800 : baud == 921600 ? B921600 : B115200;
+  speed_t sp = B115200; int standard = baud == 115200;
+#ifdef B230400
+  if (baud == 230400) { sp = B230400; standard = 1; }
+#endif
+#ifdef B460800
+  if (baud == 460800) { sp = B460800; standard = 1; }
+#endif
+#ifdef B921600
+  if (baud == 921600) { sp = B921600; standard = 1; }
+#endif
   cfsetispeed(&t, sp); cfsetospeed(&t, sp); t.c_cflag |= CLOCAL | CREAD; t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0;
-  tcsetattr(fd, TCSANOW, &t); tcflush(fd, TCIOFLUSH);
+  tcsetattr(fd, TCSANOW, &t);
+  if (!standard && serial_custom_baud(fd, baud)) { fprintf(stderr, "%s: can't set %d baud\n", dev, baud); close(fd); return -1; }
+  tcflush(fd, TCIOFLUSH);
   return fd;
 }
 

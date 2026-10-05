@@ -45,7 +45,7 @@ const GROUND = { label: 'Command module', hz: 250, formulas: RN_TASK_FORMULAS.gr
   what: 'The pilot\'s side of the radio, wired to the ExpressLRS transmitter module: buttons, sticks or your own code in, channels and commands up (through its stickInput formula), the telemetry decoded and checked (groundAlerts).' };
 const TASKS = {
   core: { label: 'Flight core', hz: 1000, mcuOnly: true, formulas: RN_TASK_FORMULAS.core,
-    what: 'Attitude, control and mixing 1000 times a second, arming and the failsafes. It needs exact timing, so it runs on a microcontroller.' },
+    what: 'Attitude, control and mixing at the board\'s flight-loop rate, arming and the failsafes. It needs exact timing, so it runs on a microcontroller.' },
   nav: { label: 'Navigation', hz: 100, formulas: RN_TASK_FORMULAS.nav,
     what: 'Where the drone is (GPS, optical flow, barometer) and holding or moving its position. It tells the flight core which way to accelerate and where to face. Without it you fly in angle mode: the keys lean the drone.' },
   learn: { label: 'Learning', hz: 200, piOnly: true, formulas: RN_TASK_FORMULAS.learn,
@@ -76,7 +76,7 @@ function fixComputers(C) {
   C = C && Array.isArray(C.boards) ? JSON.parse(JSON.stringify(C)) : defaultComputers();
   C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
-  C.ground = { kind: g.kind === 'c3' ? 'esp32' : g.kind, name: String(g.name || 'Command module').slice(0, 24) };   // (a command module is an ESP32, a Pi or a Mac or PC: the C3 isn't offered)
+  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24) };
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   let id = 1; for (const b of C.boards) { b.id = id++; b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
@@ -144,9 +144,10 @@ function boardProgram(tasks, srcs = rnSources()) {
   }
   return P;
 }
+const boardTaskHz = (b, task) => task === 'core' && b.kind === 'c3' ? 250 : TASKS[task].hz;
 function boardBudget(b) {
   const K = BOARD_KINDS[b.kind];
-  const ops = b.tasks.reduce((s, t) => s + taskCost(t) * TASKS[t].hz, 0);
+  const ops = b.tasks.reduce((s, t) => s + taskCost(t) * boardTaskHz(b, t), 0);
   const load = ops / (K.mops * 1e6) * (K.mcu ? 1 : 1.5);   // a Linux board loses some to the system
   let memKB = 0; if (needsProgram(b)) try { const P = boardProgram(b.tasks); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
   return { ops, load, memKB, ramKB: K.ramKB };
@@ -156,7 +157,7 @@ function boardBudget(b) {
 const brt = {
   module: null, err: '', inst: new Map(), sig: null, ready: false,
   toCore: [], toNav: [], q: [], tel: null, navOut: null, navReady: false, home: null,
-  t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0, nextCargo: 0, cargoN: 0,
+  coreElapsed: 0, t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0, nextCargo: 0, cargoN: 0,
   gnd: null, gndErr: '', gndOk: false,   // the command module's instance (while the drone has a radio); gndOk: its program runs (stickInput, groundAlerts)
   pilot: { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0 },
   fcState: 0, fcWhy: '', navWhy: '', out: null, pickup: 0, baroTs: null, superView: null, learnErr: '', srcs: new Map(),
@@ -210,7 +211,7 @@ function f32Blob(magic, vals) {
 function boardsStart() {
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
-  brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
+  brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
@@ -452,18 +453,24 @@ function boardsControl(dt) {
     new Float32Array(W.memory.buffer, W.cmd_ptr(), 12).set([c.arm, c.roll || 0, c.pitch || 0, c.yaw || 0, c.throttle || 0, -1, 0, c.guided ? 1 : 0, ...(c.acc || [0, 0, 0]), c.heading || 0]);
     W.fc_command();
   }
-  const b = io(W), drv = est.drv || {};
-  const baro = drv.baro && drv.baroTs !== brt.baroTs; if (baro) brt.baroTs = drv.baroTs;
-  b.set([...(est.haveImu ? est.fGyro : [0, 0, 0]), ...(est.haveImu ? est.fAccel : [0, 0, 0]), est.haveImu ? 1 : 0, dt, fc.vComp && hread.b.V > 1 ? hread.b.V : 0,
-    baro ? drv.baro.alt : 0, baro ? 1 : 0, ...(drv.mag || [0, 0, 0]), drv.mag ? 1 : 0], 0);
-  W.fc_tick();
-  acts.forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed ? 0 : b[IO_OUT + i]; setThrottle(c, st, u, u); } });
-  joints().forEach((j, k) => { const st = jst.get(j.id); if (st) st.thCmd = b[IO_OUT + 12 + k]; });
-  const s = b.subarray(IO_STATE);
-  est.q = [s[0], s[1], s[2], s[3]]; est.R = qmat(est.q); est.w = [s[4], s[5], s[6]];
-  brt.out = { attOk: s[9] > 0.5, alt: s[14], haveAlt: s[15] > 0.5, vz: s[13], tau: [s[16], s[17], s[18]], sat: acts.some((c, i) => b[IO_OUT + i] >= 0.995) };
-  const st = W.state(); if (st !== brt.fcState || (S.steps % 400 === 0)) { brt.fcState = st; brt.fcWhy = cstr(W, W.why_ptr()); }
-  if (st === 3 && thr) thr = null;   // crashed: the throw is over
+  const drv = est.drv || {};
+  brt.coreElapsed += dt;
+  const coreDt = brt.coreElapsed;
+  if (!brt.out || coreDt + 1e-9 >= 1 / boardTaskHz(coreB, 'core')) {
+    brt.coreElapsed = 0;
+    const b = io(W);
+    const baro = drv.baro && drv.baroTs !== brt.baroTs; if (baro) brt.baroTs = drv.baroTs;
+    b.set([...(est.haveImu ? est.fGyro : [0, 0, 0]), ...(est.haveImu ? est.fAccel : [0, 0, 0]), est.haveImu ? 1 : 0, coreDt, fc.vComp && hread.b.V > 1 ? hread.b.V : 0,
+      baro ? drv.baro.alt : 0, baro ? 1 : 0, ...(drv.mag || [0, 0, 0]), drv.mag ? 1 : 0], 0);
+    W.fc_tick();
+    acts.forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed ? 0 : b[IO_OUT + i]; setThrottle(c, st, u, u); } });
+    joints().forEach((j, k) => { const st = jst.get(j.id); if (st) st.thCmd = b[IO_OUT + 12 + k]; });
+    const s = b.subarray(IO_STATE);
+    est.q = [s[0], s[1], s[2], s[3]]; est.R = qmat(est.q); est.w = [s[4], s[5], s[6]];
+    brt.out = { attOk: s[9] > 0.5, alt: s[14], haveAlt: s[15] > 0.5, vz: s[13], tau: [s[16], s[17], s[18]], sat: acts.some((c, i) => b[IO_OUT + i] >= 0.995) };
+    const st = W.state(); if (st !== brt.fcState || (S.steps % 400 === 0)) { brt.fcState = st; brt.fcWhy = cstr(W, W.why_ptr()); }
+  }
+  if (brt.fcState === 3 && thr) thr = null;   // crashed: the throw is over
   if (brt.staging && S.steps % 100 === 0) boardsHostEvents();
 
   // Telemetry to the learning and the supervisor, 200 times a second; the health sensors to the supervisor's board.

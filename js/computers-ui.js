@@ -280,7 +280,7 @@ function renderComputers1(full) {
     const box = $('#taskLaws'); box.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {
       const b = boardOf(t); if (!b) continue;
-      box.append(lawSection('laws-' + t, T.label, `${T.hz} times a second.`, T.formulas, 'on ' + b.name));
+      box.append(lawSection('laws-' + t, T.label, `${boardTaskHz(b, t)} times a second.`, T.formulas, 'on ' + b.name));
     }
     box.append(lawSection('laws-ground', GROUND.label, `${GROUND.hz} times a second, on the ground.`, GROUND.formulas, hasTask('tlm') ? 'on ' + C.ground.name : 'not used: the drone has no radio'));
     const off = Object.entries(TASKS).filter(([t]) => !boardOf(t));
@@ -293,8 +293,7 @@ function renderGroundCard(C) {
   const g = C.ground, K = BOARD_KINDS[g.kind], tlmB = boardOf('tlm'), bud = groundBudget();
   const set = (k, v) => { const C2 = JSON.parse(JSON.stringify(C)); C2.ground[k] = v; setComputers(C2, 'ground'); };
   const name = nameBox(g.name, 'Command module name', 'gname', v => renameComputer(C2 => { C2.ground.name = (v || 'Command module').slice(0, 24); }));
-  // (the ESP32-C3 isn't offered for it; shown only if a saved design already has one, so the list says what it is)
-  const kind = el('select', { 'aria-label': 'Command module computer', id: 'gkind' }, ...Object.entries(BOARD_KINDS).filter(([k]) => k !== 'c3' || g.kind === 'c3').map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
+  const kind = el('select', { 'aria-label': 'Command module computer', id: 'gkind' }, ...Object.entries(BOARD_KINDS).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
   commitSelect(kind, v => { if (v !== g.kind) set('kind', v); }, 'Press Enter to change it: it starts the flight again');
   const prog = el('button', { class: 'btn', type: 'button', id: 'gprog', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: e => groundDownload(e.currentTarget) });
   const box = $('#groundCard'); box.textContent = '';
