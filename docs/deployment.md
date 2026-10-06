@@ -4,6 +4,8 @@ LiftLab is a static site at https://mrtksn.github.io/liftlab/. Pages is configur
 
 ## Publishing site changes
 
+After editing JavaScript or CSS, run `python3 tools/stamp_ui_assets.py` before committing. `python3 tools/stamp_ui_assets.py --check` checks that HTML asset references and CSS imports match the current files. The shared UI needs no framework build step; see [ui-design-system.md](ui-design-system.md).
+
 1. Review `git status` and `git diff`. Stage the intended files explicitly; leave unrelated work and firmware exports out.
 2. Commit and push the reviewed changes to `origin main`.
 3. In GitHub → Actions, check **pages build and deployment** for the pushed commit. The history contains individual runs, not a separate workflow for every change.

@@ -53,7 +53,7 @@ async function openShare(pasteOnly = false) {
 async function copyText(t, what) {
   let ok = false;
   try { await navigator.clipboard.writeText(t); ok = true; } catch (e) {
-    const ta = el('textarea', { style: 'position:fixed;opacity:0' }); ta.value = t; document.body.append(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (x) {} ta.remove();
+    const ta = UI.textarea( { style: 'position:fixed;opacity:0' }); ta.value = t; document.body.append(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (x) {} ta.remove();
   }
   $('#shareMsg').textContent = ok ? `${what} copied.` : `Couldn’t copy: select it and copy it yourself.`; $('#shareMsg').className = 'hint ' + (ok ? 'good' : 'bad');
 }

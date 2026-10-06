@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>LiftLab UI component regression checks</title>
+<link rel="stylesheet" href="../css/style.css">
+<style>body{padding:24px}#fixtures{max-width:600px}#testResults{white-space:pre-wrap;font-family:var(--f-mono)}.test-pass{color:var(--good)}.test-fail{color:var(--bad)}</style>
+<h1>UI component regression checks</h1>
+<p>Runs against native browser DOM. Uses isolated test-only state; no simulator, network or board calls.</p>
+<pre id="testResults" role="status">Running…</pre>
+<div id="fixtures"></div>
+<script src="../js/ui-components.js"></script>
+<script src="test_ui_components.js"></script>
+</html>

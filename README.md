@@ -655,6 +655,8 @@ If its formulas fail and even its built-in program can't answer, the raw sticks 
 | `js/gs-ui.js` | The Ground station tab |
 | `js/editor.js` | Edit mode: picking parts and the move and rotate handles |
 | `js/computers-ui.js` | The Computers tab: boards, tasks, the formulas under the task that runs them, the world's models |
+| `js/ui-components.js` | Shared controls, fields, cards, tabs, disclosures, action menus and focus/readout helpers |
+| `js/ui-shell.js` | Data and callbacks for both shared tab bars |
 | `js/ui.js` | Airframe editor, telemetry, traces, header controls, persistence and the boot loop |
 | `js/designs.js` | Undo and redo, saved designs (your account or this browser) and design files |
 | `js/rn-parse.js` | The step compiler's parser for the formula subset |
@@ -674,7 +676,11 @@ If its formulas fail and even its built-in program can't answer, the raw sticks 
 | `tools/` | Node tools: program export, the formula check against recorded flights, test data; `build_firmware.sh` builds `firmware/` |
 | `firmware/` | The ESP32 firmware the page flashes: the flight controller (`esp32-flight/`) and the command module (`esp32-ground/`), with `manifest.json` |
 | `js/install-ui.js` | Install on a real board: flashing an ESP32 over Web Serial (with `js/vendor/esptool.js`, esptool-js 0.7.0, Apache 2.0), the link's frames to send it the design, and the Pi's guide |
-| `css/style.css` | Styles, light and dark |
+| `css/style.css` | Stylesheet entry point importing tokens, base, components, feature layouts and responsive rules |
+| `css/tokens.css` | Central light/dark palettes, fonts, spacing/density, radii and focus settings |
+| `css/components.css` | Shared component styles used across the UI |
+
+The UI uses reusable native DOM components with centralized CSS tokens. See [the UI design guide](docs/ui-design-system.md) for component APIs, theme edits, regression checks and the pre-refactor checkpoint. Run `python3 tools/stamp_ui_assets.py` after changing JavaScript/CSS so Pages loads matching assets.
 
 ## The formulas
 

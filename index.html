@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=087a28021d">
 </head>
 <body>
 <div class="app">
@@ -65,12 +65,7 @@
 
   <main class="work">
     <aside class="panel" id="airframe" aria-label="Airframe and flight computers">
-      <div class="tabs ftabs" role="tablist" aria-label="Left panel">
-        <button type="button" role="tab" id="tabAir" aria-controls="paneAir" aria-selected="true" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="5" r="2.4"/><circle cx="15" cy="5" r="2.4"/><circle cx="5" cy="15" r="2.4"/><circle cx="15" cy="15" r="2.4"/><path d="M6.8 6.8l2 2m4.4-2-2 2m-4.4 4.4 2-2m4.4 2-2-2"/></svg><span>Airframe</span></button>
-        <button type="button" role="tab" id="tabForm" aria-controls="paneForm" aria-selected="false" tabindex="-1"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M8 2.5V5m4-2.5V5M8 15v2.5m4-2.5v2.5M2.5 8H5m-2.5 4H5m10-4h2.5M15 12h2.5"/></svg><span>Computers <span class="count" id="editedCount" hidden></span></span></button>
-        <button type="button" role="tab" id="tabGs" aria-controls="paneGs" aria-selected="false" tabindex="-1" aria-label="Ground station" title="Ground station: what comes down the radio"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v7M7 18h6"/><circle cx="10" cy="9" r="1.6"/><path d="M6.5 5.5a5 5 0 0 0 0 7M13.5 5.5a5 5 0 0 1 0 7M4 3a8.5 8.5 0 0 0 0 12M16 3a8.5 8.5 0 0 1 0 12"/></svg><span>Ground</span></button>
-        <button type="button" role="tab" id="tabAi" aria-controls="paneAi" aria-selected="false" tabindex="-1" aria-label="AI agent" title="An AI agent that can fly, build and tune the simulated drone"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg><span>AI</span></button>
-      </div>
+      <div id="editorTabs" class="tabs ftabs"></div>
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
         <h2>Design <small id="designState"></small></h2>
@@ -336,12 +331,7 @@
         </div>
         <p class="alerts" id="liveAlerts" role="status"></p>
       </section>
-      <div class="tabs ftabs rtabs" role="tablist" aria-label="Readouts">
-        <button type="button" role="tab" id="rtab-flight" aria-controls="rpane-flight" aria-selected="true" tabindex="0" title="What it does now: the actuators, the traces, the cargo"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11h3l2-5 3 9 2.5-6 1.5 2H18"/></svg><span>Flight</span></button>
-        <button type="button" role="tab" id="rtab-health" aria-controls="rpane-health" aria-selected="false" tabindex="-1" title="The parts, the supervisor and the state estimate"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16.5s-6.5-3.9-6.5-8.4A3.4 3.4 0 0 1 10 6a3.4 3.4 0 0 1 6.5 2.1c0 4.5-6.5 8.4-6.5 8.4z"/></svg><span>Health</span></button>
-        <button type="button" role="tab" id="rtab-control" aria-controls="rpane-control" aria-selected="false" tabindex="-1" title="Learning, allocation, headroom and mass"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v12M10 4v12M16 4v12"/><circle cx="4" cy="12" r="1.8" fill="currentColor"/><circle cx="10" cy="7" r="1.8" fill="currentColor"/><circle cx="16" cy="11" r="1.8" fill="currentColor"/></svg><span>Control</span></button>
-        <button type="button" role="tab" id="rtab-world" aria-controls="rpane-world" aria-selected="false" tabindex="-1" title="The target and the environment"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg><span>World</span></button>
-      </div>
+      <div id="readoutTabs" class="tabs ftabs rtabs"></div>
       <div class="rpane" id="rpane-flight" role="tabpanel" aria-labelledby="rtab-flight">
         <section class="sec">
           <h2 data-src="board sim">Actuator commands</h2>
@@ -428,56 +418,58 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="js/math.js"></script>
-<script src="js/sources.js"></script>
-<script src="js/terrain.js"></script>
-<script src="js/laws.js"></script>
-<script src="js/runtime.js"></script>
-<script src="js/budget.js"></script>
-<script src="js/rn-parse.js"></script>
-<script src="js/rn-ops.js"></script>
-<script src="js/rn-compile.js"></script>
-<script src="js/rn-sigs.js"></script>
-<script src="js/rn-vm.js"></script>
-<script src="js/rn-wasm.js"></script>
-<script src="js/rn-bridge.js"></script>
-<script src="js/sim.js"></script>
-<script src="js/joints.js"></script>
-<script src="js/multibody.js"></script>
-<script src="js/cargo.js"></script>
-<script src="js/sensors.js"></script>
-<script src="js/health.js"></script>
-<script src="js/learn.js"></script>
-<script src="js/view3d.js"></script>
-<script src="js/pilot.js"></script>
-<script src="js/computers-ui.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/place-ui.js"></script>
-<script src="js/cargo-ui.js"></script>
-<script src="js/health-ui.js"></script>
-<script src="js/designs.js"></script>
-<script src="js/share.js"></script>
-<script src="js/board-hardware.js"></script>
-<script src="js/hardware.js"></script>
-<script src="js/driver-presets.js"></script>
-<script src="js/hardware-ui.js"></script>
-<script src="js/install-ui.js"></script>
-<script src="js/editor.js"></script>
-<script src="js/fc-export.js"></script>
-<script src="js/board-wasm.js"></script>
-<script src="js/crsf.js"></script>
-<script src="js/elrs.js"></script>
-<script src="js/boards.js"></script>
-<script src="js/gs-widgets.js"></script>
-<script src="js/gs-ui.js"></script>
-<script src="js/agent.js"></script>
-<script src="js/agent-tools.js"></script>
-<script src="js/agent-tools-more.js"></script>
-<script src="js/agent-hardware.js"></script>
-<script src="js/agent-ui.js"></script>
-<script src="js/audio.js"></script>
+<script src="js/ui-components.js?v=7bee7a1164"></script>
+<script src="js/ui-shell.js?v=4e2fcdab66"></script>
+<script src="js/math.js?v=d02edf9672"></script>
+<script src="js/sources.js?v=3211fb8610"></script>
+<script src="js/terrain.js?v=7f3f1b0df1"></script>
+<script src="js/laws.js?v=88ffc9954d"></script>
+<script src="js/runtime.js?v=798dfc02ea"></script>
+<script src="js/budget.js?v=62a2d9c4cc"></script>
+<script src="js/rn-parse.js?v=cc79bcdaf9"></script>
+<script src="js/rn-ops.js?v=c53390b2b4"></script>
+<script src="js/rn-compile.js?v=6406d11fac"></script>
+<script src="js/rn-sigs.js?v=0b66218cfb"></script>
+<script src="js/rn-vm.js?v=eaf422615c"></script>
+<script src="js/rn-wasm.js?v=57aa3966fb"></script>
+<script src="js/rn-bridge.js?v=bffc67a733"></script>
+<script src="js/sim.js?v=4430a95249"></script>
+<script src="js/joints.js?v=3fc4d783ab"></script>
+<script src="js/multibody.js?v=8ebcaadfdb"></script>
+<script src="js/cargo.js?v=d3a4267220"></script>
+<script src="js/sensors.js?v=9975f2af88"></script>
+<script src="js/health.js?v=b11f5f54a3"></script>
+<script src="js/learn.js?v=c8cd75bea1"></script>
+<script src="js/view3d.js?v=256588fbe1"></script>
+<script src="js/pilot.js?v=b8f70f2c67"></script>
+<script src="js/computers-ui.js?v=184e3b739f"></script>
+<script src="js/ui.js?v=dd1e1eb6ee"></script>
+<script src="js/place-ui.js?v=245f5d12f2"></script>
+<script src="js/cargo-ui.js?v=ba123e5302"></script>
+<script src="js/health-ui.js?v=8af0e99438"></script>
+<script src="js/designs.js?v=95c3339d60"></script>
+<script src="js/share.js?v=edbc08e171"></script>
+<script src="js/board-hardware.js?v=13bee47a53"></script>
+<script src="js/hardware.js?v=9609b5ce88"></script>
+<script src="js/driver-presets.js?v=ed1dfcae66"></script>
+<script src="js/hardware-ui.js?v=96ebcbfc79"></script>
+<script src="js/install-ui.js?v=b534498fe2"></script>
+<script src="js/editor.js?v=956cb50980"></script>
+<script src="js/fc-export.js?v=ec491a7bac"></script>
+<script src="js/board-wasm.js?v=9616330bbe"></script>
+<script src="js/crsf.js?v=4a5f654dd8"></script>
+<script src="js/elrs.js?v=93bb30de88"></script>
+<script src="js/boards.js?v=9fe74f42d6"></script>
+<script src="js/gs-widgets.js?v=50b08c3d91"></script>
+<script src="js/gs-ui.js?v=6fef848119"></script>
+<script src="js/agent.js?v=f469f23ce8"></script>
+<script src="js/agent-tools.js?v=607908ba36"></script>
+<script src="js/agent-tools-more.js?v=934ae5de79"></script>
+<script src="js/agent-hardware.js?v=3dfb149f42"></script>
+<script src="js/agent-ui.js?v=e02c00aa03"></script>
+<script src="js/audio.js?v=126beda013"></script>
 <script>boot();</script>
-<script src="js/section-nav.js"></script>
+<script src="js/section-nav.js?v=55293d65c7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
 </body>

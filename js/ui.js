@@ -1,118 +1,6 @@
 'use strict';
 // Panels: airframe editor, telemetry, traces, target & environment, header controls, persistence.
 
-const $ = s => document.querySelector(s);
-function el(tag, attrs = {}, ...kids) {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null) continue;
-    if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else if (k === 'html') e.innerHTML = v;
-    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
-  }
-  for (const c of kids) if (c != null) e.append(c);
-  return e;
-}
-// Readouts that tick: write only what changed, so a reading can be selected and copied while it runs.
-function setText(n, t) {
-  if (!n || n.textContent === t) return;
-  const s = getSelection(); if (s && s.rangeCount && !s.isCollapsed && s.containsNode(n, true)) return;   // being selected: hold still until let go
-  n.textContent = t;
-}
-function syncKv(dl, rows) {   // a <dl> of [name, value] rows, built once, values updated in place
-  const sig = rows.map(r => r[0]).join('|');
-  if (dl._sig !== sig) { dl.textContent = ''; dl._dd = rows.map(([k]) => { const dd = el('dd'); dl.append(el('dt', { text: k }), dd); return dd; }); dl._sig = sig; }
-  rows.forEach((r, i) => { setText(dl._dd[i], r[1]); const c = r[2] || ''; if (dl._dd[i].className !== c) dl._dd[i].className = c; });
-}
-// Chips kept in place by key: only what changed is touched, so a chip can be clicked or keep the focus while the
-// readouts tick. list: [{ key, src, text, tone, go }]; a chip with go (what clicking it does) is a button.
-function syncChips(box, list) {
-  const have = box._chips || (box._chips = new Map()), keys = new Set(list.map(c => c.key));
-  for (const [k, n] of have) if (!keys.has(k) || n.tagName !== (list.find(c => c.key === k).go ? 'BUTTON' : 'SPAN')) { n.remove(); have.delete(k); }
-  let at = box.firstChild;
-  for (const c of list) {
-    let n = have.get(c.key);
-    if (!n) {
-      n = el(c.go ? 'button' : 'span', { type: c.go ? 'button' : null, 'data-focus-key': 'chip-' + c.key }, srcDot(c.src), document.createTextNode(''));
-      if (c.go) n.addEventListener('click', () => n._go && n._go());
-      n._src = c.src; have.set(c.key, n);
-    }
-    n._go = c.go || null;
-    if (n._src !== c.src) { n.firstChild.replaceWith(srcDot(c.src)); n._src = c.src; }
-    const cls = 'chip' + (c.tone ? ' ' + c.tone : ''); if (n.className !== cls) n.className = cls;
-    if (n.lastChild.data !== c.text) n.lastChild.data = c.text;
-    if (n === at) at = at.nextSibling; else box.insertBefore(n, at);
-  }
-}
-// Re-renders replace nodes: put the keyboard focus back on the same control afterwards (found by its id or its
-// data-focus-key), instead of letting it drop to the page.
-function keepFocus(fn) {
-  const a = document.activeElement;
-  const sel = a && a !== document.body ? (a.dataset && a.dataset.focusKey ? `[data-focus-key="${CSS.escape(a.dataset.focusKey)}"]` : a.id ? '#' + CSS.escape(a.id) : null) : null;
-  try { return fn(); } finally {
-    if (sel && !a.isConnected && (!document.activeElement || document.activeElement === document.body)) {
-      const n = document.querySelector(sel); if (n) n.focus({ preventScroll: true });
-    }
-  }
-}
-// A button that opens a short list of actions. (A select used for actions acts on a single arrow key.)
-// o: { text, label, title, key (data-focus-key), cls, align: 'left', items() -> [{ value, label, hint, group, disabled, cur }], onPick(value) }
-let openMenuClose = null;
-function menuButton(o) {
-  const btn = el('button', { type: 'button', class: 'btn mb-btn' + (o.cls ? ' ' + o.cls : ''), 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-label': o.label || null, title: o.title || null, 'data-focus-key': o.key || null },
-    el('span', { text: o.text }), el('span', { class: 'mb-caret', 'aria-hidden': 'true', text: '▾' }));
-  const menu = el('div', { class: 'mb-menu' + (o.align === 'left' ? ' left' : ''), role: 'menu', 'aria-label': o.label || o.text });
-  menu.hidden = true;
-  const wrap = el('span', { class: 'mb' }, btn, menu);
-  const live = () => [...menu.querySelectorAll('[role=menuitem]:not([aria-disabled="true"])')];
-  const close = back => {
-    if (menu.hidden) return; menu.hidden = true; btn.setAttribute('aria-expanded', 'false');
-    if (openMenuClose === close) openMenuClose = null;
-    if (back) btn.focus();
-  };
-  const open = which => {
-    if (openMenuClose && openMenuClose !== close) openMenuClose(false);
-    menu.textContent = ''; let grp = null;
-    for (const it of o.items()) {
-      if (it.group && it.group !== grp) { grp = it.group; menu.append(el('div', { class: 'mb-grp', role: 'presentation', text: grp })); }
-      const b = el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'mb-item' + (it.cur ? ' cur' : '') }, el('span', { text: it.label }), it.hint ? el('span', { class: 'mb-hint', text: it.hint }) : null);
-      if (it.disabled) b.setAttribute('aria-disabled', 'true');
-      b.addEventListener('click', () => { if (it.disabled) return; close(true); o.onPick(it.value); });
-      menu.append(b);
-    }
-    menu.hidden = false; btn.setAttribute('aria-expanded', 'true'); openMenuClose = close;
-    const l = live(); const f = which === 'last' ? l[l.length - 1] : l[0]; if (f) f.focus();
-  };
-  btn.addEventListener('click', () => { if (menu.hidden) open('first'); else close(false); });
-  btn.addEventListener('keydown', e => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); open(e.key === 'ArrowUp' ? 'last' : 'first'); } });
-  menu.addEventListener('keydown', e => {
-    const l = live(), i = l.indexOf(document.activeElement);
-    let j = null;
-    if (e.key === 'ArrowDown') j = (i + 1) % l.length; else if (e.key === 'ArrowUp') j = (i - 1 + l.length) % l.length;
-    else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = l.length - 1;
-    else if (e.key === 'Escape') { e.preventDefault(); close(true); return; }
-    else if (e.key === 'Tab') { close(false); return; }
-    else return;
-    e.preventDefault(); if (l[j]) l[j].focus();
-  });
-  wrap.addEventListener('focusout', e => { if (!menu.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) close(false); });
-  return { node: wrap, btn, close };
-}
-document.addEventListener('pointerdown', e => { if (openMenuClose && !e.target.closest('.mb')) openMenuClose(false); });
-// A select whose change is a big step (it resets the flight): a pick with the mouse applies at once; stepping
-// through it with the arrow keys only applies on Enter, or when you leave it.
-function commitSelect(sel, apply, hint = 'Press Enter to apply') {
-  let key = null, pending = false;
-  const go = () => { if (!pending) return; pending = false; sel.classList.remove('pending'); if (sel.dataset.title != null) sel.title = sel.dataset.title; apply(sel.value); };
-  sel.addEventListener('keydown', e => { if (e.key === 'Enter') { key = null; if (pending) { e.preventDefault(); go(); } } else key = e.key; });
-  sel.addEventListener('pointerdown', () => { key = null; });
-  sel.addEventListener('change', () => {
-    const stepping = key != null && (/^(Arrow|Page)/.test(key) || key === 'Home' || key === 'End' || (key.length === 1 && key !== ' '));
-    key = null; pending = true;
-    if (!stepping) { go(); return; }
-    sel.classList.add('pending'); if (sel.dataset.title == null) sel.dataset.title = sel.title || ''; sel.title = hint;
-  });
-  sel.addEventListener('blur', go);
-}
 let running = true, speed = 1;
 
 /* ───────── components ───────── */
@@ -231,47 +119,12 @@ function summary(c) {
 // A number: a slider over the usual range, and a box where you can type anything past it (a 200 kg payload, a
 // 3 m rod). Typing keeps only what makes sense physically: no zero or negative for something that must be positive
 // (a mass, a size), fractions and percentages within their range (d.hard: a field whose range is real).
-function numField(id, d, get, set) {
-  const frac = d.hard || d.u === '%' || (d.min === 0 && d.max === 1);
-  const k = d.k || 1, lo = frac ? (d.hmin ?? d.min) : d.min >= 0 ? 0 : -Infinity, hi = frac ? (d.hmax ?? d.max) : Infinity, pos = !frac && d.min > 0, inK = x => +(x * k).toFixed(6);
-  const show1 = x => String(+(x * k).toFixed(d.dp));
-  const onGrid = x => Math.abs(x / d.step - Math.round(x / d.step)) < 1e-6;   // (a min off the step grid would move where the arrow keys step to)
-  const num = el('input', { type: 'number', class: 'num', id: id + '-n', step: String(inK(d.step)), min: isFinite(lo) && onGrid(lo) ? String(inK(lo)) : null, max: isFinite(hi) ? String(inK(hi)) : null, 'aria-label': `${d.label}${d.u ? ' in ' + d.u : ''}`, inputmode: 'decimal' });
-  const rng = el('input', { type: 'range', id, min: d.min, max: d.max, step: d.step });
-  const note = el('span', { class: 'clampnote', role: 'status' }); let noteT = 0;
-  const say = t => { clearTimeout(noteT); note.textContent = t; if (t) noteT = setTimeout(() => { note.textContent = ''; }, 2500); };
-  const show = v => { num.value = show1(v); rng.value = String(v); };
-  show(get());
-  rng.addEventListener('input', () => { const v = parseFloat(rng.value); num.value = show1(v); set(v); });
-  num.addEventListener('input', () => {
-    const t = num.value; let v = parseFloat(t) / k; if (t === '' || !isFinite(v)) return;
-    let why = '';
-    if (pos && v <= 0) { say('must be above 0'); return; }
-    if (v > hi) { v = hi; why = `max ${show1(hi)}`; } else if (v < lo) { v = lo; why = `min ${show1(lo)}`; }
-    if (d.int && Math.round(v) !== v) { v = Math.round(v); why = why || 'whole numbers'; }
-    if (!why && (v > d.max || v < d.min)) why = 'past the slider';
-    say(why); rng.value = String(v); set(v);
-  });
-  num.addEventListener('change', () => show(get()));                       // tidy the box once typing is done
-  num.addEventListener('keydown', e => {
-    if (e.key === 'Enter') num.blur();
-    else if (e.key === 'Escape') { show(get()); num.blur(); }
-  });
-  const refresh = () => { if (document.activeElement !== num) show(get()); };
-  const why = el('span', { class: 'field-why' });
-  const ends = d.ends ? el('div', { class: 'ends', id: id + '-ends' }, el('span', { text: d.ends[0] }), el('span', { text: d.ends[1] })) : null;
-  if (ends) rng.setAttribute('aria-describedby', id + '-ends');
-  const node = el('div', { class: 'field' }, el('label', { for: id, text: d.label }), el('span', { class: 'numwrap' }, note, num, el('span', { class: 'unit', text: d.u })), rng, ends, why);
-  // switched off (not used here), with the reason under it
-  const setOff = (off, txt = '') => { off = !!off; if (num.disabled === off && why.textContent === (off ? txt : '')) return; node.classList.toggle('off', off); num.disabled = rng.disabled = off; setText(why, off ? txt : ''); };
-  return { node, refresh, setOff };
-}
 // A servo's swing, relative to what it's mounted on: quick picks, then the exact angle and lean.
 function hingeFields(c, rerender) {
   const pre = swingPresets(c), cur = swingPreset(c);
   const seg = el('div', { class: 'seg seg-sm seg-fill', role: 'group', 'aria-label': 'Swings' });
   for (const o of pre) {
-    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label, 'data-focus-key': `swing-${c.id}-${o.k}` });
+    const b = UI.button( { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label, 'data-focus-key': `swing-${c.id}-${o.k}` });
     b.addEventListener('click', () => { setSwing(c, o.deg, 0); edited(c, 'swing'); rerender(); });
     seg.append(b);
   }
@@ -308,32 +161,32 @@ function refreshCard(c) {
   const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
 }
 function selectF(c, key, label, opts, onchg) {
-  const id = `f-${c.id}-${key}`; const s = el('select', { id });
+  const id = `f-${c.id}-${key}`; const s = UI.select( { id });
   for (const [v, t] of opts) { const o = el('option', { value: v, text: t }); if (String(c[key]) === String(v)) o.selected = true; s.append(o); }
   s.addEventListener('change', () => { const v = s.value; c[key] = v === 'true' ? true : v === 'false' ? false : isNaN(+v) ? v : +v; edited(c, key); if (onchg) onchg(); });
   return el('div', { class: 'field' }, el('label', { for: id, text: label }), s);
 }
 function checkF(c, key, label) {
-  const id = `f-${c.id}-${key}`; const i = el('input', { type: 'checkbox', id }); i.checked = !!c[key];
+  const id = `f-${c.id}-${key}`; const i = UI.input( { type: 'checkbox', id }); i.checked = !!c[key];
   i.addEventListener('change', () => { c[key] = i.checked; edited(c, key); });
   return el('label', { class: 'check', for: id }, i, label);
 }
 function compBody(c) {
   cardRefresh.set(c.id, []);
   const b = el('div', { class: 'comp-body' });
-  const nid = `f-${c.id}-name`; const ni = el('input', { type: 'text', id: nid, value: c.name, maxlength: '18' });
+  const nid = `f-${c.id}-name`; const ni = UI.input( { type: 'text', id: nid, value: c.name, maxlength: '18' });
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
   b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
   // Attached to: the frame, or any servo joint that isn't this part or below it.
   const holders = [['', 'Frame']].concat(cfg.comps.filter(h => canAttach(c, h)).map(h => [String(h.id), `${h.name} (${h.type === 'link' ? 'rod end' : h.type === 'latch' ? 'latch' : 'servo'})`]));
-  const aid = `f-${c.id}-parent`, asel = el('select', { id: aid });
+  const aid = `f-${c.id}-parent`, asel = UI.select( { id: aid });
   for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') === v) o.selected = true; asel.append(o); }
   asel.addEventListener('change', () => { attachTo(c, asel.value ? compById(+asel.value) : null); if (c.type === 'hang') reseatPend(c); structural(); });
   b.append(el('div', { class: 'field' }, el('label', { for: aid, text: 'Attached to' }), asel));
   const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
   if (parentOf(c) || isHolder(c)) b.append(el('p', { class: 'hint', text: 'Positions are body axes with every servo at 0°; the servos above a part carry it from there. Moving or turning a servo or rod carries what\'s on it.' }));
   const presetSel = (list, kAz, kEl, label) => {   // quick directions, with the exact angles below
-    const id = `f-${c.id}-${kAz}-preset`, sel = el('select', { id }), cur = presetOf(list, c[kAz], c[kEl]);
+    const id = `f-${c.id}-${kAz}-preset`, sel = UI.select( { id }), cur = presetOf(list, c[kAz], c[kEl]);
     for (const [k, t] of list) { const o = el('option', { value: k, text: t }); if (k === cur) o.selected = true; sel.append(o); }
     sel.addEventListener('change', () => { const p = list.find(x => x[0] === sel.value); if (p[2] == null) return; c[kAz] = p[2]; c[kEl] = p[3]; edited(c, kAz); rerender(); });
     return el('div', { class: 'field' }, el('label', { for: id, text: label }), sel);
@@ -404,12 +257,8 @@ function compBody(c) {
 }
 function compCard(c) {
   const open = openSet.has(c.id);
-  const head = el('button', { class: 'comp-head', type: 'button', 'aria-expanded': String(open), 'data-focus-key': 'head-' + c.id }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
-  head.addEventListener('click', () => {
-    if (typeof editMode !== 'undefined' && editMode && edit.sel !== c.id) { edit.refocus = true; selectComp(c.id); return; }   // in edit mode a card click selects the part
-    open ? openSet.delete(c.id) : openSet.add(c.id); keepFocus(() => document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)));
-  });
-  const del = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×', 'data-focus-key': 'del-' + c.id });
+  const head = UI.button( { class: 'comp-head', type: 'button', 'aria-expanded': String(open), 'data-focus-key': 'head-' + c.id }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
+  const del = UI.button( { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×', 'data-focus-key': 'del-' + c.id });
   del.addEventListener('click', () => {   // parts on a removed joint move to what the joint was on
     for (const x of cfg.comps) if (x.parent === c.id) x.parent = c.parent ?? null;
     cfg.comps = cfg.comps.filter(x => x !== c); openSet.delete(c.id); structural();
@@ -419,13 +268,16 @@ function compCard(c) {
   const top = el('div', { class: 'comp-top', draggable: 'true' }, grip, head, del);
   top.addEventListener('dragstart', e => { dragId = c.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(c.id)); requestAnimationFrame(() => top.closest('.comp').classList.add('dragging')); });
   top.addEventListener('dragend', () => { dragId = null; document.querySelectorAll('.dragging,.drop-ok').forEach(x => x.classList.remove('dragging', 'drop-ok')); });
-  const card = el('div', { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, top, open ? compBody(c) : null);
+  const card = UI.card( { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, top, open ? compBody(c) : null);
+  UI.bindDisclosure(head,card.querySelector('.comp-body'),{open,beforeToggle:()=>{
+    if(typeof editMode!=='undefined' && editMode && edit.sel!==c.id){edit.refocus=true;selectComp(c.id);return false;}
+  },onToggle:next=>{next?openSet.add(c.id):openSet.delete(c.id);keepFocus(()=>card.replaceWith(compCard(c)));}});
   // a servo or rod: a drop target, and the twisty that folds what it carries (here, so a re-rendered card keeps them)
   if (isHolder(c)) dropTarget(card, c);
   const kids = childrenOf(c);
   if (kids.length) {
     const folded = foldSet.has(c.id);
-    const tw = el('button', { class: 'twisty', type: 'button', 'aria-expanded': String(!folded), title: folded ? 'Show what it carries' : 'Hide what it carries', 'aria-label': (folded ? 'Show what ' : 'Hide what ') + c.name + ' carries', text: folded ? `▸ ${kids.length}` : '▾', 'data-focus-key': 'tw-' + c.id });
+    const tw = UI.button( { class: 'twisty', type: 'button', 'aria-expanded': String(!folded), title: folded ? 'Show what it carries' : 'Hide what it carries', 'aria-label': (folded ? 'Show what ' : 'Hide what ') + c.name + ' carries', text: folded ? `▸ ${kids.length}` : '▾', 'data-focus-key': 'tw-' + c.id });
     tw.addEventListener('click', () => { folded ? foldSet.delete(c.id) : foldSet.add(c.id); renderComps(); });
     top.prepend(tw);
   }
@@ -619,7 +471,7 @@ function renderMass() {
     ['Inertia Ixx / Iyy / Izz', `${(truth.J[0] * 1000).toFixed(1)} / ${(truth.J[4] * 1000).toFixed(1)} / ${(truth.J[8] * 1000).toFixed(1)} g·m²`]];
   syncKv($('#massKv'), rows);
 }
-const goForm = () => showTab('form');
+const goForm = () => UI_PANELS.editor.select('form');
 // Phones: the header is one line (play/pause, the airframe, share) until ⋯ opens the rest.
 $('#hdrMore').addEventListener('click', () => { const o = $('#topBar').classList.toggle('open'); $('#hdrMore').setAttribute('aria-expanded', String(o)); });
 $('#tileCode').addEventListener('click', goForm);
@@ -666,7 +518,7 @@ function renderLaunch() {
 // The status strip on top of the readouts: four tiles that are always there (so nothing below moves), and one line of
 // warnings. Tones: good, warn, bad, or none.
 function setTile(id, value, sub, tone, title) {
-  const t = $('#' + id), cls = 'tile' + (tone ? ' ' + tone : ''); if (t.className !== cls) t.className = cls;
+  const t = $('#' + id), cls = 'tile' + (t.tagName === 'BUTTON' ? ' ui-button' : '') + (tone ? ' ' + tone : ''); if (t.className !== cls) t.className = cls;
   setText(t.querySelector('.tv'), value); setText(t.querySelector('.ts'), sub);
   if (title != null && t.title !== title) t.title = title;
 }
@@ -951,7 +803,7 @@ $('#frameMassSlot').replaceWith(frameMassField.node, el('div', { id: 'frameShape
 function renderFrameShape() {
   const box = $('#frameShape'); if (!box) return; box.textContent = '';
   const changed = () => { undoKey = 'frame-shape'; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); };
-  const sel = el('select', { id: 'frameAero' }, el('option', { value: 'prism', text: 'Prism: a box hub (drag)' }), el('option', { value: 'wing', text: 'Wing: the body is a wing (lift and drag)' }));
+  const sel = UI.select( { id: 'frameAero' }, el('option', { value: 'prism', text: 'Prism: a box hub (drag)' }), el('option', { value: 'wing', text: 'Wing: the body is a wing (lift and drag)' }));
   sel.value = frameWing() ? 'wing' : 'prism';
   sel.addEventListener('change', () => { cfg.frame.aero = sel.value; changed(); renderFrameShape(); });
   box.append(el('div', { class: 'field' }, el('label', { for: 'frameAero', text: 'Frame shape' }), sel));
@@ -1095,6 +947,7 @@ function toggleTorque() {   // Q: rotor and net torque together
   menu.innerHTML = `<div class="show-grp"><span class="lbl">Layout</span><div class="show-layout"><div class="seg seg-sm" role="group" aria-label="Layout">${[['auto', 'Auto'], ['phone', 'Phone'], ['full', 'Full']].map(([k, l]) => `<button type="button" data-uimode="${k}" aria-pressed="false" title="${{ auto: 'Phone when the page opens taller than it is wide, Full otherwise', phone: 'A one-line header, the flight pads with Home and Poke, a lean view', full: 'Everything' }[k]}">${l}</button>`).join('')}</div><span class="hint" id="uiNow"></span></div></div>` + groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
     LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn tog" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
     + `<div class="show-grp show-presets"><span class="lbl">Presets</span><div class="show-btns">${Object.keys(SHOW_PRESETS).map(p => `<button type="button" class="btn" data-preset="${p}">${p}</button>`).join('')}</div></div>`;
+  UI.hydrate(menu);
   menu.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.key) setLayers({ [b.dataset.key]: !view[b.dataset.key] });
@@ -1113,41 +966,6 @@ function popover(btn, pop) {
 }
 popover($('#tKeys'), $('#keysPop'));
 
-/* ───────── tabs ───────── */
-const TABS = [['tabAir', 'air'], ['tabForm', 'form'], ['tabGs', 'gs'], ['tabAi', 'ai']];
-function showTab(which) {
-  if (!['air', 'form', 'gs', 'ai'].includes(which)) which = 'air';
-  const form = which === 'form', gsT = which === 'gs', ai = which === 'ai';
-  for (const [id, k] of TABS) { const t = $('#' + id); t.setAttribute('aria-selected', String(k === which)); t.tabIndex = k === which ? 0 : -1; }
-  $('#paneAir').hidden = which !== 'air'; $('#paneForm').hidden = !form; $('#paneGs').hidden = !gsT; $('#paneAi').hidden = !ai;
-  $('.work').classList.toggle('wide', form || gsT || ai);
-  if (gsT) renderGs(true);
-  try { localStorage.setItem(LS + '-tab', which); } catch (e) {}
-}
-for (const [id, k] of TABS) $('#' + id).addEventListener('click', () => showTab(k));
-$('.tabs').addEventListener('keydown', e => {   // arrow keys move between the tabs (one tab stop for the row)
-  const i = TABS.findIndex(([id]) => id === e.target.id); if (i < 0) return;
-  const j = e.key === 'ArrowRight' ? (i + 1) % TABS.length : e.key === 'ArrowLeft' ? (i - 1 + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
-  if (j < 0) return; e.preventDefault(); showTab(TABS[j][1]); $('#' + TABS[j][0]).focus();
-});
-
-// The readouts (right panel): the airframe check stays on top; the rest in tabs. Health shows a dot while something is
-// broken, failing or overheating, or the supervisor has stepped in, since the panel isn't always in view.
-const RTABS = ['flight', 'health', 'control', 'world'];
-function showRtab(k) {
-  if (!RTABS.includes(k)) k = 'flight';
-  for (const t of RTABS) { const b = $('#rtab-' + t); b.setAttribute('aria-selected', String(t === k)); b.tabIndex = t === k ? 0 : -1; $('#rpane-' + t).hidden = t !== k; }
-  if (k === 'flight') requestAnimationFrame(drawChart);   // (a hidden canvas has no size to draw at)
-  if (k === 'health' && typeof renderHealth === 'function') renderHealth(true);
-  try { localStorage.setItem('drone-force-bench-v1-rtab', k); } catch (e) {}
-}
-for (const t of RTABS) $('#rtab-' + t).addEventListener('click', () => showRtab(t));
-$('#telemetry .rtabs').addEventListener('keydown', e => {
-  const i = RTABS.findIndex(t => 'rtab-' + t === e.target.id); if (i < 0) return;
-  const j = e.key === 'ArrowRight' ? (i + 1) % RTABS.length : e.key === 'ArrowLeft' ? (i - 1 + RTABS.length) % RTABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? RTABS.length - 1 : -1;
-  if (j < 0) return; e.preventDefault(); showRtab(RTABS[j]); $('#rtab-' + RTABS[j]).focus();
-});
-try { showRtab(localStorage.getItem('drone-force-bench-v1-rtab') || 'flight'); } catch (e) { showRtab('flight'); }
 function syncRtabAlerts() {
   const sv = brt.superView, hot = (typeof anyBroken === 'function' && anyBroken()) || (sv && sv.mode > 0);
   const b = $('#rtab-health'); b.classList.toggle('alert', !!hot); b.title = hot ? 'Something is broken or failing, or the supervisor has stepped in' : 'The parts, the supervisor and the state estimate';
@@ -1163,7 +981,7 @@ function infoize(root) {
     if (!hints.length) continue;
     hints.forEach(p => p.classList.add('info-more'));
     const name = (h.firstChild && h.firstChild.textContent || 'this').trim();
-    const b = el('button', { class: 'info-btn', type: 'button', 'aria-expanded': 'false', title: 'What this is', 'aria-label': 'About ' + name, text: 'i' });
+    const b = UI.button( { class: 'info-btn', type: 'button', 'aria-expanded': 'false', title: 'What this is', 'aria-label': 'About ' + name, text: 'i' });
     b.addEventListener('click', () => { const o = sec.classList.toggle('show-info'); b.setAttribute('aria-expanded', String(o)); });
     h.insertBefore(b, h.childNodes[1] || null);
   }
@@ -1246,13 +1064,15 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 
 /* ───────── boot ───────── */
 function boot() {
+  UI.hydrate(document);
   buildSp(); buildThrowFields(); buildAllocFields(); buildComputers(); bindPads();
   const loaded = load(); if (!terrain.ver) setTerrain('parkour', 1); syncTerrainUi();
   if (loaded) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
   initDesigns(bootDesign); syncFlightUi();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
-  showTab(tab);
+  UI_PANELS.editor.select(tab);
+  UI_PANELS.readouts.restore();
   let lastT = performance.now(), envT = 0, uiT = 0;
   function frame(now) {
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;

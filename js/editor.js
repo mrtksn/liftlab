@@ -66,7 +66,7 @@ function buildGizmo() {
 function setEditMode(on) {
   if (on === editMode) return;
   editMode = on;
-  if (on) { editWasRunning = running; running = false; releaseAll(); showTab('air'); }
+  if (on) { editWasRunning = running; running = false; releaseAll(); UI_PANELS.editor.select('air'); }
   else { running = editWasRunning; selectComp(null); setHover(null); }
   renderRun();
   $('#tEdit').setAttribute('aria-pressed', String(on));
@@ -123,16 +123,16 @@ function renderEditTools(c) {
   if (swingPrev.id !== c.id) { swingPrev.id = c.id; swingPrev.play = true; swingPrev.t0 = performance.now(); }
   const changed = key => { edited(c, key); refreshCard(c); updateEditMsg(); };
   const cur = swingPreset(c), w = swingOf(c);
-  const btn = (text, title, on) => { const b = el('button', { class: 'btn', type: 'button', title, 'aria-label': title, text }); b.addEventListener('click', on); return b; };
+  const btn = (text, title, on) => { const b = UI.button( { class: 'btn', type: 'button', title, 'aria-label': title, text }); b.addEventListener('click', on); return b; };
   const row = (label, ...kids) => el('div', { class: 'st-row' }, el('span', { class: 'st-lab', text: label }), el('div', { class: 'st-ctl' }, ...kids));
 
   const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Swing direction' });
   for (const o of swingPresets(c)) {
-    const b = el('button', { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
+    const b = UI.button( { type: 'button', 'aria-pressed': String(!!cur && cur.k === o.k), text: o.label });
     b.addEventListener('click', () => { setSwing(c, o.deg, 0); changed('swing'); });
     seg.append(b);
   }
-  const ang = el('input', { type: 'number', class: 'num', min: -180, max: 180, step: 5, value: String(Math.round(w.swing)), 'aria-label': 'Swing direction in degrees' });
+  const ang = UI.input( { type: 'number', class: 'num', min: -180, max: 180, step: 5, value: String(Math.round(w.swing)), 'aria-label': 'Swing direction in degrees' });
   ang.addEventListener('change', () => { const v = parseFloat(ang.value); if (isFinite(v)) { setSwing(c, clamp(v, -180, 180)); changed('swing'); } });
   ang.addEventListener('keydown', e => { if (e.key === 'Enter') ang.blur(); });
   const nudge = d => { setSwing(c, ((Math.round(swingOf(c).swing) + d + 540) % 360) - 180); changed('swing'); };
@@ -149,7 +149,7 @@ function renderEditTools(c) {
     renderEditTools(c);
   });
   play.id = 'swingPlay';
-  const scrub = el('input', { type: 'range', id: 'swingScrub', min: -R, max: R, step: 1, value: String(Math.round(swingPrev.th * R2D)), 'aria-label': 'Preview angle' });
+  const scrub = UI.input( { type: 'range', id: 'swingScrub', min: -R, max: R, step: 1, value: String(Math.round(swingPrev.th * R2D)), 'aria-label': 'Preview angle' });
   scrub.addEventListener('input', () => { swingPrev.play = false; swingPrev.th = parseFloat(scrub.value) * D2R; play.textContent = '▶'; play.title = 'Play the preview'; play.setAttribute('aria-label', 'Play the preview'); });
   const at = el('span', { class: 'rv', id: 'swingAt' });
   const hold = (label, deg) => btn(label, `Hold at ${label}`, () => { swingPrev.play = false; swingPrev.th = deg * D2R; renderEditTools(c); });

@@ -10,8 +10,8 @@ function renderBattery() {
   const box = $('#battFields'); if (!box) return; box.textContent = '';
   const b = battCfg();
   const num = (key, d) => numField('batt-' + key, d, () => battCfg()[key], v => { battCfg()[key] = key === 'cells' ? Math.round(v) : v; battEdited(); }).node;
-  const chk = (key, label) => { const id = 'batt-' + key, i = el('input', { type: 'checkbox', id }); i.checked = !!b[key]; i.addEventListener('change', () => { battCfg()[key] = i.checked; battEdited(); }); return el('label', { class: 'check', for: id }, i, label); };
-  const sel = el('select', { id: 'batt-failMode' });
+  const chk = (key, label) => { const id = 'batt-' + key, i = UI.input( { type: 'checkbox', id }); i.checked = !!b[key]; i.addEventListener('change', () => { battCfg()[key] = i.checked; battEdited(); }); return el('label', { class: 'check', for: id }, i, label); };
+  const sel = UI.select( { id: 'batt-failMode' });
   for (const [v, t] of [['cell', 'It loses a cell'], ['cut', 'It cuts out']]) { const o = el('option', { value: v, text: t }); if (b.failMode === v) o.selected = true; sel.append(o); }
   sel.addEventListener('change', () => { battCfg().failMode = sel.value; battEdited(); });
   box.append(
@@ -49,11 +49,11 @@ function buildHealth() { keepFocus(buildHealth1); }
 function buildHealth1() {
   const box = $('#healthBody'); box.textContent = ''; HEALTH.rows.clear(); HEALTH.logSig = null;
   const mode = el('span', { class: 'pill good', id: 'supMode' }, el('i'), el('span', { text: 'Normal' }));
-  const repair = HEALTH.repair = el('button', { class: 'btn', type: 'button', id: 'repairAll', text: 'Repair all' });
+  const repair = HEALTH.repair = UI.button( { class: 'btn', type: 'button', id: 'repairAll', text: 'Repair all' });
   repair.addEventListener('click', () => { if (repair.getAttribute('aria-disabled') === 'true') return; repairAll(); renderHealth(true); });
   const sb = typeof boardOf === 'function' ? boardOf('super') : null;
   mode.hidden = !sb;
-  const how = el('details', { class: 'h-how' }, el('summary', { text: 'How to read this' }),
+  const how = UI.details({ class: 'h-how', title: 'How to read this' },
     el('p', { class: 'hint', id: 'supWhy', text: sb ? `Each row is a part: the dot and the words are its true state (simulated), the bar its temperature up to its limit. The line under it, when there is one, is what the drone's own sensors read and what the health supervisor (on ${sb.name}, 10 times a second, from the flight core's data and the health sensors) did about it. Break a part to see what the flight code does.`
       : 'Each row is a part: the dot and the words are its true state (simulated), the bar its temperature up to its limit; the line under it, what the drone\'s own sensors read. Break a part to see what the flight code does. No board runs the health supervisor (Computers tab), so nothing watches for failures.' }));
   box.append(el('div', { class: 'h-top' }, el('span', { class: 'lbl', text: sb ? 'Supervisor' : 'No supervisor' }), mode, el('span', { class: 'h-count', id: 'hCount' }), repair), how);

@@ -229,11 +229,11 @@ function renderDesigns() {
   const box = document.getElementById('designList'); if (!box) return;
   box.textContent = '';
   for (const d of designs.list) {
-    const open = el('button', { class: 'dname', type: 'button', title: 'Open this design', text: d.name || 'Untitled design' });
+    const open = UI.button( { class: 'dname', type: 'button', title: 'Open this design', text: d.name || 'Untitled design' });
     open.addEventListener('click', () => askToSave(d.name || 'Untitled design', () => openDesign(d)));
-    const exp = el('button', { class: 'icon-btn dexp', type: 'button', title: 'Save to file', 'aria-label': 'Save ' + d.name + ' to a file', text: '⤓' });
+    const exp = UI.button( { class: 'icon-btn dexp', type: 'button', title: 'Save to file', 'aria-label': 'Save ' + d.name + ' to a file', text: '⤓' });
     exp.addEventListener('click', () => exportDesign(d));
-    const del = el('button', { class: 'icon-btn', type: 'button', title: 'Delete', 'aria-label': 'Delete ' + d.name, text: '×' });
+    const del = UI.button( { class: 'icon-btn', type: 'button', title: 'Delete', 'aria-label': 'Delete ' + d.name, text: '×' });
     del.addEventListener('click', () => {   // two clicks: the first asks
       if (del.dataset.armed) { removeDesign(d.id); return; }
       del.dataset.armed = '1'; del.textContent = 'Delete?'; del.classList.add('armed');

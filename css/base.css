@@ -1,0 +1,7 @@
+/* Global document defaults */
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:var(--text-base);line-height:1.45}
+button,select,input{font:inherit;color:inherit}

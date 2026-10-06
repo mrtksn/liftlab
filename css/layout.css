@@ -1,0 +1,45 @@
+/* Responsive adaptations and reduced-motion preferences */
+@media (max-width:600px){ #triad{width:60px;height:60px} .view-named{display:none} }
+@media (max-width:1100px){
+  .work.wide{grid-template-columns:minmax(0,1fr)}
+  html,body{height:auto}
+  .app{height:auto}
+  .work{grid-template-columns:minmax(0,1fr)}
+  .view{height:60vh;min-height:340px;order:1}
+  #airframe{order:2}
+  #telemetry{order:3}
+  .panel{overflow:visible}
+}
+@media (max-width:640px){
+  .pilot{flex-wrap:wrap;row-gap:var(--space-12)}
+  .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
+  .hud-tl{top:44px}
+  .crash,.liftoff{bottom:232px}
+  .pad{grid-template-columns:repeat(3,34px);grid-template-rows:repeat(3,34px);gap:var(--space-2)}
+  .pad-cap{font-size:8.5px}
+  .pk kbd{display:none}
+  .pilot-acts kbd{display:none}
+  .legend{display:none}
+}
+@media (max-width:1560px){ .brand span{display:none} }
+@media (max-width:1330px){
+  .brand{flex:1 0 100%}
+  .brand + .hgroup{border-left:0;padding-left:0}
+}
+@media (max-width:760px){
+  .brand{flex:1 0 100%}
+  .bar{gap:var(--space-10) var(--space-16)}
+  .hgroup{border-left:0;padding-inline:0}
+}
+@media (max-width:480px){
+  .brand h1{font-size:21px}
+}
+@media (prefers-reduced-motion: reduce){ *{transition:none!important} .poke.full .poke-lbl,.poke.fired,.crash{animation:none} .poke.charging{transform:none} }
+@media (prefers-reduced-motion:reduce){.liftoff-steps li.now{animation:none}}
+@media (max-width:600px){
+  .edit-bar.servo #editMsg .sub,.edit-bar.servo .st-note{display:none}
+  .st-row{grid-template-columns:70px 1fr}
+}
+@media (prefers-reduced-motion:reduce){.ui-tab.busy::after,.ai-typing i{animation:none}}
+/* a touch screen has no keys: no Keys button, no key hints */
+@media (hover:none) and (pointer:coarse){ #tKeys,#kbdHint,.pk kbd,.pilot-acts kbd{display:none!important} }
