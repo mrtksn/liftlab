@@ -158,6 +158,8 @@ int main(void) {
   { rlink_cfg L; char err[200], d[32]; int ok = 1;
     for (int r = 0; r < 3; r++) { const char *in[] = { "nrf24,250", "nrf24,1000", "nrf24,2000" }; if (rlink_parse(&L, in[r], err, sizeof err)) ok = 0; rlink_describe(&L, d, sizeof d); if (strcmp(d, in[r]) || !rlink_compact(&L) || rlink_packets(&L)) ok = 0; }
     CHECK(ok && rlink_parse(&L, "nrf24,500", err, sizeof err) && rlink_parse(&L, "nrf24", err, sizeof err), "nrf24,250 / 1000 / 2000 read back as written; others refused: %s", err);
+    CHECK(!rlink_parse(&L, "ble", err, sizeof err) && L.kind == RLINK_BLE && rlink_packets(&L) && !rlink_compact(&L) && (rlink_describe(&L, d, sizeof d), !strcmp(d, "ble")) && rlink_parse(&L, "ble,2m", err, sizeof err),
+          "ble reads back as written (a packet link, plink's packets); ble with settings refused: %s", err);
     rlink_parse(&L, "nrf24,250", err, sizeof err); clink_cfg c; clink_cfg_default(&c, PLINK_GROUND); clink_cfg_link(&c, &L);
     CHECK(c.up_hz == 50 && rlink_budget(&L) > 600 && rlink_budget(&L) < 700, "at 250 kbit/s: 50 packets a second, the telemetry %.0f B/s (ExpressLRS at 250 Hz 1:4: about 280)", rlink_budget(&L)); }
 

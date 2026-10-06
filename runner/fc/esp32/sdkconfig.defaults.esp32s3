@@ -1,3 +1,13 @@
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Bluetooth LE for radio=ble (the S3 and C3: on the ESP32 its controller's 64 KB of static memory don't fit beside the
+# flight code): NimBLE (the lighter host), one connection, a 256-byte MTU, no pairing or bonding (plink
+# signs the packets). Its memory goes back to the heap at start when the link isn't Bluetooth (radio_ble_release).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_NVS_PERSIST=n
+CONFIG_BT_NIMBLE_LOG_LEVEL_NONE=y

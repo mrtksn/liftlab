@@ -266,6 +266,7 @@ int main(int argc, char **argv) {
     "  (wifi,ap: hostapd or NetworkManager, on that channel) or joins one (wifi,sta), as the OS is set up; --bind: the same phrase\n"
     "  as the command module's), or a serial line to the command module (--radio serial,BAUD: a laser, fibre, infrared, a radio\n"
     "  modem, a wire; half: one way at a time), or none here (the receiver on the ESP32). ESP-NOW needs an ESP32: not on a Pi.\n"); return 2; }
+  if (RL.kind == RLINK_BLE) { fprintf(stderr, "--radio ble: Bluetooth LE needs an ESP32-S3 or C3 on the drone (radio=ble there), the command module an ESP32 too\n"); return 2; }
   if (RL.kind == RLINK_ESPNOW) { fprintf(stderr, "--radio espnow: ESP-NOW needs an ESP32: put the radio on the flight controller's ESP32 (radio=espnow,... there), or use --radio wifi,ap,CHANNEL for the Pi's own Wi-Fi\n"); return 2; }
   if (RL.kind == RLINK_WIFI && crsf_dev) { fprintf(stderr, "--crsf is an ExpressLRS receiver's port: with --radio wifi the radio is this Pi's Wi-Fi (no --crsf)\n"); return 2; }
   if (RL.kind == RLINK_ELRS && bind_phrase) fprintf(stderr, "--bind is for the packet links (wifi, serial): an ExpressLRS receiver has its own binding phrase\n");

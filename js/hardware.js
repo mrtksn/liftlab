@@ -130,6 +130,7 @@ function radioSettingLines(r) {
   if (r.kind === 'espnow') return ['radio=espnow,'+(r.channel||1)+(r.lr?',lr':''),'bind='+(r.bind||'liftlab')];
   if (r.kind === 'wifi') return [r.sta?'radio=wifi,sta':'radio=wifi,ap,'+(r.channel||1),'bind='+(r.bind||'liftlab')];
   if (r.kind === 'serial') return ['radio=serial,'+(r.baud||115200)+(r.half?',half':''),'bind='+(r.bind||'liftlab')];
+  if (r.kind === 'ble') return ['radio=ble','bind='+(r.bind||'liftlab')];
   if (r.kind === 'nrf24') return ['radio=nrf24,'+(r.kbps||1000),'bind='+(r.bind||'liftlab')];
   return ['radio=elrs,'+(r.rate||250)+','+(r.ratio||4)];
 }
@@ -139,6 +140,7 @@ function radioWiringRow(b,bus,esp,r) {
   const kind=r?.kind||'elrs';
   if(kind==='espnow')return {device:'ESP-NOW radio',connection:esp?'Built into the ESP32 · no wiring':'Not available on '+b.kind+' · needs an ESP32',note:'Channel '+(r.channel||1)+(r.lr?' · long range':'')+' · the command module needs an ESP32 too'};
   if(kind==='wifi')return {device:'Wi-Fi radio',connection:'Built into the board · no wiring',note:(r.sta?'Joins a network':'Makes the network (access point), channel '+(r.channel||1))+' · UDP port 14570'};
+  if(kind==='ble')return {device:'Bluetooth LE radio',connection:b.kind==='s3'||b.kind==='c3'?'Built into the ESP32-S3/C3 · no wiring':'Not available on '+b.kind+' · needs an ESP32-S3 or C3',note:'the drone advertises; the command module (an ESP32-S3 or C3) connects'};
   if(kind==='nrf24')return {device:'nRF24L01 module',connection:esp?(bus.nrfPins&&bus.nrfPins.every(p=>p>=0)?'SPI · SCK '+bus.nrfPins[0]+', MOSI '+bus.nrfPins[1]+', MISO '+bus.nrfPins[2]+', CSN '+bus.nrfPins[3]+', CE '+bus.nrfPins[4]:'SPI · not connected'):(bus.nrfSpi||'/dev/spidev0.0')+' · CE GPIO '+(bus.nrfCe??25),note:(r.kbps||1000)+' kbit/s · 3.3 V with a 10 µF capacitor at the module'};
   if(kind==='serial')return {device:'Serial line',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← the line\'s output; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → its input':(bus.receiverPort||'/dev/ttyUSB1')+' · a serial port',note:(r.baud||115200)+' baud'+(r.half?', one way at a time':'')+' · laser, fibre, infrared, a radio modem or a wire · share GND'};
   return {device:'ExpressLRS receiver',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← receiver TX; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'};

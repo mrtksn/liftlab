@@ -29,6 +29,7 @@
  *   set radio=wifi,sta    drone's own, radio=wifi,ap,CH on the drone, or one both join); the channel is the network's
  *   set nrf24=18,23,19,5,4  an nRF24L01 on SPI: SCK, MOSI, MISO, CSN, CE (3.3 V, a 10 µF capacitor at the module)
  *   set radio=nrf24,1000  the link through it, 250, 1000 or 2000 kbit/s, the drone's the same
+ *   set radio=ble         Bluetooth LE: finds the drone advertising this binding phrase's mark and connects
  *   set bind=PHRASE       1–31 characters, as on the drone: it signs the packets. The default (liftlab) is everyone's
  *   set wifi=SSID,PASS    the network to join: the drone's LiftLab-XXXX (as it says at power-on). set wifi=SSID: the
  *                         drone's default password (the binding phrase if it has 8+ characters, else liftlab1)
@@ -134,6 +135,7 @@ static int cfg_radio(const gcfg *c, rlink_cfg *L) {   /* the link as set: 0, or 
         : c->radio_kind == RLINK_WIFI ? rlink_make(L, RLINK_WIFI, c->radio_opt, c->radio_channel)
         : c->radio_kind == RLINK_SERIAL ? rlink_make(L, RLINK_SERIAL, (int)c->radio_baud, c->radio_opt)
         : c->radio_kind == RLINK_NRF24 ? rlink_make(L, RLINK_NRF24, c->radio_kbps, 0)
+        : c->radio_kind == RLINK_BLE ? rlink_make(L, RLINK_BLE, 0, 0)
         : c->radio_kind == RLINK_ELRS ? rlink_make(L, RLINK_ELRS, c->elrs_rate, c->elrs_ratio) : -1;
   if (e) rlink_default(L);
   return e;
@@ -236,6 +238,7 @@ static int setting(char *kv, char *err, int en) {
     else if (L.kind == RLINK_ESPNOW) { N.radio_channel = (int8_t)L.channel; N.radio_opt = (int8_t)L.lr; }
     else if (L.kind == RLINK_SERIAL) { N.radio_baud = L.baud; N.radio_opt = (int8_t)L.half; }
     else if (L.kind == RLINK_NRF24) { if (N.nrf_pin[0] < 0) { snprintf(err, (size_t)en, "radio=nrf24: set nrf24=SCK,MOSI,MISO,CSN,CE first: the module's pins"); N.radio_kind = C.radio_kind; return -1; } N.radio_kbps = (int16_t)L.kbps; }
+    else if (L.kind == RLINK_BLE) {}
     else { N.radio_opt = (int8_t)L.sta; if (!L.sta) N.radio_channel = (int8_t)L.channel; if (!N.wifi_ssid[0]) snprintf(err, (size_t)en, "set wifi=SSID[,PASSWORD] too: the network to join (the drone's: LiftLab-XXXX)"); }
     return 0;
   }
@@ -288,12 +291,14 @@ static void hw_init(void) {
     }
   }
   rlink_cfg L; cfg_radio(&C, &L);                       /* the pilot's radio link (radio_io.h) */
+  if (L.kind != RLINK_BLE) radio_ble_release();            /* (Bluetooth's memory back to the heap: not this time) */
   if (L.kind == RLINK_ELRS) RADIO = radio_module_start(C.tx, C.rx, (int)C.baud);
   else {
     if (rcfg_bind_default(C.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly your drone. set bind=YOUR PHRASE (the same on the drone)\n");
     RADIO = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_GROUND, C.bind, radio_say)
           : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_GROUND, C.bind, LB_RADIO_UART, C.tx, C.rx, radio_say)   /* (the module's pins: the line's) */
           : L.kind == RLINK_NRF24 ? radio_nrf24_start(&L, PLINK_GROUND, C.bind, C.nrf_pin, radio_say)
+          : L.kind == RLINK_BLE ? radio_ble_start(&L, PLINK_GROUND, C.bind, radio_say)
           : radio_wifi_start(&L, PLINK_GROUND, C.bind, C.wifi_ssid, C.wifi_pass, C.drone, radio_say);
   }
   if (!RADIO) RADIO = &no_radio;

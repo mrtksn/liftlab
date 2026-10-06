@@ -32,6 +32,7 @@ void hw_radio(const hw_config *c, rlink_cfg *L) {
         : c->radio_kind == RLINK_WIFI ? rlink_make(L, RLINK_WIFI, c->radio_opt, c->radio_channel)
         : c->radio_kind == RLINK_SERIAL ? rlink_make(L, RLINK_SERIAL, (int)c->radio_baud, c->radio_opt)
         : c->radio_kind == RLINK_NRF24 ? rlink_make(L, RLINK_NRF24, c->radio_kbps, 0)
+        : c->radio_kind == RLINK_BLE ? rlink_make(L, RLINK_BLE, 0, 0)
         : rlink_make(L, RLINK_ELRS, c->elrs_rate, c->elrs_ratio);
   if (e) rlink_default(L);
 }
@@ -41,6 +42,7 @@ static void radio_put(hw_config *c, const rlink_cfg *L) {
   else if (L->kind == RLINK_ESPNOW) { c->radio_channel = (int8_t)L->channel; c->radio_opt = (int8_t)L->lr; }
   else if (L->kind == RLINK_SERIAL) { c->radio_baud = L->baud; c->radio_opt = (int8_t)L->half; }
   else if (L->kind == RLINK_NRF24) c->radio_kbps = (int16_t)L->kbps;
+  else if (L->kind == RLINK_BLE) {}
   else { c->radio_opt = (int8_t)L->sta; if (!L->sta) c->radio_channel = (int8_t)L->channel; }   /* (wifi,sta keeps the channel an access point had) */
 }
 static int parse_list(const char *s, float *v, int max) {
@@ -69,7 +71,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   for(int i=0;i<3;i++) for(int j=0;j<3;j++) { float dot=0;for(int k=0;k<3;k++) dot+=c->mag_matrix[3*i+k]*c->mag_matrix[3*j+k]; if(fabsf(dot-(i==j?1:0))>0.01f) { snprintf(err,errn,"compass matrix must be orthonormal");return -1; } }
   { rlink_cfg L; int k = c->radio_kind;
     if (k == RLINK_ELRS ? rlink_make(&L, k, c->elrs_rate, c->elrs_ratio) : k == RLINK_ESPNOW ? rlink_make(&L, k, c->radio_channel, c->radio_opt)
-        : k == RLINK_WIFI ? rlink_make(&L, k, c->radio_opt, c->radio_channel) : k == RLINK_SERIAL ? rlink_make(&L, k, (int)c->radio_baud, c->radio_opt) : k == RLINK_NRF24 ? rlink_make(&L, k, c->radio_kbps, 0) : -1) { snprintf(err, errn, "invalid radio link"); return -1; }
+        : k == RLINK_WIFI ? rlink_make(&L, k, c->radio_opt, c->radio_channel) : k == RLINK_SERIAL ? rlink_make(&L, k, (int)c->radio_baud, c->radio_opt) : k == RLINK_NRF24 ? rlink_make(&L, k, c->radio_kbps, 0) : k == RLINK_BLE ? rlink_make(&L, k, 0, 0) : -1) { snprintf(err, errn, "invalid radio link"); return -1; }
     char t[RCFG_BIND_N];
     if (!rcfg_terminated(c->bind, sizeof c->bind) || (c->bind[0] && rcfg_bind_parse(t, c->bind, err, errn)))   /* (empty: the default) */
       { snprintf(err, errn, "invalid binding phrase"); return -1; }

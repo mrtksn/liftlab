@@ -35,6 +35,10 @@ radio_io *radio_wifi_start(const rlink_cfg *L, int role, const char *bind, const
  * end answers in the acknowledgements: nrf24.h). */
 radio_io *radio_nrf24_start(const rlink_cfg *L, int role, const char *bind, const int8_t pins[5], esp_radio_say say);
 int radio_nrf24_status(radio_io *R, char *out, int n);         /* 1: R is it (its line in out) */
+/* Bluetooth LE (radio=ble): the drone a peripheral, the command module the central (radio_ble.c). And, when the link
+ * isn't Bluetooth, its memory given back at start (call it before any other radio starts). */
+radio_io *radio_ble_start(const rlink_cfg *L, int role, const char *bind, esp_radio_say say);
+void radio_ble_release(void);
 /* uart: the UART to use; tx_pin to the line's input, rx_pin from its output. */
 radio_io *radio_uart_start(const rlink_cfg *L, int role, const char *bind, int uart, int tx_pin, int rx_pin, esp_radio_say say);
 /* The link's counts (plink_counts) and what it hears, for status: a line into out. */

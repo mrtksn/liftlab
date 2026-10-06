@@ -1,5 +1,11 @@
 # Project memory
 
+## Bluetooth LE link — 2026-10-07
+- Link kind `ble` (RLINK_BLE=5), `radio=ble` + `bind=`. `runner/esp_radio/radio_ble.c` (NimBLE): drone = peripheral (128-bit service, UP write-no-rsp / DOWN notify, advertising with mfg data 0xFFFF + 4-byte SipHash mark of the phrase); ground = central (scan for the mark, connect 7.5–15 ms interval, 1 s supervision timeout, MTU 256, subscribe). plink packets up to min(250, MTU−3), 64 before the exchange.
+- ESP32-S3/C3 only (classic ESP32: BT controller's ~64 KB static DRAM overflows; built without BT, `radio=ble` refused there). BT config in sdkconfig.defaults.esp32s3/.esp32c3; controller memory released at boot when the link isn't ble. Flash +170 KB (S3) / +200 KB (C3); C3 flight partition 13% free.
+- dfb_ground `--radio ble --tx DEV` via an S3/C3 command module as USB bridge; dfb_pi refuses ble. Simulator: PK_AIR.ble (connection events, retries, supervision timeout, reconnect, phrase-mark filter).
+- NOT verified on hardware.
+
 ## Serial/nRF24 publication verification — 2026-10-06
 - Confirmed Claude's serial commit 1072b3c and nRF24 commit 9aece65 were already pushed to their source branches and main; fast-forwarded this checkout and confirmed the push is current.
 - All eight latest board/host CI jobs and Pages deployment passed at 9aece65. Live serial/nRF24 scripts, embedded board WASM and firmware manifest matched main. Local asset fingerprints, firmware/install/wiring/physics checks and browser flight/persistence regressions passed, including serial, half-duplex serial, nRF24, ESP-NOW and Wi-Fi. Physical link validation remains pending as documented below.

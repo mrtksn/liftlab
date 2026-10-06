@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
       const char *r = argv[++i]; int k = (int)strcspn(r, ","); kind = -1;
       for (int j = 0; j < RLINK_KINDS; j++) if ((int)strlen(rlink_names[j]) == k && !strncmp(r, rlink_names[j], (size_t)k)) kind = j;
       rlink_cfg L; char err[160]; rlink_default(&L); L.kind = kind < 0 ? 0 : kind;
-      if (kind < 0) { fprintf(stderr, "--radio %s: elrs, espnow, wifi, serial or nrf24\n", r); return 2; }
+      if (kind < 0) { fprintf(stderr, "--radio %s: elrs, espnow, wifi, serial, nrf24 or ble\n", r); return 2; }
       if (r[k] && rlink_parse(&L, r, err, sizeof err)) { fprintf(stderr, "--radio %s: %s\n", r, err); return 2; }
       RL = L; radio_given = 1;
     }
@@ -223,14 +223,15 @@ int main(int argc, char **argv) {
     if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": give both ends a phrase of their own\n"); }
   } else {
     if (drone) { fprintf(stderr, "dfb_ground: --drone is for --radio wifi\n"); return 2; }
-    if (bind_phrase) fprintf(stderr, "dfb_ground: --bind is for --radio wifi: %s keeps its binding phrase in the module\n", kind == RLINK_ESPNOW ? "ESP-NOW's bridge" : "ExpressLRS");
+    if (bind_phrase) fprintf(stderr, "dfb_ground: --bind is for --radio wifi: %s keeps its binding phrase in the module\n", kind == RLINK_ESPNOW ? "ESP-NOW's bridge" : kind == RLINK_BLE ? "Bluetooth LE's bridge" : "ExpressLRS");
     if (!tx_dev && !test) {
-      if (kind == RLINK_ESPNOW) fprintf(stderr, "dfb_ground: --radio espnow: an ESP32 running the command module firmware in its USB bridge mode is the module: --tx /dev/ttyUSB0 (its USB serial port; 115200 baud)\n");
+      if (kind == RLINK_BLE) fprintf(stderr, "dfb_ground: --radio ble: an ESP32-S3 or C3 running the command module firmware (radio=ble) in its USB bridge mode is the module: --tx /dev/ttyUSB0 (its USB serial port; 115200 baud)\n");
+      else if (kind == RLINK_ESPNOW) fprintf(stderr, "dfb_ground: --radio espnow: an ESP32 running the command module firmware in its USB bridge mode is the module: --tx /dev/ttyUSB0 (its USB serial port; 115200 baud)\n");
       else fprintf(stderr, "dfb_ground: say where the transmitter module is (--tx DEV), or --test to run without one\n");
       return 2;
     }
   }
-  if (!baud) baud = kind == RLINK_ESPNOW ? 115200 : 400000;
+  if (!baud) baud = kind == RLINK_ESPNOW || kind == RLINK_BLE ? 115200 : 400000;
   if (js_dev && !latch_set) latch = GB(GB_ARM) | GB(GB_FLY);          /* a gamepad's buttons are push buttons */
   cfg.latch = latch; cfg.seq0 = (uint8_t)(time(0) ^ getpid());   /* (see gnd_config.seq0) */
 
@@ -253,8 +254,8 @@ int main(int argc, char **argv) {
     char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "an nRF24L01 (%s) on %s, CE GPIO %d", d, nrf_spi, nrf_ce); }
   else if (tx_dev && kind == RLINK_SERIAL) { R = radio_pserial_open(PLINK_GROUND, tx_dev, &RL, bind_phrase, "serial line"); if (!R) return 1;
     char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "a serial line (%s) on %s", d, tx_dev); }
-  else if (tx_dev) { R = radio_serial_open(tx_dev, baud, kind == RLINK_ESPNOW ? "ESP-NOW bridge (serial)" : "ExpressLRS transmitter module (serial)"); if (!R) return 1;
-    snprintf(radio_said, sizeof radio_said, "%s on %s", kind == RLINK_ESPNOW ? "ESP-NOW bridge (an ESP32)" : "transmitter module", tx_dev); }
+  else if (tx_dev) { R = radio_serial_open(tx_dev, baud, kind == RLINK_ESPNOW ? "ESP-NOW bridge (serial)" : kind == RLINK_BLE ? "Bluetooth LE bridge (serial)" : "ExpressLRS transmitter module (serial)"); if (!R) return 1;
+    snprintf(radio_said, sizeof radio_said, "%s on %s", kind == RLINK_ESPNOW ? "ESP-NOW bridge (an ESP32)" : kind == RLINK_BLE ? "Bluetooth LE bridge (an ESP32)" : "transmitter module", tx_dev); }
   else if (kind == RLINK_WIFI && drone) { R = radio_udp_open(PLINK_GROUND, drone_host, drone_port, bind_phrase, "Wi-Fi radio"); if (!R) return 1;
     snprintf(radio_said, sizeof radio_said, "Wi-Fi to the drone at %s:%d", drone_host, drone_port); }
   int packets = R && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R));               /* a packet link: R does the module's part, read() every pass drives it */

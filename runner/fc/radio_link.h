@@ -24,14 +24,16 @@
  *     acknowledges and retries, and the drone's answer rides in the acknowledgement. Its packets hold 32 bytes, too
  *     few for plink: clink.h is the compact packet layer for it. Settings: nrf24,RATE (250, 1000 or 2000 kbit/s:
  *     slower reaches further); the channels hop, the address and the 8 channels come from the binding phrase.
- * The packet links (ESP-NOW, Wi-Fi, serial: plink.h; nRF24L01: clink.h) do the modules' part in our own code, the
- * same at both ends. Both ends need the same binding phrase (a setting of each program): it signs the packets.
- * To come: Bluetooth LE. */
+ *   - Bluetooth LE: an ESP32 at each end, the drone a peripheral with LiftLab's GATT service, the command module the
+ *     central that connects to it (the one advertising this binding phrase's mark). Settings: ble.
+ * The packet links (ESP-NOW, Wi-Fi, serial, Bluetooth LE: plink.h; nRF24L01: clink.h) do the modules' part in our own
+ * code, the same at both ends. Both ends need the same binding phrase (a setting of each program): it signs the
+ * packets. */
 #ifndef RADIO_LINK_H
 #define RADIO_LINK_H
 #include "rc_core.h"
 
-enum { RLINK_ELRS = 0, RLINK_ESPNOW, RLINK_WIFI, RLINK_SERIAL, RLINK_NRF24, RLINK_KINDS };
+enum { RLINK_ELRS = 0, RLINK_ESPNOW, RLINK_WIFI, RLINK_SERIAL, RLINK_NRF24, RLINK_BLE, RLINK_KINDS };
 #define RLINK_UDP_PORT 14570
 typedef struct {
   int kind;
@@ -61,7 +63,7 @@ int rlink_make(rlink_cfg *L, int kind, int a, int b);
 float rlink_budget(const rlink_cfg *L);
 float rlink_budget_now(const rlink_cfg *L, const rc_input *in, double t);
 /* A packet link (plink.h does the modules' part): 1; ExpressLRS: 0. */
-static inline int rlink_packets(const rlink_cfg *L) { return L->kind == RLINK_ESPNOW || L->kind == RLINK_WIFI || L->kind == RLINK_SERIAL; }
+static inline int rlink_packets(const rlink_cfg *L) { return L->kind == RLINK_ESPNOW || L->kind == RLINK_WIFI || L->kind == RLINK_SERIAL || L->kind == RLINK_BLE; }
 /* A packet link's packets (plink_cfg: plink.h plink_cfg_link): the biggest down and up [bytes], how many a second
  * up, down at least and at most, and one way at a time. ESP-NOW and Wi-Fi: 250 and 250, 100, 20–100. A serial line:
  * from its speed, so the line never has more to carry than it can and the telemetry has what the channels leave

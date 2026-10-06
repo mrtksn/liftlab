@@ -20,7 +20,13 @@
 //     back what follows. And association: the station hears the access point's beacons (every 102.4 ms, at the
 //     lowest rate); after 3 s without one it disconnects, and once it hears one again it takes 1–3 s to join
 //     (scan, authenticate, DHCP). Until it has joined, nothing goes through either way.
-// Both: a packet gets through with a probability set by its margin over the sensitivity at its rate, on the path
+//   - Bluetooth LE: a connection between the two ESP32s (the drone advertises, the command module connects): the
+//     packets wait for the next connection event (every 7.5 ms), each try is acknowledged by the link layer, one not
+//     acknowledged goes again at the next event (up to 8); LE 1M PHY, sensitivity about −96 dBm, 9 dBm out. The
+//     connection drops after 1 s with nothing through (the supervision timeout); the drone advertises again (every
+//     40 ms), and once the command module hears it, it connects again in 0.15–0.5 s. The advertising carries a mark
+//     from the drone's binding phrase: the command module connects only to its own phrase's.
+// All: a packet gets through with a probability set by its margin over the sensitivity at its rate, on the path
 // link.js works out (linkPath); the drone's transmissions are 1 dB worse (as in link-elrs.js); with no power on the
 // drone, nothing at all. Each direction is one transmitter's queue: packets arrive in the order they went.
 
@@ -39,7 +45,12 @@ const PK_AIR = {
       for (const r of PK_MCS) if (rssi - r[1] >= 6) m = r;
       return { mbps: m[0], sens: m[1], pre: 36e-6, name: m[0] + ' Mbit/s' };
     },
-    lat: c => 0.002 + 0.003 * radioRand() + (c.sta ? 0.001 : 0), stall: 0.003,
+    lat: c => 0.002 + 0.003 * radioRand() + (c.sta ? 0.001 : 0), stall: 0.003, beacon: 0.1024, lose: 3, join: [1, 3],
+  },
+  ble: {   // a connection: the packets go at its events (every 7.5 ms), each acknowledged, again at the next if not
+    label: 'Bluetooth LE (ESP32 to ESP32)', short: 'Bluetooth LE', code: 5, tx: 9, tries: 8, over: 17, difs: 0, slot: 0, cw: 0, ack: 150e-6, ackWait: 0.0075, assoc: true,
+    phy: () => ({ mbps: 1, sens: -96, pre: 0, name: '1 Mbit/s (LE 1M)' }),
+    lat: () => 0.0005 + 0.0075 * radioRand(), stall: 0, beacon: 0.04, lose: 1, join: [0.15, 0.5],   // (the next connection event; advertising every 40 ms, a 1 s supervision timeout, scan and connect)
   },
 };
 const pk = {};   // the packet model's own state (radio, in link.js, holds what every link shares)
@@ -66,21 +77,27 @@ function pkRf() {
 function packetModel(kind, settings) {
   const A = PK_AIR[kind];
   return {
-    label: A.label, receiver: kind === 'wifi' ? 'Wi-Fi radio' : 'ESP-NOW radio', packets: true, settings,
-    wasm: c => kind === 'wifi' ? [2, c.sta ? 1 : 0, c.channel] : [1, c.channel, c.lr ? 1 : 0],   // radio_link.h RLINK_ESPNOW, RLINK_WIFI
+    label: A.label, receiver: kind === 'wifi' ? 'Wi-Fi radio' : kind === 'ble' ? 'Bluetooth LE radio' : 'ESP-NOW radio', packets: true, settings,
+    wasm: c => kind === 'wifi' ? [2, c.sta ? 1 : 0, c.channel] : kind === 'ble' ? [5, 0, 0] : [1, c.channel, c.lr ? 1 : 0],   // radio_link.h RLINK_ESPNOW, RLINK_WIFI, RLINK_BLE
     room: () => 6000,                                                 // radio_link.c rlink_budget for a packet link
     roomNote(c) {                                                     // what the hardware can't do (the simulator flies it anyway)
       const b = typeof boardOf === 'function' ? boardOf('tlm') : null, K = b && BOARD_KINDS[b.kind];
+      if (kind === 'ble') {
+        const g = computers().ground, gk = g && g.kind;
+        if (b && b.kind !== 's3' && b.kind !== 'c3') return `Bluetooth LE needs an ESP32-S3 or C3 on the drone: ${b.name} is a ${K ? K.label : b.kind}, whose firmware here has no Bluetooth (the ESP32's controller takes memory the flight code needs; a Pi isn't supported). The simulator flies it anyway.`;
+        if (gk && gk !== 's3' && gk !== 'c3' && gk !== 'mac') return 'Bluetooth LE: the command module needs an ESP32-S3 or C3 too (a Mac or PC flies through one on USB).';
+        return '';
+      }
       if (kind === 'espnow' && K && !K.mcu) return `ESP-NOW needs an ESP32 at each end: the receiver's board here, ${b.name}, is a ${K.label}, which has no ESP-NOW (the simulator flies it anyway). Put the Telemetry & radio task on an ESP32, or use Wi-Fi: it works with an ESP32 or a Pi.`;
       return '';
     },
     signalNote(c) {
       const rf = radio.rf; if (!rf) return '';
       const ph = A.phy(c, rf.margin), low = kind === 'wifi' ? `${PK_MCS[0][1]} dBm at ${PK_MCS[0][0]} Mbit/s, its lowest rate (now ${ph.name})` : `${ph.sens} dBm at ${ph.name}`;
-      const S = pk.assoc && { up: 'connected', join: 'joining the network (scan, authenticate, DHCP)', down: 'disconnected: no beacons' }[pk.assoc.state];
+      const S = pk.assoc && (kind === 'ble' ? { up: 'connected', join: 'connecting', down: pk.assoc.foreign > pk.assoc.heard ? 'not connecting: the drone advertising has another binding phrase' : 'disconnected: the drone advertising, not heard' } : { up: 'connected', join: 'joining the network (scan, authenticate, DHCP)', down: 'disconnected: no beacons' })[pk.assoc.state];
       const g = computers().ground, gk = BOARD_KINDS[g.kind];
-      const who = kind === 'espnow' ? (gk && !gk.mcu ? ` The command module (${gk.label}) talks ESP-NOW through an ESP32 on USB.` : '') : ` The drone ${c.sta ? 'joins a network; the command module joins the same one' : 'makes the network (access point); the command module joins it'}.`;
-      return `Now ${rf.d.toFixed(0)} m from the handset${rf.walls ? `, ${rf.walls} building${rf.walls > 1 ? 's' : ''} in the way` : ''}; with the extra loss that is like ${fmtDist(rf.d * Math.pow(10, c.extra / 20))} in the open. Signal ${rf.rssi.toFixed(0)} dBm, the ${kind === 'wifi' ? 'radio' : 'ESP32'} needs ${low}.${S ? ` Wi-Fi: ${S}.` : ''}${who}`;
+      const who = kind === 'ble' ? ' The drone advertises; the command module connects (a 7.5 ms connection interval).' : kind === 'espnow' ? (gk && !gk.mcu ? ` The command module (${gk.label}) talks ESP-NOW through an ESP32 on USB.` : '') : ` The drone ${c.sta ? 'joins a network; the command module joins the same one' : 'makes the network (access point); the command module joins it'}.`;
+      return `Now ${rf.d.toFixed(0)} m from the handset${rf.walls ? `, ${rf.walls} building${rf.walls > 1 ? 's' : ''} in the way` : ''}; with the extra loss that is like ${fmtDist(rf.d * Math.pow(10, c.extra / 20))} in the open. Signal ${rf.rssi.toFixed(0)} dBm, the ${kind === 'wifi' ? 'radio' : 'ESP32'} needs ${low}.${S ? ` ${A.short}: ${S}.` : ''}${who}`;
     },
     reset() { pkReset(kind); },
     resume() { },                                                     // (reset starts it at radio.t)
@@ -104,6 +121,7 @@ RADIO_LINKS.espnow = packetModel('espnow', [
   { key: 'channel', label: 'Wi-Fi channel', options: PK_CHANNELS },
   { key: 'lr', label: 'Long range', options: [[0, 'Off (1 Mbit/s)'], [1, 'On (0.5 Mbit/s, further)']] },
 ]);
+RADIO_LINKS.ble = packetModel('ble', []);
 RADIO_LINKS.wifi = packetModel('wifi', [
   { key: 'sta', label: 'Network', options: [[0, 'Drone makes it (AP)'], [1, 'Drone joins one']] },
   { key: 'channel', label: 'Channel', options: PK_CHANNELS, show: c => !c.sta },
@@ -264,18 +282,25 @@ function pkPoll(t, gnd, drone) {
 }
 const PK_RQ = 16;   // plink.h PLINK_RQ: reliable frames waiting
 // Wi-Fi's network: the station hears the access point's beacons; it leaves after 3 s without one, and joins again
-// (1–3 s) once it hears one.
+// (1–3 s) once it hears one. Bluetooth LE's connection the same way: its events (taken here every 40 ms) or, down, the
+// drone's advertising; 1 s without, it drops; heard again, it connects in 0.15–0.5 s.
 function pkAssoc(t, drone) {
-  const S = pk.assoc;
+  const S = pk.assoc, A = PK_AIR[pk.kind], W = A.short;
   while (S.nextBeacon <= t + 1e-9) {
-    const tb = S.nextBeacon; S.nextBeacon += 0.1024;
+    const tb = S.nextBeacon; S.nextBeacon += A.beacon;
     const margin = radioCfg.sta ? radio.rf.margin : radio.rf.margin - 1;   // (a station drone hears the router; an access point drone is heard by the command module)
-    if (drone && radioRand() < pkP(margin)) S.heard = tb;
+    if (!drone || radioRand() >= pkP(margin)) continue;
+    if (pk.kind === 'ble' && radio.phrase && radio.phrase.gnd !== radio.phrase.drone) {   // (its advertising carries its phrase's mark: another, not ours)
+      S.foreign = tb;
+      if (!(t - (S.foreignLog ?? -1e9) < 10)) { S.foreignLog = t; linkLog('↕', 'link', 'Bluetooth LE: a drone advertising, not ours', 'its mark is from another binding phrase: not connecting', 'bad'); }
+      continue;
+    }
+    S.heard = tb;
   }
   if (S.state === 'up') {
-    if (t - S.heard > 3) { S.state = 'down'; S.since = t; linkLog('↕', 'link', 'Wi-Fi disconnected', 'no beacon for 3 s', 'bad'); }
+    if (t - S.heard > A.lose) { S.state = 'down'; S.since = t; linkLog('↕', 'link', `${W} disconnected`, pk.kind === 'ble' ? 'nothing through for 1 s (the supervision timeout)' : 'no beacon for 3 s', 'bad'); }
   } else if (S.state === 'down') {
-    if (S.heard > S.since) { S.state = 'join'; S.joinT0 = t; S.joinAt = t + 1 + 2 * radioRand(); linkLog('↕', 'link', S.ever ? 'Wi-Fi reconnecting' : 'Wi-Fi connecting', 'scan, authenticate, DHCP', 'warn'); }
-  } else if (t - S.heard > 1) { S.state = 'down'; S.since = t; linkLog('↕', 'link', 'Wi-Fi didn\'t connect', 'lost the beacons again', 'bad'); }
-  else if (t >= S.joinAt) { S.state = 'up'; S.ever = true; linkLog('↕', 'link', 'Wi-Fi connected', `after ${(t - S.joinT0).toFixed(1)} s`, 'good'); }
+    if (S.heard > S.since) { S.state = 'join'; S.joinT0 = t; S.joinAt = t + A.join[0] + (A.join[1] - A.join[0]) * radioRand(); linkLog('↕', 'link', S.ever ? `${W} reconnecting` : `${W} connecting`, pk.kind === 'ble' ? 'the drone\'s advertising heard: connecting, the MTU, the service' : 'scan, authenticate, DHCP', 'warn'); }
+  } else if (t - S.heard > 1) { S.state = 'down'; S.since = t; linkLog('↕', 'link', `${W} didn't connect`, 'lost the other end again', 'bad'); }
+  else if (t >= S.joinAt) { S.state = 'up'; S.ever = true; linkLog('↕', 'link', `${W} connected`, `after ${(t - S.joinT0).toFixed(1)} s`, 'good'); }
 }

@@ -98,7 +98,11 @@ function renderHardware() {
     // the link itself is picked here as on the Ground tab (both ends switch at once); the card shows what it needs wired
     const pick=hardwareSelect('Link','hw-link-'+radio.id,RADIO_KINDS.filter(k=>RADIO_LINKS[k]).map(k=>[k,RADIO_LINKS[k].label]),rk,v=>{if(v===radioCfg.kind||!RADIO_LINKS[v])return;radioCfg.kind=v;save();boardsRadioCfg();if(typeof renderGs==='function')renderGs(true);renderHardware();});
     const owner=el('p',{class:'hw-owner',text:'Board: '+radio.name}),esp=!!ESP_PROFILES[radio.kind],bus=hardwareBus(C,radio),lines=el('p',{class:'hint',text:'Settings: '+radioSettingLines(radioCfg).join(' ')+'. The link\'s own settings and the binding phrase are on the Ground tab; Install sends them.'});
-    if(rk==='espnow'||rk==='wifi'){                                   // ESP-NOW, Wi-Fi: the board's own radio, nothing to wire
+    if(rk==='ble'){                                                   // Bluetooth LE: the S3's or C3's own radio
+      const row=radioWiringRow(radio,bus,esp,radioCfg),ok=radio.kind==='s3'||radio.kind==='c3';
+      auxiliary.append(hardwareCard(row.device,'Radio','Bluetooth LE · GATT',owner,hardwareField('Link',pick),
+        el('p',{class:ok?'hint':'bad',text:ok?'Built into the ESP32-S3/C3: no wiring. The drone advertises LiftLab\'s service with the binding phrase\'s mark; the command module (an ESP32-S3 or C3, or one on a laptop\'s USB) finds it and connects. Range: tens of metres.':'Bluetooth LE needs an ESP32-S3 or C3: '+radio.name+' can\'t (the ESP32\'s Bluetooth takes memory the flight code needs). Put the Telemetry & radio task on an S3 or C3, or use ESP-NOW.'}),lines));
+    }else if(rk==='espnow'||rk==='wifi'){                                   // ESP-NOW, Wi-Fi: the board's own radio, nothing to wire
       const row=radioWiringRow(radio,bus,esp,radioCfg);
       auxiliary.append(hardwareCard(row.device,'Radio',rk==='wifi'?'Wi-Fi · UDP':'ESP-NOW · 802.11',owner,hardwareField('Link',pick),
         el('p',{class:rk==='espnow'&&!esp?'bad':'hint',text:rk==='espnow'?(esp?'Built into the ESP32: no wiring. The command module needs an ESP32 too (or an ESP32 on USB as its bridge). Both ends need the same binding phrase.':'ESP-NOW needs an ESP32: '+radio.name+' can\'t do it. Put the Telemetry & radio task on an ESP32, or use Wi-Fi.')

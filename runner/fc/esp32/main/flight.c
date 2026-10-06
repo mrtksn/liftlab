@@ -38,6 +38,8 @@
  *   radio=nrf24,1000      an nRF24L01 on SPI, nrf24=SCK,MOSI,MISO,CSN,CE (set those first; 3.3 V and a 10 µF capacitor
  *                         at the module): 250, 1000 or 2000 kbit/s (250 reaches furthest), the command module the same.
  *                         It hops over 8 channels from the binding phrase; the drone answers in the acknowledgements
+ *   radio=ble             Bluetooth LE: the drone advertises LiftLab's service with the binding phrase's mark; a
+ *                         command module ESP32 set radio=ble (or one on a laptop's USB) connects to it
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
  *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
  *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
@@ -408,12 +410,14 @@ static void radio_task(void *arg) {
 /* The radio the settings ask for (radio_io.h), started; 0: none. */
 static radio_io *radio_start(void) {
   rlink_cfg L; hw_radio(&HW, &L);
+  if (L.kind != RLINK_BLE) radio_ble_release();                  /* (Bluetooth's memory back to the heap: not this time) */
   if (L.kind == RLINK_ELRS) return radio_elrs_start(&HW);
   if (rcfg_bind_default(HW.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly this drone. set bind=YOUR PHRASE (the same on the command module)\n");
   if (HW.crsf_rx >= 0 && L.kind != RLINK_SERIAL) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
   radio_io *R = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_DRONE, HW.bind, post)
               : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_DRONE, HW.bind, LB_RADIO_UART, HW.crsf_tx, HW.crsf_rx, post)   /* (the receiver's pins: the line's) */
               : L.kind == RLINK_NRF24 ? radio_nrf24_start(&L, PLINK_DRONE, HW.bind, HW.nrf_pin, post)
+              : L.kind == RLINK_BLE ? radio_ble_start(&L, PLINK_DRONE, HW.bind, post)
               : radio_wifi_start(&L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
   printf("radio: %s; free heap %u bytes\n", R ? R->name : "DIDN'T START (see the next messages): no pilot's radio", (unsigned)esp_get_free_heap_size());
   return R;

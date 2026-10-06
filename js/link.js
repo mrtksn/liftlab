@@ -43,7 +43,7 @@ const RADIO_LINKS = {};
 // the packet links: bind (the binding
 // phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
 const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
-const RADIO_KINDS = ['elrs', 'espnow', 'wifi', 'serial', 'nrf24'];
+const RADIO_KINDS = ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'];
 // A binding phrase as both ends take it (the boards' bind=: 1–31 printable characters, no spaces at the ends;
 // runner/esp_radio/radio_cfg.h), or null.
 function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
@@ -146,6 +146,7 @@ function radioLinkSetup() {
 }
 function plinkSetup(w, role, phrase) {
   const b = new TextEncoder().encode(String(phrase)).slice(0, 63);
+  (radio.phrase || (radio.phrase = {}))[role ? 'drone' : 'gnd'] = String(phrase);   // (Bluetooth LE: the command module connects only to its own phrase's advertising)
   new Uint8Array(w.memory.buffer, w.rbuf_ptr(), b.length).set(b);
   w.plink_setup(role, b.length, 1 + Math.floor(radioRand() * 0x7FFFFFFE), ...radioModel().wasm(radioCfg));   // (the link: a serial line's packet sizes follow its speed)
 }

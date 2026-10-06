@@ -84,8 +84,8 @@ try{
     await settle(heliKey,5);assert(!S.crashed && brt.fcState===1,'Collective helicopter flight failed');
     const main=actuators().find(isCollective),fullCollective=flightAvailable(main);computers().wiring ||= {parts:{},boards:{}};computers().wiring.parts[main.id]={driver:'brushed',maxDuty:10};
     assert(flightAvailable(main)<fullCollective*.5,'Collective ceiling ignores motor load');passed.push('Collective flight and governor-aware feasibility');
-    // Exercise the packet transports (ESP-NOW, Wi-Fi, a serial line both ways and one way at a time, an nRF24L01) against the same flight plant and board instances.
-    for(const kind of ['espnow','wifi','serial','serial-half','nrf24']){
+    // Exercise the packet transports (ESP-NOW, Wi-Fi, a serial line both ways and one way at a time, an nRF24L01, Bluetooth LE) against the same flight plant and board instances.
+    for(const kind of ['espnow','wifi','serial','serial-half','nrf24','ble']){
       radioCfg.kind=kind.split('-')[0];radioCfg.bind='flight-regression';radioCfg.extra=0;radioCfg.sta=0;Object.assign(radioCfg,kind==='serial-half'?{baud:57600,half:1,medium:3}:{baud:115200,half:0,medium:1},{kbps:1000});
       await settle('quadx',8);
       assert(radioConnected() && radio.lqUp>90 && radio.lqDown>90,kind+' radio failed to connect');
