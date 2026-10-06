@@ -1,6 +1,12 @@
 # Project memory
 
-## Current state — 2026-10-02
+## Current state — 2026-10-06
+- LiftLab: browser airframe editor/simulator with portable C flight/companion code in WebAssembly, editable formulas, per-device board/GPIO wiring, custom sensor C source/presets and AI hardware tools. Live Pages last verified at d5911e3.
+- Physical adapters exist for ESP32/S3/C3 flight/radio and ground roles, plus the Pi navigation/learning/supervisor/cargo companion. New drivers support MPU/BMP/HMC profiles, configurable pins and mixed PWM ESC/brushed MOSFET outputs. This is implementation coverage, not verified real flight.
+- Simulation permits more task/device combinations than physical firmware. MCU navigation/cargo, Pi I²C, distributed outputs, optical-flow hardware, browser C compilation/register emulation and automatic source/binary matching remain missing. See docs/boards.md and docs/hardware-wiring.md.
+- Current review found unauthenticated Pi UDP control, an airframe upload validation bypass, AI board metadata round-trip failure, incomplete install-readiness warnings and false custom-gyro diagnostics. Two native navigation tests fail on macOS. Details/reproduction: docs/review-2026-10-06.md.
+
+## Historical state — 2026-10-02
 - Repository orientation: browser airframe editor and simulator, editable physical/control laws, JavaScript-subset compiler, C step runner, portable flight controller, ESP32 hardware integration, and Pi/Mac serial console.
 - The simulator can run the portable C flight controller through WebAssembly. Airframe models export as `.dfa`; compiled formula programs as `.rnp`.
 - Hardware firmware currently uses an exported model in angle mode, with optional barometric height control. In-flight learning, throw-start identification, horizontal position hold, and the simulated health supervisor are not integrated into the flight firmware.
@@ -12,7 +18,7 @@
 - Native flight tests use a simplified plant driven by the exported controller model. These results do not establish real-flight performance. README reports ESP32 bench measurements; hardware and browser UI were not exercised during this review.
 
 ## Known limits and follow-ups
-- Reconcile README's final step-runner limitation (surrounding flight firmware "still ... to write") with the implemented `runner/fc/` stack; preserve the distinction between implemented angle-mode firmware and remaining simulator features.
+- Reconcile README's final step-runner limitation (surrounding flight firmware "still ... to write") with the implemented `runner/fc/` stack; preserve the distinction between implemented angle-mode firmware and remaining simulator features. RESOLVED in the 2026-10-06 documentation review; native adapters and Pi companion features are described separately from deployment gaps.
 - Attitude estimation under sustained acceleration is a documented limitation, also visible in passing native tests: estimated lean can differ materially from true lean.
 - Track full-physics firmware-in-the-loop scenarios and real hardware/flight evidence separately from model-matched native tests.
 - Program bounds checks, self-tests, shadow execution, blending, and fallback protect execution integrity; they do not establish the stability of arbitrary edited control laws. Candidate outputs already affect control during blending.
@@ -113,3 +119,13 @@
 ## Publish pending website updates — 2026-10-06
 - Publishing the automatic board labels, wiring overview, compact section navigation, AI hardware tools/ID fix and decimal simulation-speed labels together. GitHub Pages deploys main from the repository root; prior live deployment was 6469ba9 because these updates were still local.
 - Earlier local regression/browser checks passed. No firmware changes are included; legacy untracked firmware/test exports remain local. Verify the Pages run and live decimal labels/new scripts after the push.
+- Published commit d5911e3. Pages run 37425216230 completed successfully; live site shows 0.25x/0.5x/1x, compact section links and wiring overview, and loads both new agent/navigation scripts with no console errors. Deployment verification is recorded locally after the published commit.
+
+## Gaps and issues review — 2026-10-06
+- Reviewed d5911e3 without changing application code, firmware, branches or running agents. Added docs/review-2026-10-06.md with six prioritized findings, reproductions, capability gaps and validation boundaries.
+- Corrected README tab/control labels, C3 rate, native learning/supervisor/firmware implementation and brushed-model claims. Updated board/wiring docs with physical capability limits, ground program loading, unenforced upload sequence and known diagnostic/API issues; added docs/deployment.md for Pages versus firmware publication.
+- P1 pending: Pi UDP 14560 listens on all interfaces and accepts flight/latch commands without authentication. Add loopback default, explicit LAN opt-in/authentication and disable option. Temporary mitigation: firewall/network isolation; --port 0 currently chooses an ephemeral port, not disabled control.
+- P2 pending: gate airframe upload on valid/applied wiring and custom firmware; allow AI board read/edit round trips with read-only flight_loop_hz; share physical task support checks with AI install readiness. P3 pending: fix custom IMU legacy telemetry gyro flag.
+- Native navigation fails repeatably on macOS arm64: hold 0.803399 m and landing drift 1.02 m versus 0.8 m limits. Root cause/platform-noise sensitivity is unresolved; investigate before relaxing thresholds. Host CI currently omits the native behavioral suites; add portable checks and Linux Pi end-to-end coverage.
+- Pending regression checklist: default/disabled/authorized Pi listener, blocked invalid/custom airframe upload and confirmed reboot sequence, board get→rename→set, unsupported MCU task warnings, built-in/custom/absent gyro status, deterministic navigation noise and landing/hold limits.
+- Passed: agent/wiring/install/preset JS checks, preset sync, 16 recorded JS/embedded-WASM formula comparisons, native flight/runner-host/link/cargo/telemetry/ground suites, UBSan sensor and all three chip mocked motor-output tests. Navigation had two failures. No fresh IDF/WASM build, Pi end-to-end, live-model/hardware test or deployment was performed; production bug fixes remain pending.
