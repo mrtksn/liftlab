@@ -43,6 +43,7 @@ int main(void){
   old.version=4;restored=config();restored.imu_driver=0;assert(lb_hw_restore(&restored,&old,(offsetof(hw_config,imu_driver)+3u)&~3u));assert(restored.motor_pin[0]==27 && restored.imu_driver==0);
   old.version=6;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio_kind)));
   old.version=7;old.radio_kind=RLINK_WIFI;restored=config();restored.radio_baud=115200;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio_baud))&&restored.radio_kind==RLINK_WIFI&&restored.radio_baud==115200&&restored.version==HW_VERSION);old.radio_kind=0;
+  old.version=8;old.radio_kind=RLINK_SERIAL;old.radio_baud=57600;restored=config();memset(restored.nrf_pin,-1,5);restored.radio_kbps=1000;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,nrf_pin))&&restored.radio_baud==57600&&restored.nrf_pin[0]==-1&&restored.radio_kbps==1000&&restored.version==HW_VERSION);old.radio_kind=0;
   old.version=3;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,crsf_rx)));
   old.version=2;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,link_baud)));assert(restored.link_baud==115200);
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
@@ -54,5 +55,5 @@ int main(void){
   assert(!hw_set(&settings,"motor_driver=",log,sizeof log));assert(settings.motor_driver[0]==0 && settings.motor_driver[11]==0);assert(!hw_set(&settings,"motor_max=",log,sizeof log));assert(settings.motor_max_pct[0]==100);
   char text[800];hw_describe(&settings,text,sizeof text);assert(strstr(text,"motor_driver=") && strstr(text,"motor_max=") && strstr(text,"brushed_hz=30000"));
   struct {char text[8];char canary[8];} small;memset(&small,42,sizeof small);hw_describe(&settings,small.text,sizeof small.text);assert(small.text[7]==0);for(int i=0;i<8;i++)assert(small.canary[i]==42);
-  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v7 migration.");
+  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v8 migration.");
 }

@@ -130,6 +130,24 @@ int main(void) {
   plink_from_air(&W.D, pk, on, -60, W.t);
   CHECK(W.D.N.stale_sessions == s0 + 1 && W.D.peer == 0x3333, "refused: the session we have is talking");
 
+  printf("a recording of a whole session played back to a drone that started again\n");
+  {
+    static world R; world_init(&R, 0, 21, "phrase", "phrase");
+    static uint8_t rec[600][PLINK_MTU]; static int rec_n[600]; int nr = 0;
+    for (int k = 0; k < 3000; k++) {                         /* the real flight: commands and channels, recorded off the air */
+      if (k % 100 == 50) cmd(&R);
+      double t = R.t; uint8_t b[64], pk[PLINK_MTU];
+      if (k % 4 == 0) { float ch[16] = { 0.9f }; int n = crsf_rc(b, CRSF_ADDR_FC, ch); plink_from_stack(&R.G, b, n, t); }
+      int n = plink_to_air(&R.G, t, pk, sizeof pk); if (n) { if (nr < 600) { memcpy(rec[nr], pk, (size_t)n); rec_n[nr++] = n; } air_send(&R.up, pk, n, t); }
+      n = plink_to_air(&R.D, t, pk, sizeof pk); if (n) air_send(&R.down, pk, n, t);
+      air_deliver(&R.up, &R.D, t); air_deliver(&R.down, &R.G, t); read_stack(&R.d, &R.D, t); read_stack(&R.g, &R.G, t); R.t += 0.001;
+    }
+    plink_cfg cd = R.D.C; plink_init(&R.D, &cd, 0x7777); memset(&R.d, 0, sizeof R.d);   /* the drone starts again; the ground is off */
+    for (int i = 0; i < nr; i++) { uint8_t b[PLINK_OUT]; plink_from_air(&R.D, rec[i], rec_n[i], -60, R.t); plink_to_stack(&R.D, R.t, b, sizeof b); R.t += 0.01; }
+    read_stack(&R.d, &R.D, R.t);
+    CHECK(R.d.rc == 0 && R.d.ncmd == 0 && !plink_connected(&R.D, R.t), "it takes the recording's session but none of its frames (no channels, no commands): its packets name the drone's old session, not this start's (%d played)", nr);
+  }
+
   printf("the link goes quiet\n");
   world_init(&W, 0, 8, "phrase", "phrase");
   for (int k = 0; k < 1000; k++) world_step(&W, 0);

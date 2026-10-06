@@ -103,6 +103,14 @@ function renderHardware() {
       auxiliary.append(hardwareCard(row.device,'Radio',rk==='wifi'?'Wi-Fi · UDP':'ESP-NOW · 802.11',owner,hardwareField('Link',pick),
         el('p',{class:rk==='espnow'&&!esp?'bad':'hint',text:rk==='espnow'?(esp?'Built into the ESP32: no wiring. The command module needs an ESP32 too (or an ESP32 on USB as its bridge). Both ends need the same binding phrase.':'ESP-NOW needs an ESP32: '+radio.name+' can\'t do it. Put the Telemetry & radio task on an ESP32, or use Wi-Fi.')
           :'The board\'s own Wi-Fi: no wiring. '+(radioCfg.sta?'It joins your network; the command module joins the same one.':'It makes the network (access point, channel '+radioCfg.channel+'); the command module joins it.')+' Both ends need the same binding phrase.'}),lines));
+    }else if(rk==='nrf24'){                                           // an nRF24L01 module on SPI
+      const card=hardwareCard('nRF24L01 module','Radio','SPI · '+(radioCfg.kbps||1000)+' kbit/s',owner,hardwareField('Link',pick));
+      if(esp){const pins=Array.isArray(bus.nrfPins)?bus.nrfPins.slice():[-1,-1,-1,-1,-1];
+        ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>card.append(pinPicker(radio,'Module '+n+' GPIO','hw-nrf'+i+'-'+radio.id,pins[i],'nrf'+i,i===2?hardwareInputPins(radio.kind):pinsFor(radio),v=>{const p2=(Array.isArray(hardwareBus(computers(),radio).nrfPins)?hardwareBus(computers(),radio).nrfPins:[-1,-1,-1,-1,-1]).slice();p2[i]=Number(v);editBoard(radio,{nrfPins:p2},'nrf'+i);})));
+        if(pins.some(p=>p<0))card.append(el('p',{class:'bad',text:'Pick all five pins: the board needs them before it takes radio=nrf24.'}));}
+      else card.append(hardwareText('SPI device',bus.nrfSpi||'/dev/spidev0.0',v=>editBoard(radio,{nrfSpi:v},'nrfspi')),hardwareNumber('CE GPIO',bus.nrfCe??25,v=>editBoard(radio,{nrfCe:v},'nrfce'),0,27));
+      card.append(el('p',{class:'hint',text:'VCC to 3.3 V, never 5 V, with a 10 µF capacitor (or more) across VCC and GND right at the module: its current comes in bursts, and without one most of these modules drop packets. IRQ isn\'t used. The command module needs one too, on the same data rate and binding phrase; the address and the 8 channels it hops over come from the phrase.'+(esp?'':' On a Pi: SCK pin 23, MOSI 19, MISO 21, CSN pin 24 (CE0, /dev/spidev0.0); SPI on in raspi-config.')}),lines);
+      auxiliary.append(card);
     }else{                                                            // ExpressLRS's receiver, or a serial line, on a UART
       const ser=rk==='serial',card=hardwareCard(ser?'Serial line':'ExpressLRS receiver','Radio',ser?'UART · '+(radioCfg.baud||115200)+' baud'+(radioCfg.half?', one way at a time':''):'UART · CRSF',owner,hardwareField('Link',pick));
       if(esp)card.append(pinPicker(radio,ser?'Line output → board RX GPIO':'Receiver TX → board RX GPIO','hw-rx-'+radio.id,bus.crsfRx,'rx',hardwareInputPins(radio.kind),v=>editBoard(radio,{crsfRx:Number(v)},'rx')),
@@ -133,8 +141,8 @@ function renderGroundHardware(box,C){
   const fields=el('div',{class:'hw-fields'});
   const save=(key,index,value)=>{const next={...groundHardware(computers()),[key]:g[key].map((v,i)=>i===index?Number(value):v)};const D=JSON.parse(JSON.stringify(computers()));D.ground.wiring=next;setComputers(D,'ground-wiring');};
   for(const [key,values] of Object.entries(g))for(let i=0;i<values.length;i++){
-    const title=key==='tx'?(i?'Module TX → board RX':'Module RX ← board TX'):({arm:'Arm button',fly:'Fly button',roll:'Roll stick ADC',pitch:'Pitch stick ADC',throttle:'Throttle stick ADC',yaw:'Yaw stick ADC',buzzer:'Buzzer output',led:'LED output'}[key]||key);
-    const pins=['roll','pitch','throttle','yaw'].includes(key)?p.adc:['tx','buzzer','led'].includes(key)?[...p.pins,...(key==='led'&&C.ground.kind==='esp32'?[2]:[])]:hardwareInputPins(C.ground.kind);
+    const title=key==='nrf24'?'nRF24L01 '+['SCK','MOSI','MISO','CSN','CE'][i]:key==='tx'?(i?'Module TX → board RX':'Module RX ← board TX'):({arm:'Arm button',fly:'Fly button',roll:'Roll stick ADC',pitch:'Pitch stick ADC',throttle:'Throttle stick ADC',yaw:'Yaw stick ADC',buzzer:'Buzzer output',led:'LED output'}[key]||key);
+    const pins=groundPinList(C,key,i);
     const occupied=new Set(Object.entries(g).filter(([k])=>k!==key).flatMap(([,v])=>v).filter(v=>v>=0));
     const options=[...((key==='tx')?[]:[[-1,'Not connected']]),...pins.map(pin=>[pin,'GPIO '+pin+(occupied.has(pin)?' · in use':''),occupied.has(pin)])];
     if(values[i]>=0&&!pins.includes(values[i]))options.push([values[i],'GPIO '+values[i]+' · unavailable',true]);

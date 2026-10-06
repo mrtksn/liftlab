@@ -1,5 +1,11 @@
 # Project memory
 
+## nRF24L01 link and a compact packet layer — 2026-10-06
+- `runner/fc/clink.c`: 32-byte packets for small-packet radios. Ground on a fixed beat (100/s; 50 at 250 kbit/s), drone answers in ESB ACK payloads. Channels 22 B up; commands/telemetry/messages as a reliable selective-repeat byte stream (21-byte chunks, window 8). 4-byte SipHash tag over both sessions (never sent) + seq high bits; hello handshake; 8-channel hopping from the phrase, drone parks on hop[0] after 0.5 s. `nrf24.c`: portable register driver (HAL: SPI xfer, CE, delay).
+- plink security fix: frames delivered only from packets naming this end's current session (a recording replayed to a restarted drone is ignored); test added.
+- ESP32 `esp_radio/radio_nrf24.c` (SPI2, 8 MHz), settings `nrf24=SCK,MOSI,MISO,CSN,CE` + `radio=nrf24,KBPS`; flight hw_config v9, ground cfg v4. Pi/Linux `pi/radio_nrf24.c` (spidev + gpiochip CE), `--nrf-spi/--nrf-ce` on dfb_pi and dfb_ground. Simulator `js/link-nrf24.js`; Hardware page pins for both boards.
+- Tests: test_clink (loss, restarts, replay, hopping, 250k), test_nrf24 (two emulated chips: registers, FIFOs, retries, ACK payloads). NOT verified on real modules (user has PCB-antenna nRF24L01+).
+
 ## Serial-line radio link (laser, fibre, infrared, radio modem, wire) — 2026-10-06
 - New link kind `serial,BAUD[,half]`: packets framed in the byte stream with COBS between zeros (`runner/fc/pframe.c`), the same plink above, sized from the line speed (`rlink_sizing`). Half duplex: the drone answers each ground packet; the ground waits for the answer (1.5× measured round trip, 1.5–4 beats). Uplink packets put channels first; a receiver skips reliable frames the sender had to drop (fixes a stall after a long cut with >16 commands queued).
 - ESP32: `radio_uart.c` on the receiver pins (flight `crsf=`) / module pins (ground `tx=`); flight hw_config v8 and ground cfg v3 add `radio_baud`. Pi/computer: `radio_pserial.c`, `dfb_pi --radio serial,… --radio-dev`, `dfb_ground --radio serial,… --tx`. Simulator: `js/link-serial.js` (fibre/tether, laser, infrared, 433 MHz modem), real pframe/plink in WASM; Hardware page radio card now has the link picker.

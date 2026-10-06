@@ -24,11 +24,14 @@ void hw_defaults(hw_config *c) {
   c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
   c->crsf_rx = c->crsf_tx = -1; c->elrs_rate = 250; c->elrs_ratio = 4;
   c->radio_kind = RLINK_ELRS; c->radio_channel = 1; c->radio_opt = 0; strcpy(c->bind, RCFG_BIND_DEFAULT); c->radio_baud = 115200;
+  for (int i = 0; i < 5; i++) c->nrf_pin[i] = -1;
+  c->radio_kbps = 1000;
 }
 void hw_radio(const hw_config *c, rlink_cfg *L) {
   int e = c->radio_kind == RLINK_ESPNOW ? rlink_make(L, RLINK_ESPNOW, c->radio_channel, c->radio_opt)
         : c->radio_kind == RLINK_WIFI ? rlink_make(L, RLINK_WIFI, c->radio_opt, c->radio_channel)
         : c->radio_kind == RLINK_SERIAL ? rlink_make(L, RLINK_SERIAL, (int)c->radio_baud, c->radio_opt)
+        : c->radio_kind == RLINK_NRF24 ? rlink_make(L, RLINK_NRF24, c->radio_kbps, 0)
         : rlink_make(L, RLINK_ELRS, c->elrs_rate, c->elrs_ratio);
   if (e) rlink_default(L);
 }
@@ -37,6 +40,7 @@ static void radio_put(hw_config *c, const rlink_cfg *L) {
   if (L->kind == RLINK_ELRS) { c->elrs_rate = (int16_t)L->rate_hz; c->elrs_ratio = (int16_t)L->ratio; }
   else if (L->kind == RLINK_ESPNOW) { c->radio_channel = (int8_t)L->channel; c->radio_opt = (int8_t)L->lr; }
   else if (L->kind == RLINK_SERIAL) { c->radio_baud = L->baud; c->radio_opt = (int8_t)L->half; }
+  else if (L->kind == RLINK_NRF24) c->radio_kbps = (int16_t)L->kbps;
   else { c->radio_opt = (int8_t)L->sta; if (!L->sta) c->radio_channel = (int8_t)L->channel; }   /* (wifi,sta keeps the channel an access point had) */
 }
 static int parse_list(const char *s, float *v, int max) {
@@ -65,7 +69,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   for(int i=0;i<3;i++) for(int j=0;j<3;j++) { float dot=0;for(int k=0;k<3;k++) dot+=c->mag_matrix[3*i+k]*c->mag_matrix[3*j+k]; if(fabsf(dot-(i==j?1:0))>0.01f) { snprintf(err,errn,"compass matrix must be orthonormal");return -1; } }
   { rlink_cfg L; int k = c->radio_kind;
     if (k == RLINK_ELRS ? rlink_make(&L, k, c->elrs_rate, c->elrs_ratio) : k == RLINK_ESPNOW ? rlink_make(&L, k, c->radio_channel, c->radio_opt)
-        : k == RLINK_WIFI ? rlink_make(&L, k, c->radio_opt, c->radio_channel) : k == RLINK_SERIAL ? rlink_make(&L, k, (int)c->radio_baud, c->radio_opt) : -1) { snprintf(err, errn, "invalid radio link"); return -1; }
+        : k == RLINK_WIFI ? rlink_make(&L, k, c->radio_opt, c->radio_channel) : k == RLINK_SERIAL ? rlink_make(&L, k, (int)c->radio_baud, c->radio_opt) : k == RLINK_NRF24 ? rlink_make(&L, k, c->radio_kbps, 0) : -1) { snprintf(err, errn, "invalid radio link"); return -1; }
     char t[RCFG_BIND_N];
     if (!rcfg_terminated(c->bind, sizeof c->bind) || (c->bind[0] && rcfg_bind_parse(t, c->bind, err, errn)))   /* (empty: the default) */
       { snprintf(err, errn, "invalid binding phrase"); return -1; }
@@ -79,6 +83,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   for (int i = 0; i < FC_MAX_MOTORS; i++) USE(c->motor_pin[i], "motor");
   for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
   USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
+  for (int i = 0; i < 5; i++) USE(c->nrf_pin[i], "nRF24L01");
   #undef USE
   int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
   if (nm + ns > LB_PWM_OUTPUTS) { snprintf(err, errn, "%d motors and %d servos: this chip has %d PWM outputs", nm, ns, LB_PWM_OUTPUTS); return -1; }
@@ -99,6 +104,7 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     rlink_cfg L; if (rlink_parse(&L, eq + 1, err, errn)) return -1;
     if (key[0] == 'e' && L.kind != RLINK_ELRS) { snprintf(err, errn, "elrs=rate,ratio; for the other links radio="); return -1; }
     if (L.kind == RLINK_SERIAL && (c->crsf_rx < 0 || c->crsf_tx < 0 || c->crsf_rx == c->crsf_tx)) { snprintf(err, errn, "radio=serial: set crsf=RX,TX first: the pins from the line's output and to its input"); return -1; }
+    if (L.kind == RLINK_NRF24 && c->nrf_pin[0] < 0) { snprintf(err, errn, "radio=nrf24: set nrf24=SCK,MOSI,MISO,CSN,CE first: the module's pins"); return -1; }
     radio_put(c, &L); return 0;
   }
   if (!strcmp(key, "bind")) return rcfg_bind_parse(c->bind, eq + 1, err, errn);   /* the binding phrase */
@@ -156,6 +162,14 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     else if (n != 2 || !lb_input_pin((int)v[0]) || !pin_ok((int)v[1]) || v[1] < 0) { snprintf(err, errn, "crsf=rx,tx: free input and output pins (or crsf=-1)"); return -1; }
     else { c->crsf_rx = (int8_t)v[0]; c->crsf_tx = (int8_t)v[1]; }
 
+  } else if (!strcmp(key, "nrf24")) {                 /* an nRF24L01's pins: nrf24=SCK,MOSI,MISO,CSN,CE, or nrf24=-1 */
+    if (n == 1 && v[0] == -1) for (int i = 0; i < 5; i++) c->nrf_pin[i] = -1;
+    else {
+      int ok = n == 5; for (int i = 0; i < 5 && ok; i++) ok = v[i] >= 0 && (i == 2 ? lb_input_pin((int)v[i]) : pin_ok((int)v[i]));
+      if (!ok) { snprintf(err, errn, "nrf24=SCK,MOSI,MISO,CSN,CE: free pins (MISO an input; the others outputs), or nrf24=-1"); return -1; }
+      for (int i = 0; i < 5; i++) c->nrf_pin[i] = (int8_t)v[i];
+    }
+
   } else if (!strcmp(key, "telemetry")) {
     if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
     c->telem_hz = (int16_t)v[0];
@@ -172,6 +186,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   char rl[32]; rlink_cfg L; hw_radio(c,&L); rlink_describe(&L,rl,sizeof rl);
   APP(" esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->esc_hz,c->esc_min_us,c->esc_max_us,c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
+  if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");
   /* the packet links' settings: the binding phrase and the password masked (show goes wherever the link goes) */
   if (rcfg_bind_default(c->bind)) APP(" bind=%s(the default: set your own)",RCFG_BIND_DEFAULT); else APP(" bind=(set, %d characters)",(int)strlen(c->bind));
   if (c->wifi_ssid[0]) APP(" wifi=%s,%s",c->wifi_ssid,c->wifi_pass[0]?"********":"(default password)"); else APP(" wifi=(default)");

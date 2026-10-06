@@ -15,7 +15,7 @@ static uint32_t get32(const uint8_t *p) { return get16(p) | get16(p + 2) << 16; 
 #define ROTL(x, b) (uint64_t)(((x) << (b)) | ((x) >> (64 - (b))))
 #define SIPROUND do { v0 += v1; v1 = ROTL(v1, 13); v1 ^= v0; v0 = ROTL(v0, 32); v2 += v3; v3 = ROTL(v3, 16); v3 ^= v2; \
   v0 += v3; v3 = ROTL(v3, 21); v3 ^= v0; v2 += v1; v1 = ROTL(v1, 17); v1 ^= v2; v2 = ROTL(v2, 32); } while (0)
-static uint64_t siphash(uint64_t k0, uint64_t k1, const uint8_t *m, int n) {
+uint64_t plink_siphash(uint64_t k0, uint64_t k1, const uint8_t *m, int n) {
   uint64_t v0 = 0x736f6d6570736575ULL ^ k0, v1 = 0x646f72616e646f6dULL ^ k1, v2 = 0x6c7967656e657261ULL ^ k0, v3 = 0x7465646279746573ULL ^ k1;
   int end = n - n % 8;
   for (int i = 0; i < end; i += 8) {
@@ -29,8 +29,8 @@ static uint64_t siphash(uint64_t k0, uint64_t k1, const uint8_t *m, int n) {
 }
 void plink_key(const char *phrase, uint64_t *k0, uint64_t *k1) {
   int n = 0; while (phrase[n]) n++;
-  *k0 = siphash(0x4c6966744c616231ULL, 0x6b65792d30303031ULL, (const uint8_t *)phrase, n);   /* (two fixed keys: "LiftLab1", "key-0001") */
-  *k1 = siphash(0x6b65792d30303032ULL, 0x4c6966744c616232ULL, (const uint8_t *)phrase, n);
+  *k0 = plink_siphash(0x4c6966744c616231ULL, 0x6b65792d30303031ULL, (const uint8_t *)phrase, n);   /* (two fixed keys: "LiftLab1", "key-0001") */
+  *k1 = plink_siphash(0x6b65792d30303032ULL, 0x4c6966744c616232ULL, (const uint8_t *)phrase, n);
 }
 
 void plink_cfg_default(plink_cfg *C, int role) {
@@ -41,7 +41,7 @@ void plink_init(plink *L, const plink_cfg *C, uint32_t session) {
   uint8_t *p = (uint8_t *)L; for (unsigned i = 0; i < sizeof *L; i++) p[i] = 0;
   L->C = *C; if (L->C.mtu > PLINK_MTU) L->C.mtu = PLINK_MTU;
   L->session = session ? session : 1;
-  L->t_peer = L->t_sent = L->t_stats = L->t_up = L->t_rc = -1e9; L->peer_lq = L->peer_rssi = 0; L->peer_took = 255;
+  L->t_peer = L->t_fresh = L->t_sent = L->t_stats = L->t_up = L->t_rc = -1e9; L->peer_lq = L->peer_rssi = 0; L->peer_took = 255;
 }
 
 /* ── what the stack writes ── */
@@ -84,7 +84,7 @@ static void to_stack(plink *L, const uint8_t *f, int n) { if (L->out_n + n <= PL
 int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
   if (n < PLINK_HDR + PLINK_TAG || n > PLINK_MTU || p[0] != MAGIC || (p[1] >> 4) != VERSION) { L->N.bad++; return 0; }
   uint64_t tag = 0; for (int k = 7; k >= 0; k--) tag = tag << 8 | p[n - PLINK_TAG + k];
-  if (tag != siphash(L->C.k0, L->C.k1, p, n - PLINK_TAG) || (int)(p[1] & 15) == L->C.role) { L->N.bad++; return 0; }
+  if (tag != plink_siphash(L->C.k0, L->C.k1, p, n - PLINK_TAG) || (int)(p[1] & 15) == L->C.role) { L->N.bad++; return 0; }
   uint16_t seq = (uint16_t)get16(p + 2); uint32_t ses = get32(p + 4);
   if (ses != L->peer) {                                              /* the other end started (again) */
     if (L->peer && t - L->t_peer < 0.5) { L->N.stale_sessions++; return 0; }   /* (not while the one we have still talks: a replay) */
@@ -107,14 +107,19 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
   if (L->awaiting) { float r = (float)(t - L->t_sent); L->rtt = L->rtt > 0 ? L->rtt * 0.8f + r * 0.2f : r; }
   L->t_peer = t; L->N.got++; L->polled = 1; L->awaiting = 0;
   if (rssi) L->rssi = L->rssi ? (L->rssi * 3 + rssi) / 4 : rssi;
-  /* what they took of ours, and what they hear of us: only if it's about us (not a session of ours before a restart) */
-  if (get32(p + 8) == L->session) {
+  /* Only a packet addressed to this start of ours (it names our session, which it can only have heard from us) is
+   * taken in: its acknowledgement, what it hears of us, its frames. One that names none or another (the other end
+   * hasn't heard us yet; or a recording of an older session played back: it can't name ours, the signature covers
+   * it) is answered, so the other end learns our session, and goes no further. */
+  if (get32(p + 8) != L->session) { L->peer_lq = 0; L->peer_rssi = 0; return 1; }
+  L->t_fresh = t;
+  {
     uint8_t took = p[12];
     while (L->rq_n && (uint8_t)(took - L->rq[0].num) < 128) { for (int i = 1; i < L->rq_n; i++) L->rq[i - 1] = L->rq[i]; L->rq_n--; }
     L->peer_took = took;
     if (p[13] <= 100) L->peer_lq = p[13];
     L->peer_rssi = (int8_t)p[14];
-  } else { L->peer_lq = 0; L->peer_rssi = 0; }
+  }
   /* the records */
   int k = PLINK_HDR, end = n - PLINK_TAG, first = 1;
   while (k + 1 < end) {
@@ -172,7 +177,7 @@ int plink_to_air(plink *L, double t, uint8_t *p, int cap) {
   int u = 0;                                                         /* then the frames that go once, as many as fit */
   while (u < L->uq_n) { int n = L->uq[u + 1] + 2; if (k + 1 + n > room) break; p[k++] = REC_ONCE; copy(p + k, L->uq + u, n); k += n; u += n; }
   if (u) { for (int i = u; i < L->uq_n; i++) L->uq[i - u] = L->uq[i]; L->uq_n -= u; }
-  uint64_t tag = siphash(L->C.k0, L->C.k1, p, k);
+  uint64_t tag = plink_siphash(L->C.k0, L->C.k1, p, k);
   for (int i = 0; i < 8; i++) p[k + i] = (uint8_t)(tag >> (8 * i));
   L->t_sent = t; L->N.sent++;
   return k + PLINK_TAG;

@@ -27,7 +27,7 @@ function hardwarePart(C, c, comps) {
 }
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
-  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, ...s };
+  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, nrfPins:[-1,-1,-1,-1,-1], ...s };
 }
 function hardwareInputPins(kind) { const p=ESP_PROFILES[kind];return !p?PI_GPIO_PINS:kind==='esp32'?[...p.pins,34,35,36,37,38,39]:p.pins; }
 function hardwarePinClaims(C,comps,b) {
@@ -38,6 +38,7 @@ function hardwarePinClaims(C,comps,b) {
     for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port==='/dev/serial0')claims.push({pin:14,name:c.name+' UART TX',key:'gpsTx'+c.id},{pin:15,name:c.name+' UART RX',key:'gpsRx'+c.id});}
     if(bus.receiverPort==='/dev/serial0')claims.push({pin:14,name:'Receiver UART TX',key:'rxTx'},{pin:15,name:'Receiver UART RX',key:'rxRx'});
   }
+  if(ESP_PROFILES[b.kind] && b.tasks.includes('tlm') && hardwareRadio()?.kind==='nrf24' && Array.isArray(bus.nrfPins)) ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>claims.push({pin:bus.nrfPins[i],name:'nRF24L01 '+n,key:'nrf'+i}));
   for(const c of comps) if(['motor','joint','latch'].includes(c.type)) { const p=hardwarePart(C,c,comps);if(p.board===b.id)claims.push({pin:p.pin,name:c.name,key:'part'+c.id}); }
   return claims.filter(x=>x.pin>=0);
 }
@@ -47,14 +48,18 @@ function piLatchSettings(C,comps,b) {
 function groundHardware(C) {
   const p=ESP_PROFILES[C.ground.kind];if(!p)return null;
   const defaults=Object.fromEntries(p.ground.split('\n').map(line=>{const [,key,value]=/^set (\w+)=(.*)$/.exec(line);return [key,value.split(',').map(Number)];}));
-  return {...defaults,...C.ground.wiring};
+  const nrf=hardwareRadio()?.kind==='nrf24', g={...defaults,...(nrf?{nrf24:[-1,-1,-1,-1,-1]}:{}),...C.ground.wiring};   // (an nRF24L01's pins: SCK, MOSI, MISO, CSN, CE, while it's the link)
+  if(!nrf)delete g.nrf24;
+  return g;
 }
-function groundHardwareSettings(C, radio=hardwareRadio()) { const g=groundHardware(C);return [...Object.entries(g||{}).map(([key,v])=>'set '+key+'='+v.join(',')),...radioSettingLines(radio).map(l=>'set '+l)].join('\n')+'\nset latch=arm,fly\nsave\nreboot'; }
+const groundPinList=(C,key,i)=>{const p=ESP_PROFILES[C.ground.kind];return ['roll','pitch','throttle','yaw'].includes(key)?p.adc:['tx','buzzer','led'].includes(key)||(key==='nrf24'&&i!==2)?[...p.pins,...(key==='led'&&C.ground.kind==='esp32'?[2]:[])]:hardwareInputPins(C.ground.kind);};
+function groundHardwareSettings(C, radio=hardwareRadio()) { const g=groundHardware(C);return [...Object.entries(g||{}).map(([key,v])=>'set '+key+'='+(key==='nrf24'&&v.some(x=>x<0)?'-1':v.join(','))),...(g&&!g.nrf24?['set nrf24=-1']:[]),...radioSettingLines(radio).map(l=>'set '+l)].join('\n')+'\nset latch=arm,fly\nsave\nreboot'; }
 function groundHardwareErrors(C) {
   const g=groundHardware(C),p=ESP_PROFILES[C.ground.kind],errors=[],used=new Map();if(!g)return errors;
-  for(const [key,values] of Object.entries(g)) for(const pin of [...new Set(values)]) {
-    const pins=['roll','pitch','throttle','yaw'].includes(key)?p.adc:['tx','buzzer','led'].includes(key)?[...p.pins,...(key==='led'&&C.ground.kind==='esp32'?[2]:[])]:hardwareInputPins(C.ground.kind);
+  for(const [key,values] of Object.entries(g)) for(const [i,pin] of values.map((v,i)=>[i,v]).filter(([i,v])=>values.indexOf(v)===i)) {
+    const pins=groundPinList(C,key,i);
     if(!Number.isInteger(pin)|| (pin>=0&&!pins.includes(pin)) || (key==='tx'&&pin<0))errors.push('Command module '+key+': unavailable GPIO '+pin);
+    if(key==='nrf24'&&pin<0)errors.push('Command module nRF24L01: pick all five pins (SCK, MOSI, MISO, CSN, CE)');
     if(pin>=0){if(used.has(pin))errors.push('Command module GPIO '+pin+': '+used.get(pin)+' and '+key+' overlap');used.set(pin,key);}
   }
   return errors;
@@ -116,7 +121,7 @@ function hardwarePlan(C, comps, b) {
   return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings,radioBoard:b.tasks.includes('tlm')};
 }
 // The pilot's radio link as settings lines (runner/fc/radio_link.h rlink_parse; the packet links' binding phrase):
-// radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta | serial,BAUD[,half], then bind=PHRASE
+// radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta | serial,BAUD[,half] | nrf24,KBPS, then bind=PHRASE
 // for a packet link. (A serial line is on the receiver's pins: crsf= comes first in the settings, as the board wants.)
 // r: radioCfg (link.js) or one like it; none (a test without the page): no lines.
 const hardwareRadio = () => typeof radioCfg !== 'undefined' ? radioCfg : null;
@@ -125,6 +130,7 @@ function radioSettingLines(r) {
   if (r.kind === 'espnow') return ['radio=espnow,'+(r.channel||1)+(r.lr?',lr':''),'bind='+(r.bind||'liftlab')];
   if (r.kind === 'wifi') return [r.sta?'radio=wifi,sta':'radio=wifi,ap,'+(r.channel||1),'bind='+(r.bind||'liftlab')];
   if (r.kind === 'serial') return ['radio=serial,'+(r.baud||115200)+(r.half?',half':''),'bind='+(r.bind||'liftlab')];
+  if (r.kind === 'nrf24') return ['radio=nrf24,'+(r.kbps||1000),'bind='+(r.bind||'liftlab')];
   return ['radio=elrs,'+(r.rate||250)+','+(r.ratio||4)];
 }
 // What each link needs wired to the radio's board: an ExpressLRS receiver on a UART; nothing for ESP-NOW (built into
@@ -133,16 +139,18 @@ function radioWiringRow(b,bus,esp,r) {
   const kind=r?.kind||'elrs';
   if(kind==='espnow')return {device:'ESP-NOW radio',connection:esp?'Built into the ESP32 · no wiring':'Not available on '+b.kind+' · needs an ESP32',note:'Channel '+(r.channel||1)+(r.lr?' · long range':'')+' · the command module needs an ESP32 too'};
   if(kind==='wifi')return {device:'Wi-Fi radio',connection:'Built into the board · no wiring',note:(r.sta?'Joins a network':'Makes the network (access point), channel '+(r.channel||1))+' · UDP port 14570'};
+  if(kind==='nrf24')return {device:'nRF24L01 module',connection:esp?(bus.nrfPins&&bus.nrfPins.every(p=>p>=0)?'SPI · SCK '+bus.nrfPins[0]+', MOSI '+bus.nrfPins[1]+', MISO '+bus.nrfPins[2]+', CSN '+bus.nrfPins[3]+', CE '+bus.nrfPins[4]:'SPI · not connected'):(bus.nrfSpi||'/dev/spidev0.0')+' · CE GPIO '+(bus.nrfCe??25),note:(r.kbps||1000)+' kbit/s · 3.3 V with a 10 µF capacitor at the module'};
   if(kind==='serial')return {device:'Serial line',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← the line\'s output; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → its input':(bus.receiverPort||'/dev/ttyUSB1')+' · a serial port',note:(r.baud||115200)+' baud'+(r.half?', one way at a time':'')+' · laser, fibre, infrared, a radio modem or a wire · share GND'};
   return {device:'ExpressLRS receiver',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← receiver TX; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'};
 }
 function hardwareSettings(plan, radio=hardwareRadio()) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
   const {bus,motors,servos,sensors,motorConfigs}=plan;
-  const lines=['servos=','motors=','battery=-1','crsf=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax,'esc_hz='+bus.escHz];
+  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax,'esc_hz='+bus.escHz];
   lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
+  if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));

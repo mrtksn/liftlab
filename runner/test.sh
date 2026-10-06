@@ -29,6 +29,10 @@ cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_plink" fc/test_plink.c fc/plink.c fc/r
 "$T/test_plink"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_pserial" fc/test_pserial.c fc/pframe.c fc/plink.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_pserial"
+cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_clink" fc/test_clink.c fc/clink.c fc/plink.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c fc/rc_core.c fc/pickup_core.c -lm
+"$T/test_clink"
+cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_nrf24" fc/test_nrf24.c fc/nrf24.c fc/clink.c fc/plink.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c fc/rc_core.c fc/pickup_core.c -lm
+"$T/test_nrf24"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_esp_radio" esp_radio/test_esp_radio.c esp_radio/usb_split.c fc/crsf.c -lm
 "$T/test_esp_radio"
 (cd pi && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_dfb_pi" test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../fc/pickup_core.c ../rn_builtin.c -lm -lutil && "$T/test_dfb_pi")

@@ -1,10 +1,10 @@
 /* The pilot's radio link: see radio_link.h. (No C library: it also builds for the simulator.) */
 #include "radio_link.h"
 
-const char *const rlink_names[RLINK_KINDS] = { "elrs", "espnow", "wifi", "serial" };
-const char *const rlink_labels[RLINK_KINDS] = { "ExpressLRS 2.4 GHz", "ESP-NOW (ESP32 to ESP32)", "Wi-Fi (UDP)", "Serial line (laser, fibre, radio modem)" };
+const char *const rlink_names[RLINK_KINDS] = { "elrs", "espnow", "wifi", "serial", "nrf24" };
+const char *const rlink_labels[RLINK_KINDS] = { "ExpressLRS 2.4 GHz", "ESP-NOW (ESP32 to ESP32)", "Wi-Fi (UDP)", "Serial line (laser, fibre, radio modem)", "nRF24L01 2.4 GHz" };
 
-void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; L->baud = 115200; L->half = 0; }
+void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; L->baud = 115200; L->half = 0; L->kbps = 1000; }
 
 static int say(char *err, int en, const char *s) { int k = 0; if (en > 0) { while (s[k] && k < en - 1) { err[k] = s[k]; k++; } err[k] = 0; } return -1; }
 static int same(const char *a, int n, const char *b) { int k = 0; while (k < n && b[k] && a[k] == b[k]) k++; return k == n && !b[k]; }
@@ -28,7 +28,7 @@ int rlink_parse(rlink_cfg *L, const char *s, char *err, int en) {
   const char *v = s;
   if (kind >= 0) v = s[k] ? s + k + 1 : s + k;
   else if (s[0] >= '0' && s[0] <= '9') kind = RLINK_ELRS;            /* (just numbers: ExpressLRS's, as before) */
-  else return say(err, en, "no such link (elrs, espnow, wifi or serial)");
+  else return say(err, en, "no such link (elrs, espnow, wifi, serial or nrf24)");
   int x[2] = { 0, 0 };
   if (kind == RLINK_ELRS && (ints(v, x, 2) != 2 || rlink_make(L, kind, x[0], x[1])))
     return say(err, en, "elrs,rate,ratio as set on the radio: 50, 150, 250 or 500 Hz; telemetry 1:2 to 1:128");
@@ -43,6 +43,8 @@ int rlink_parse(rlink_cfg *L, const char *s, char *err, int en) {
     else if (v[0] == 'a' && v[1] == 'p' && v[2] == ',' && ints(v + 3, x, 1) == 1 && !rlink_make(L, kind, 0, x[0])) {}
     else return say(err, en, "wifi,ap,channel (the drone makes the network, channel 1 to 13) or wifi,sta (it joins one)");
   }
+  if (kind == RLINK_NRF24 && (ints(v, x, 2) != 1 || rlink_make(L, kind, x[0], 0)))   /* nrf24,KBPS */
+    return say(err, en, "nrf24,rate: the air data rate in kbit/s, 250, 1000 or 2000 (250 reaches furthest), the same at both ends");
   if (kind == RLINK_SERIAL) {                                        /* serial,BAUD[,half] */
     int k2 = 0; while (v[k2] && v[k2] != ',') k2++;
     char num[12]; int m = 0; while (m < k2 && m < 11) { num[m] = v[m]; m++; } num[m] = 0;
@@ -57,6 +59,7 @@ int rlink_make(rlink_cfg *L, int kind, int a, int b) {
   if (kind == RLINK_ELRS && elrs_ok(a, b)) { c.rate_hz = a; c.ratio = b; }
   else if (kind == RLINK_ESPNOW && a >= 1 && a <= 13 && (b == 0 || b == 1)) { c.channel = a; c.lr = b; }
   else if (kind == RLINK_WIFI && (a == 0 || a == 1) && b >= 1 && b <= 13) { c.sta = a; c.channel = b; }
+  else if (kind == RLINK_NRF24 && (a == 250 || a == 1000 || a == 2000) && b == 0) c.kbps = a;
   else if (kind == RLINK_SERIAL && (b == 0 || b == 1) && a >= (b ? RLINK_BAUD_HALF_MIN : RLINK_BAUD_MIN) && a <= RLINK_BAUD_MAX) { c.baud = a; c.half = b; }
   else return -1;
   *L = c; return 0;
@@ -66,6 +69,7 @@ static int put_int(char *o, int n, int k, int x) { char b[12]; int i = 11; b[i] 
 int rlink_describe(const rlink_cfg *L, char *out, int n) {
   if (L->kind == RLINK_ESPNOW) { int k = put(out, n, 0, "espnow,"); k = put_int(out, n, k, L->channel); return L->lr ? put(out, n, k, ",lr") : k; }
   if (L->kind == RLINK_WIFI) { if (L->sta) return put(out, n, 0, "wifi,sta"); int k = put(out, n, 0, "wifi,ap,"); return put_int(out, n, k, L->channel); }
+  if (L->kind == RLINK_NRF24) { int k = put(out, n, 0, "nrf24,"); return put_int(out, n, k, L->kbps); }
   if (L->kind == RLINK_SERIAL) { int k = put(out, n, 0, "serial,"); k = put_int(out, n, k, L->baud); return L->half ? put(out, n, k, ",half") : k; }
   if (L->kind != RLINK_ELRS) return put(out, n, 0, "?");
   int k = put(out, n, 0, "elrs,"); k = put_int(out, n, k, L->rate_hz); k = put(out, n, k, ","); return put_int(out, n, k, L->ratio);
@@ -120,6 +124,9 @@ float rlink_budget(const rlink_cfg *L) {
    * 0.5 Mbit/s, still carries it) */
   if (L->kind == RLINK_ESPNOW || L->kind == RLINK_WIFI) return 6000;
   if (L->kind == RLINK_SERIAL) { serial_plan P; serial_sizing(L, &P); return P.room; }
+  /* nRF24L01 (clink.h): an answer to each packet up, up to 21 bytes of the stream each, sent again when lost: the
+   * telemetry gets 60% of it (1260 B/s at 100 a second, 630 at 50) */
+  if (L->kind == RLINK_NRF24) return rlink_compact_hz(L) * 21 * 0.6f;
   return 0;
 }
 /* As the link is now: scaled by the telemetry link quality the receiver reports (a lost chunk is sent again, so half

@@ -35,6 +35,9 @@
  *                         photodiode, fibre transceivers, an infrared pair, a radio modem in transparent mode, a wire.
  *                         serial,57600,half: a line that goes one way at a time (most radio modems; 38400 and up):
  *                         the drone answers each packet. The packets are framed in the byte stream (pframe.h)
+ *   radio=nrf24,1000      an nRF24L01 on SPI, nrf24=SCK,MOSI,MISO,CSN,CE (set those first; 3.3 V and a 10 µF capacitor
+ *                         at the module): 250, 1000 or 2000 kbit/s (250 reaches furthest), the command module the same.
+ *                         It hops over 8 channels from the binding phrase; the drone answers in the acknowledgements
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
  *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
  *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
@@ -410,6 +413,7 @@ static radio_io *radio_start(void) {
   if (HW.crsf_rx >= 0 && L.kind != RLINK_SERIAL) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
   radio_io *R = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_DRONE, HW.bind, post)
               : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_DRONE, HW.bind, LB_RADIO_UART, HW.crsf_tx, HW.crsf_rx, post)   /* (the receiver's pins: the line's) */
+              : L.kind == RLINK_NRF24 ? radio_nrf24_start(&L, PLINK_DRONE, HW.bind, HW.nrf_pin, post)
               : radio_wifi_start(&L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
   printf("radio: %s; free heap %u bytes\n", R ? R->name : "DIDN'T START (see the next messages): no pilot's radio", (unsigned)esp_get_free_heap_size());
   return R;

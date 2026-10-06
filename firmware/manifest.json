@@ -1,7 +1,7 @@
 {
  "version": 2,
  "built": "2026-10-06",
- "commit": "b83a131+serial-link",
+ "commit": "1072b3c+nrf24",
  "idf": "ESP-IDF v5.4.2",
  "targets": {
   "esp32": {
@@ -28,8 +28,8 @@
        "sha256": "32d5541c5ddfd410d2ff0ea5a29f3e5fd250b8a713f14f859b9f1a02741c12b4"
       },
       "dfb_flight.bin": {
-       "size": 1022608,
-       "sha256": "73d21904f21d23d005aff3cf383b8ed1655d92f01b8e0f33d50957a52956e581"
+       "size": 1053664,
+       "sha256": "82ce290e3909a50074437ef6dae981d3726a6c1eb8556fcd2be524fb926c3dbe"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -59,8 +59,8 @@
        "sha256": "5761f4521a27e6c8e2343437de06a674d630225d5f2f6c3044203113b61412e9"
       },
       "dfb_ground.bin": {
-       "size": 879104,
-       "sha256": "e3a99a07a4100b0e16d8ef3e2a51dec6024d6a4bf1dcfec7d0e8fb52957c3ce0"
+       "size": 908496,
+       "sha256": "e463187a1e0c5c9fe01db91093c730feefc01f678bef0c5d916e9356efb689c1"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -94,8 +94,8 @@
        "sha256": "84f3bcd9835490fda008703b45266c596d239dd749c2cb62e8d0e6e8cf7d659d"
       },
       "dfb_flight.bin": {
-       "size": 1016416,
-       "sha256": "a5fd4a82776c0fbf04519bbcb10e06d43f89cb1f6b5cf4fbc3412cc3d594271e"
+       "size": 1048944,
+       "sha256": "300ccf00f3f72e7c22449def2adb024e78061cc1ec1da7d26185a721a1e17c25"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -125,8 +125,8 @@
        "sha256": "251670534b579a82cf00fd25e02d4c8793e1af501c000318b614377abcbf653b"
       },
       "dfb_ground.bin": {
-       "size": 871840,
-       "sha256": "097eea9f8820842a3c3b06ca83ba625b6b9e226ce7bda09ff25792206e730329"
+       "size": 902864,
+       "sha256": "9caff14bdf54a32ce9f8420418c11e0bc9e18cea0ad42570da769d0ea2d2a1a3"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -160,8 +160,8 @@
        "sha256": "ddd05de93b3ad47ce7d7ab685ccb82a5dfb63066568d7f334c09af25bfb55a97"
       },
       "dfb_flight.bin": {
-       "size": 1101712,
-       "sha256": "47649e4b4d32ea2ce6811e277a94f6cb2e6a03603bcb2170b292b684f071ad09"
+       "size": 1133952,
+       "sha256": "cd02f2030953a180fe1e3239c8b0281472a8a5ee1702c2e25ba3968754f5154f"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -191,8 +191,8 @@
        "sha256": "71dbdfca1f24f44626796e24c99980a934ff718ef9ef45cb82e2718891e12d6f"
       },
       "dfb_ground.bin": {
-       "size": 943728,
-       "sha256": "be53d593e900b7a8b7d73aae046d589e0d0fca67d78e1f20d11a8b8d3999a30d"
+       "size": 976224,
+       "sha256": "b77e3bf4eda3b038a47db99a2d035ddad46088cdcc527717925094a9c3ecf241"
       },
       "partition-table.bin": {
        "size": 3072,

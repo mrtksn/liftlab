@@ -222,7 +222,7 @@ function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if (!COMP.built) return;
   const C = computers(), core = boardOf('core');
-  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';') + '|' + [radioCfg.kind, radioCfg.channel, radioCfg.lr, radioCfg.sta, radioCfg.baud, radioCfg.half, radioCfg.bind].join();   // (the radio's card follows the link)
+  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';') + '|' + [radioCfg.kind, radioCfg.channel, radioCfg.lr, radioCfg.sta, radioCfg.baud, radioCfg.half, radioCfg.kbps, radioCfg.bind].join();   // (the radio's card follows the link)
   if (full || COMP.sig !== sig) {
     COMP.sig = sig;
     const list = $('#boardList'); list.textContent = '';

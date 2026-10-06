@@ -1,4 +1,4 @@
-/* A radio link made of packets (ESP-NOW, Wi-Fi UDP; nRF24L01 and Bluetooth LE to come): the part an ExpressLRS
+/* A radio link made of packets (ESP-NOW, Wi-Fi UDP, a serial line; the nRF24L01 has clink.h): the part an ExpressLRS
  * transmitter module and receiver play in hardware, here in our own code, the same at both ends.
  *
  * The stack at each end (the command module's ground_core, the drone's rc_core/tlm_core) writes and reads CRSF frames,
@@ -17,7 +17,9 @@
  *     its messages (0x80/0xF1) reliably; a packet as soon as there is something, at most down_hz_max a second, and
  *     at least down_hz_min (to report and acknowledge).
  * A packet with a bad tag is dropped; so is one with a number seen already or more than 64 behind (a replay). A new
- * session (the other end restarted) is taken only once the old one has been quiet for half a second.
+ * session (the other end restarted) is taken only once the old one has been quiet for half a second. Frames are
+ * taken only from packets that name this end's own session (the header's "session it talks to"): the first packets
+ * of a new pair only introduce the ends, and a recording of an older session played back gets nowhere.
  *
  * Link statistics: each end counts the other's packets by their numbers (link quality, % of the last 100, falling
  * while nothing comes) and reads the signal from the radio if it can; each tells the other its counts in its packets.
@@ -62,7 +64,7 @@ typedef struct {
   plink_cfg C;
   uint32_t session;            /* ours (random, at start) */
   uint32_t peer;               /* theirs (0: none yet) */
-  double t_peer, t_sent, t_stats, t_up;   /* t_up: the ground's next packet, on a fixed beat of 1/up_hz */
+  double t_peer, t_fresh, t_sent, t_stats, t_up;   /* t_fresh: a packet naming our session last came; t_up: the ground's next packet, on a fixed beat of 1/up_hz */
   uint16_t seq;                /* our next packet number */
   /* theirs: the newest number, which of the last 128 came (by number), for replays and link quality */
   uint16_t rx_top, rx_first; int rx_any; uint64_t rx_bits[2];
@@ -85,6 +87,8 @@ typedef struct {
   plink_counts N;
 } plink;
 
+/* SipHash-2-4 of n bytes under the key (k0, k1): the packets' tags. */
+uint64_t plink_siphash(uint64_t k0, uint64_t k1, const uint8_t *m, int n);
 /* The key from a binding phrase (both ends the same phrase: the same key). */
 void plink_key(const char *phrase, uint64_t *k0, uint64_t *k1);
 void plink_cfg_default(plink_cfg *C, int role);        /* ESP-NOW's numbers: up 100 Hz, down 20–100 Hz, mtu 250 */
@@ -103,8 +107,8 @@ int plink_from_air(plink *L, const uint8_t *pkt, int n, int rssi, double t);
 int plink_to_air(plink *L, double t, uint8_t *pkt, int cap);
 /* What the stack should read now (frames that came, and the link statistics this end makes): bytes, ≤ cap. */
 int plink_to_stack(plink *L, double t, uint8_t *b, int cap);
-/* Heard the other end within a second. */
-static inline int plink_connected(const plink *L, double t) { return L->peer && t - L->t_peer < 1.0; }
+/* Heard the other end, naming our session, within a second. */
+static inline int plink_connected(const plink *L, double t) { return L->peer && t - L->t_fresh < 1.0; }
 /* The link quality we hear now [%]: the last 100 packets by number, the ones not come yet missing. */
 int plink_lq(const plink *L, double t);
 #endif

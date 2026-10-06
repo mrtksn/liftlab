@@ -20,14 +20,18 @@
  *     (the line's speed, 19200 to 4000000 baud, the same at both ends; half: one way at a time, as most radio
  *     modems are: the drone then answers each packet from the ground). The packets' sizes and rates follow from the
  *     speed (rlink_sizing).
- * The packet links (ESP-NOW, Wi-Fi, serial) do the modules' part in our own code, the same at both ends: plink.h.
- * Both ends need the same binding phrase (a setting of each program): it signs the packets.
- * To come: nRF24L01, Bluetooth LE. */
+ *   - nRF24L01: a 2.4 GHz module on SPI at each end, Nordic's Enhanced ShockBurst: the ground sends, the radio
+ *     acknowledges and retries, and the drone's answer rides in the acknowledgement. Its packets hold 32 bytes, too
+ *     few for plink: clink.h is the compact packet layer for it. Settings: nrf24,RATE (250, 1000 or 2000 kbit/s:
+ *     slower reaches further); the channels hop, the address and the 8 channels come from the binding phrase.
+ * The packet links (ESP-NOW, Wi-Fi, serial: plink.h; nRF24L01: clink.h) do the modules' part in our own code, the
+ * same at both ends. Both ends need the same binding phrase (a setting of each program): it signs the packets.
+ * To come: Bluetooth LE. */
 #ifndef RADIO_LINK_H
 #define RADIO_LINK_H
 #include "rc_core.h"
 
-enum { RLINK_ELRS = 0, RLINK_ESPNOW, RLINK_WIFI, RLINK_SERIAL, RLINK_KINDS };
+enum { RLINK_ELRS = 0, RLINK_ESPNOW, RLINK_WIFI, RLINK_SERIAL, RLINK_NRF24, RLINK_KINDS };
 #define RLINK_UDP_PORT 14570
 typedef struct {
   int kind;
@@ -36,6 +40,7 @@ typedef struct {
   int lr;                      /* ESP-NOW: long range */
   int sta;                     /* Wi-Fi: join a network (1) or make one (0) */
   int baud, half;              /* a serial line: its speed [baud], and one way at a time (1) or both at once (0) */
+  int kbps;                    /* nRF24L01: its air data rate [kbit/s]: 250, 1000 or 2000 */
 } rlink_cfg;
 #define RLINK_BAUD_MIN 19200
 #define RLINK_BAUD_HALF_MIN 38400
@@ -49,7 +54,7 @@ void rlink_default(rlink_cfg *L);                     /* ExpressLRS at 250 Hz, t
 int rlink_parse(rlink_cfg *L, const char *s, char *err, int en);
 int rlink_describe(const rlink_cfg *L, char *out, int n);    /* back as rlink_parse takes it */
 /* The same from numbers: kind, then its settings in order (ExpressLRS: rate, ratio; ESP-NOW: channel, long range;
- * Wi-Fi: joins a network, channel; serial: baud, half duplex). 0, or −1 (L unchanged). */
+ * Wi-Fi: joins a network, channel; serial: baud, half duplex; nRF24L01: kbit/s, 0). 0, or −1 (L unchanged). */
 int rlink_make(rlink_cfg *L, int kind, int a, int b);
 /* The telemetry's room [bytes/s]: on a good link, and as the link is now (from the link statistics the drone's end
  * reports into rc_input; nothing while it reports nothing for a second). */
@@ -62,4 +67,8 @@ static inline int rlink_packets(const rlink_cfg *L) { return L->kind == RLINK_ES
  * from its speed, so the line never has more to carry than it can and the telemetry has what the channels leave
  * (see radio_link.c). */
 void rlink_sizing(const rlink_cfg *L, int *mtu_down, int *mtu_up, float *up_hz, float *down_min, float *down_max, int *half);
+/* A compact packet link (clink.h: the nRF24L01): 1. Its packets a second up (each answered down): 100, 50 at 250
+ * kbit/s (a 32-byte packet, its 32-byte answer and the radio's retries take a few milliseconds there). */
+static inline int rlink_compact(const rlink_cfg *L) { return L->kind == RLINK_NRF24; }
+static inline float rlink_compact_hz(const rlink_cfg *L) { return L->kbps == 250 ? 50.0f : 100.0f; }
 #endif

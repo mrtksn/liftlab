@@ -62,6 +62,7 @@ void pk_init(pk_link *K, const char *name, int role, const char *bind, esp_radio
 }
 
 void esp_radio_status(radio_io *R, char *out, int n) {
+  if (radio_nrf24_status(R, out, n)) return;
   pk_link *K = R ? (pk_link *)R->ctx : 0;
   if (!K || K->io.read != pk_read) { snprintf(out, (size_t)n, "%s", R ? R->name : "no radio"); return; }
   double t = pk_now(); const plink_counts *N = &K->L.N;

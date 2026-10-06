@@ -31,6 +31,10 @@ typedef void (*esp_radio_say)(const char *text);
 radio_io *radio_espnow_start(const rlink_cfg *L, int role, const char *bind, esp_radio_say say);
 /* ssid, pass: wifi= (empty: the defaults); drone_ip: the command module's drone= (the drone: ignored). */
 radio_io *radio_wifi_start(const rlink_cfg *L, int role, const char *bind, const char *ssid, const char *pass, const char *drone_ip, esp_radio_say say);
+/* nRF24L01 (radio=nrf24,RATE): the module on SPI, pins SCK, MOSI, MISO, CSN, CE (nrf24= on either board; the drone's
+ * end answers in the acknowledgements: nrf24.h). */
+radio_io *radio_nrf24_start(const rlink_cfg *L, int role, const char *bind, const int8_t pins[5], esp_radio_say say);
+int radio_nrf24_status(radio_io *R, char *out, int n);         /* 1: R is it (its line in out) */
 /* uart: the UART to use; tx_pin to the line's input, rx_pin from its output. */
 radio_io *radio_uart_start(const rlink_cfg *L, int role, const char *bind, int uart, int tx_pin, int rx_pin, esp_radio_say say);
 /* The link's counts (plink_counts) and what it hears, for status: a line into out. */

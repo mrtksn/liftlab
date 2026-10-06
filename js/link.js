@@ -10,7 +10,8 @@
 //
 //   HOW they travel — the link itself: a model in RADIO_LINKS, chosen by radioCfg.kind. A model is what the two
 //   radios and the air between them do: when a packet goes, whether it gets through, how long it takes, what a module
-//   queues, drops or reports. ExpressLRS (link-elrs.js); ESP-NOW and Wi-Fi (link-packet.js). A model has:
+//   queues, drops or reports. ExpressLRS (link-elrs.js); ESP-NOW and Wi-Fi (link-packet.js); a serial line
+//   (link-serial.js); the nRF24L01 (link-nrf24.js: the compact packet layer, runner/fc/clink.h). A model has:
 //     label, receiver                         its name, and what sits on the drone's board
 //     settings: [{ key, label, options, show(cfg) }]   its settings in radioCfg, as the Ground station shows them
 //     wasm(cfg) → [kind, a, b]                the same for the boards (board_wasm.c radio_link, radio_link.h)
@@ -38,10 +39,11 @@
 const RADIO_LINKS = {};
 // kind; ExpressLRS: rate [Hz], ratio, power [mW]; ESP-NOW: channel, lr (long range); Wi-Fi: sta (the drone joins a
 // network: 1; makes one: 0), channel; a serial line: baud, half (one way at a time), and the simulator's medium (0 a
-// fibre or a wire, tether [m] long; 1 a laser; 2 infrared LEDs; 3 a radio modem); the packet links: bind (the binding
+// fibre or a wire, tether [m] long; 1 a laser; 2 infrared LEDs; 3 a radio modem); nRF24L01: kbps (250, 1000, 2000);
+// the packet links: bind (the binding
 // phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
-const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, bind: 'liftlab' };
-const RADIO_KINDS = ['elrs', 'espnow', 'wifi', 'serial'];
+const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
+const RADIO_KINDS = ['elrs', 'espnow', 'wifi', 'serial', 'nrf24'];
 // A binding phrase as both ends take it (the boards' bind=: 1–31 printable characters, no spaces at the ends;
 // runner/esp_radio/radio_cfg.h), or null.
 function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
