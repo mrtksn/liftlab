@@ -13,9 +13,20 @@ function hardwareNumber(label,value,change,min,max) {
 function hardwareText(label,value,change){const inp=el('input',{type:'text','aria-label':label,value});inp.addEventListener('change',()=>change(inp.value.trim()));return hardwareField(label,inp);}
 function hardwareDetails(key,title,...children){const d=el('details',{class:'hw-advanced',open:HW_UI.open.has(key)?'open':null},el('summary',{text:title}),...children);d.addEventListener('toggle',()=>{if(d.open)HW_UI.open.add(key);else HW_UI.open.delete(key);});return d;}
 function hardwareCard(name,kind,connection,board,...children){return el('article',{class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:name}),el('span',{class:'hw-kind',text:kind})),board,hardwareField('Connection',el('span',{class:'hw-connection',text:connection})),...children);}
+function renderWiringOverview(C){
+  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
+  for(const g of [...data.groups,...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
+    const card=el('article',{class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
+    for(const r of g.rows)list.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
+    card.append(g.rows.length?list:el('p',{class:'hint',text:'No device connections assigned.'}));section.append(card);
+  }
+  section.append(el('p',{class:'hint',text:'Power: connect each module to its specified supply and share signal GND. Motors take power through their ESC or MOSFET stage; servos need a suitable supply. Battery sensing uses a resistor divider. This list describes signal wiring; check module pinouts and the wiring checks below before installation.'}));
+  return section;
+}
 function renderHardware() {
   const box=$('#hardwareRows');if(!box)return;box.textContent='';
   const C=computers(),parts=cfg.comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type));
+  box.append(renderWiringOverview(C));
   const pinsFor=b=>ESP_PROFILES[b.kind]?ESP_PROFILES[b.kind].pins:PI_GPIO_PINS;
   const pinPicker=(b,label,id,value,key,pins,change)=>{
     const claims=hardwarePinClaims(C,cfg.comps,b).filter(x=>x.key!==key),used=new Map(claims.map(x=>[x.pin,x.name]));
@@ -38,10 +49,12 @@ function renderHardware() {
     const p=partWiring(c),owner=hardwareOwner(C,c),saved=C.wiring?.parts?.[c.id]||{};
     const update=patch=>editWiring(w=>{w.parts[c.id]={...w.parts[c.id],...patch};},c.id);
     const task=c.type==='latch'?'cargo':c.type==='sensor'&&['fix','flow'].includes(c.kind)?'navigation':'flight core';
-    const board=hardwareField('Board',hardwareSelect(c.name+' board','hw-board-'+c.id,[['auto','Follow '+task],['off','No board (off)'],...C.boards.map(b=>[b.id,b.name])],Object.hasOwn(saved,'board')?(saved.board??'off'):'auto',v=>{
+    const automatic=!Object.hasOwn(saved,'board');
+    const board=hardwareField('Board',hardwareSelect(c.name+' board','hw-board-'+c.id,[['auto','Automatic — '+task+' board'],['off','No board (off)'],...C.boards.map(b=>[b.id,b.name])],automatic?'auto':(saved.board??'off'),v=>{
       if(v==='auto')editWiring(w=>{const q={...w.parts[c.id]};delete q.board;delete q.pin;w.parts[c.id]=q;},c.id);
       else update({board:v==='off'?null:Number(v),...(c.type==='sensor'?{}:{pin:-1})});
     }));
+    if(automatic)board.append(el('span',{class:'hint',text:(owner?'Currently uses '+owner.name+'.':'No board has the '+task+' task assigned.')+' Changes automatically when you move the '+task+' task to another board.'}));
     if(c.type==='motor'||c.type==='joint'){
       const brushed=c.type==='motor'&&p.driver==='brushed';
       const bus=owner&&hardwareBus(C,owner),card=hardwareCard(c.name,c.type==='motor'?'Motor':'Servo',c.type==='motor'?(brushed?'Duty PWM · active-high MOSFET':'PWM ESC signal'):'PWM servo · 50 Hz',board);
@@ -56,8 +69,7 @@ function renderHardware() {
       cargo||=group('Cargo latches','A Pi can drive a servo latch with PWM or a switched latch with a digital GPIO. Set the cargo task to that Pi.');
       const card=hardwareCard(c.name,'Latch',p.driver==='pwm'?'PWM servo · 50 Hz':'Digital on/off · high = closed',board,
         hardwareField('Driver',hardwareSelect(c.name+' latch driver','hw-driver-'+c.id,[['pwm','PWM servo'],['gpio','Digital on/off']],p.driver,v=>update({driver:v,pin:v==='pwm'?18:-1}))));
-      if(c.type==='motor')card.append(hardwareField('Motor driver',hardwareSelect(c.name+' motor driver','hw-motor-driver-'+c.id,[['pwm','PWM ESC'],['brushed','Brushed motor · MOSFET']],p.driver,v=>update({driver:v}))));
-      if(owner)card.append(pinPicker(owner,c.name+(brushed?' gate GPIO':' signal GPIO'),'hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
+      if(owner)card.append(pinPicker(owner,c.name+' signal GPIO','hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
       card.append(el('p',{class:'hint',text:owner?.kind.startsWith('pi')?'PWM GPIO 18/19 uses Pi hardware PWM. Digital outputs control an external latch driver.':'Real latch drivers currently run on a Pi.'}));cargo.append(card);continue;
     }
     const defs=DEVICE_PROFILES[c.kind],def=defs[p.driver],i2c=['imu','baro','mag'].includes(c.kind),custom=p.driver==='custom';
@@ -89,7 +101,7 @@ function renderHardware() {
     else card.append(hardwareText('Receiver serial port',bus.receiverPort||'/dev/ttyUSB1',v=>editBoard(radio,{receiverPort:v},'port')));
     auxiliary.append(card);
   }
-  renderGroundHardware(box,C);
+  renderGroundHardware(group('Command-module wiring','Buttons, sticks and the transmitter on the ground-side board.'),C);
   const advanced=group('Board settings & custom code','Shared timing and source code live here. Most devices work with a built-in driver and need no code edits.');
   for(const b of C.boards){const bus=hardwareBus(C,b);if(!b.tasks.includes('core')||!ESP_PROFILES[b.kind])continue;
     advanced.append(hardwareDetails('timing'+b.id,b.name+' · ESC timing',...[['escHz','ESC PWM Hz',50,490],['escMin','ESC minimum µs',800,1700],['escMax','ESC maximum µs',1300,2200]].map(([k,l,min,max])=>hardwareNumber(l,bus[k],v=>editBoard(b,{[k]:v},k),min,max))),customDriverEditor(C,b));

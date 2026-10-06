@@ -149,3 +149,45 @@ function use10Dof(b) {
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
 if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings};
+
+// Read-only connection list derived from the same saved assignments as Install.
+function hardwareOverview(C, comps) {
+  const core=C.boards.find(b=>b.tasks.includes('core')),radio=C.boards.find(b=>b.tasks.includes('tlm'));
+  const groups=C.boards.map(b=>({id:b.id,name:b.name,kind:b.kind,rows:[]})),unassigned=[];
+  const pin=n=>Number.isInteger(n)&&n>=0?'GPIO '+n:'Not connected';
+  for(const c of comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type))){
+    const p=hardwarePart(C,c,comps),b=hardwareOwner(C,c),row={device:c.name,connection:'',note:''};
+    if(!b){row.connection='No board';row.note='Disconnected or task has no board';unassigned.push(row);continue;}
+    const bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
+    if(c.type==='motor'||c.type==='joint'||c.type==='latch'){
+      row.connection=pin(p.pin)+' → '+(c.type==='motor'?(p.driver==='brushed'?'MOSFET gate':'ESC signal'):c.type==='joint'||p.driver==='pwm'?'servo signal':'latch driver');
+      row.note=c.type==='motor'?(p.driver==='brushed'?bus.brushedHz+' Hz duty PWM · limit '+(p.maxDuty??100)+'%':bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs'):c.type==='joint'||p.driver==='pwm'?'50 Hz PWM':'Digital · high = closed';
+      if(p.pin<0)row.note='Choose a GPIO';
+      if(c.type==='latch'?!b.kind.startsWith('pi'):b.id!==core?.id)row.note+=' · Hardware assignment unsupported';
+    }else if(['imu','baro','mag'].includes(c.kind)){
+      row.connection=pin(bus.sda)+' → SDA; '+pin(bus.scl)+' → SCL';
+      row.note=(DEVICE_PROFILES[c.kind][p.driver]?.label||p.driver)+' · '+(p.address?'address 0x'+p.address.toString(16):'auto address');
+      if(!esp||b.id!==core?.id||p.driver==='none')row.note+=' · Hardware driver unsupported';
+    }else if(c.kind==='fix'){
+      const port=p.port||'/dev/ttyUSB0';row.connection=port==='/dev/serial0'?'GPIO 15 (RX) ← GPS TX; GPIO 14 (TX) → GPS RX':port+' · USB adapter RX ← GPS TX';
+      row.note='NMEA serial · GPS RX optional';if(esp||!b.tasks.includes('nav'))row.note+=' · Hardware assignment unsupported';
+    }else{row.connection='No physical connection';row.note='Simulation only · driver not implemented';}
+    groups.find(g=>g.id===b.id).rows.push(row);
+  }
+  for(const b of C.boards){
+    const g=groups.find(g=>g.id===b.id),bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
+    if(esp&&b.id===core?.id)g.rows.push({device:'Battery voltage',connection:pin(bus.batteryPin)+(bus.batteryPin>=0?' ← resistor divider midpoint':''),note:bus.batteryPin>=0?'Divider ratio '+bus.batteryDivider+' · divider GND → board GND':'Optional ADC input'});
+    if(b.kind.startsWith('pi')){
+      const port=bus.linkPort||'/dev/serial0',link=core&&ESP_PROFILES[core.kind]?.link;
+      g.rows.push({device:'Link to '+(core?.name||'flight controller'),connection:port==='/dev/serial0'&&link?'GPIO 14 (TX) → '+core.name+' GPIO '+link[1]+' (RX); GPIO 15 (RX) ← '+core.name+' GPIO '+link[0]+' (TX)':port+' · serial link',note:!core?'No flight-core board':port==='/dev/serial0'&&!link?'Target UART pins unavailable':port==='/dev/serial0'?'Share board GND':'USB serial adapter; no Pi GPIO'});
+      if(core&&link)groups.find(x=>x.id===core.id).rows.push({device:'Link to '+b.name,connection:port==='/dev/serial0'?'GPIO '+link[1]+' (RX) ← '+b.name+' GPIO 14 (TX); GPIO '+link[0]+' (TX) → '+b.name+' GPIO 15 (RX)':'GPIO '+link[1]+' (RX) ← USB adapter TX; GPIO '+link[0]+' (TX) → USB adapter RX',note:port==='/dev/serial0'?'UART0 · share board GND':'Pi '+port+' · USB-to-UART adapter · share GND'});
+    }else if(esp&&b.id!==core?.id&&b.tasks.length)g.rows.push({device:'Flight-controller link',connection:'Hardware routing not implemented',note:'Inter-board link is simulated; no supported wiring recipe'});
+    if(b.id===radio?.id)g.rows.push({device:'ExpressLRS receiver',connection:esp?pin(bus.crsfRx)+' (RX) ← receiver TX; '+pin(bus.crsfTx)+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'});
+  }
+  const ground=groundHardware(C);
+  if(ground){const g={id:'ground',name:C.ground.name,kind:C.ground.kind,rows:[]};groups.push(g);
+    const labels={arm:'Arm button',fly:'Fly button',roll:'Roll stick',pitch:'Pitch stick',throttle:'Throttle stick',yaw:'Yaw stick',buzzer:'Buzzer',led:'LED'};
+    for(const [key,values] of Object.entries(ground))values.forEach((n,i)=>g.rows.push({device:key==='tx'?'ExpressLRS transmitter':(labels[key]||key)+(values.length>1?' '+(i+1):''),connection:pin(n)+(n<0?'':key==='tx'?(i?' (RX) ← module TX':' (TX) → module RX'):['arm','fly'].includes(key)?' ↔ button ↔ GND':['roll','pitch','throttle','yaw'].includes(key)?' ← stick wiper':' → external '+key),note:n<0?'Disconnected':key==='tx'?'CRSF UART · share GND':['roll','pitch','throttle','yaw'].includes(key)?'ADC · stick supply/GND to board logic supply/GND':['arm','fly'].includes(key)?'Active low':'Use a suitable driver / LED resistor'}));
+  }else if(C.ground)groups.push({id:'ground',name:C.ground.name,kind:C.ground.kind,rows:[{device:'Command module',connection:'USB / host input',note:'GPIO wiring is not configured for this platform'}]});
+  return {groups,unassigned};
+}

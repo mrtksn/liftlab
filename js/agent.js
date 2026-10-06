@@ -1,7 +1,7 @@
 'use strict';
 // The AI agent: a model behind an OpenAI-compatible chat API (OpenAI, OpenRouter, a local server) that can read the
-// simulator and change it through tools (agent-tools.js): the airframe, the flight computers, the formulas, the
-// simulation and the flying. It works on the simulator only: the browser has no link to a real drone.
+// simulator and change it through tools: the airframe, computers, wiring, driver source, formulas and flight.
+// Agent tools operate on the saved design and simulation; physical connections are handled separately by Install.
 //
 // A turn: what you typed (or a trigger's message, with the state at that moment) goes to the model with the tools;
 // the model answers, or asks for tools; the page runs them and sends the results back; until it answers in words, or
@@ -169,7 +169,9 @@ function agentSystem() {
     'Axes: X forward, Y left, Z up, metres, from the world origin (the start point). Body axes on the airframe: the same, from the frame hub. Angles in degrees.',
     'Flight computers: boards (ESP32 microcontrollers, Raspberry Pi) run tasks: core (attitude, control, mixing), nav (position), learn, super (health), tlm (radio), cargo (latches). Each task runs formulas: JavaScript functions you can read and replace (same arguments, same kind of return value).',
     'Work in small steps and check: after a change, run the simulation for a few seconds (wait) and read the state. Read a formula (get_formula) before you replace it, and keep its signature.',
-    'You can reach everything the page shows or does: get_health for each part\'s true state (a broken prop, a stopped motor), get_actuators for thrust and throttle, get_estimate, get_learning, get_boards, get_envelope, get_radio, get_events; stick and poke to fly by hand; set_view and look (if allowed) to see; designs, triggers, cargo_items, set_control, set_learning, set_radio, set_frame_shape; run_js (if allowed) for anything else.',
+    'Use get_computers before set_computers and keep existing board IDs when renaming, reordering or moving tasks. Removing a board leaves its explicit wiring disconnected. get_hardware lists boards, device drivers and C presets; query a board id (or "ground") for its pins, resolved device assignments and wiring checks. get_wiring_overview gives the board connection list. Use set_hardware for atomic GPIO, board, driver/address, PWM/MOSFET duty, battery/receiver/serial and ground-input changes. It rejects new wiring errors unless draft=true; draft wiring may be saved but is not ready to install. Follow-up get_hardware/get_install_settings checks the result. apply_hardware_preset configures a combined 10DOF sensor module; set_driver_code saves a C preset or custom source, get_driver_code reads it in chunks.',
+    'Hardware tools edit the simulated design and its installation settings only; they do not connect to, flash or operate physical boards. Only Install can send settings. Custom sensor C is saved/exported source: it is not compiled or executed in this browser and needs an ESP-IDF rebuild, custom firmware installation and driver="custom" on the relevant sensors. MOSFET outputs are active-high, one direction, zero duty when stopped; frequency is shared on the board. Duty ceilings affect simulated actuation, but the allocator/learning model does not yet account for reduced headroom. Distributed motor outputs, Pi I2C sensor drivers and physical optical-flow drivers are unsupported.',
+    'Other tools: get_health, get_actuators, get_estimate, get_learning, get_boards, get_envelope, get_radio, get_events; stick and poke to fly by hand; set_view and look (if allowed) to see; designs, triggers, cargo_items, set_control, set_learning, set_radio, set_frame_shape. Prefer dedicated tools over run_js (if allowed).',
     'The person sees each tool you call. Be brief in words: say what you did, what you saw and what you suggest.',
     `Now: ${new Date().toISOString().slice(0, 10)}. Simulated time ${S.t.toFixed(1)} s.`,
   ].join('\n');

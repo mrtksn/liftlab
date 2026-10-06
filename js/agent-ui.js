@@ -27,7 +27,7 @@ function connView() {
   box.append(el('div', { class: 'ai-hero' },
     el('div', { class: 'ai-mark', 'aria-hidden': 'true', text: '✦' }),
     el('h2', { text: aiUi.editConn ? 'Change the connection' : 'Connect an AI model' }),
-    el('p', { text: 'An agent that can fly the simulated drone, rebuild it, tune its formulas and test it, and that triggers can call when something happens. Any OpenAI-compatible chat API works; pick a model that can call tools.' })));
+    el('p', { text: 'An agent that can build and fly the simulated drone, configure boards and wiring, edit sensor driver source, and tune and test formulas. Triggers can call it when something happens. Any OpenAI-compatible chat API works; pick a model that can call tools.' })));
   const ep = el('div', { class: 'ai-eps', role: 'radiogroup', 'aria-label': 'Provider' });
   for (const [k, X] of Object.entries(AGENT_ENDPOINTS)) {
     const b = el('button', { type: 'button', class: 'ai-ep', role: 'radio', 'aria-checked': String(k === D.endpoint), text: X.label.replace(' (this computer)', ''), title: X.label });
@@ -67,7 +67,7 @@ function connView() {
     field('Model', el('div', { class: 'ai-row' }, model, load, dl)),
     msg, el('div', { class: 'ai-row' }, connect, aiUi.editConn ? el('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: () => { aiUi.editConn = false; aiUi.draft = null; aiUi.msg = ''; agentRender(); } }) : null),
     E().noKey ? el('p', { class: 'hint', text: 'A server on this computer must allow requests from a web page (CORS). For Ollama, start it with OLLAMA_ORIGINS=*.' }) : null);
-  box.append(form, el('p', { class: 'hint ai-foot', text: 'Private: the provider, the key and your chats are kept in this browser only. Nothing goes to us or anyone else; the page talks straight to the provider you pick, and only to run the agent. It works on the simulator only: this page has no link to a real drone.' }));
+  box.append(form, el('p', { class: 'hint ai-foot', text: 'The key and chats are stored in this browser; requests go to your chosen provider. The agent edits the design and simulation. Use Install to connect to physical boards; custom C source requires a firmware rebuild.' }));
   return box;
 }
 
@@ -111,7 +111,7 @@ function threadRow(t, title, meta, lead, onDelete) {
 }
 
 /* ───────── a thread ───────── */
-const AI_SUGGEST = ['Fly a 2 m square at 2 m height and tell me how well it held the corners', 'Add a wing and see how it flies in 5 m/s wind', 'Make the position control softer', 'Find out why it crashes when M2 stops'];
+const AI_SUGGEST = ['Fly a 2 m square at 2 m height and tell me how well it held the corners', 'Check my hardware wiring for GPIO conflicts', 'Add a wing and see how it flies in 5 m/s wind', 'Make the position control softer', 'Find out why it crashes when M2 stops'];
 function chatView(th) {
   const box = el('div', { class: 'ai-view ai-chatv' });
   const T = th.kind === 'trigger' ? agent.triggers.find(x => x.id === th.triggerId) : null;
@@ -164,6 +164,10 @@ const AI_DESC = {   // a tool call, in a few words, for the chat
   set_part: a => `set ${a.id}: ${Object.keys(a.fields || {}).join(', ')}`, add_part: a => `add a ${a.type}${a.on != null ? ' on ' + a.on : a.between != null ? ' above ' + a.between : ''}`,
   remove_part: a => `remove ${a.id}`, attach_part: a => `attach ${a.id} to ${a.to}`, set_frame: a => 'set ' + Object.keys(a).join(', '), load_layout: a => 'load ' + a.layout,
   get_computers: () => 'read the computers', set_computers: () => 'set the computers', list_formulas: () => 'list the formulas', get_formula: a => 'read ' + a.key,
+  get_hardware: a => a.board == null ? 'read hardware profiles' : 'read wiring for board ' + a.board,
+  get_wiring_overview: () => 'read the wiring overview', set_hardware: () => 'update hardware wiring',
+  apply_hardware_preset: a => 'apply the ' + a.preset + ' hardware preset', get_driver_code: () => 'read sensor driver source',
+  set_driver_code: () => 'save sensor driver source', get_install_settings: a => 'read installation settings for board ' + a.board,
   set_formula: a => 'change ' + a.key, reset_formula: a => 'reset ' + a.key, simulation: a => a.action + (a.speed ? ' ' + a.speed : ''),
   wait: a => `run ${a.seconds} s${a.fast ? ', fast' : ''}${a.until ? ' until ' + a.until : ''}`, fly: a => a.action === 'goto' ? `go to ${['x', 'y', 'z'].map(k => a[k] ?? '·').join(', ')}${a.heading != null ? ' facing ' + a.heading + '°' : ''}` : a.action + (a.level ? ' ' + a.level : ''),
   latch: a => `${a.action} latch ${a.latch}`, environment: a => 'set ' + Object.entries(a).map(([k, v]) => `${k} ${v}`).join(', '), break_part: a => `break ${a.id}${a.mode ? ' (' + a.mode + ')' : ''}`, repair_all: () => 'repair all',

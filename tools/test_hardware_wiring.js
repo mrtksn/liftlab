@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const ctx=vm.createContext({console,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},Map,Set});
 for(const file of ['board-hardware','hardware','driver-presets','boards','designs']) vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
-vm.runInContext('this.api={hardwareOwner,hardwarePart,hardwarePlan,hardwareSettings,fixComputers,readDesignFile,DRIVER_PRESETS};',ctx);
+vm.runInContext('this.api={hardwareOverview,hardwareOwner,hardwarePart,hardwarePlan,hardwareSettings,fixComputers,readDesignFile,DRIVER_PRESETS};',ctx);
 const A=ctx.api;
 const C={boards:[{id:1,kind:'s3',name:'FC',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi',tasks:['nav']}]};
 const parts=[...Array.from({length:4},(_,i)=>({id:i+1,type:'motor',name:'M'+i,pos:[0,0,0]})),...['imu','baro','mag','fix'].map((kind,i)=>({id:i+5,type:'sensor',kind,name:kind,pos:[0,0,0]}))];
@@ -77,3 +77,19 @@ C.wiring.parts[1].maxDuty=0;assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors
 C.wiring.parts[1].driver='hbridge';assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('unsupported motor driver')));C.wiring.parts[1].driver='brushed';
 C.wiring.boards[1].brushedHz=50000;assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('Brushed PWM frequency')));C.wiring.boards[1].brushedHz=20000;
 console.log('Motor profile checks passed: mixed-driver export, duty clipping, design persistence and invalid settings.');
+
+// The overview must reflect actual saved wiring, including both ends of a board link.
+const overviewConfig={boards:[{id:1,kind:'s3',name:'FC',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi',tasks:['nav','cargo']}],ground:{kind:'c3',name:'Pilot'},wiring:{parts:{1:{driver:'brushed',pin:8,maxDuty:60},5:{driver:'bmp180',address:0x77},6:{board:null}},boards:{1:{sda:17,scl:18,brushedHz:12000,batteryPin:1,crsfRx:15,crsfTx:16},2:{linkPort:'/dev/serial0'}}}};
+const overviewParts=[{id:1,type:'motor',name:'M1'},{id:5,type:'sensor',kind:'baro',name:'Baro'},{id:6,type:'motor',name:'Off motor'},{id:7,type:'latch',name:'Latch'}];
+let overview=A.hardwareOverview(overviewConfig,overviewParts);
+const row=(group,name)=>overview.groups.find(g=>g.id===group).rows.find(r=>r.device===name);
+assert.match(row(1,'M1').connection,/GPIO 8.*MOSFET gate/);assert.match(row(1,'M1').note,/12000.*60%/);
+assert.match(row(1,'Baro').connection,/GPIO 17.*SDA.*GPIO 18.*SCL/);assert.match(row(1,'Baro').note,/0x77/);
+assert.match(row(1,'Battery voltage').connection,/GPIO 1/);assert.match(row(1,'ExpressLRS receiver').connection,/GPIO 15.*receiver TX.*GPIO 16.*receiver RX/);
+assert.match(row(2,'Link to FC').connection,/GPIO 14.*GPIO 44.*GPIO 15.*GPIO 43/);assert.match(row(1,'Link to Pi').connection,/GPIO 44.*GPIO 14.*GPIO 43.*GPIO 15/);
+assert.match(row(2,'Latch').connection,/GPIO 18.*servo/);assert.equal(overview.unassigned[0].device,'Off motor');
+assert.match(row('ground','Throttle stick').note,/Disconnected/);
+overviewConfig.wiring.boards[2].linkPort='/dev/ttyUSB2';overview=A.hardwareOverview(overviewConfig,overviewParts);
+assert.match(row(2,'Link to FC').connection,/ttyUSB2/);assert.doesNotMatch(row(2,'Link to FC').connection,/GPIO 14/);
+assert.match(row(1,'Link to Pi').connection,/GPIO 44.*USB adapter/);
+console.log('Wiring overview checks passed: saved pins, shared bus, mixed motor profiles, radio, ground inputs, disconnected devices and both UART/USB link ends.');

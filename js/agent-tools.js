@@ -118,15 +118,13 @@ const AGENT_TOOLS = {
 
   get_computers: { desc: 'The flight computers: each board, its kind and the tasks it runs; what each task and board kind is.',
     params: obj({}),
-    run: () => ({ boards: computers().boards.map(b => ({ name: b.name, kind: b.kind, tasks: b.tasks })),
+    run: () => ({ boards: computers().boards.map(b => ({ id:b.id,name: b.name, kind: b.kind, tasks: b.tasks, ...(b.tasks.includes('core')?{flight_loop_hz:boardTaskHz(b,'core')}:{}) })), ground:computers().ground,
       tasks: Object.fromEntries(Object.entries(TASKS).map(([k, T]) => [k, `${T.label}, ${T.hz} Hz${T.mcuOnly ? ', microcontroller only' : ''}${T.piOnly ? ', Linux only' : ''}: ${T.what}`])),
-      board_kinds: Object.fromEntries(Object.entries(BOARD_KINDS).filter(([, k]) => !k.groundOnly).map(([k, B]) => [k, `${B.label}: ${B.note}`])) }) },
-  set_computers: { desc: 'Set the boards (1 to 4) and their tasks. Each task on one board at most; the core on a microcontroller. It restarts the flight. Returns what was kept.',
-    params: obj({ boards: { type: 'array', items: obj({ name: { type: 'string' }, kind: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' } } }, ['kind', 'tasks']) } }, ['boards']),
-    run: a => {
-      setComputers({ ...computers(), boards: a.boards.map(b => ({ name: b.name, kind: b.kind, tasks: b.tasks })) }, 'agent');
-      return { boards: computers().boards.map(b => ({ name: b.name, kind: b.kind, tasks: b.tasks })) };
-    } },
+      board_kinds: Object.fromEntries(Object.entries(BOARD_KINDS).filter(([, k]) => !k.groundOnly).map(([k, B]) => [k, `${B.label}: ${B.note}`])),
+      ground_board_kinds:Object.fromEntries(Object.entries(BOARD_KINDS).map(([k,B])=>[k,B.label])) }) },
+  set_computers: { desc: 'Replace the drone board list (1–4). Include each existing board id from get_computers to preserve wiring, even when renaming/reordering. Omit id for a new board; an exact unique existing name also preserves its id. Removed boards leave explicit connections disconnected. Assign core exactly once to a microcontroller; other tasks at most once. Optional ground changes the command-module kind/name. Restarts flight.',
+    params: obj({ boards: { type: 'array', items: obj({ id:{type:'integer'},name: { type: 'string' }, kind: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' } } }, ['kind', 'tasks']) },ground:obj({kind:{type:'string'},name:{type:'string'}}) }, ['boards']),
+    run: a => agentSetComputers(a) },
 
   list_formulas: { desc: 'Every formula: key, title, group (plant: physics; sensor; est: estimators; ctrl: control; learn; super: health; ground), which task runs it, and whether it is edited or stopped.',
     params: obj({}),

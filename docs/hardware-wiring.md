@@ -51,7 +51,19 @@ These are native C drivers with access to the firmware, not sandboxed programs. 
 
 The browser simulation uses its existing sensor models; it does not execute these C register drivers. A single compiled header serves the board; separate custom implementations for multiple sensors of the same kind need firmware extensions.
 
+## AI agent
+
+The AI agent can inspect and edit saved hardware wiring without enabling **Run JavaScript**. `get_computers` returns stable board IDs; `set_computers` preserves those IDs when renaming, reordering or changing a board. Include existing IDs in edits. New boards receive new IDs; removing a board leaves its explicit connections disconnected.
+
+`get_hardware` lists boards, devices and profiles, or returns one board’s pins, assignments and checks. `get_wiring_overview` reads the connection list. `set_hardware` changes device assignments/GPIOs, sensor profiles/addresses, shared buses, motor drivers/duty limits, servo calibration, battery/radio wiring, Pi serial ports and command-module inputs. Related changes can be batched atomically. New validation errors reject the entire edit; `draft=true` deliberately saves incomplete/unsupported wiring and reports blockers. Existing errors can remain during incremental repairs. `get_install_settings` reads the resulting settings; it does not send them.
+
+`apply_hardware_preset` uses the same 10DOF preset as the UI. `get_driver_code` reads saved source or presets in chunks; `set_driver_code` saves full source or a preset, respects the formula-edit confirmation preference, and refuses to overwrite an unsaved editor draft. Changes use the normal design save/reset/undo paths. Custom C still requires export, an ESP-IDF rebuild, custom firmware installation and **Custom C driver** selection on the sensors. These tools do not compile C or flash/control physical hardware.
+
+Examples: “Check my wiring for GPIO conflicts”, “Use a brushed MOSFET driver for M1 with a 60% ceiling at 12 kHz”, or “Configure my 10DOF module and show its wiring.”
+
 ## Validation
+
+`node tools/test_agent_hardware.js` checks registered agent tools: board identity, atomic GPIO/port validation, installation settings, ground wiring persistence, 10DOF sensor creation, C source chunking and editor-draft/confirmation protection. The host CI jobs run these checks.
 
 `tools/test_motor_outputs.c` compiles the production configuration/output modules against mocked GPIO/LEDC calls for ESP32/S3/C3. It checks mixed timers, zero-duty startup/shutdown, duty ceilings, invalid commands, failed setup/writes, channel limits and versioned flash migration. These host tests run in CI alongside chip firmware builds; they do not verify physical waveforms.
 

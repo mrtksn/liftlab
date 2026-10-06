@@ -1064,3 +1064,31 @@ html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100
 .hw-advanced .btn, .hw-device .btn, .hw-preset-btn { white-space: normal; text-align: left; }
 .hw-advanced .inst-code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .hw-advanced .code { margin-top: 10px; }
+
+/* Long-tab orientation and board connection overview. */
+.panel > .ftabs{position:sticky;top:0;z-index:7;flex-shrink:0}
+#airframe,#telemetry{overflow-anchor:none}
+#airframe > .pane:not(.ai){flex-shrink:0}
+#telemetry > .rpane{flex-shrink:0}
+.section-nav{position:sticky;top:var(--section-tabs-height,48px);z-index:6;flex:none;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) minmax(0,1fr);align-items:center;gap:8px;padding:7px 10px;background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 3px 8px #00000008;font-size:11px}
+.section-neighbor{color:var(--muted);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.section-neighbor:hover{color:var(--accent)}
+.section-next{text-align:right}
+.section-jump{min-width:0}
+.section-jump summary{display:flex;align-items:center;justify-content:center;gap:4px;cursor:pointer;list-style:none;color:var(--ink)}
+.section-jump summary::-webkit-details-marker{display:none}
+.section-jump summary::after{content:'⌄';color:var(--muted);flex:none}
+.section-jump[open] summary::after{content:'⌃'}
+.section-current{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.section-links{position:absolute;left:6px;right:6px;top:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:6px;max-height:35vh;overflow:auto;background:var(--panel);border:1px solid var(--line-strong);border-radius:6px;box-shadow:0 6px 18px #0002}
+.section-links a{padding:6px 8px;border-radius:5px;color:var(--ink-2);text-decoration:none;overflow-wrap:anywhere}
+.section-links a:hover{background:var(--panel-2)}
+.section-links .section-sub{padding-left:16px;font-size:11px}
+.section-links a[aria-current]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.section-links a:focus-visible,.section-neighbor:focus-visible,.section-jump summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hw-wire-list{display:grid;grid-template-columns:minmax(70px,1fr) minmax(0,2fr);gap:0;margin:0;font-size:12px}
+.hw-wire-list dt,.hw-wire-list dd{padding:8px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.hw-wire-list dt{padding-right:8px;font-weight:500}
+.hw-wire-list dd{margin:0;display:flex;flex-direction:column;gap:4px}
+.hw-wire-list small{color:var(--muted);font-size:11px}
+.hw-overview{margin-top:0}

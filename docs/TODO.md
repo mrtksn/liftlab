@@ -1,0 +1,115 @@
+# Project memory
+
+## Current state — 2026-10-02
+- Repository orientation: browser airframe editor and simulator, editable physical/control laws, JavaScript-subset compiler, C step runner, portable flight controller, ESP32 hardware integration, and Pi/Mac serial console.
+- The simulator can run the portable C flight controller through WebAssembly. Airframe models export as `.dfa`; compiled formula programs as `.rnp`.
+- Hardware firmware currently uses an exported model in angle mode, with optional barometric height control. In-flight learning, throw-start identification, horizontal position hold, and the simulated health supervisor are not integrated into the flight firmware.
+- ESP32-S3 brushed H-bridge motor testing is a separate firmware project from the PWM ESC flight controller.
+
+## Validation
+- 2026-10-02: all 16 formula comparisons passed on recorded samples using the JavaScript runner and the checked-in embedded C/WebAssembly runner. No fresh WebAssembly build was performed.
+- 2026-10-02: compiled and ran native `runner/fc/test_fc.c`; all checks passed, including quad/tilt-quad/tricopter flight, arming, failsafes, sensor loss, and biased sensors.
+- Native flight tests use a simplified plant driven by the exported controller model. These results do not establish real-flight performance. README reports ESP32 bench measurements; hardware and browser UI were not exercised during this review.
+
+## Known limits and follow-ups
+- Reconcile README's final step-runner limitation (surrounding flight firmware "still ... to write") with the implemented `runner/fc/` stack; preserve the distinction between implemented angle-mode firmware and remaining simulator features.
+- Attitude estimation under sustained acceleration is a documented limitation, also visible in passing native tests: estimated lean can differ materially from true lean.
+- Track full-physics firmware-in-the-loop scenarios and real hardware/flight evidence separately from model-matched native tests.
+- Program bounds checks, self-tests, shadow execution, blending, and fallback protect execution integrity; they do not establish the stability of arbitrary edited control laws. Candidate outputs already affect control during blending.
+- Browser flight-budget estimates are optimistic relative to the ESP32 bench timings reported in README; distinguish estimates from measured costs.
+- Design saving uses browser storage or an optional host-provided account database. This repository does not contain a standalone ecosystem backend.
+
+## Project rename — 2026-10-05
+- Renamed the private GitHub repository to `mrtksn/liftlab` and updated local origin. Display name is LiftLab across the UI, docs, agent and source banners.
+- Kept the checkout path, `dfb_*` executable/service names, file formats and browser storage keys unchanged for compatibility and active workflows.
+- Verified bundled firmware checksums previously; binaries retain their original banners until rebuilt. Follow-up: rebuild firmware for LiftLab banners when ESP-IDF is available.
+- Validation: review the branding diff, verify new repository URL/privacy, and confirm legacy storage/file-format identifiers remain unchanged.
+
+## Website analytics — 2026-10-05
+- Added the user-provided asynchronous GoatCounter script to index.html, targeting mrtksn.goatcounter.com.
+- Follow-up: confirm visits appear in the GoatCounter dashboard after GitHub Pages deploys; browser blocking can prevent counts.
+
+## Board deployment — 2026-10-05
+- Added S3/C3 flight and ground firmware profiles, per-chip PWM limits/pins, ADC calibration, UART selection, C3 single-core scheduling and 250 Hz default (also reflected in simulated stepping/load estimates). Build script packages all six chip/role images using IDF flash offsets.
+- Installer selects the chip bundle, checks image headers/checksums, validates motor/servo wiring and shows hardware limits; C3 is now available for the ground controller. Pi wiring follows the selected flight chip; desktop guide covers macOS/Linux.
+- Fixed Mac high-baud compilation/custom-baud selection. Fixed wiring UI claiming restart without confirmation and stale servo assignments on designs without servos. Regression: run tools/test_board_install.js, ground tests and all six IDF builds; open S3/C3 install dialogs.
+- Hardware remains untested. UART0 USB adapters are required for live design/console links; native USB currently supports flashing only. MCU navigation/latch drivers and persistent formula edits remain follow-ups. See docs/boards.md.
+- Fixed C3 startup/reset telemetry access before the first 250 Hz controller step. Regression: switch to C3, reset and confirm flight continues without console errors.
+- Validation: all six firmware builds and installer/ground regression checks passed locally; C3 reset and 250 Hz flight verified in the browser. GitHub Linux/macOS host builds passed; Pages deployed commit 372959d. All six remote ESP matrix builds passed. Live S3 installer and C3 reset verified after deployment.
+
+## Configurable wiring and drivers — 2026-10-05
+- Added saved per-part board/GPIO/driver/address assignments, shared I²C bus and PWM/servo calibration settings, conflict checks, and installer commands derived from the design. Board IDs now remain stable after deletion; disconnected flight sensors/outputs are excluded in simulation.
+- Added combined 10DOF preset and real BMP180/HMC5883L drivers with MPU auxiliary-bus bypass, compass mounting/manual calibration and sample expiry. Version-4 firmware wiring migrates to version 5.
+- Added C driver editor with individual/combined sensor presets, source saved in design and header export. Custom C requires an ESP-IDF rebuild and custom binary installation; source is not compiled/executed by the browser. See docs/hardware-wiring.md.
+- Regression checklist: design/file/undo persistence, board deletion, conflicting GPIO/addresses, installer refusal/reboot, native BMP180 datasheet vector and register tests, all three flight firmware builds.
+- Follow-ups: physical sensor/timing checks, automatic compass calibration, QMC5883L/AK8963 drivers, Pi I²C, distributed outputs, other output protocols, browser driver compilation/emulation. Custom binary-to-source matching is manual; custom C is trusted native code.
+
+- Fixed setting-order refusal when changing ESC frequency/pulses: send a temporary 50 Hz pending setting before the target pulse range and final frequency. Regression: verify safe ordering in hardware settings tests.
+- Fixed narrow-panel overflow in the 10DOF button/preset picker and custom build instructions. Regression: inspect Hardware wiring and expanded C editor at the default panel width.
+- Validation: all six chip/role firmware builds, installer/wiring regressions, all four editor preset compilations and UBSan sensor-register tests passed locally. Browser verified 10DOF settings, GPIO/code persistence, undo, derived installer settings and resumed flight; screenshots captured.
+- Known browser follow-up: preview reload occasionally skipped cached scripts or reached the pre-existing rnRender call before UI helpers loaded; a fresh no-store preview completed startup and flight. Investigate startup/cache behavior separately.
+- Published main commit ff4e5a6. Pages deployment and both Linux/macOS host CI jobs passed; six remote ESP builds were still running at first check. Exported custom_sensors.h matches the compiled preset exactly.
+- Final validation: all eight GitHub CI jobs passed (six ESP firmware builds plus Linux/macOS host checks), Pages deployed ff4e5a6, and the live C editor and flying simulator loaded with no console errors. Physical module/board checks remain unverified.
+
+## Device wiring organization — 2026-10-05
+- Reorganized wiring into device cards: Board → Connection → GPIOs / address / driver. I²C SDA/SCL selectors now appear on each sensor card and edit one shared board bus; calibration, timing and C source are folded below.
+- Added saved battery ADC/voltage-divider and receiver UART pins, Pi PWM/digital latch assignments, and command-module button/stick/transmitter GPIOs. Installer settings derive from the design; reserved/overlapping pins are validated across device types.
+- Browser C compilation is technically possible; missing compiler, register emulation and chip-specific firmware build paths are implementation work, not a browser prohibition. Preserve source/export workflow until those exist.
+- Follow-ups: physical wiring verification, sensor register emulator + browser C compiler, custom non-I²C device interfaces. Pi GPIO 14/15 are reserved for the default serial flight link; moving the link to USB frees the GPIO UART for another device.
+- Fixed unsaved C drafts being discarded by GPIO rerenders and command-module wiring being lost during board normalization. Regression: change GPIO while editing C, reload saved button assignments, load another design and confirm drafts clear.
+- Fixed Pi installation instructions ignoring the saved USB link; UART setup is now conditional and Pi latch commands follow their saved pins. Disconnected simulated latches hold position. Regression: USB/GPIO link guides, duplicate serial ports, dry latch outputs and GPIO conflicts.
+- Validation: wiring/installer tests and all four C preset compilations passed. Browser verified shared SDA, ADC/receiver/ground persistence, derived installer settings, USB-specific Pi steps, draft preservation and ongoing flight; physical hardware remains untested.
+- Published main commit 97dacf9. macOS host CI passed; Pages, Linux host and six ESP jobs remained queued at the final check. Fresh preview loaded saved USB/GPIO settings and flew with no console errors. One reload reproduced the existing preview script-loading issue (hardwareBus missing); a fresh tab loaded successfully.
+
+## Motor-driver profiles — proposed, 2026-10-05
+- User wants brushed motors through MOSFETs as an alternative to PWM ESCs. Proposed per-motor driver selection: ESC pulse PWM, brushed MOSFET duty PWM, and later H-bridge/custom protocols; each profile exposes its required GPIOs/settings.
+- Verified flight firmware currently converts throttle to ESC pulse width and uses the minimum ESC pulse when stopped. MOSFET mode must instead initialize/disarm/failsafe at zero duty and allocate timers with suitable frequency/resolution; changing the UI label alone is insufficient.
+- Existing runner/motortest is a separate ESP32-S3 brushed H-bridge bench program, not flight-controller support. Follow-up: implement saved profiles, mixed-output timer validation, firmware config migration, derived install commands, zero-duty regressions and chip builds before offering MOSFET flight installation.
+
+## Brushed MOSFET implementation — 2026-10-05
+- Added per-motor PWM ESC / active-high brushed MOSFET selection, GPIO, duty ceiling and shared board frequency (1–30 kHz, default 20 kHz). Saved settings reach Install; simulated actuation applies the brushed ceiling.
+- Added native mixed-output adapter: ESC/servo 14-bit timers and brushed 10-bit timers, gate-low initialization, zero brushed duty for stopped/unused motors and shutdown on output setup/write failures. Flight-core descent failsafe behavior is retained; H-bridge/direction/custom motor drivers remain follow-ups.
+- Wiring version 6 appends driver/ceiling/frequency fields and migrates v2–v5 to existing ESC defaults. Pending validation: mocked peripheral regressions, legacy blob tests, three-chip firmware rebuild and browser install/persistence checks.
+- Validation: production output/config modules passed UBSan host tests for all three chips, including rejected settings leaving pending config unchanged and bounded diagnostics. Existing controller flight regressions and JS wiring/install/C preset tests passed. All six firmware bundles built successfully; final rebuild needed after adding runtime output-failure reporting.
+- Known limit: duty ceilings clip after core allocation; feasibility/headroom and native learning streams still use the full model/requested throttle. Physical PWM waveforms, MOSFET circuitry and flight remain untested; hardware testing and allocation-aware ceilings are follow-ups.
+- Final validation: all six final firmware bundles and checksum/install tests passed, plus native controller, sensor and motor regressions. Browser verified shared frequency, mixed-driver install commands, undo/redo, reload persistence and no console errors. Motor power must remain disconnected until MOSFET settings are sent/restarted: factory/reset wiring retains ESC defaults.
+- Published main commit 6469ba9 with rebuilt bundles. CI and Pages deployment are queued. The preceding 97dacf9 run later passed both host jobs and C3 flight; its other ESP jobs were cancelled, leaving the run marked failed. New local builds passed all chips/roles.
+
+## Deployment runner failure — 2026-10-06
+- Pages run 37371895424 for 6469ba9 was cancelled before any build step: GitHub reported "The job was not acquired by Runner of type hosted even after multiple attempts". The macOS CI job reported the same allocation error; no source/build error was reported.
+- Retried Pages and the unsuccessful board CI jobs (attempt 2). macOS now passed; C3 firmware jobs are running, Pages remains queued. Follow-up: confirm Pages deploys and the remaining CI jobs finish.
+- Recovery verified: all eight board/host CI jobs passed on retry, and Pages build/deploy completed successfully for 6469ba9. No tracked repository files changed.
+
+## Automatic board labels — 2026-10-06
+- Replaced "Follow flight core/navigation/cargo" with "Automatic — [task] board". Automatic assignments show the current board (or missing task assignment) and explain that moving the task changes the board.
+- Validation: hardware UI JavaScript syntax and existing hardware wiring regressions passed. Assignment behavior and saved format are unchanged.
+
+## Wiring overview and section navigation — 2026-10-06
+- Added live signal-wiring overview grouped by every drone board and the command module: motor/servo/latch GPIOs, shared I²C pins/addresses, battery ADC, radio, GPS and both ends of Pi UART/USB links. Disconnected and unsupported assignments are labelled; supply/GND guidance accompanies the list. Exact module supply/header pinouts still require hardware documentation.
+- Added sticky current-section label, section count/progress and keyboard-accessible jump links to long left-panel and readout tabs. Hardware subsections are included; headings refresh after rerenders and reduced-motion preferences are respected. Menus overlay content; scroll anchoring is disabled in these panels to keep section jumps stable.
+- Fixed cargo card rendering referencing an out-of-scope motor variable. Regression checklist: assign a latch to a Pi and verify its driver/GPIO card renders.
+- Validation: wiring overview tests cover saved pins, shared buses, driver ceilings, radio, ground inputs, disconnected devices and UART/USB endpoints; existing wiring/installer checks passed. Browser verified live GPIO updates and undo, section jumps/indicators across tabs, and continued flight. Reload reproduced the previously recorded missing-script startup issue; a fresh preview tab loaded successfully.
+
+## Compact section navigation — 2026-10-06
+- Replaced the section caption/count/progress with one row: previous section link, current section menu, next section link. Clicking the current section expands all section links; long names truncate with full accessible labels.
+- Fixed section jumps/position tracking on narrow layouts, where the document scrolls instead of the panel. Regression checklist: previous/next at first/last sections, full list on current-section click, desktop panel scrolling and narrow-screen document scrolling.
+- Validation: JavaScript syntax/diff checks passed; browser verified full list, previous/next and current-section tracking on the narrow layout. No deployment performed.
+
+## AI hardware integration audit — 2026-10-06
+- Existing agent tools expose airframe/tasks/formulas and dynamic board kinds, but no dedicated wiring, GPIO, driver/preset, custom C, ground wiring or install-settings tools. Optional run_js can access these globals when allowed; the agent prompt does not describe the new hardware features.
+- Known bug: set_computers omits board IDs when rebuilding the boards array; fixComputers allocates new IDs while old saved wiring remains keyed to previous IDs. Follow-up: preserve IDs and add regression coverage before agent board edits with explicit wiring.
+- Follow-up: add validated hardware read/edit tools, wiring overview/errors and driver source access; update the prompt to distinguish simulated settings from physical installation and firmware rebuilds. No agent code changed during this audit.
+
+## AI hardware support and board-ID fix — 2026-10-06
+- FIXED: agent board edits now preserve explicit IDs (or match an exact unique name), retain saved wiring and expose IDs to the model. Deleted IDs cannot be reused, including older designs without nextBoardId. Invalid/duplicate tasks and unknown IDs are rejected before mutation; C3 reports its actual 250 Hz loop.
+- Added dedicated hardware inspection, wiring overview, atomic GPIO/driver/bus/ground edits, 10DOF preset, chunked C source read/save and derived installation-settings tools. Prompt and chat labels cover PWM/MOSFET profiles, sensor drivers, presets and physical-installation limits; arbitrary JavaScript is not required.
+- New errors reject the whole wiring edit; explicit draft mode permits incomplete/unsupported wiring and reports blockers. Existing errors may remain during incremental repairs. Driver saves respect formula-edit confirmation and protect unsaved editor drafts. Tools use normal design save/reset/undo functions and never call serial/flashing APIs.
+- Regression checklist: rename/reorder/remove/change boards without rewiring; GPIO swaps/conflicts and rejected edits leave design unchanged; ground/Pi settings persist; C source chunks reconstruct exactly; editor drafts and declined/racing confirmations preserve source. Added tools/test_agent_hardware.js to Linux/macOS host CI.
+- Validation: agent/hardware/installer tests, all four C preset compilations, preset sync, JavaScript syntax and diff checks passed. Browser mock-model chat completed all six read/edit/settings calls; saved MOSFET 60% / 12 kHz settings matched Install and flight continued with no console errors. This verifies integration, not live-model reasoning or physical hardware. No firmware changes or deployment performed; custom C still needs export/rebuild/install.
+
+## Simulation speed labels — 2026-10-06
+- Replaced fractional speed labels with conventional 0.25x, 0.5x and 1x. Speed values, selected-state behavior and tooltips are unchanged. Verified labels match their data-speed values; no deployment performed.
+
+## Publish pending website updates — 2026-10-06
+- Publishing the automatic board labels, wiring overview, compact section navigation, AI hardware tools/ID fix and decimal simulation-speed labels together. GitHub Pages deploys main from the repository root; prior live deployment was 6469ba9 because these updates were still local.
+- Earlier local regression/browser checks passed. No firmware changes are included; legacy untracked firmware/test exports remain local. Verify the Pages run and live decimal labels/new scripts after the push.
