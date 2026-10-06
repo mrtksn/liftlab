@@ -4,8 +4,9 @@
 #define DFB_HW_H
 #include <stdint.h>
 #include "fc_core.h"
+#include "radio_link.h"
 
-#define HW_VERSION 6
+#define HW_VERSION 7
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -27,6 +28,14 @@ typedef struct {
   uint8_t motor_driver[FC_MAX_MOTORS]; /* 0 ESC pulse PWM, 1 active-high brushed MOSFET duty PWM */
   uint8_t motor_max_pct[FC_MAX_MOTORS]; /* brushed duty ceiling, 1–100%; ESC ignores it */
   int32_t brushed_hz;                 /* one shared brushed timer frequency, 1000–30000 Hz */
+  /* Appended in v7 (v6 blobs migrate to ExpressLRS and the defaults): the pilot's radio link (radio_link.h) and the
+   * packet links' settings (esp_radio/radio_cfg.h). */
+  int8_t radio_kind;                  /* RLINK_ELRS (its rate and ratio above), RLINK_ESPNOW, RLINK_WIFI */
+  int8_t radio_channel;               /* ESP-NOW, Wi-Fi access point: the Wi-Fi channel, 1–13 */
+  int8_t radio_opt;                   /* ESP-NOW: long range (1); Wi-Fi: joins a network (1) or makes one (0) */
+  int8_t radio_pad;
+  char bind[32];                      /* the binding phrase, 1–31 characters (both ends the same) */
+  char wifi_ssid[33], wifi_pass[64];  /* wifi=SSID,PASSWORD (empty: the defaults) */
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -37,6 +46,8 @@ int hw_save(const hw_config *c);
  * Returns 0, or −1 with why in err (then nothing changed). */
 int hw_set(hw_config *c, const char *line, char *err, int errn);
 void hw_describe(const hw_config *c, char *out, int n);
+/* The pilot's radio link as set (radio_link.h). */
+void hw_radio(const hw_config *c, rlink_cfg *L);
 
 /* airframe blob in flash */
 int hw_airframe_load(uint8_t *buf, uint32_t cap, uint32_t *len);

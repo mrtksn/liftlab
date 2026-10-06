@@ -224,6 +224,15 @@ int main(void) {
     CHECK(rlink_parse(&L, "elrs,250", err, sizeof err) && rlink_parse(&L, "elrs,250,4,1", err, sizeof err) && rlink_parse(&L, "elrs,250,x", err, sizeof err), "a number short, one too many, not a number: refused");
     CHECK(rlink_parse(&L, "carrier-pigeon,1", err, sizeof err) && L.kind == RLINK_ELRS, "a link this build doesn't have: refused (%s)", err);
     rlink_default(&L); CHECK(fabsf(rlink_budget(&L) - 281.25f) < 0.01f, "250 Hz, 1:4: %.0f bytes a second of telemetry", rlink_budget(&L));
+    CHECK(!rlink_parse(&L, "espnow,6", err, sizeof err) && L.kind == RLINK_ESPNOW && L.channel == 6 && !L.lr && rlink_packets(&L), "espnow,6: ESP-NOW on channel 6, a packet link");
+    CHECK(!rlink_parse(&L, "espnow,11,lr", err, sizeof err) && L.channel == 11 && L.lr, "espnow,11,lr: the long-range mode");
+    rlink_describe(&L, d, sizeof d); CHECK(!strcmp(d, "espnow,11,lr"), "written back: %s", d);
+    CHECK(rlink_parse(&L, "espnow,14", err, sizeof err) && rlink_parse(&L, "espnow,6,fast", err, sizeof err) && rlink_parse(&L, "espnow", err, sizeof err), "espnow,14, espnow,6,fast, espnow alone: refused (%s)", err);
+    CHECK(!rlink_parse(&L, "wifi,ap,9", err, sizeof err) && L.kind == RLINK_WIFI && !L.sta && L.channel == 9, "wifi,ap,9: the drone makes a network on channel 9");
+    rlink_describe(&L, d, sizeof d); CHECK(!strcmp(d, "wifi,ap,9"), "written back: %s", d);
+    CHECK(!rlink_parse(&L, "wifi,sta", err, sizeof err) && L.sta, "wifi,sta: it joins one");
+    CHECK(rlink_parse(&L, "wifi,ap", err, sizeof err) && rlink_parse(&L, "wifi,sta,3", err, sizeof err) && rlink_parse(&L, "wifi", err, sizeof err), "wifi,ap without a channel, wifi,sta,3, wifi alone: refused");
+    rlink_make(&L, RLINK_ESPNOW, 1, 0); CHECK(rlink_budget(&L) >= 4000, "a packet link's telemetry room: %.0f bytes a second", rlink_budget(&L));
   }
   printf(fails ? "%d FAILED\n" : "all passed\n", fails);
   return fails != 0;

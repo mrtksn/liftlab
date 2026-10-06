@@ -22,6 +22,13 @@
  *     the tasks, the ESP32's included (it asks for them: RN_LINK_WANT bit 2), down the radio. With the receiver on
  *     the ESP32 instead, the channels come from it (RN_LINK_RC) and this program sends its tasks' telemetry there
  *     (RN_LINK_TLM) when asked.
+ *     Or the Pi's own Wi-Fi (--radio wifi,ap,CHANNEL or wifi,sta; no --crsf): the command module (dfb_ground --radio
+ *     wifi --drone PI_ADDRESS) sends the same frames in UDP datagrams to port 14570 (--radio-port N), signed with
+ *     the binding phrase (--bind PHRASE, the same at both ends; "liftlab" if not given, with a warning); radio_udp.c
+ *     does the receiver's part (fc/plink.h) and the rest is the same. The Wi-Fi network is the OS's business: with
+ *     wifi,ap the Pi makes it (hostapd, or NetworkManager: nmcli device wifi hotspot ssid liftlab password ...
+ *     channel 6 band bg), with wifi,sta it joins one (nmcli device wifi connect ...). ESP-NOW needs an ESP32 (the
+ *     radio on the flight controller's ESP32): refused here.
  *   - the cargo (--latch pwm0,gpio17: fc/cargo_core.h): the latches wired to this Pi, a servo on a hardware PWM
  *     channel or an on/off line (latch_hw.c; --latch-us 1000,2000: a servo's pulse closed and open, µs). They start
  *     closed; the radio's LATCH commands (the ground station's buttons) and the text commands open and close them,
@@ -39,7 +46,8 @@
  *
  * Build:  sh runner/pi/build.sh
  * Run:    ./dfb_pi --link /dev/serial0 --baud 921600 --nav drone.dnc [--gps /dev/ttyUSB0] [--airframe drone.dfa --pi drone.dlc]
- *                  [--crsf /dev/ttyAMA1 --radio elrs,250,4] [--latch pwm0,gpio17 [--latch-us 1000,2000]]
+ *                  [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,6 [--bind PHRASE] [--radio-port 14570]]
+ *                  [--latch pwm0,gpio17 [--latch-us 1000,2000]]
  * While the radio's channels come, they fly it; the text commands are for when there is no radio.
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
@@ -50,6 +58,7 @@
 #include "tlm_crsf.h"
 #include "radio_link.h"
 #include "radio_serial.h"
+#include "radio_udp.h"
 #include "rn_link.h"
 #include "latch_hw.h"
 #include <arpa/inet.h>
@@ -222,7 +231,7 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
 
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
-  rlink_cfg RL; rlink_default(&RL); const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
+  rlink_cfg RL; rlink_default(&RL); const char *bind_phrase = 0; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -232,13 +241,21 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
     else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--radio") || !strcmp(argv[i], "--elrs")) { char err[120]; if (rlink_parse(&RL, argv[++i], err, sizeof err)) { fprintf(stderr, "%s: %s\n", argv[i - 1], err); return 2; } }
+    else if (!strcmp(argv[i], "--bind")) bind_phrase = argv[++i]; else if (!strcmp(argv[i], "--radio-port")) radio_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
-    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560] [--crsf /dev/ttyAMA1 --radio elrs,250,4]\n"
+    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
+    "              [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,CHANNEL|wifi,sta [--bind PHRASE] [--radio-port 14570]]\n"
     "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000]\n"
-    "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"); return 2; }
+    "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"
+    "radio: an ExpressLRS receiver on a serial port (--crsf), or this Pi's Wi-Fi (--radio wifi,...: UDP; the Pi makes the network\n"
+    "  (wifi,ap: hostapd or NetworkManager, on that channel) or joins one (wifi,sta), as the OS is set up; --bind: the same phrase\n"
+    "  as the command module's), or none here (the receiver on the ESP32). ESP-NOW needs an ESP32: not on a Pi.\n"); return 2; }
+  if (RL.kind == RLINK_ESPNOW) { fprintf(stderr, "--radio espnow: ESP-NOW needs an ESP32: put the radio on the flight controller's ESP32 (radio=espnow,... there), or use --radio wifi,ap,CHANNEL for the Pi's own Wi-Fi\n"); return 2; }
+  if (RL.kind == RLINK_WIFI && crsf_dev) { fprintf(stderr, "--crsf is an ExpressLRS receiver's port: with --radio wifi the radio is this Pi's Wi-Fi (no --crsf)\n"); return 2; }
+  if (RL.kind == RLINK_ELRS && bind_phrase) fprintf(stderr, "--bind is for the packet links (wifi): an ExpressLRS receiver has its own binding phrase\n");
 
   setvbuf(stdout, NULL, _IOLBF, 0);   /* a line at a time, also into a pipe or a log file */
   static rn_host H; static nav_state N; static learn_state LS; static super_state SS;
@@ -267,7 +284,14 @@ int main(int argc, char **argv) {
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
   int crsf = -1;
   radio_io *R = 0;                                  /* the pilot's radio link's bytes (radio_io.h) */
-  if (crsf_dev) { R = radio_serial_open(crsf_dev, CRSF_BAUD, "ExpressLRS receiver (serial)"); if (!R) return 1; crsf = R->fd; }
+  int packets = rlink_packets(&RL);                 /* a packet link: R does the receiver's part, read() every pass drives it */
+  char radio_said[160];
+  if (crsf_dev) { R = radio_serial_open(crsf_dev, CRSF_BAUD, "ExpressLRS receiver (serial)"); if (!R) return 1; crsf = R->fd; snprintf(radio_said, sizeof radio_said, "%s", crsf_dev); }
+  else if (RL.kind == RLINK_WIFI) {
+    if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": anyone with LiftLab on this network can fly the drone; give both ends a phrase of their own\n"); }
+    R = radio_udp_open(PLINK_DRONE, 0, radio_port, bind_phrase, "Wi-Fi radio"); if (!R) return 1; crsf = R->fd;
+    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "Wi-Fi (%s), UDP port %d", d, radio_port);
+  } else snprintf(radio_said, sizeof radio_said, "on the ESP32, if it has one");
   static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
   tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
   double tlm_want = -10, next_pub = 0, next_radio = 0, next_pack = 0; nav_sp last_sp; memset(&last_sp, 0, sizeof last_sp);
@@ -277,7 +301,7 @@ int main(int argc, char **argv) {
   if (udp >= 0 && bind(udp, (struct sockaddr *)&addr, sizeof addr)) { perror("udp"); close(udp); udp = -1; }
   fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
   printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s; radio %s; latches %d\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
-         have_learn ? "on" : "off", have_super ? "on" : "off", crsf_dev ? crsf_dev : "on the ESP32, if it has one", CG.n);
+         have_learn ? "on" : "off", have_super ? "on" : "off", radio_said, CG.n);
 
   static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
   gps_t G; memset(&G, 0, sizeof G);
@@ -291,7 +315,10 @@ int main(int argc, char **argv) {
     struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
-    if (R && (pf[4].revents & POLLIN)) { uint8_t b[256]; int n = R->read(R, b, sizeof b, 0); for (int i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t); }
+    if (R && (packets || (pf[4].revents & POLLIN))) for (int more = 1; more;) {   /* (a packet link: every pass, it sends its packets from there) */
+      uint8_t b[512]; int n = R->read(R, b, sizeof b, 0); for (int i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t);
+      more = n == (int)sizeof b;
+    }
     if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
     for (int k = 2; k < 4; k++) if (pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot */
       static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
@@ -313,6 +340,7 @@ int main(int argc, char **argv) {
             else { PKt.said = 0; snprintf(reply, sizeof reply, "pickup: flying over it, then down onto it; any other command stops it"); }
             in_control = 1;
           } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; pickup_cancel(&PKt, "another command"); PKt.said = 0; }
+          if (!strncmp(s, "status", 6) && radio_udp_is(R)) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); radio_udp_counts(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the Wi-Fi link's counts) */
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
         s = nl + 1;

@@ -1,3 +1,7 @@
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Wi-Fi's speed-ups in IRAM off: on the ESP32 the program slots' steps (MALLOC_CAP_EXEC) come from the same IRAM, and
+# with them on there's no room for a slot for programs from the Pi. The packet links need little speed.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n

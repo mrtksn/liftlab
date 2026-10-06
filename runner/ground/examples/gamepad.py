@@ -3,7 +3,8 @@
 buttons to dfb_ground over UDP, 50 times a second. (On Linux, dfb_ground --joystick reads a pad itself.)
 
   pip install pygame
-  ./dfb_ground --tx /dev/tty.usbserial-XXXX --latch arm,fly    (in another terminal)
+  ./dfb_ground --tx /dev/tty.usbserial-XXXX --latch arm,fly    (in another terminal; over Wi-Fi to the drone's Pi
+                                                               instead: --radio wifi --drone ADDRESS --bind PHRASE)
   python3 gamepad.py [HOST]
 
 Mode 2, an Xbox-style layout: left stick throttle and yaw, right stick pitch and roll; LB arm, RB take off/land

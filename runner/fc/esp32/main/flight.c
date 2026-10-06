@@ -17,11 +17,32 @@
  * While the Pi's navigation sends guided commands (12-float RN_LINK_CMD), it gets RN_LINK_NAV 100 times a second.
  * While the Pi runs the learning or the health supervisor (it sends RN_LINK_WANT), it gets RN_LINK_LTEL 200 times a
  * second (fewer at slower links), and takes their RN_LINK_EXC, RN_LINK_MODEL and RN_LINK_SET (fc_core.h).
- * The pilot's radio (an ExpressLRS or Crossfire receiver on a second UART, setting crsf=rx,tx; CRSF at 420000 baud): its
- * channels fly the drone (rc_core.h): without the Pi's navigation, as the stick command; with it, they go to the Pi
- * (RN_LINK_RC). The telemetry task (tlm_core.h) sends what the flight core and the Pi's tasks publish back down the
- * radio as CRSF frames, within the link's budget (setting radio=elrs,rate,ratio; radio_link.h). Without a receiver, if the Pi runs the
+ * The pilot's radio (radio_link.h): its channels fly the drone (rc_core.h): without the Pi's navigation, as the stick
+ * command; with it, they go to the Pi (RN_LINK_RC). The telemetry task (tlm_core.h) sends what the flight core and the
+ * Pi's tasks publish back down the radio as CRSF frames, within the link's budget. Without a radio, if the Pi runs the
  * telemetry task (it sends RN_LINK_WANT bit 2), the flight core's items go to the Pi instead (RN_LINK_TLM).
+ * Which radio (settings, as all the others: over the link, save, reboot; "show" lists them, the secrets masked):
+ *   radio=elrs,250,4      an ExpressLRS (or Crossfire) receiver on a second UART, crsf=RX,TX (CRSF at 420000 baud);
+ *                         the packet rate and telemetry ratio as set on the radio (the default)
+ *   radio=espnow,6[,lr]   ESP-NOW, ESP32 to ESP32 on Wi-Fi channel 6 (1–13), no network, no receiver: the command
+ *                         module is an ESP32 with the ground firmware set the same (radio=espnow,6). lr: Espressif's
+ *                         long-range mode, slower and further: both ends lr, or neither
+ *   radio=wifi,ap,6       Wi-Fi: the drone makes a network on channel 6 (LiftLab-XXXX, XXXX from its MAC address, as
+ *                         it says at power-on; 192.168.4.1) and takes UDP on port 14570
+ *   radio=wifi,sta        Wi-Fi: the drone joins wifi= (it says its address once joined)
+ *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
+ *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
+ *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
+ *                         its password then the binding phrase if it has 8+ characters, else liftlab1, with a warning).
+ *                         wifi=SSID alone: that name, the default password. wifi= alone: the defaults
+ * ESP-NOW and Wi-Fi need no crsf= wiring (crsf=-1 is fine): the ESP32's own radio is the receiver. The telemetry and
+ * link statistics work as with ExpressLRS (plink.h does the receiver's part), the failsafe too.
+ * Flying from a laptop over Wi-Fi: set radio=wifi,ap,6 and bind=YOUR PHRASE (8+ characters: it's also the network's
+ * password), save, reboot. Join the laptop to LiftLab-XXXX with that password, then
+ *   dfb_ground --radio wifi --drone 192.168.4.1 --bind "YOUR PHRASE" --keys
+ * With two ESP32s over ESP-NOW: this one radio=espnow,6 bind=…; the command module (runner/ground/esp32) set radio=
+ * espnow,6 and the same bind=. From a laptop over ESP-NOW: that command module on its USB port is the laptop's
+ * transmitter module (dfb_ground --tx /dev/ttyUSB0 --baud 115200; see ground.c).
  * Telemetry (RN_LINK_TELEM), 36 floats: t, state, roll, pitch, yaw [deg], body rates [deg/s] ×3, height [m],
  * vertical speed [m/s], battery [V], loop [µs], longest loop [µs], flags (1 gyro, 2 barometer, 4 attitude
  * settled, 8 holding height, 16 airframe loaded), flying program slot, last formula error, 12 throttles, 8 servo
@@ -46,6 +67,8 @@
 #include "tlm_crsf.h"
 #include "radio_link.h"
 #include "radio_elrs.h"
+#include "esp_radio.h"
+#include "radio_cfg.h"
 #include "hw.h"
 #include "esp_board.h"
 
@@ -65,6 +88,7 @@ static fc_state F;
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 static void host_lock(void *c, int on) { if (on) { portENTER_CRITICAL(&mux); } else { portEXIT_CRITICAL(&mux); } }
 static TaskHandle_t flight_h;
+static radio_io *RADIO_IO;                         /* the pilot's radio link's bytes (radio_io.h), 0: no radio */
 static int outputs_ok; static char outputs_why[64] = "outputs not wired";   /* every motor and servo of the airframe has a working output */
 
 /* ── events: from either core to the link task ── */
@@ -255,6 +279,7 @@ static void setting(const char *line) {
     hw_describe(&HW, s, sizeof s); report(s);
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
     if (memcmp(&HW, &HW_next, sizeof HW)) { strcpy(s, "after a reboot: "); hw_describe(&HW_next, s + 16, sizeof s - 16); report(s); }
+    strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
     snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act);
     report(s); return;
   }
@@ -344,11 +369,12 @@ static void link_task(void *arg) {
 }
 
 /* ── the pilot's radio and the telemetry task ── */
-static radio_io *RADIO_IO;                         /* the pilot's radio link's bytes (radio_io.h), 0: no radio */
 static void radio_task(void *arg) {
   radio_io *R = RADIO_IO; int radio = R != 0;
-  rlink_cfg RL; if (rlink_make(&RL, RLINK_ELRS, HW.elrs_rate, HW.elrs_ratio)) rlink_default(&RL);
-  static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[TLM_PACK_MAX]; static fc_state Fs;
+  rlink_cfg RL; hw_radio(&HW, &RL);
+  static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[TLM_PACK_MAX];
+  fc_state *Fs = calloc(1, sizeof *Fs);               /* (the telemetry's copy of the flight state, on the heap: static DRAM is short with Wi-Fi) */
+  if (!Fs) { post("no memory for the telemetry: no radio"); vTaskDelete(NULL); }
   tlm_init(&TS); tlm_watch_init(&TW);
   int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0;
   for (;;) {
@@ -361,7 +387,7 @@ static void radio_task(void *arg) {
     }
     if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
-    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(&Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, &Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
     if (radio) {
       int m = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), out, sizeof out); if (m) R->write(R, out, m);
       if (now >= next_want) { next_want = now + 500000; float w = 2; link_send2(RN_LINK_WANT, &w, 4); }   /* the Pi's items, please */
@@ -369,6 +395,18 @@ static void radio_task(void *arg) {
       next_pack = now + 50000; int k = tlm_pack(&TS, pk, TLM_PACK_MAX); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);
     }
   }
+}
+
+/* The radio the settings ask for (radio_io.h), started; 0: none. */
+static radio_io *radio_start(void) {
+  rlink_cfg L; hw_radio(&HW, &L);
+  if (L.kind == RLINK_ELRS) return radio_elrs_start(&HW);
+  if (rcfg_bind_default(HW.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly this drone. set bind=YOUR PHRASE (the same on the command module)\n");
+  if (HW.crsf_rx >= 0) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
+  radio_io *R = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_DRONE, HW.bind, post)
+              : radio_wifi_start(&L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
+  printf("radio: %s; free heap %u bytes\n", R ? R->name : "DIDN'T START (see the next messages): no pilot's radio", (unsigned)esp_get_free_heap_size());
+  return R;
 }
 
 void app_main(void) {
@@ -386,6 +424,10 @@ void app_main(void) {
   if (SENS.imu == 2) printf("The LIS3DH has no gyro: this board can't fly (it won't arm). Motor tests and telemetry work. Add an MPU-6050 (GY-521) for flying.\n");
   if (se) printf("no IMU: it won't arm\n");
   if (HW.batt_pin >= 0 && hw_battery_init(&HW)) printf("battery: GPIO %d isn't an ADC1 pin\n", HW.batt_pin);
+
+  /* The pilot's radio before the program slots: Wi-Fi takes its memory first (the slots fit in what's left; one
+   * slot fewer for programs from the Pi, maybe, but the drone can still be flown). Its news comes after the link starts. */
+  RADIO_IO = radio_start();
 
   /* The program slots: the built-in program's steps in IRAM, one slot for programs from the Pi (two if there's room). */
   int32_t asz; memcpy(&asz, rn_builtin_img + 8, 4); uint32_t acap = (uint32_t)asz + 512;
@@ -424,6 +466,5 @@ void app_main(void) {
   xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU);
   xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);
   xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0);
-  RADIO_IO = radio_elrs_start(&HW);                  /* the pilot's radio, if one is wired */
   xTaskCreatePinnedToCore(radio_task, "radio", 6144, NULL, 4, NULL, 0);
 }

@@ -20,14 +20,11 @@ function buildGs() {
   const al = sec('Alerts', 'from the command module', 'gnd');
   W.alert = GSW.badge(); al.append(el('div', { class: 'gs-moderow' }, W.alert.el), el('p', { class: 'hint', id: 'gsCmdNote' }));
 
-  // the radio
+  // the radio: which link, then its own settings (its model in link-*.js says which)
   const r = sec('Radio link', radioModel().label, 'tlm gnd sim you');
-  const sel = (id, label, opts, get, set) => {
-    const s = UI.choice({id,label,options:opts,value:get(),onChange:value=>{set(value);save();boardsRadioCfg();}});
-    return UI.field({label,class:'gs-sel'},s);
-  };
-  r.append(el('div', { class: 'gs-row' },                             // the link's own settings (its model in link-*.js says which)
-    ...radioModel().settings.map(s => sel('gs-' + s.key, s.label, s.options, () => radioCfg[s.key], v => { radioCfg[s.key] = +v; }))));
+  GS_UI.radioSmall = r.querySelector('h2 small');
+  GS_UI.radioCfg = el('div', { class: 'gs-radiocfg' }); buildGsRadio();
+  r.append(GS_UI.radioCfg);
   const extra = numField('gsExtra', { label: 'Extra path loss (distance, walls, interference)', min: 0, max: 120, step: 1, u: 'dB', dp: 0 }, () => radioCfg.extra, v => { radioCfg.extra = v; save(); });
   r.append(el('p', { class: 'hint warn' }, srcDot('calc'), el('span', { id: 'gsRoom' })), extra.node, el('p', { class: 'hint' }, srcDot('sim'), el('span', { id: 'gsEquiv' })));
   W.linkUp = GSW.bar('Uplink LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
@@ -36,7 +33,8 @@ function buildGs() {
   W.thru = GSW.value('Telemetry', { unit: 'B/s', dp: 0 }); W.budget = GSW.value('Room', { unit: 'B/s', dp: 0 });
   W.age = GSW.value('Last frame', { unit: 's ago', dp: 1, tone: v => v > 1.5 ? 'bad' : v > 0.5 ? 'warn' : '' });
   W.budget.el.firstChild.prepend(srcDot('calc'));   // (what the settings allow, worked out on the ground)
-  r.append(el('p', { class: 'hint' }, srcDot('tlm'), 'Link quality, RSSI and SNR as the transmitter module reports them to the command module; the rest decoded by it from the frames that came down.'),
+  GS_UI.kindShown = null;                                              // (renderGs says who reports the link quality, by the link)
+  r.append(el('p', { class: 'hint' }, srcDot('tlm'), el('span', { id: 'gsLinkWho' })),
     W.linkUp.el, W.linkDown.el, grid(W.rssi.el, W.snr.el, W.thru.el, W.budget.el, W.age.el));
   W.chans = GSW.columns('Channels the command module sends (1–9)'); W.chans.el.firstChild.prepend(srcDot('gnd'));
   r.append(W.chans.el, el('p', { class: 'hint', id: 'gsRadioNote' }));
@@ -126,6 +124,43 @@ function buildGs() {
   applySrcTags(pane);
   GS_UI.built = true;
 }
+// The radio's settings: which link (both ends switch at once, in flight too), then its own settings, and for a packet
+// link the binding phrase. Built again when the link changes, or a setting that shows or hides another (the keyboard
+// focus stays on the control it was on).
+function buildGsRadio() {
+  const box = GS_UI.radioCfg; if (!box) return;
+  keepFocus(() => {
+    box.textContent = '';
+    const M = radioModel(), apply = () => { save(); boardsRadioCfg(); };
+    const pick = UI.choice({ id: 'gs-kind', label: 'Link', commit: true, value: radioCfg.kind,
+      options: RADIO_KINDS.filter(k => RADIO_LINKS[k]).map(k => [k, RADIO_LINKS[k].label]),
+      onChange: v => { if (v === radioCfg.kind || !RADIO_LINKS[v]) return; radioCfg.kind = v; apply(); buildGsRadio(); renderGs(true); } });
+    box.append(el('div', { class: 'gs-row' }, UI.field({ label: 'Link', class: 'gs-sel gs-linkpick', hint: 'Both ends switch at once, in flight too.' }, pick)));
+    const own = el('div', { class: 'gs-row' });
+    for (const s of M.settings) {
+      if (s.show && !s.show(radioCfg)) continue;
+      const c = UI.choice({ id: 'gs-' + s.key, label: s.label, options: s.options, value: radioCfg[s.key],
+        onChange: v => { radioCfg[s.key] = +v; apply(); if (M.settings.some(x => x.show)) buildGsRadio(); } });
+      own.append(UI.field({ label: s.label, class: 'gs-sel' }, c));
+    }
+    if (M.packets) {                                                 // the binding phrase: taken when you leave the box or press Enter
+      const say = UI.status({ class: 'hint gs-bindmsg' });
+      const inp = UI.input({ type: 'text', id: 'gs-bind', value: radioCfg.bind, maxlength: '31', spellcheck: 'false', autocomplete: 'off', title: 'Enter or leaving the box applies it; Escape puts it back' });
+      const take = () => {
+        if (inp.value === radioCfg.bind) { say.textContent = ''; return; }
+        const p = radioPhraseOk(inp.value);
+        if (!p) { say.textContent = 'A phrase of 1–31 plain characters (letters, digits, punctuation, spaces inside).'; say.dataset.tone = 'bad'; inp.setAttribute('aria-invalid', 'true'); return; }
+        inp.value = p; inp.removeAttribute('aria-invalid'); say.textContent = 'Both ends set up again with it.'; say.dataset.tone = '';
+        if (p !== radioCfg.bind) { radioCfg.bind = p; apply(); }
+      };
+      inp.addEventListener('change', take);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); take(); } else if (e.key === 'Escape') { inp.value = radioCfg.bind; inp.removeAttribute('aria-invalid'); say.textContent = ''; } });
+      own.append(UI.field({ label: 'Binding phrase', class: 'gs-sel gs-bind', hint: 'The same at both ends: it signs the packets.' }, inp, say));
+    }
+    box.append(own);
+  });
+  if (GS_UI.radioSmall) GS_UI.radioSmall.textContent = radioModel().label;
+}
 // What the link log shows: by the filters, after the last Clear.
 const LOG_GROUP = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
 const LOG_TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
@@ -181,11 +216,12 @@ function renderGs(force) {
     else W.alert.set('All fine', t, 'good');
   }
   const LM = radioModel(), roomNote = LM.roomNote(radioCfg);         // what the link's model says of its room and its signal
+  if (GS_UI.kindShown !== radioCfg.kind) { GS_UI.kindShown = radioCfg.kind; buildGsRadio(); setText($('#gsLinkWho'), LM.packets ? 'Link quality and RSSI as the command module\'s packet layer reports them (a packet link has no SNR); the rest decoded by it from the frames that came down.' : 'Link quality, RSSI and SNR as the transmitter module reports them to the command module; the rest decoded by it from the frames that came down.'); }   // (another link, set elsewhere: the agent, a loaded design)
   setText($('#gsRoom'), roomNote);
   $('#gsRoom').parentNode.hidden = !roomNote;
   setText($('#gsEquiv'), LM.signalNote(radioCfg));
   const L = gs.link;
-  if (has && L) { W.linkUp.set(L.upLq, L.t); W.linkDown.set(L.downLq, L.t); W.rssi.set(L.upRssi, L.t); W.snr.set(L.upSnr, L.t); }
+  if (has && L) { W.linkUp.set(L.upLq, L.t); W.linkDown.set(L.downLq, L.t); W.rssi.set(L.upRssi, L.t); W.snr.set(LM.packets ? null : L.upSnr, LM.packets ? null : L.t); }
   // throughput over the last second
   gs.rate.push([t, gs.bytes]); while (gs.rate.length > 2 && t - gs.rate[0][0] > 1) gs.rate.shift();
   const dt = gs.rate.length > 1 ? t - gs.rate[0][0] : 0;
@@ -228,8 +264,8 @@ function renderGs(force) {
     const S = linkStats(t), ms = L => L ? `${Math.round(L.avg)} / ${Math.round(L.max)} ms` : '—', ps = x => x < 10 ? x.toFixed(1) : Math.round(x);
     const rows = [null,
       [`${ps(S.chSent)} carried of ${ps(S.chMade)} made`, ms(S.chLat), `${S.upLostPct.toFixed(0)}% of packets`],
-      [`${S.cmds} in 5 s${S.upQueued ? ` · ${S.upQueued} waiting` : ''}`, ms(S.cmdLat), S.cmdDrop ? `${S.cmdDrop} dropped · link down` : ''],
-      [`${ps(S.tlmOut)} delivered of ${ps(S.tlmIn)} written${S.tlmSuper ? ` · ${ps(S.tlmSuper)} superseded` : ''}`, ms(S.tlmLat), `${S.downLostPct.toFixed(0)}% of packets · ${S.tlmDrop} frames dropped · ${S.queued} B queued`]];
+      [`${S.cmds} in 5 s${S.upQueued ? ` · ${S.upQueued} waiting` : ''}`, ms(S.cmdLat), S.cmdDrop ? `${S.cmdDrop} dropped · ${S.tlmLost != null ? 'too many waiting' : 'link down'}` : S.resent ? `${S.resent} sent again` : ''],
+      [`${ps(S.tlmOut)} delivered of ${ps(S.tlmIn)} written${S.tlmSuper ? ` · ${ps(S.tlmSuper)} superseded` : ''}`, ms(S.tlmLat), `${S.downLostPct.toFixed(0)}% of packets${S.tlmLost != null ? ` · ${S.tlmLost} frames lost` : ''} · ${S.tlmDrop} frames dropped · ${S.queued} B queued`]];
     rows.forEach((r, i) => { if (r) r.forEach((c, k) => setText(GS_UI.statCells[i][k + 1], c)); });   // (cells built once: only what changed is written)
   }
   GS_UI.stats.hidden = !has;

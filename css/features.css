@@ -400,6 +400,12 @@ button.chip{background:transparent;cursor:pointer}
 .gs-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-8);margin-bottom:var(--space-8)}
 .gs-sel{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
 .gs-sel select{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--panel);padding:var(--space-4) var(--space-6)}
+.gs-sel input[type=text]{width:100%;box-sizing:border-box;padding:var(--space-4) var(--space-6);font-family:var(--f-mono)}
+.gs-sel input[aria-invalid="true"]{border-color:var(--bad)}
+.gs-linkpick{grid-column:span 2}
+.gs-bindmsg{margin:0}
+.gs-bindmsg:empty{display:none}
+.gs-bindmsg[data-tone="bad"]{color:var(--bad)}
 .gs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:var(--space-6) var(--space-10);margin-block:var(--space-6)}
 .gs-moderow{display:flex;justify-content:flex-start;margin-bottom:var(--space-8)}
 .w-label{font-family:var(--f-display);font-weight:600;font-size:var(--text-xs);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}

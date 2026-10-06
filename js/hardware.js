@@ -49,7 +49,7 @@ function groundHardware(C) {
   const defaults=Object.fromEntries(p.ground.split('\n').map(line=>{const [,key,value]=/^set (\w+)=(.*)$/.exec(line);return [key,value.split(',').map(Number)];}));
   return {...defaults,...C.ground.wiring};
 }
-function groundHardwareSettings(C) { const g=groundHardware(C);return Object.entries(g||{}).map(([key,v])=>'set '+key+'='+v.join(',')).join('\n')+'\nset latch=arm,fly\nsave\nreboot'; }
+function groundHardwareSettings(C, radio=hardwareRadio()) { const g=groundHardware(C);return [...Object.entries(g||{}).map(([key,v])=>'set '+key+'='+v.join(',')),...radioSettingLines(radio).map(l=>'set '+l)].join('\n')+'\nset latch=arm,fly\nsave\nreboot'; }
 function groundHardwareErrors(C) {
   const g=groundHardware(C),p=ESP_PROFILES[C.ground.kind],errors=[],used=new Map();if(!g)return errors;
   for(const [key,values] of Object.entries(g)) for(const pin of [...new Set(values)]) {
@@ -113,9 +113,27 @@ function hardwarePlan(C, comps, b) {
   for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port && !/^\/[A-Za-z0-9_./-]+$/.test(p.port))errors.push(c.name+': use a serial device path such as /dev/ttyUSB0');}
   if(bus.receiverPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.receiverPort))errors.push('Receiver: use a serial device path such as /dev/ttyUSB1');
   if(bus.linkPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.linkPort))errors.push('Flight-controller link: use a serial device path such as /dev/serial0');
-  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings};
+  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings,radioBoard:b.tasks.includes('tlm')};
 }
-function hardwareSettings(plan) {
+// The pilot's radio link as settings lines (runner/fc/radio_link.h rlink_parse; the packet links' binding phrase):
+// radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta, then bind=PHRASE for a packet link.
+// r: radioCfg (link.js) or one like it; none (a test without the page): no lines.
+const hardwareRadio = () => typeof radioCfg !== 'undefined' ? radioCfg : null;
+function radioSettingLines(r) {
+  if (!r) return [];
+  if (r.kind === 'espnow') return ['radio=espnow,'+(r.channel||1)+(r.lr?',lr':''),'bind='+(r.bind||'liftlab')];
+  if (r.kind === 'wifi') return [r.sta?'radio=wifi,sta':'radio=wifi,ap,'+(r.channel||1),'bind='+(r.bind||'liftlab')];
+  return ['radio=elrs,'+(r.rate||250)+','+(r.ratio||4)];
+}
+// What each link needs wired to the radio's board: an ExpressLRS receiver on a UART; nothing for ESP-NOW (built into
+// the ESP32) or Wi-Fi (the ESP32's or the Pi's own).
+function radioWiringRow(b,bus,esp,r) {
+  const kind=r?.kind||'elrs';
+  if(kind==='espnow')return {device:'ESP-NOW radio',connection:esp?'Built into the ESP32 · no wiring':'Not available on '+b.kind+' · needs an ESP32',note:'Channel '+(r.channel||1)+(r.lr?' · long range':'')+' · the command module needs an ESP32 too'};
+  if(kind==='wifi')return {device:'Wi-Fi radio',connection:'Built into the board · no wiring',note:(r.sta?'Joins a network':'Makes the network (access point), channel '+(r.channel||1))+' · UDP port 14570'};
+  return {device:'ExpressLRS receiver',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← receiver TX; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'};
+}
+function hardwareSettings(plan, radio=hardwareRadio()) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
   const {bus,motors,servos,sensors,motorConfigs}=plan;
   const lines=['servos=','motors=','battery=-1','crsf=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax,'esc_hz='+bus.escHz];
@@ -125,6 +143,7 @@ function hardwareSettings(plan) {
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
+  if(plan.radioBoard) lines.push(...radioSettingLines(radio));
   return lines;
 }
 // The same duty ceiling applies to simulated physical actuation and the native MOSFET adapter.
@@ -148,7 +167,7 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings};
+if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
@@ -182,12 +201,12 @@ function hardwareOverview(C, comps) {
       g.rows.push({device:'Link to '+(core?.name||'flight controller'),connection:port==='/dev/serial0'&&link?'GPIO 14 (TX) → '+core.name+' GPIO '+link[1]+' (RX); GPIO 15 (RX) ← '+core.name+' GPIO '+link[0]+' (TX)':port+' · serial link',note:!core?'No flight-core board':port==='/dev/serial0'&&!link?'Target UART pins unavailable':port==='/dev/serial0'?'Share board GND':'USB serial adapter; no Pi GPIO'});
       if(core&&link)groups.find(x=>x.id===core.id).rows.push({device:'Link to '+b.name,connection:port==='/dev/serial0'?'GPIO '+link[1]+' (RX) ← '+b.name+' GPIO 14 (TX); GPIO '+link[0]+' (TX) → '+b.name+' GPIO 15 (RX)':'GPIO '+link[1]+' (RX) ← USB adapter TX; GPIO '+link[0]+' (TX) → USB adapter RX',note:port==='/dev/serial0'?'UART0 · share board GND':'Pi '+port+' · USB-to-UART adapter · share GND'});
     }else if(esp&&b.id!==core?.id&&b.tasks.length)g.rows.push({device:'Flight-controller link',connection:'Hardware routing not implemented',note:'Inter-board link is simulated; no supported wiring recipe'});
-    if(b.id===radio?.id)g.rows.push({device:'ExpressLRS receiver',connection:esp?pin(bus.crsfRx)+' (RX) ← receiver TX; '+pin(bus.crsfTx)+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'});
+    if(b.id===radio?.id)g.rows.push(radioWiringRow(b,bus,esp,hardwareRadio()));
   }
   const ground=groundHardware(C);
   if(ground){const g={id:'ground',name:C.ground.name,kind:C.ground.kind,rows:[]};groups.push(g);
     const labels={arm:'Arm button',fly:'Fly button',roll:'Roll stick',pitch:'Pitch stick',throttle:'Throttle stick',yaw:'Yaw stick',buzzer:'Buzzer',led:'LED'};
-    for(const [key,values] of Object.entries(ground))values.forEach((n,i)=>g.rows.push({device:key==='tx'?'ExpressLRS transmitter':(labels[key]||key)+(values.length>1?' '+(i+1):''),connection:pin(n)+(n<0?'':key==='tx'?(i?' (RX) ← module TX':' (TX) → module RX'):['arm','fly'].includes(key)?' ↔ button ↔ GND':['roll','pitch','throttle','yaw'].includes(key)?' ← stick wiper':' → external '+key),note:n<0?'Disconnected':key==='tx'?'CRSF UART · share GND':['roll','pitch','throttle','yaw'].includes(key)?'ADC · stick supply/GND to board logic supply/GND':['arm','fly'].includes(key)?'Active low':'Use a suitable driver / LED resistor'}));
+    for(const [key,values] of Object.entries(ground))values.forEach((n,i)=>g.rows.push({device:key==='tx'?'ExpressLRS transmitter':(labels[key]||key)+(values.length>1?' '+(i+1):''),connection:pin(n)+(n<0?'':key==='tx'?(i?' (RX) ← module TX':' (TX) → module RX'):['arm','fly'].includes(key)?' ↔ button ↔ GND':['roll','pitch','throttle','yaw'].includes(key)?' ← stick wiper':' → external '+key),note:n<0?'Disconnected':key==='tx'?((hardwareRadio()?.kind||'elrs')==='elrs'?'CRSF UART · share GND':'Not used with '+(hardwareRadio().kind==='wifi'?'Wi-Fi':'ESP-NOW (built into the ESP32)')):['roll','pitch','throttle','yaw'].includes(key)?'ADC · stick supply/GND to board logic supply/GND':['arm','fly'].includes(key)?'Active low':'Use a suitable driver / LED resistor'}));
   }else if(C.ground)groups.push({id:'ground',name:C.ground.name,kind:C.ground.kind,rows:[{device:'Command module',connection:'USB / host input',note:'GPIO wiring is not configured for this platform'}]});
   return {groups,unassigned};
 }

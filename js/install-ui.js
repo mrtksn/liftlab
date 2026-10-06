@@ -104,6 +104,7 @@ class BoardConn {
   }
 }
 
+const shq = s => /^[A-Za-z0-9_.,:@%+=\/-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`;   // a word for the shell
 /* ───────── which board, what it needs ───────── */
 const instKind = t => t === 'ground' ? computers().ground.kind : t.kind;
 const instProfile = t => ESP_PROFILES[instKind(t)];
@@ -238,7 +239,7 @@ function espDesign(t, edited) {
   const kids = [
     ...(wiring.motorConfigs.some(m=>m.driver==='brushed')?[el('p',{class:'inst-note',text:'For MOSFET motors, keep motor power disconnected until these saved driver settings have been sent and the board has restarted. Factory/default wiring uses ESC pulses, which are not a stopped MOSFET signal.'})]:[]),
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
-    instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. Receiver UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}.`),
+    instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. ${!wiring.radioBoard?'':radioCfg.kind==='elrs'?`Receiver UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}. `:''}${wiring.radioBoard?`Radio: <code>${radioSettingLines(radioCfg).join(' ')}</code> (the link and binding phrase from the Ground tab, sent with the hardware settings)${radioCfg.kind==='elrs'?'':'; built in, nothing to wire'}.`:''}`),
     instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in <b>Hardware wiring</b> in Computers. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
     el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
@@ -339,7 +340,7 @@ async function espSendWiring(motors, servos, msg) {
   if(custom && !INST.customFirmware) { instMsg(msg,'Custom C drivers require rebuilt firmware. Flash your custom .bin files first, then send these settings.','bad');return; }
   const lines=hardwareSettings(plan);
   for (const l of lines) {
-    const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_/.test(s), 2000, msg, 'Sending ' + l);
+    const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_|radio|bind|phrase|firmware/.test(s), 2000, msg, 'Sending ' + l);   // (radio=, bind=: the board's answer, or why it can't)
     if (r === null) { if (!/Couldn|Not conn/.test(msg.textContent)) instMsg(msg, 'No answer from the board.', 'bad'); return; }
     if (!/^set /.test(r)) { instMsg(msg, 'The board refused ' + l + ': ' + r, 'bad'); return; }
   }
@@ -463,7 +464,8 @@ function piGuide(t, K) {
   if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in Hardware wiring',true]);
   fields.push(['link', 'Link to the ESP32', hardwareBus(computers(),t).linkPort||'/dev/serial0', 'Change the serial connection in Hardware wiring',true]);
   if (cargo) fields.push(['latch', 'Latch outputs', piLatchSettings(computers(),cfg.comps,t), 'Saved GPIO/PWM connections from Hardware wiring',true]);
-  if (radio) fields.push(['crsf', 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in Hardware wiring',true]);
+  const rk = radioCfg.kind, rlines = radioSettingLines(radioCfg);   // the link (Ground tab): a receiver on a serial port, or the Pi's own Wi-Fi
+  if (radio && rk === 'elrs') fields.push(['crsf', 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in Hardware wiring',true]);
   const need = ['nav', ...(learnOrSuper ? ['airframe', 'pi'] : [])];
   const cmds = {};
   const out = [];
@@ -471,6 +473,8 @@ function piGuide(t, K) {
   if (!tasks.includes('nav')) notes.push('dfb_pi always runs the navigation (it needs the .dnc): with this board\'s navigation off in the simulator, the real Pi still runs it.');
   if (editedFor(tasks).length) notes.push(`Your edits to ${editedFor(tasks).join(', ')} aren't loaded by dfb_pi yet: it runs its built-in formulas.`);
   if (tasks.includes('cargo') && !nL) notes.push('This design has no latches, so the cargo task has nothing to drive.');
+  if (radio && rk === 'espnow') notes.push('ESP-NOW needs an ESP32: a Pi can\'t be its drone end (dfb_pi refuses it). Put the Telemetry & radio task on the ESP32, or pick Wi-Fi in the Ground tab: the Pi\'s own Wi-Fi works.');
+  if (radio && rk === 'wifi') notes.push(radioCfg.sta ? 'Wi-Fi, the Pi joining a network: set its network up as usual (nmcli device wifi connect …); the command module joins the same one and talks to this Pi\'s address.' : `Wi-Fi, the Pi making the network: set up a hotspot on channel ${radioCfg.channel} (hostapd, or NetworkManager: nmcli device wifi hotspot ssid liftlab password … channel ${radioCfg.channel} band bg); the command module joins it.`);
   out.push(instPara(`The Pi runs <code>dfb_pi</code>: ${tasks.map(x => TASKS[x].label.toLowerCase()).join(', ') || 'the navigation'}, the same C as this simulator's ${t.name}. It's built on the Pi from the source, and this design's files go in beside it. You need Raspberry Pi OS (Lite is fine) with its network and SSH working: everything below is typed into <code>ssh ${'<span class="inst-host"></span>'}</code>, except where it says your computer.`));
   for (const n of notes) out.push(el('p', { class: 'inst-note', text: n }));
   const inputs = piInputs(fields, () => refresh());
@@ -529,7 +533,7 @@ function piGuide(t, K) {
     if (files.length) cmds.files.code.textContent = await pastePack(files, 'sudo systemctl restart dfb 2>/dev/null; true');
     const args = ['--nav drone.dnc', ...(learnOrSuper ? ['--airframe drone.dfa --pi drone.dlc'] : []), ...(v('link') && v('link') !== '/dev/serial0' ? ['--link ' + v('link')] : []),
       ...(!tasks.includes('learn') && learnOrSuper ? ['--no-learning'] : []), ...(!tasks.includes('super') && learnOrSuper ? ['--no-supervisor'] : []),
-      ...(fix ? ['--gps ' + v('gps')] : []), ...(cargo ? ['--latch ' + v('latch')] : []), ...(radio ? ['--crsf ' + v('crsf')] : [])].join(' ');
+      ...(fix ? ['--gps ' + v('gps')] : []), ...(cargo ? ['--latch ' + v('latch')] : []), ...(radio && rk === 'elrs' ? ['--crsf ' + v('crsf') + ' --radio ' + rlines[0].slice(6)] : []), ...(radio && rk === 'wifi' ? [`--radio ${rlines[0].slice(6)} --bind ${shq(radioCfg.bind)}`] : [])].join(' ');
     cmds.run.code.textContent = `cd ~/dfb && ./runner/pi/dfb_pi ${args}`;
     cmds.svc.code.textContent = `sudo tee /etc/systemd/system/dfb.service > /dev/null <<EOF\n[Unit]\nDescription=LiftLab: dfb_pi\nAfter=network.target\n\n[Service]\nUser=$USER\nWorkingDirectory=$HOME/dfb\nExecStart=$HOME/dfb/runner/pi/dfb_pi ${args}\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsudo systemctl daemon-reload\nsudo systemctl enable --now dfb`;
   };
@@ -538,12 +542,13 @@ function piGuide(t, K) {
 }
 // The command module on a Pi or a Mac: dfb_ground, built from the source.
 function groundPiGuide(K) {
-  const desktop = K.groundOnly, macOS = /Mac/.test(navigator.platform || ''), edited = editedFor(['ground']);
+  const desktop = K.groundOnly, macOS = /Mac/.test(navigator.platform || ''), edited = editedFor(['ground']), rk = radioCfg.kind;
   const fields = desktop ? [] : [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
-  fields.push(['tx', 'Transmitter module port', desktop && macOS ? '/dev/cu.usbserial-0001' : '/dev/ttyUSB0', 'The ExpressLRS transmitter module\'s USB serial port']);
+  if (rk === 'wifi') fields.push(['drone', 'The drone\'s address', radioCfg.sta ? 'liftlab-drone.local' : '192.168.4.1', 'Its Pi or ESP32 on the Wi-Fi network']);
+  else fields.push(['tx', rk === 'espnow' ? 'ESP-NOW bridge port' : 'Transmitter module port', desktop && macOS ? '/dev/cu.usbserial-0001' : '/dev/ttyUSB0', rk === 'espnow' ? 'The USB serial port of the ESP32 that is its ESP-NOW radio' : 'The ExpressLRS transmitter module\'s USB serial port']);
   const v = k => instPref(k, (fields.find(f => f[0] === k) || [])[2] || '');
   const out = [], cmds = { copy: cmdBox('', 'the copy command'), build: cmdBox('', 'the build commands'), run: cmdBox('', 'the run command') };
-  out.push(instPara(`It runs <code>dfb_ground</code>, the command module's C (the same this simulator runs on the ground), wired to the ExpressLRS transmitter module over USB serial, with the terminal's keys, a gamepad or your own code over UDP.${desktop ? ' Everything below is typed into a terminal on this computer.' : ''}`));
+  out.push(instPara(`It runs <code>dfb_ground</code>, the command module's C (the same this simulator runs on the ground), ${rk === 'wifi' ? 'on this computer\'s Wi-Fi, in UDP to the drone (the same binding phrase at both ends)' : rk === 'espnow' ? 'with an ESP32 on USB serial as its ESP-NOW radio' : 'wired to the ExpressLRS transmitter module over USB serial'}, with the terminal's keys, a gamepad or your own code over UDP.${desktop ? ' Everything below is typed into a terminal on this computer.' : ''}`));
   out.push(el('div', { class: 'inst-safety' }, el('b', { text: desktop ? 'This computer' : 'Your Pi' }), piInputs(fields, () => refresh())));
   if (!desktop) out.push(instStep(1, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder:'), cmds.copy));
   out.push(instStep(desktop ? 1 : 2, 'Build it', instPara(desktop ? `In this repository's folder. ${macOS ? 'Install Xcode command line tools with <code>xcode-select --install</code> if needed.' : 'On Linux, install the C compiler with your package manager (Debian/Ubuntu: <code>sudo apt install build-essential</code>).'}` : 'The compiler first, then dfb_ground:'), cmds.build));
@@ -557,7 +562,8 @@ function groundPiGuide(K) {
     const host = v('host') || 'pi@raspberrypi.local';
     cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;
     cmds.build.code.textContent = desktop ? 'sh runner/ground/build.sh' : 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/ground/build.sh';
-    cmds.run.code.textContent = `${desktop ? '' : 'cd ~/dfb && '}./runner/ground/dfb_ground --tx ${v('tx')} --keys${edited.length ? ' --program command-module.rnp' : ''}`;
+    const link = rk === 'wifi' ? `--radio wifi --drone ${v('drone')} --bind ${shq(radioCfg.bind)}` : rk === 'espnow' ? `--radio espnow --tx ${v('tx')}` : `--tx ${v('tx')}`;
+    cmds.run.code.textContent = `${desktop ? '' : 'cd ~/dfb && '}./runner/ground/dfb_ground ${link} --keys${edited.length ? ' --program command-module.rnp' : ''}`;
     if (cmds.prog) { try { const f = instFile('program', 'ground'); cmds.prog.code.textContent = (await pastePack([f])).replace('mkdir -p ~/dfb && cd ~/dfb', desktop ? '# (in the repository\'s folder)' : 'mkdir -p ~/dfb && cd ~/dfb'); } catch (e) { cmds.prog.code.textContent = '# The formulas don\'t compile: ' + e.message; } }
   };
   refresh();

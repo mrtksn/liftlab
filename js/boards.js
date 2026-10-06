@@ -42,7 +42,7 @@ const BOARD_KINDS = {
 };
 // The command module: the pilot's side of the radio (not on the drone, so not in TASKS: it has one board of its own).
 const GROUND = { label: 'Command module', hz: 250, formulas: RN_TASK_FORMULAS.ground,
-  what: 'The pilot\'s side of the radio, wired to the ExpressLRS transmitter module: buttons, sticks or your own code in, channels and commands up (through its stickInput formula), the telemetry decoded and checked (groundAlerts).' };
+  what: 'The pilot\'s side of the radio, wired to the ExpressLRS transmitter module (or its own ESP-NOW or Wi-Fi): buttons, sticks or your own code in, channels and commands up (through its stickInput formula), the telemetry decoded and checked (groundAlerts).' };
 const TASKS = {
   core: { label: 'Flight core', hz: 1000, mcuOnly: true, formulas: RN_TASK_FORMULAS.core,
     what: 'Attitude, control and mixing at the board\'s flight-loop rate, arming and the failsafes. It needs exact timing, so it runs on a microcontroller.' },
@@ -54,7 +54,7 @@ const TASKS = {
     what: 'Watches for failing, weakened or overheating parts (from the flight core\'s data stream and the health sensors wired to its board), takes them out of the flight core\'s table or caps them, and decides how to fly on what\'s left: carefully, home, or straight down.' },
 };
 TASKS.tlm = { label: 'Telemetry & radio', hz: 200, formulas: [],
-  what: 'The ExpressLRS receiver is wired to this board. Its channels fly the drone; the other tasks\' telemetry comes here and goes down the radio, as much as the link has room for. About 16 KB of an ESP32\'s memory.' };
+  what: 'The pilot\'s radio is on this board: an ExpressLRS receiver wired to it, or its own ESP-NOW or Wi-Fi (the Ground tab picks the link). Its channels fly the drone; the other tasks\' telemetry comes here and goes down the radio, as much as the link has room for. About 16 KB of an ESP32\'s memory.' };
 TASKS.cargo = { label: 'Cargo', hz: 50, formulas: [],
   what: 'The latches are wired to this board: it opens and closes them on the pilot\'s command (the radio, or the buttons on the view) and reports what they hold. Any board will do: the flight controller, the Pi, or an ESP32 of its own.' };
 // Tasks that are plain code, without formulas: a board that runs only these loads no flight program.
@@ -250,6 +250,7 @@ function boardsStart() {
     }
   }
   groundStart();
+  radioLinkSetup();                                                  // (a packet link: both ends' packet layers, with the binding phrase)
   brt.ready = true;
 }
 // The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
@@ -547,10 +548,13 @@ function boardsControl(dt) {
 // receiver's board makes the flight core's stick command.
 function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
   radio.t = brt.t;
+  if (radio.setup && radio.setup.kind !== radioCfg.kind) boardsRadioCfg();   // (the link changed without saying so: a saved one loaded after the start)
   const g = brt.gnd;
+  const pk = !!radioModel().packets;                                  // a packet link: each end's packet layer (plink.h) in its instance, no modules
   if (g) {                                                           // the command module: its step, every 4 ms
     g.host_tick(dt);
-    if (radio.toGround.length) {                                     // what the transmitter module handed it
+    if (pk) radioStackOut(g, 'gnd', brt.t);                          // what its packet layer has for it
+    else if (radio.toGround.length) {                                // what the transmitter module handed it
       const rb = new Uint8Array(g.memory.buffer, g.rbuf_ptr(), 2048); let n = 0;
       let k = 0; for (; k < radio.toGround.length; k++) { const f = radio.toGround[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
       radio.toGround = radio.toGround.slice(k); g.gnd_from_radio(n, brt.t);   // (what didn't fit goes next step)
@@ -558,13 +562,14 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     if (brt.t >= brt.nextGnd - 1e-9) {
       brt.nextGnd += 0.004;
       const I = groundInputs(brt.t), n = g.gnd_tick(I.held, I.has, I.ax[0], I.ax[1], I.ax[2], I.ax[3], brt.t, 0.004);
-      if (n) radioFromGround(Uint8Array.from(new Uint8Array(g.memory.buffer, g.rbuf_ptr(), n)));
+      if (n) { const b = Uint8Array.from(new Uint8Array(g.memory.buffer, g.rbuf_ptr(), n)); if (pk) g.plink_stack_in(n, brt.t); radioFromGround(b); }
     }
     if (brt.t >= brt.nextGsRead - 1e-9) { brt.nextGsRead += 0.1; gsRead(); }
   }
-  radioStep(dt, brt.t);
+  radioStep(dt, brt.t, { gnd: g, drone: droneOff ? null : tw });
   if (droneOff) { radio.toBoard = []; return; }                    // (nothing powers the receiver)
-  if (radio.toBoard.length) {
+  if (pk) radioStackOut(tw, 'drone', brt.t);
+  else if (radio.toBoard.length) {
     const rb = new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), 2048); let n = 0;
     let k = 0; for (; k < radio.toBoard.length; k++) { const f = radio.toBoard[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
     radio.toBoard = radio.toBoard.slice(k); tw.radio_in(n, brt.t);   // (what didn't fit goes next step)
@@ -580,7 +585,7 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
   }
   if (brt.t >= brt.nextRadio - 1e-9) {
     brt.nextRadio += 0.005;
-    const n = tw.radio_out(brt.t); if (n) radioFromDrone(Uint8Array.from(new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), n)));
+    const n = tw.radio_out(brt.t); if (n) { const b = Uint8Array.from(new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), n)); if (pk) tw.plink_stack_in(n, brt.t); radioFromDrone(b); }
   }
   if (brt.t >= brt.nextRc - 1e-9) {
     brt.nextRc += 0.02;

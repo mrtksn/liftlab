@@ -93,7 +93,14 @@ function renderHardware() {
   }
   for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareCard('Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));}
   const radio=C.boards.find(b=>b.tasks.includes('tlm'));
-  if(radio){const bus=hardwareBus(C,radio);const card=hardwareCard('ExpressLRS receiver','Radio','UART · CRSF',el('p',{class:'hw-owner',text:'Board: '+radio.name}));
+  const rk=radioCfg.kind;
+  if(radio&&rk!=='elrs'){                                             // ESP-NOW, Wi-Fi: the board's own radio, nothing to wire
+    const esp=!!ESP_PROFILES[radio.kind],row=radioWiringRow(radio,hardwareBus(C,radio),esp,radioCfg);
+    auxiliary.append(hardwareCard(row.device,'Radio',rk==='wifi'?'Wi-Fi · UDP':'ESP-NOW · 802.11',el('p',{class:'hw-owner',text:'Board: '+radio.name}),
+      el('p',{class:rk==='espnow'&&!esp?'bad':'hint',text:rk==='espnow'?(esp?'Built into the ESP32: no wiring. The command module needs an ESP32 too (or an ESP32 on USB as its bridge). Both ends need the same binding phrase (Ground tab); Install sends it.':'ESP-NOW needs an ESP32: '+radio.name+' can\'t do it. Put the Telemetry & radio task on an ESP32, or use Wi-Fi.')
+        :'The board\'s own Wi-Fi: no wiring. '+(radioCfg.sta?'It joins your network; the command module joins the same one.':'It makes the network (access point, channel '+radioCfg.channel+'); the command module joins it.')+' Both ends need the same binding phrase (Ground tab); Install sends it.'}),
+      el('p',{class:'hint',text:'Settings: '+radioSettingLines(radioCfg).join(' ')+'. Change the link in the Ground tab.'})));
+  }else if(radio){const bus=hardwareBus(C,radio);const card=hardwareCard('ExpressLRS receiver','Radio','UART · CRSF',el('p',{class:'hw-owner',text:'Board: '+radio.name}));
     if(ESP_PROFILES[radio.kind])card.append(pinPicker(radio,'Receiver TX → board RX GPIO','hw-rx-'+radio.id,bus.crsfRx,'rx',hardwareInputPins(radio.kind),v=>editBoard(radio,{crsfRx:Number(v)},'rx')),
       pinPicker(radio,'Receiver RX ← board TX GPIO','hw-tx-'+radio.id,bus.crsfTx,'tx',pinsFor(radio),v=>editBoard(radio,{crsfTx:Number(v)},'tx')));
     else card.append(hardwareText('Receiver serial port',bus.receiverPort||'/dev/ttyUSB1',v=>editBoard(radio,{receiverPort:v},'port')));

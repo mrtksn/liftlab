@@ -1,5 +1,12 @@
 # Project memory
 
+## Packet radio links (ESP-NOW, Wi-Fi) — 2026-10-06
+- New packet layer `runner/fc/plink.c` (no libc, also in the boards' WebAssembly) does a module's part for links without one: signed (SipHash-2-4, binding phrase) packets, 100 Hz uplink on a fixed beat, reliable commands/messages, replay and session handling, synthesized CRSF link statistics. Kinds `espnow,CH[,lr]`, `wifi,ap,CH`, `wifi,sta` in radio_link.c.
+- ESP32 (flight and ground) via `runner/esp_radio/`; ESP-NOW broadcasts until it learns the peer, then unicasts (MAC acks/retries). Ground ESP32 doubles as a USB dongle for dfb_ground. Pi: `dfb_pi --radio wifi,…`; computer: `dfb_ground --radio wifi --drone HOST` or `--radio espnow --tx DEV`. Simulator: js/link-packet.js runs the real plink at both ends; Ground tab picks the link and phrase (1–31 chars, same as boards).
+- Passed: runner/test.sh (280 ok, incl. test_plink and Wi-Fi e2e with loss/cuts), motor tests ×3 chips, tools/test_*.js, UI components 9/9, ELRS capture identical to base, sim ESP-NOW/Wi-Fi scenarios. Six firmware images built with IDF 5.4.2, 0 warnings; bundled firmware/ regenerated (single 1.5 MB app partition).
+- NOT verified on hardware: classic ESP32 heap with Wi-Fi on (check "free heap" at boot), real range/latency, ESP-NOW LR, CI's IDF 5.3.2 build. ESP32 flight build disables Wi-Fi IRAM optimizations and adds ~20 KB static DRAM even on ExpressLRS.
+- Next: Bluetooth LE, then nRF24L01 as further plink transports.
+
 ## Radio transport split and publication — 2026-10-06
 - Local radio commit 9f43eb8 separates common CRSF channels/commands/telemetry from transport settings, native byte I/O and the browser ExpressLRS model. Embedded board WebAssembly and asset fingerprints are updated; README describes the split.
 - ExpressLRS remains the only implemented transport. Other radio kinds need their own adapters/models; this refactor does not add ESP-NOW, Wi-Fi, nRF24 or BLE.

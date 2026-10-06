@@ -5,3 +5,12 @@ CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # The control loop keeps core 1 busy: don't treat that as a hang.
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+# With Wi-Fi (ESP-NOW, UDP) the app is ~1 MB: the 1.5 MB app partition (same offsets: the bootloader, the partition
+# table at 0x8000, the settings at 0x9000 and the app at 0x10000; fits a 2 MB flash).
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# Wi-Fi's memory down (the packet links carry ~100 small packets a second each way): fewer receive buffers, no
+# aggregation. Static DRAM and the heap are short on the ESP32 with the flight code's program slots.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n

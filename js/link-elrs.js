@@ -61,6 +61,7 @@ RADIO_LINKS.elrs = {
       txConn: false, txLostAt: -1, txLostLq: 0,   // its connection, and when and at what uplink LQ it was last lost
     });
   },
+  resume(t) { Object.assign(elrs, { nextPkt: t, nextStats: t, lastUpOk: t, lastDownOk: t }); },   // (taking over in flight from another link)
   step: elrsStep,
   fromDrone: elrsFromDrone,
   command(f) {   // the transmitter module passes them on only while connected; 5 bytes at a time in place of some channel packets

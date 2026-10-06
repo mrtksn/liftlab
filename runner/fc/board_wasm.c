@@ -25,6 +25,7 @@
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
 #include "radio_link.h"
+#include "plink.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
 
@@ -163,7 +164,7 @@ EXPORT("nav_set") void nav_set_(int n) { nav_set(&N, fr, n); }
 
 /* ── the telemetry task and the pilot's radio ── */
 static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
-static int tlm_local; static rlink_cfg RL = { RLINK_ELRS, 250, 4 };   /* the radio link: which, and its settings (radio_link.h) */
+static int tlm_local; static rlink_cfg RL = { .kind = RLINK_ELRS, .rate_hz = 250, .ratio = 4, .channel = 1 };   /* the radio link: which, and its settings (radio_link.h) */
 static pickup_state PK; static double nav_clock; static uint32_t pk_seen_r, pk_seen_l;   /* the pickup without a radio (below) */
 static nav_out last_o; static nav_sp last_sp; static int have_nav_out;
 static uint8_t rbuf[2048];                 /* the receiver's UART, both ways */
@@ -178,6 +179,30 @@ EXPORT("tlm_setup") void tlm_setup(int local) {
 /* the radio link: which (radio_link.h RLINK_*) and its settings (ExpressLRS: a packet rate, b telemetry ratio). At
  * any time, in flight too: the telemetry's budget follows, nothing else is touched. 0, or −1 (unknown, unchanged). */
 EXPORT("radio_link") int radio_link(int kind, int a, int b) { return rlink_make(&RL, kind, a, b); }
+/* ── a packet link's end (plink.h): the drone's on the receiver's board, the ground's on the command module's ──
+ * The board's stack writes and reads CRSF as with a module (radio_out/radio_in, gnd_tick/gnd_from_radio); these take
+ * what it wrote, give what it should read, and make and take the packets the simulated air carries. */
+static plink PL; static int pl_on; static uint8_t pbuf[PLINK_MTU];
+EXPORT("pbuf_ptr") uint8_t *pbuf_ptr(void) { return pbuf; }
+/* role 0 the ground, 1 the drone; the binding phrase: n bytes in rbuf; session: this start's own number (not 0) */
+EXPORT("plink_setup") int plink_setup(int role, int n, int session) {
+  plink_cfg C; plink_cfg_default(&C, role ? PLINK_DRONE : PLINK_GROUND);
+  char ph[64]; int k = 0; for (; k < n && k < 63; k++) ph[k] = (char)rbuf[k]; ph[k] = 0;
+  plink_key(ph, &C.k0, &C.k1); plink_init(&PL, &C, (uint32_t)session); pl_on = 1; return 0;
+}
+EXPORT("plink_stack_in") void plink_stack_in(int n, double t) { if (pl_on) plink_from_stack(&PL, rbuf, n, t); }   /* what the stack wrote, in rbuf */
+EXPORT("plink_stack_out") int plink_stack_out(double t) { return pl_on ? plink_to_stack(&PL, t, rbuf, (int)sizeof rbuf) : 0; }   /* for the stack, into rbuf */
+EXPORT("plink_air_out") int plink_air_out(double t) { return pl_on ? plink_to_air(&PL, t, pbuf, (int)sizeof pbuf) : 0; }   /* a packet due, into pbuf */
+EXPORT("plink_air_in") int plink_air_in(int n, int rssi, double t) { return pl_on ? plink_from_air(&PL, pbuf, n, rssi, t) : 0; }   /* a packet that came, in pbuf */
+/* its numbers: sent, got, bad, replays, stale sessions, dropped, sent again, LQ heard, signal heard, LQ the other end
+ * hears, bytes waiting, reliable frames waiting, connected */
+EXPORT("plink_stats") int plink_stats(double t) {
+  const plink_counts *c = &PL.N; float *o = fr; int k = 0;
+  o[k++] = (float)c->sent; o[k++] = (float)c->got; o[k++] = (float)c->bad; o[k++] = (float)c->replays; o[k++] = (float)c->stale_sessions;
+  o[k++] = (float)c->uq_dropped; o[k++] = (float)c->resent; o[k++] = (float)plink_lq(&PL, t); o[k++] = (float)PL.rssi; o[k++] = (float)PL.peer_lq;
+  o[k++] = (float)PL.uq_n; o[k++] = (float)PL.rq_n; o[k++] = (float)plink_connected(&PL, t);
+  return k;
+}
 /* n bytes from the receiver, in rbuf */
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */

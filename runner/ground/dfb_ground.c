@@ -2,17 +2,28 @@
  * The command module on a Mac, a Raspberry Pi or any Linux computer: ground_core.c (the same code the simulator runs
  * on the far side of its radio link, and the ESP32 command module runs) driving an ExpressLRS transmitter module
  * over a serial port. It sends the module CRSF channel frames 250 times a second and your commands, and reads back
- * the drone's telemetry and the module's link statistics.
+ * the drone's telemetry and the module's link statistics. Or, with no module, over Wi-Fi (--radio wifi): the same
+ * frames in UDP datagrams to the drone's Pi (dfb_pi --radio wifi,...), the module's part done here (../pi/radio_udp.c,
+ * ../fc/plink.h), the link statistics too.
  *
  *   sh runner/ground/build.sh
  *   ./runner/ground/dfb_ground --tx /dev/tty.usbserial-XXXX --keys            (fly from the terminal)
  *   ./runner/ground/dfb_ground --tx /dev/ttyUSB0 --joystick /dev/input/js0    (a gamepad, on Linux)
  *   ./runner/ground/dfb_ground --tx /dev/ttyUSB0                              (your own code over UDP, below)
+ *   ./runner/ground/dfb_ground --radio wifi --drone 192.168.4.1 --bind PHRASE --keys   (Wi-Fi: no module; this
+ *                                                                             computer on the drone's network)
  *   ./runner/ground/dfb_ground --test                                         (no module: runs 1.5 s and shows the channels)
  *
  * Options:
+ *   --radio KIND       the link (../fc/radio_link.h): elrs (the default: an ExpressLRS module on --tx), espnow or wifi
  *   --tx DEV           the transmitter module's serial port (CRSF). --baud N: its speed (400000 by default; set the
- *                      module to the same, or the speed it auto-detects). Wiring below
+ *                      module to the same, or the speed it auto-detects). Wiring below.
+ *                      With --radio espnow the module is an ESP32 running the command module firmware in its USB
+ *                      bridge mode, which does ESP-NOW: --tx /dev/ttyUSB0 (115200 baud by default), otherwise the same
+ *   --drone HOST[:PORT] with --radio wifi: the drone's address (its Pi running dfb_pi --radio wifi,...; port 14570
+ *                      by default). This computer joins the drone's network (wifi,ap) or the one it joined (wifi,sta)
+ *   --bind PHRASE      with --radio wifi: the binding phrase, the same as the drone's: it signs the packets, and a
+ *                      packet signed with another is dropped ("liftlab" if not given, with a warning)
  *   --keys             the terminal's keys are the buttons (below). A terminal reports presses but not releases, so
  *                      a key counts as held until 0.5 s after its last repeat
  *   --joystick DEV     a gamepad (Linux joystick API). --axes R,P,T,Y: which axis is roll, pitch, throttle, yaw (an i
@@ -54,6 +65,8 @@
 #include "rc_core.h"
 #include "ground_text.h"
 #include "radio_serial.h"
+#include "radio_udp.h"
+#include "radio_link.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -82,6 +95,7 @@ static gnd_state G; static gnd_text_in IN; static int running = 1, status_line =
 /* what goes to the module: a frame the port didn't take whole waits here, so none is cut (cut, it would fail its CRC,
  * and the frame after it too); while it waits, the next beat waits too (no frames pile up to go late, back to back) */
 static uint8_t txq[CRSF_MAX_FRAME]; static int txn;
+static void radio_close(radio_io *R) { if (radio_udp_is(R)) radio_udp_close(R); else radio_serial_close(R); }
 static int tx_flush(radio_io *R) {
   while (txn > 0) {
     int w = R->write(R, txq, txn);
@@ -130,7 +144,7 @@ static void key(int c, double t, int *esc) {
 }
 
 int main(int argc, char **argv) {
-  const char *tx_dev = 0, *js_dev = 0, *prog = 0; int baud = 400000, port = 14561, keys = 0, test = 0, listen_all = 0;
+  const char *tx_dev = 0, *js_dev = 0, *prog = 0, *drone = 0, *bind_phrase = 0; int baud = 0, port = 14561, keys = 0, test = 0, listen_all = 0, kind = RLINK_ELRS;
   int axmap[4] = { 3, 4, 1, 0 }, axinv[4] = { 0, 1, 1, 0 }, bmap[GB_N]; for (int i = 0; i < GB_N; i++) bmap[i] = -1;
   bmap[GB_ARM] = 4; bmap[GB_FLY] = 5; bmap[GB_HOLD] = 0; bmap[GB_HOME] = 3; bmap[GB_CAL] = 2;
   gnd_config cfg; gnd_config_default(&cfg); uint32_t latch = 0; int latch_set = 0;
@@ -138,6 +152,15 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--tx") && i + 1 < argc) tx_dev = argv[++i];
     else if (!strcmp(argv[i], "--baud") && i + 1 < argc) baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--drone") && i + 1 < argc) drone = argv[++i];
+    else if (!strcmp(argv[i], "--bind") && i + 1 < argc) bind_phrase = argv[++i];
+    else if (!strcmp(argv[i], "--radio") && i + 1 < argc) {             /* the kind; its settings, if given, are the drone's business: checked, not used */
+      const char *r = argv[++i]; int k = (int)strcspn(r, ","); kind = -1;
+      for (int j = 0; j < RLINK_KINDS; j++) if ((int)strlen(rlink_names[j]) == k && !strncmp(r, rlink_names[j], (size_t)k)) kind = j;
+      rlink_cfg L; char err[120];
+      if (kind < 0) { fprintf(stderr, "--radio %s: elrs, espnow or wifi\n", r); return 2; }
+      if (r[k] && rlink_parse(&L, r, err, sizeof err)) { fprintf(stderr, "--radio %s: %s\n", r, err); return 2; }
+    }
     else if (!strcmp(argv[i], "--joystick") && i + 1 < argc) js_dev = argv[++i];
     else if (!strcmp(argv[i], "--axes") && i + 1 < argc) {
       char buf[64]; snprintf(buf, sizeof buf, "%s", argv[++i]); int a = 0;
@@ -156,11 +179,33 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--status")) status_line = 1;
     else if (!strcmp(argv[i], "--test")) test = 1;
     else if (!strcmp(argv[i], "--listen-all")) listen_all = 1;
-    else { fprintf(stderr, "usage: %s --tx DEV [--baud 400000] [--keys] [--joystick /dev/input/js0 [--axes 3,4i,1i,0] [--buttons arm=4,fly=5,…]]\n"
+    else { fprintf(stderr, "usage: %s [--radio elrs] --tx DEV [--baud 400000] | --radio espnow --tx DEV [--baud 115200] | --radio wifi --drone HOST[:14570] [--bind PHRASE]\n"
+                           "          [--keys] [--joystick /dev/input/js0 [--axes 3,4i,1i,0] [--buttons arm=4,fly=5,…]]\n"
                            "          [--port 14561 [--listen-all]] [--program FILE.rnp] [--latch arm,fly] [--status] | --test\n"
+                           "  elrs: an ExpressLRS transmitter module on the serial port DEV\n"
+                           "  espnow: an ESP32 running the command module firmware in its USB bridge mode, on DEV, is the module (ESP-NOW)\n"
+                           "  wifi: UDP to the drone's Pi (dfb_pi --radio wifi,...) at HOST, this computer on its network; --bind: the drone's phrase\n"
                            "  UDP commands come from this computer only; --listen-all takes them from the network (anyone on it can arm)\n", argv[0]); return 2; }
   }
-  if (!tx_dev && !test) { fprintf(stderr, "dfb_ground: say where the transmitter module is (--tx DEV), or --test to run without one\n"); return 2; }
+  char drone_host[256] = ""; int drone_port = RLINK_UDP_PORT;
+  if (kind == RLINK_WIFI) {
+    if (tx_dev) { fprintf(stderr, "dfb_ground: --radio wifi has no transmitter module: --drone HOST instead of --tx\n"); return 2; }
+    if (!drone && !test) { fprintf(stderr, "dfb_ground: --radio wifi: say where the drone is (--drone HOST[:PORT], its Pi's address on the Wi-Fi network; port %d by default)\n", RLINK_UDP_PORT); return 2; }
+    if (drone) {
+      snprintf(drone_host, sizeof drone_host, "%s", drone); char *c = strrchr(drone_host, ':');
+      if (c && strchr(drone_host, ':') == c) { *c = 0; drone_port = atoi(c + 1); if (drone_port <= 0 || drone_port > 65535) { fprintf(stderr, "--drone %s: no such port\n", drone); return 2; } }
+    }
+    if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": anyone with LiftLab on this network can talk to your drone; give both ends a phrase of their own\n"); }
+  } else {
+    if (drone) { fprintf(stderr, "dfb_ground: --drone is for --radio wifi\n"); return 2; }
+    if (bind_phrase) fprintf(stderr, "dfb_ground: --bind is for --radio wifi: %s keeps its binding phrase in the module\n", kind == RLINK_ESPNOW ? "ESP-NOW's bridge" : "ExpressLRS");
+    if (!tx_dev && !test) {
+      if (kind == RLINK_ESPNOW) fprintf(stderr, "dfb_ground: --radio espnow: an ESP32 running the command module firmware in its USB bridge mode is the module: --tx /dev/ttyUSB0 (its USB serial port; 115200 baud)\n");
+      else fprintf(stderr, "dfb_ground: say where the transmitter module is (--tx DEV), or --test to run without one\n");
+      return 2;
+    }
+  }
+  if (!baud) baud = kind == RLINK_ESPNOW ? 115200 : 400000;
   if (js_dev && !latch_set) latch = GB(GB_ARM) | GB(GB_FLY);          /* a gamepad's buttons are push buttons */
   cfg.latch = latch; cfg.seq0 = (uint8_t)(time(0) ^ getpid());   /* (see gnd_config.seq0) */
 
@@ -177,7 +222,13 @@ int main(int argc, char **argv) {
     else printf("%s: checked; runs in the background for a second, then takes over\n", prog);
   }
 
-  radio_io *R = tx_dev ? radio_serial_open(tx_dev, baud, "ExpressLRS transmitter module (serial)") : 0; if (tx_dev && !R) return 1;   /* the pilot's radio link (radio_io.h) */
+  /* the pilot's radio link (radio_io.h): a module on a serial port, or the Wi-Fi link's end here */
+  radio_io *R = 0; char radio_said[300] = "no transmitter module (test)";
+  if (tx_dev) { R = radio_serial_open(tx_dev, baud, kind == RLINK_ESPNOW ? "ESP-NOW bridge (serial)" : "ExpressLRS transmitter module (serial)"); if (!R) return 1;
+    snprintf(radio_said, sizeof radio_said, "%s on %s", kind == RLINK_ESPNOW ? "ESP-NOW bridge (an ESP32)" : "transmitter module", tx_dev); }
+  else if (kind == RLINK_WIFI && drone) { R = radio_udp_open(PLINK_GROUND, drone_host, drone_port, bind_phrase, "Wi-Fi radio"); if (!R) return 1;
+    snprintf(radio_said, sizeof radio_said, "Wi-Fi to the drone at %s:%d", drone_host, drone_port); }
+  int packets = R && radio_udp_is(R);               /* a packet link: R does the module's part, read() every pass drives it */
   int udp = -1;
   if (port > 0) {
     udp = socket(AF_INET, SOCK_DGRAM, 0); struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(listen_all ? INADDR_ANY : INADDR_LOOPBACK);
@@ -192,7 +243,7 @@ int main(int argc, char **argv) {
 #endif
   if (keys && isatty(0)) { tcgetattr(0, &term_saved); struct termios t = term_saved; t.c_lflag &= ~(ICANON | ECHO); t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0; tcsetattr(0, TCSANOW, &t); term_raw = 1; atexit(term_restore); }
   signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
-  printf("command module: %s%s, inputs: %s%s%s; %s\r\n", tx_dev ? "transmitter module on " : "no transmitter module (test)", tx_dev ? tx_dev : "",
+  printf("command module: %s, inputs: %s%s%s; %s\r\n", radio_said,
          keys ? "keys" : "text commands", js >= 0 ? ", gamepad" : "", udp >= 0 ? ", UDP" : "", G.why);
   if (keys) printf("W/S climb, sink · A/D turn · arrows move · Space hold · H home · 1/2/3 speed · R arm · T take off/land · C calibrate · G latch 1 · Q quit\r\n");
 
@@ -208,15 +259,15 @@ int main(int argc, char **argv) {
     int wait = (int)((next - t) * 1000); if (wait < 0) wait = 0;
     poll(p, (nfds_t)np, wait);
     t = now_s();
-    if (itx >= 0 && (p[itx].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
+    if (itx >= 0 && (packets || (p[itx].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL)))) {   /* (a packet link: every pass, input or not: it sends its packets from there) */
       uint8_t b[512]; int n = R->read(R, b, sizeof b, 0);
-      if (n > 0) gnd_from_radio(&G, b, n, t - t0);
-      else if ((n == 0 && (p[itx].revents & (POLLHUP | POLLERR | POLLNVAL))) || n < 0) {   /* unplugged */
+      if (n > 0) for (int got = n; got > 0; got = got == (int)sizeof b ? R->read(R, b, sizeof b, 0) : 0) gnd_from_radio(&G, b, got, t - t0);   /* (all that waits) */
+      else if ((n == 0 && !packets && (p[itx].revents & (POLLHUP | POLLERR | POLLNVAL))) || n < 0) {   /* unplugged */
         fprintf(stderr, "\rtransmitter module: gone (%s): nothing goes up any more; the drone will count the link lost\r\n", n < 0 ? strerror(errno) : "hung up");
-        radio_serial_close(R); R = 0;
+        radio_close(R); R = 0;
       }
     }
-    if (R && txn && (p[itx].revents & POLLOUT) && tx_flush(R)) { perror("\rtransmitter module"); radio_serial_close(R); R = 0; }
+    if (R && txn && (p[itx].revents & POLLOUT) && tx_flush(R)) { perror("\rtransmitter module"); radio_close(R); R = 0; }
     if (iudp >= 0 && (p[iudp].revents & POLLIN)) {
       char b[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n = recvfrom(udp, b, sizeof b - 1, 0, (struct sockaddr *)&from, &fl);
       if (n > 0) { b[n] = 0; char reply[1200]; for (char *s = strtok(b, "\n"), *nx; s; s = nx) { nx = strtok(0, "\n"); char cp[256]; snprintf(cp, sizeof cp, "%s", s); command(cp, reply, sizeof reply, t - t0); if (reply[0]) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl); } }
@@ -252,7 +303,7 @@ int main(int argc, char **argv) {
     rn_host_tick(&H, dt);
     gnd_input in; input_now(t - t0, &in);
     uint8_t out[CRSF_MAX_FRAME]; int n = gnd_step(&G, &in, t - t0, dt, out, txn ? 0 : (int)sizeof out);   /* (cap 0: no frame due) */
-    if (n && R) { memcpy(txq, out, (size_t)n); txn = n; if (tx_flush(R)) { perror("\rtransmitter module"); radio_serial_close(R); R = 0; } }
+    if (n && R) { memcpy(txq, out, (size_t)n); txn = n; if (tx_flush(R)) { perror("\rtransmitter module"); radio_close(R); R = 0; } }
     if (H.last_event) { int ev = H.last_event; H.last_event = 0; printf("\rprogram: %s\r\n", ev == RN_EV_SWAPPED ? "the new program runs now" : ev == RN_EV_REJECTED ? "the new program was rejected" : ev == RN_EV_FELL_BACK ? "the new program stopped: back to the one before" : ev == RN_EV_LOADED ? "checking the new program in the background" : "event"); }
     /* what to tell the pilot */
     if (G.V.nmsg - msgs_seen > GND_MSGS) msgs_seen = G.V.nmsg - GND_MSGS;   /* (more came than the ring keeps: the newest) */
@@ -260,7 +311,11 @@ int main(int argc, char **argv) {
     if (G.dropped != dropped_was) { dropped_was = G.dropped; printf("\rcommand module: %s\r\n", G.why); }
     int why, lvl = gnd_alert(&G, &why);
     if (lvl != alert_was || why != why_was) { if (alert_was >= 0 || lvl) printf("\r%s%s\r\n", lvl == 2 ? "ALARM: " : lvl ? "warning: " : "", lvl ? gnd_why_text[why] : "all fine again"); alert_was = lvl; why_was = why; if (lvl == 2) { putchar('\a'); fflush(stdout); } }
-    if (status_line && t >= next_status) { next_status = t + 1; char s[300]; gnd_status(&G, t - t0, s, sizeof s); printf("\r%s\r\n", s); }
+    if (status_line && t >= next_status) {
+      next_status = t + 1; char s[600]; gnd_status(&G, t - t0, s, sizeof s);
+      if (packets && R) { size_t k = strlen(s); if (k + 4 < sizeof s) { memcpy(s + k, " | ", 3); radio_udp_counts(R, s + k + 3, (int)(sizeof s - k - 3)); } }
+      printf("\r%s\r\n", s);
+    }
     fflush(stdout);
     if (test && t - t0 > 1.5) break;
   }

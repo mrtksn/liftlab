@@ -10,23 +10,40 @@
 //
 //   HOW they travel — the link itself: a model in RADIO_LINKS, chosen by radioCfg.kind. A model is what the two
 //   radios and the air between them do: when a packet goes, whether it gets through, how long it takes, what a module
-//   queues, drops or reports. Today: ExpressLRS (link-elrs.js). A model has:
-//     label, receiver                         its name, and what sits on the drone's UART
-//     settings: [{ key, label, options }]     its settings in radioCfg, as the Ground station shows them
+//   queues, drops or reports. ExpressLRS (link-elrs.js); ESP-NOW and Wi-Fi (link-packet.js). A model has:
+//     label, receiver                         its name, and what sits on the drone's board
+//     settings: [{ key, label, options, show(cfg) }]   its settings in radioCfg, as the Ground station shows them
 //     wasm(cfg) → [kind, a, b]                the same for the boards (board_wasm.c radio_link, radio_link.h)
 //     room(cfg) → bytes/s                     the telemetry's room on a good link (radio_link.c rlink_budget)
-//     roomNote(cfg), signalNote(cfg)          what to say about the room, and about the signal now
-//     reset(), step(dt, t)                    its state; each step: the packets due, what arrives
+//     roomNote(cfg), signalNote(cfg)          what to say about the room (or the hardware), and about the signal now
+//     reset(), step(dt, t, ends)              its state; each step: the packets due, what arrives. ends: { gnd, drone },
+//                                             the command module's instance and the receiver board's (null while the
+//                                             drone has no power)
+//     resume(t)                               (optional) taking over in flight from another link: start from t
+//     changed()                               (optional) a setting of its own changed in flight (both ends at once)
 //     fromDrone(f, id)                        a frame the drone's board wrote (id: its record, linkNoteDown)
 //     command(f)                              a frame from the command module other than the channels
 //     connected()                             does the pilot's module count the link connected
-//     stats() → { queued, upQueued }          what it holds now, for the statistics
-//   and delivers with radio.toBoard / radio.toGround (whole frames), linkDown, linkChannels, linkLog, linkEv.
+//     stats() → { queued, upQueued }          what it holds now, for the statistics; extraStats(t) → more (optional)
+//   A module link (ExpressLRS) delivers whole frames with radio.toBoard / radio.toGround. A packet link
+//   (packets: true) has no modules: the packet layer (runner/fc/plink.h) runs at both ends, in the two instances,
+//   set up by radioLinkSetup with the binding phrase. boards.js passes what each stack writes to its plink
+//   (plink_stack_in) as well as to fromDrone/command (for the log); radioStackOut hands what each plink has for its
+//   stack (plink_stack_out) to the stack, and each frame to the model's toStack(end, f, t); the model's step moves
+//   the packets (plink_air_out at one end, plink_air_in at the other) and adds rebind() (new plinks, same link).
+//   Both kinds log with linkDown, linkChannels, linkLog, linkEv.
 //
 // The command module's inputs are you: the keys and the simulator's pilot (arm, take off) are its buttons and sticks.
 
 const RADIO_LINKS = {};
-const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0 };
+// kind; ExpressLRS: rate [Hz], ratio, power [mW]; ESP-NOW: channel, lr (long range); Wi-Fi: sta (the drone joins a
+// network: 1; makes one: 0), channel; the packet links: bind (the binding phrase, the same at both ends); every link:
+// extra (path loss [dB], the simulator's)
+const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, bind: 'liftlab' };
+const RADIO_KINDS = ['elrs', 'espnow', 'wifi'];
+// A binding phrase as both ends take it (the boards' bind=: 1–31 printable characters, no spaces at the ends;
+// runner/esp_radio/radio_cfg.h), or null.
+function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
 const radioModel = () => RADIO_LINKS[radioCfg.kind] || RADIO_LINKS.elrs;
 const radio = {};
 function radioReset() {
@@ -36,6 +53,7 @@ function radioReset() {
     txCh: null, txChT: 0, toBoard: [], toGround: [],
     holdUntil: -1, homeUntil: -1,
     log: [], logN: 0, meta: new Map(), ev: {}, stickLogged: null, dropRun: null, lqUp: 0, lqDown: 0, rf: null, rfAt: -1, delivered: null, modeSeen: '',
+    stackIn: { gnd: crsfParser(), drone: crsfParser() }, setup: null,
   });
   radioModel().reset();
   gsReset();
@@ -65,7 +83,7 @@ function linkPath() {
 
 // Each 1 ms step: the link's packets due. Fills radio.toBoard with the bytes the receiver writes to the drone's UART,
 // radio.toGround with what the pilot's module hands the command module.
-function radioStep(dt, t) { radioModel().step(dt, t); }
+function radioStep(dt, t, ends) { radioModel().step(dt, t, ends); }
 // What the drone's board wrote to its receiver: each whole frame gets a record (for its latency and the log), then
 // the link takes it.
 function radioFromDrone(bytes) { radio.fromDrone.feed(bytes, f => radioModel().fromDrone(f, linkNoteDown(f))); }
@@ -96,11 +114,52 @@ function radioCommand(cmd, values) {
 function radioHold() { radio.holdUntil = radio.t + 0.3; }
 function radioHome() { radio.homeUntil = radio.t + 0.3; }
 // The link's settings changed: the boards take the new ones (board_wasm.c radio_link: the telemetry budget follows,
-// in flight too; nothing else resets).
+// in flight too; nothing else resets). Another link, or another binding phrase: both ends switch at once (the
+// packet layers set up again); the drone sees a short gap in its link.
 function boardsRadioCfg() {
   if (!brt.ready) return;                                            // (starting: the boards take radioCfg as they start)
-  const a = radioModel().wasm(radioCfg);
+  const M = radioModel(), a = M.wasm(radioCfg), S = radio.setup || {};
   for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w) w.radio_link(...a); }
+  if (S.kind !== radioCfg.kind) {
+    radio.toBoard = []; radio.toGround = []; radio.meta.clear();
+    M.reset(); if (M.resume) M.resume(radio.t);
+    radioLinkSetup();
+    linkLog('↕', 'link', `now ${M.label}`, 'both ends switched', 'warn');
+  } else if (M.packets && S.bind !== radioCfg.bind) {
+    M.rebind(); radioLinkSetup();
+    linkLog('↕', 'link', 'a new binding phrase', 'both ends set up again', 'warn');
+  } else if (M.changed) M.changed();
+}
+// The two ends of a packet link: the command module's instance, the receiver board's.
+function radioEnds() { const b = typeof boardOf === 'function' ? boardOf('tlm') : null; return { gnd: brt.gnd, drone: b ? brt.inst.get(b.id) || null : null }; }
+// As the boards start (boardsStart), and when the link changes: a packet link's two ends set up, each with the binding
+// phrase and a session number of its own (the simulator's random numbers: the same each run).
+function radioLinkSetup() {
+  radio.setup = { kind: radioCfg.kind, bind: radioCfg.bind };
+  if (!radioModel().packets) return;
+  const E = radioEnds();
+  if (E.gnd) plinkSetup(E.gnd, 0, radioCfg.bind);
+  if (E.drone) plinkSetup(E.drone, 1, radioCfg.bind);
+}
+function plinkSetup(w, role, phrase) {
+  const b = new TextEncoder().encode(String(phrase)).slice(0, 63);
+  new Uint8Array(w.memory.buffer, w.rbuf_ptr(), b.length).set(b);
+  w.plink_setup(role, b.length, 1 + Math.floor(radioRand() * 0x7FFFFFFE));
+}
+// One end given another phrase (as if its program had been installed with it): to try a mismatch. end 'gnd' or 'drone'.
+function radioBindEnd(end, phrase) {
+  const w = radioEnds()[end]; if (!w || !radioModel().packets) return false;
+  plinkSetup(w, end === 'drone' ? 1 : 0, phrase); radioModel().rebind();
+  linkLog('↕', 'link', `${end === 'drone' ? 'the drone' : 'the command module'}: binding phrase "${phrase}"`, 'that end set up again', 'warn');
+  return true;
+}
+// A packet link: what one end's packet layer has for its stack (the frames that came, its link statistics) goes to
+// the stack, as a module's UART would bring it; the model sees each frame (for the log).
+function radioStackOut(w, end, t) {
+  const n = w.plink_stack_out(t); if (!n) return;
+  const b = Uint8Array.from(new Uint8Array(w.memory.buffer, w.rbuf_ptr(), n));
+  if (end === 'gnd') w.gnd_from_radio(n, t); else w.radio_in(n, t);
+  radio.stackIn[end].feed(b, f => radioModel().toStack(end, f, t));
 }
 
 // The command module's inputs (ground_core.h): the buttons held (GB bits) and the analog sticks. With navigation the
@@ -138,6 +197,7 @@ function linkStats(t) {
     cmds: n('cmdOut'), cmdLat: lat('cmdOut'),
     tlmIn: n('tlmIn') / span, tlmOut: n('tlmOut') / span, tlmLat: lat('tlmOut'), tlmDrop: n('tlmDrop'), tlmSuper: n('tlmSuper') / span, downLostPct: pct(n('downLost'), n('downOk')),
     queued: held.queued, upQueued: held.upQueued, cmdDrop: n('cmdDrop'),
+    ...(radioModel().extraStats ? radioModel().extraStats(t) : {}),
   };
 }
 // A frame's bytes, field by field (the raw view of a log line).

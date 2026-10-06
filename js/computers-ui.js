@@ -162,7 +162,7 @@ function buildComputers() {
         C.boards.push({ id: C.nextBoardId || Math.max(...C.boards.map(b=>b.id))+1, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
       } }))),
     UI.section( { class: 'sec', id: 'groundSec' }, el('h2', { text: 'On the ground', 'data-src': 'you' }),
-      el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module. Here it runs on the far side of the simulated link: your keys are its buttons.' }),
+      el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module, or talking ESP-NOW or Wi-Fi with its own radio (the link is picked in the Ground tab). Here it runs on the far side of the simulated link: your keys are its buttons.' }),
       el('div', { class: 'boards', id: 'groundCard' })),
     UI.section( { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
     UI.section( { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'For each device: choose its board, check its connection type, then pick the GPIOs you will wire. Connections are saved with this design and used by Install.' }), el('div', { id: 'hardwareRows' })),
@@ -222,7 +222,7 @@ function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if (!COMP.built) return;
   const C = computers(), core = boardOf('core');
-  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';');
+  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';') + '|' + [radioCfg.kind, radioCfg.channel, radioCfg.lr, radioCfg.sta, radioCfg.bind].join();   // (the radio's card follows the link)
   if (full || COMP.sig !== sig) {
     COMP.sig = sig;
     const list = $('#boardList'); list.textContent = '';
@@ -305,7 +305,7 @@ function renderGroundCard(C) {
     el('dl', { class: 'kv board-kv' },
       el('dt', { text: 'Runs' }), el('dd', { text: 'Command module: sticks and switches, commands, telemetry, alerts' }),
       el('dt', { text: 'Wired to it' }), el('dd', { text: K.mcu ? 'buttons and sticks, a buzzer, the ExpressLRS transmitter module' : 'a gamepad, keys or your own code (UDP), the ExpressLRS transmitter module (USB serial)' }),
-      el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `ExpressLRS radio to the receiver on ${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
+      el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `${radioModel().label} radio to ${radioModel().packets ? '' : 'the receiver on '}${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
       el('dt', {}, srcDot('calc'), 'Load'), el('dd', { text: `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(1)} KB of ${K.ramKB} KB` : ''}` })),
     el('div', { class: 'board-ex' }, UI.button( { class: 'btn primary', type: 'button', id: 'ginst', text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB' : 'Build and run it on a real computer: the steps and the commands', onclick: () => openInstall('ground') }), prog), errLine('g')));
 }

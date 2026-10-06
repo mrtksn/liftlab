@@ -2,7 +2,7 @@
 // The rest of the agent's tools (agent-tools.js has the core ones): everything else the page shows or lets you do, so
 // the agent sees and works what you do. The health of every part, the actuators, the sensors and the estimate, the
 // learning, the boards, the airframe check and mass, the radio and the command module, the logs; the sticks and the
-// poke, the camera and what the view draws, the learning and allocation settings, the radio's settings, saved
+// poke, the camera and what the view draws, the learning and allocation settings, the radio's link and settings, saved
 // designs, undo, the things to pick up, its own triggers. Two more are off until Settings turn them on: looking at
 // the view (a picture, for a model that can see) and running its own JavaScript in the page.
 
@@ -76,14 +76,29 @@ Object.assign(AGENT_TOOLS, {
         mass: { rigid_kg: rnd(truth.m), on_cables_kg: rnd(mp), thrust_to_weight: rnd(actuators().reduce((s, c) => s + c.tmax * motorEff(c), 0) / ((truth.m + mp) * G), 2),
           cog_from_hub_m: rndA(truth.c), controller_cog_error_mm: rnd(nrm(sub(truth.c, model.c)) * 1000, 0), controller_mass_error_g: rnd((model.m - truth.m - mp) * 1000, 0), inertia_kgm2: [truth.J[0], truth.J[4], truth.J[8]].map(x => rnd(x, 5)) } };
     } },
-  get_radio: { desc: 'The radio (ExpressLRS) and the command module: whether the drone has a radio, its settings (packet rate, telemetry ratio, power, extra path loss), the link statistics of the last 5 s, the telemetry the command module decoded, its alert, and its log.',
+  get_radio: { desc: 'The radio and the command module: whether the drone has a radio, the link (kind: elrs ExpressLRS 2.4 GHz, espnow ESP-NOW ESP32 to ESP32, wifi Wi-Fi UDP) and its settings, the link statistics of the last 5 s, the telemetry the command module decoded, its alert, and its log.',
     params: obj({}),
-    run: () => JSON.parse(JSON.stringify({ has_radio: hasTask('tlm'), active: radioActive(), settings: radioCfg, link: hasTask('tlm') ? linkStats(radio.t) : null,
+    run: () => JSON.parse(JSON.stringify({ has_radio: hasTask('tlm'), active: radioActive(), link_kind: radioCfg.kind, link_label: radioModel().label, settings: radioCfg, setting_lines: radioSettingLines(radioCfg),
+      wifi: pk.assoc && radioModel().packets ? pk.assoc.state : undefined, link: hasTask('tlm') ? linkStats(radio.t) : null, note: radioModel().roomNote(radioCfg) || undefined,
       ground: { alert: gs.alert, link: gs.link, telemetry: gs.v, frames: gs.frames, log: (gs.log || []).slice(-10).map(l => typeof l === 'string' ? l : (l.msg || l.text || JSON.stringify(l)).slice(0, 160)) } },
       (k, v) => (typeof v === 'number' ? +v.toFixed(2) : v))) },
-  set_radio: { desc: 'The radio\'s settings: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet), power [mW], extra (extra path loss [dB]: distance, walls).',
-    params: obj({ rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' } }),
-    run: a => { for (const k of ['rate', 'ratio', 'power', 'extra']) if (a[k] != null && isFinite(a[k])) radioCfg[k] = +a[k]; save(); if (typeof renderGs === 'function') renderGs(true); return { settings: radioCfg, note: 'rate and ratio take effect at the next reset' }; } },
+  set_radio: { desc: 'The radio\'s settings; both ends take them at once, in flight too. kind: elrs, espnow or wifi (another link: the drone sees a short gap; Wi-Fi then joins its network, 1–3 s). ExpressLRS: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet: 2…128), power [mW: 10, 25, 100, 250, 500, 1000]. ESP-NOW: channel (1–13), lr (long range, true/false). Wi-Fi: sta (true: the drone joins a network; false: it makes one, an access point), channel (1–13, the access point\'s). ESP-NOW and Wi-Fi: bind (the binding phrase, the same at both ends, 1–31 characters). Any link: extra (extra path loss [dB]: distance, walls).',
+    params: obj({ kind: { type: 'string', enum: ['elrs', 'espnow', 'wifi'] }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' },
+      channel: { type: 'integer' }, lr: { type: 'boolean' }, sta: { type: 'boolean' }, bind: { type: 'string' } }),
+    run: a => {
+      const bad = [], ok = (k, test, why) => { if (a[k] != null && !test(a[k])) bad.push(`${k}: ${why}`); };
+      ok('kind', v => !!RADIO_LINKS[v], 'elrs, espnow or wifi');
+      ok('rate', v => ELRS_RATES[v] != null, '50, 150, 250 or 500'); ok('ratio', v => ELRS_RATIOS.includes(+v), 'one of ' + ELRS_RATIOS.join(', '));
+      ok('power', v => ELRS_POWERS.includes(+v), 'one of ' + ELRS_POWERS.join(', ')); ok('extra', v => isFinite(v) && v >= 0 && v <= 200, '0 to 200 dB');
+      ok('channel', v => Number.isInteger(+v) && v >= 1 && v <= 13, '1 to 13'); ok('bind', v => !!radioPhraseOk(v), '1–31 plain characters');
+      if (bad.length) throw new Error('Radio not changed: ' + bad.join('; '));
+      for (const k of ['rate', 'ratio', 'power', 'extra', 'channel']) if (a[k] != null) radioCfg[k] = +a[k];
+      for (const k of ['lr', 'sta']) if (a[k] != null) radioCfg[k] = a[k] ? 1 : 0;
+      if (a.bind != null) radioCfg.bind = radioPhraseOk(a.bind);
+      if (a.kind) radioCfg.kind = a.kind;
+      save(); boardsRadioCfg(); if (typeof renderGs === 'function') renderGs(true);
+      return { settings: radioCfg, setting_lines: radioSettingLines(radioCfg), note: radioModel().roomNote(radioCfg) || 'applied at both ends now' };
+    } },
   get_events: { desc: 'Everything logged lately, newest first: the boards, the supervisor, the cargo (up to 40 lines).', params: obj({ n: { type: 'integer' } }), run: a => agentEvents(clamp(num(a.n, 20), 1, 40)) },
 
   stick: { desc: 'Hold flight keys for some seconds, as you would on the keyboard: fwd, back, left, right (from the heading), up, down, yawL, yawR. With navigation they move the target; without, they lean the drone (angle mode). Runs the simulation for that time and reports.',

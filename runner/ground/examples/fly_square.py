@@ -4,6 +4,7 @@ network) takes text commands over UDP and sends them up the radio as channels an
 
   ./dfb_ground --tx /dev/tty.usbserial-XXXX          (in another terminal; add --listen-all if this script runs on
                                                       another computer: dfb_ground takes UDP from its own only)
+  ./dfb_ground --radio wifi --drone 192.168.4.1 --bind PHRASE   (or so, over Wi-Fi to the drone's Pi: no module)
   python3 fly_square.py [HOST] [SIDE_METRES]
 
 The drone does the flying: the go-tos are targets for its navigation, within its own limits and failsafes.

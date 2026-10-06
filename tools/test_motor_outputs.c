@@ -41,11 +41,12 @@ int main(void){
   hw_config old=config(),restored=config();old.version=5;old.motor_pin[0]=27;old.imu_driver=3;old.mag_scale[0]=1.5f;
   assert(lb_hw_restore(&restored,&old,offsetof(hw_config,motor_driver)));assert(restored.motor_pin[0]==27 && restored.imu_driver==3 && restored.mag_scale[0]==1.5f);assert(restored.motor_driver[0]==0 && restored.motor_max_pct[0]==100 && restored.brushed_hz==20000);
   old.version=4;restored=config();restored.imu_driver=0;assert(lb_hw_restore(&restored,&old,(offsetof(hw_config,imu_driver)+3u)&~3u));assert(restored.motor_pin[0]==27 && restored.imu_driver==0);
+  old.version=6;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio_kind)));
   old.version=3;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,crsf_rx)));
   old.version=2;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,link_baud)));assert(restored.link_baud==115200);
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
-  hw_config settings;hw_defaults(&settings);assert(settings.version==6 && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
+  hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
   assert(!hw_check(&settings,log,sizeof log));assert(!hw_set(&settings,"motor_driver=1,0,1,0",log,sizeof log));assert(!hw_set(&settings,"motor_max=60,100,70,100",log,sizeof log));assert(!hw_set(&settings,"brushed_hz=30000",log,sizeof log));
   const char *bad[]={"motor_driver=2","motor_driver=0.5","motor_driver=NaN","motor_max=0","motor_max=101","motor_max=10.5","brushed_hz=999","brushed_hz=30001","brushed_hz=20000.5","motor_driver=1,0,1,0,1,0,1,0,1,0,1,0,1","brushed_hz=20000junk"};
   for(unsigned i=0;i<sizeof bad/sizeof *bad;i++){hw_config before=settings;assert(hw_set(&settings,bad[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}

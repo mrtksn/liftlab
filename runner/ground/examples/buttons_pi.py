@@ -4,7 +4,7 @@ dfb_ground over UDP. Run dfb_ground on the same Pi, with --latch arm,fly so the 
 push of those goes as "tap", which toggles a latching button (press and release would set it on and off).
 
   sudo apt install python3-gpiozero
-  ./dfb_ground --tx /dev/ttyUSB0 --latch arm,fly &
+  ./dfb_ground --tx /dev/ttyUSB0 --latch arm,fly &      (or --radio wifi --drone ADDRESS --bind PHRASE instead of --tx)
   python3 buttons_pi.py
 
 Change PINS for your wiring (BCM numbers). The stick buttons are repeated while held: dfb_ground lets a stick go
