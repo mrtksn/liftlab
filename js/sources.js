@@ -43,12 +43,10 @@ function applySrcTags(root) {
 }
 // The key: the tags in a line, and what each means when opened.
 function srcLegend(keys) {
-  const d = document.createElement('details'); d.className = 'src-legend';
-  const s = document.createElement('summary'); s.append(Object.assign(document.createElement('span'), { className: 'lbl', textContent: 'Where it comes from' }));
-  for (const k of keys) s.append(srcTag(k));
+  const d = UI.details({class:'src-legend',title:[el('span',{class:'lbl',text:'Where it comes from'}),...keys.map(srcTag)]});
   const dl = document.createElement('dl');
   for (const k of keys) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.append(srcTag(k)); dd.textContent = SRC[k][1]; dl.append(dt, dd); }
-  d.append(s, dl);
+  d.append(dl);
   return d;
 }
 

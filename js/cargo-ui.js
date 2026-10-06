@@ -52,7 +52,7 @@ function cargoBarBuild() {
   const box = $('#cargoBar'); if (!box) return;
   const ls = latches(); box.textContent = ''; box.hidden = !ls.length;
   ls.forEach((l, i) => {
-    const b = el('button', { type: 'button', class: 'btn cargo-btn', 'data-latch': String(i) },
+    const b = UI.button( { type: 'button', class: 'btn cargo-btn', 'data-latch': String(i) },
       el('span', { class: 'cg-name', text: l.name }), el('span', { class: 'cg-state' }),
       el('span', { class: 'cg-meter', 'aria-hidden': 'true' }, el('i')), el('kbd', { text: 'G' }));
     b.addEventListener('mousedown', e => e.preventDefault());   // (the keyboard stays with the view)
@@ -96,7 +96,7 @@ function cargoSecBuild() {
   box.textContent = '';
   box.append(el('dl', { id: 'cargoLatches', class: 'kv' }));
   box.append(el('span', { class: 'lbl', text: 'To pick up' }), el('div', { id: 'cargoItems' }));
-  const add = el('button', { class: 'btn', type: 'button', text: '+ Thing to pick up' });
+  const add = UI.button( { class: 'btn', type: 'button', text: '+ Thing to pick up' });
   add.addEventListener('click', () => { if (cargoWorld.items.length >= 8) return; cargoWorld.items.push({ name: 'Parcel ' + (cargoWorld.items.length + 1), mass: 0.2, size: [0.1, 0.1, 0.08], at: [1 + 0.4 * cargoWorld.items.length, -0.6] }); cargoWorldSave(); cargoItemsBuild(); });
   box.append(add, el('p', { class: 'hint', text: 'Boxes resting on whatever is under them, from the start point (X forward, Y left at the start). They move to where you set them at the next reset. Fly an open latch over one, within its reach, and close it.' }));
   box.append(el('span', { class: 'lbl', text: 'What happened' }), el('ul', { class: 'cargo-log', id: 'cargoLog' }));
@@ -105,10 +105,10 @@ function cargoSecBuild() {
 function cargoItemsBuild() {
   const box = $('#cargoItems'); if (!box) return; box.textContent = '';
   cargoWorld.items.forEach((it, k) => {
-    const nm = el('input', { type: 'text', value: it.name || '', maxlength: '18', 'aria-label': 'Name' });
+    const nm = UI.input( { type: 'text', value: it.name || '', maxlength: '18', 'aria-label': 'Name' });
     nm.addEventListener('change', () => { it.name = nm.value || 'Parcel'; cargoWorldSave(); });
     const f = (label, get, set, d) => numField(`cgi-${k}-${label}`, { label, ...d }, get, v => { set(v); cargoWorldSave(); }).node;
-    const del = el('button', { class: 'icon-btn', type: 'button', text: '×', title: 'Remove', 'aria-label': 'Remove ' + it.name });
+    const del = UI.button( { class: 'icon-btn', type: 'button', text: '×', title: 'Remove', 'aria-label': 'Remove ' + it.name });
     del.addEventListener('click', () => { cargoWorld.items.splice(k, 1); cargoWorldSave(); cargoItemsBuild(); });
     box.append(el('div', { class: 'cargo-item' }, el('div', { class: 'cargo-item-head' }, nm, del),
       f('Mass', () => it.mass, v => { it.mass = v; }, { min: 0.02, max: 1.5, hmax: 5, step: 0.01, u: 'kg', dp: 2 }),

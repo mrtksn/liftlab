@@ -12,10 +12,10 @@ function mathBlock(lines) { const m = el('div', { class: 'math' }); for (const l
 function lawCard(key) {
   const L = LAWS[key], d = L.def, open = lawOpen.has(key);
   const status = el('span', { class: 'lst' });
-  const head = el('button', { class: 'law-head', type: 'button', 'aria-expanded': String(open), 'aria-controls': 'law-' + key, 'data-focus-key': 'lawhead-' + key },
+  const head = UI.button( { class: 'law-head', type: 'button', 'aria-expanded': String(open), 'aria-controls': 'law-' + key, 'data-focus-key': 'lawhead-' + key },
     el('span', { class: 'law-title', text: d.title }), el('code', { class: 'law-key', text: d.key + '()' }), status);
   const body = el('div', { class: 'law-body', id: 'law-' + key }); body.hidden = !open;
-  head.addEventListener('click', () => { const o = body.hidden; body.hidden = !o; head.setAttribute('aria-expanded', String(o)); o ? lawOpen.add(key) : lawOpen.delete(key); if (o) fitTa(ta); });
+  UI.bindDisclosure(head,body,{open,onToggle:o=>{o?lawOpen.add(key):lawOpen.delete(key);if(o)fitTa(ta);}});
 
   body.append(mathBlock(d.math), el('p', { class: 'law-doc', text: d.doc }));
   if (d.used) body.append(el('p', { class: 'law-used', text: d.used }));
@@ -25,19 +25,19 @@ function lawCard(key) {
   body.append(io);
 
   const taId = 'code-' + key;
-  const ta = el('textarea', { class: 'code', id: taId, spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', 'aria-label': d.title + ' code' });
+  const ta = UI.textarea( { class: 'code', id: taId, spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', 'aria-label': d.title + ' code' });
   ta.value = L.src;
-  const err = el('p', { class: 'law-err', role: 'status' });
-  const applyBtn = el('button', { class: 'btn primary', type: 'button', text: 'Apply' });
-  const resetBtn = el('button', { class: 'btn', type: 'button', text: 'Revert to default' });
+  const err = UI.status( { class: 'law-err', role: 'status' });
+  const applyBtn = UI.button( { class: 'btn primary', type: 'button', text: 'Apply' });
+  const resetBtn = UI.button( { class: 'btn', type: 'button', text: 'Revert to default' });
   const hint = el('span', { class: 'kbd', text: '⌘/Ctrl + Enter applies' });
   const doApply = () => {
-    try { applyLaw(key, ta.value); err.textContent = ''; err.className = 'law-err'; flash(ta); }
-    catch (e) { err.textContent = e.message; err.className = 'law-err on'; }
+    try { applyLaw(key, ta.value); err.textContent = ''; err.className = 'ui-status law-err'; flash(ta); }
+    catch (e) { err.textContent = e.message; err.className = 'ui-status law-err on'; }
     save(); refreshLaw(key);
   };
   applyBtn.addEventListener('click', doApply);
-  resetBtn.addEventListener('click', () => { resetLaw(key); ta.value = LAWS[key].src; err.textContent = ''; err.className = 'law-err'; save(); refreshLaw(key); fitTa(ta); });
+  resetBtn.addEventListener('click', () => { resetLaw(key); ta.value = LAWS[key].src; err.textContent = ''; err.className = 'ui-status law-err'; save(); refreshLaw(key); fitTa(ta); });
   ta.addEventListener('input', () => { fitTa(ta); refreshLaw(key); });
   ta.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); doApply(); return; }
@@ -47,15 +47,15 @@ function lawCard(key) {
   // Flight formulas: what the step runner makes of them.
   let rn = null;
   if (typeof RN_SIGS !== 'undefined' && RN_SIGS[key]) {
-    const note = el('p', { class: 'law-rn', role: 'status' });
-    const steps = el('details', { class: 'steps' });
-    const sum = el('summary', { text: 'Compiled steps' }), pre = el('pre', { class: 'listing' });
-    steps.append(sum, pre);
+    const note = UI.status( { class: 'law-rn', role: 'status' });
+    const steps = UI.details({ class: 'steps', title: 'Compiled steps' });
+    const sum = steps.querySelector('summary'), pre = el('pre', { class: 'listing' });
+    steps.append(pre);
     steps.addEventListener('toggle', () => { if (steps.open) pre.textContent = RN.P && RN.P.fns[key] ? rnListing(RN.P, key) : ''; });
     body.append(note, steps);
     rn = { note, steps, sum, pre };
   }
-  const card = el('div', { class: 'law', 'data-law': key }, head, body);
+  const card = UI.card( { class: 'law', 'data-law': key }, head, body);
   lawCards.set(key, { card, status, ta, err, applyBtn, resetBtn, rn });
   return card;
 }
@@ -69,7 +69,7 @@ function refreshLawRunner(key) {
   else if (RN.trapped[key]) { msg = RN.trapped[key]; tone = 'bad'; }
   else if (RN.stage && RN.stage.keys.includes(key)) { msg = rnStageText(RN.stage); tone = 'warn'; }
 
-  r.note.textContent = msg; r.note.className = 'law-rn' + (tone ? ' ' + tone : ''); r.note.hidden = !msg;
+  r.note.textContent = msg; r.note.className = 'ui-status law-rn' + (tone ? ' ' + tone : ''); r.note.hidden = !msg;
   if (f) {
     const calls = RN.calls[key] || 0, avg = calls ? Math.round(RN.steps[key] / calls) : null;
     r.sum.textContent = `Compiled steps: ${f.nInstr}` + (avg != null ? ` · ${avg} run per call in this flight` : '') + ` · at most ${f.maxSteps.toLocaleString()}`;
@@ -114,8 +114,8 @@ function refreshLaw(key) {
   c.status.className = 'lst ' + L.status + (dirty ? ' dirty' : '');
   c.ta.classList.toggle('dirty', dirty);
   c.resetBtn.disabled = L.status === 'default' && !dirty;
-  if (L.status === 'error' && L.err && !dirty) { c.err.textContent = L.err; c.err.className = 'law-err on'; }
-  const chip = document.querySelector(`.chain [data-go="${key}"]`); if (chip) chip.className = 'lchip ' + L.status;
+  if (L.status === 'error' && L.err && !dirty) { c.err.textContent = L.err; c.err.className = 'ui-status law-err on'; }
+  const chip = document.querySelector(`.chain [data-go="${key}"]`); if (chip) chip.className = 'ui-button lchip ' + L.status;
   refreshFormulaStatus();
   refreshLawRunner(key);
 }
@@ -128,7 +128,7 @@ function refreshFormulaStatus() {
 }
 lawListeners.add(key => {
   const c = lawCards.get(key);
-  if (c && LAWS[key].status === 'error') { c.err.textContent = LAWS[key].err; c.err.className = 'law-err on'; }
+  if (c && LAWS[key].status === 'error') { c.err.textContent = LAWS[key].err; c.err.className = 'ui-status law-err on'; }
   refreshLaw(key); save();
 });
 
@@ -143,43 +143,43 @@ function goToLaw(key) {
 const taskOfLaw = k => Object.keys(TASKS).find(t => TASKS[t].formulas.includes(k)) || null;
 const COMP = { built: false };
 function lawSection(id, title, blurb, keys, small) {
-  const sec = el('section', { class: 'sec', id }, el('h2', {}, document.createTextNode(title + ' '), el('small', { text: small || '' })), el('p', { class: 'hint', text: blurb }));
+  const sec = UI.section( { class: 'sec', id }, el('h2', {}, document.createTextNode(title + ' '), el('small', { text: small || '' })), el('p', { class: 'hint', text: blurb }));
   const list = el('div', { class: 'laws' }); for (const k of keys) list.append(lawCards.has(k) ? lawCards.get(k).card : lawCard(k));
   sec.append(list); return sec;
 }
 function buildComputers() {
   const pane = $('#paneForm'); pane.textContent = '';
   for (const d of LAW_DEFS) if (!lawCards.has(d.key)) lawCard(d.key);
-  pane.append(el('section', { class: 'sec' },
+  pane.append(UI.section( { class: 'sec' },
     el('h2', { text: 'Flight computers', 'data-src': 'you' }),
     el('p', { class: 'hint', text: 'The boards on the drone and what each one runs. They are what flies: each is the drone\'s real flight code (the same C as on the ESP32 and the Pi) running here, fed by the simulated sensors, with the link between boards delaying what they send each other.' }),
     el('div', { class: 'boards', id: 'boardList' }),
     el('div', { class: 'board-add' }, el('label', { class: 'lbl', for: 'boardKind', text: 'Add a board' }),
-      el('select', { id: 'boardKind' }, ...Object.entries(BOARD_KINDS).map(([k, b]) => el('option', { value: k, text: b.label }))),
-      el('button', { class: 'btn', type: 'button', id: 'boardAdd', text: 'Add', onclick: () => {
+      UI.select( { id: 'boardKind' }, ...Object.entries(BOARD_KINDS).map(([k, b]) => el('option', { value: k, text: b.label }))),
+      UI.button( { class: 'btn', type: 'button', id: 'boardAdd', text: 'Add', onclick: () => {
         const C = JSON.parse(JSON.stringify(computers())), kind = $('#boardKind').value;
         if (C.boards.length >= BOARD_MAX) return;
         C.boards.push({ id: C.nextBoardId || Math.max(...C.boards.map(b=>b.id))+1, kind, name: BOARD_KINDS[kind].label, tasks: [] }); setComputers(C, 'add');
       } }))),
-    el('section', { class: 'sec', id: 'groundSec' }, el('h2', { text: 'On the ground', 'data-src': 'you' }),
+    UI.section( { class: 'sec', id: 'groundSec' }, el('h2', { text: 'On the ground', 'data-src': 'you' }),
       el('p', { class: 'hint', text: 'The command module: the pilot\'s side of the radio. The same C on an ESP32 with buttons (runner/ground/esp32), on a Pi or a Mac with a gamepad, keys or your own code (runner/ground/dfb_ground.c), wired to an ExpressLRS transmitter module. Here it runs on the far side of the simulated link: your keys are its buttons.' }),
       el('div', { class: 'boards', id: 'groundCard' })),
-    el('section', { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
-    el('section', { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'For each device: choose its board, check its connection type, then pick the GPIOs you will wire. Connections are saved with this design and used by Install.' }), el('div', { id: 'hardwareRows' })),
+    UI.section( { class: 'sec' }, el('h2', { text: 'Tasks', 'data-src': 'you' }), el('p', { class: 'hint', text: 'Which board runs each part of the flight code. Its formulas are listed under it, below.' }), el('div', { class: 'tasks', id: 'taskRows' })),
+    UI.section( { class: 'sec', id: 'hardwareSec' }, el('h2', { text: 'Hardware wiring', 'data-src': 'you' }), el('p', { class: 'hint', text: 'For each device: choose its board, check its connection type, then pick the GPIOs you will wire. Connections are saved with this design and used by Install.' }), el('div', { id: 'hardwareRows' })),
     el('div', { id: 'taskLaws' }),
-    el('section', { class: 'sec', id: 'rnBox' },
+    UI.section( { class: 'sec', id: 'rnBox' },
       el('h2', { text: 'The flight program', 'data-src': 'board' }),
       el('p', { class: 'hint', text: 'The flight formulas are compiled into steps for a small runner: the heavy math (matrices, quaternions, the least-squares allocation) is built into the runner in C, and the formulas are the steps between. Every board has the same runner and loads a program with the formulas of its tasks, so a formula edited here flies unchanged on the drone. An edit applied in flight reaches each board the way it would on the drone: the loader\'s checks, self-tests, a second of flying in the background beside the current version, then a short blend; if the new version stops in flight, the one before takes over again.' }),
-      el('p', { class: 'rn-status', id: 'rnStatus', role: 'status' }),
+      UI.status( { class: 'rn-status', id: 'rnStatus', role: 'status' }),
       el('ol', { class: 'rn-log', id: 'rnLog', hidden: true }),
       el('ul', { class: 'rn-problems', id: 'rnProblems' }),
-      el('div', { class: 'law-actions' }, el('button', { class: 'btn', type: 'button', id: 'rnDownload', text: 'Download the program (.rnp)', onclick: rnDownload }))));
+      el('div', { class: 'law-actions' }, UI.button( { class: 'btn', type: 'button', id: 'rnDownload', text: 'Download the program (.rnp)', onclick: rnDownload }))));
   // the world's formulas, then the edit tools
   pane.append(lawSection('worldLaws', 'The world', 'Not flight code: what actually happens to the airframe (physics) and what the hardware reports (sensor models). Edits here change the world the flight computers have to cope with.', LAW_DEFS.filter(d => d.group === 'plant' || d.group === 'sensor').map(d => d.key), 'simulator only'));
   pane.querySelector('#worldLaws h2').dataset.src = 'sim';
-  const copyBtn = el('button', { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
-  const revertAll = el('button', { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
-  const copyOut = el('textarea', { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
+  const copyBtn = UI.button( { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
+  const revertAll = UI.button( { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
+  const copyOut = UI.textarea( { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
   const copyMsg = el('span', { class: 'kbd', role: 'status' });
   copyBtn.addEventListener('click', () => {
     const text = '// Edited formulas from LiftLab. Paste over the matching functions in js/laws.js.\n\n' + editedLaws().map(L => L.src.trim()).join('\n\n') + '\n';
@@ -189,14 +189,14 @@ function buildComputers() {
   revertAll.addEventListener('click', () => {
     if (revertAll.dataset.armed !== '1') { revertAll.dataset.armed = '1'; revertAll.textContent = 'Click again to revert all'; setTimeout(() => { revertAll.dataset.armed = ''; revertAll.textContent = 'Revert all'; }, 3000); return; }
     revertAll.dataset.armed = ''; revertAll.textContent = 'Revert all';
-    for (const L of editedLaws()) { resetLaw(L.def.key); const c = lawCards.get(L.def.key); c.ta.value = LAWS[L.def.key].src; c.err.textContent = ''; c.err.className = 'law-err'; fitTa(c.ta); refreshLaw(L.def.key); }
+    for (const L of editedLaws()) { resetLaw(L.def.key); const c = lawCards.get(L.def.key); c.ta.value = LAWS[L.def.key].src; c.err.textContent = ''; c.err.className = 'ui-status law-err'; fitTa(c.ta); refreshLaw(L.def.key); }
     save();
   });
-  const tools = el('section', { class: 'sec' }, el('h2', { text: 'Your edits' }),
+  const tools = UI.section( { class: 'sec' }, el('h2', { text: 'Your edits' }),
     el('p', { class: 'hint', text: 'Every formula above is the code that runs. Edit one and apply it; it takes effect mid-flight. The math shows the default form.' }),
     el('div', { class: 'law-actions' }, copyBtn, revertAll, copyMsg), copyOut);
   if (!evalAllowed) tools.append(el('p', { class: 'note', text: 'This viewer blocks running edited JavaScript. The flight formulas still take edits: they are compiled for the boards. The world\'s formulas can be read here; open index.html from the repo to edit them.' }));
-  pane.append(tools, el('section', { class: 'sec' }, el('h2', { text: 'Available inside formulas' }),
+  pane.append(tools, UI.section( { class: 'sec' }, el('h2', { text: 'Available inside formulas' }),
     el('p', { class: 'hint', html: 'Vectors are <code>[x, y, z]</code> arrays; 3×3 matrices are 9 numbers, row by row. Helpers: <code>add sub scl dot crs nrm unit clamp</code>, <code>m3v m3m m3T m3inv</code>, <code>qmat qmul qnorm matToQuat</code>, <code>randn</code> (standard normal, seeded so each reset replays the same noise), <code>bls(cols, lo, hi, w, W)</code>, and constants <code>G D2R R2D</code>. Anything in <code>Math</code> works too. A formula that throws or returns a wrong shape is switched off and the default takes over.' })));
   COMP.built = true;
   applySrcTags(pane);
@@ -211,7 +211,7 @@ function renameComputer(apply) {
 }
 // A name you can type in, with a pencil to say so.
 function nameBox(value, label, id, onName) {
-  const i = el('input', { type: 'text', class: 'board-name', value, maxlength: 24, 'aria-label': label, id, title: 'Click to rename', autocomplete: 'off', spellcheck: 'false' });
+  const i = UI.input( { type: 'text', class: 'board-name', value, maxlength: 24, 'aria-label': label, id, title: 'Click to rename', autocomplete: 'off', spellcheck: 'false' });
   i.addEventListener('change', () => onName(i.value.trim()));
   i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); else if (e.key === 'Escape') { i.value = value; i.blur(); } });
   const pen = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); pen.setAttribute('viewBox', '0 0 16 16'); pen.setAttribute('aria-hidden', 'true');
@@ -229,10 +229,10 @@ function renderComputers1(full) {
     for (const b of C.boards) {
       const K = BOARD_KINDS[b.kind], bud = boardBudget(b), wired = cfg.comps.filter(c => ['motor','joint','sensor','latch'].includes(c.type) && wiredTo(c) === b);
       const name = nameBox(b.name, 'Board name', 'bname-' + b.id, v => renameComputer(C2 => { const x = C2.boards.find(y => y.id === b.id); if (x) x.name = (v || K.label).slice(0, 24); }));
-      const kind = el('select', { 'aria-label': 'Board', id: 'bkind-' + b.id }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
+      const kind = UI.select( { 'aria-label': 'Board', id: 'bkind-' + b.id }, ...Object.entries(BOARD_KINDS).filter(([, x]) => !x.groundOnly).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === b.kind ? 'selected' : null })));
       commitSelect(kind, v => { if (v === b.kind) return; const C2 = JSON.parse(JSON.stringify(C)); C2.boards.find(x => x.id === b.id).kind = v; setComputers(C2, 'kind'); }, 'Press Enter to change the board: it starts the flight again');
       const only = b.tasks.includes('core') && C.boards.filter(x => BOARD_KINDS[x.kind].mcu).length < 2;
-      const del = el('button', { class: 'icon-btn', type: 'button', text: '×', id: 'bdel-' + b.id, title: only ? 'The flight core needs a microcontroller: add another before removing this one' : 'Remove this board', 'aria-label': 'Remove ' + b.name, disabled: only || C.boards.length < 2 ? 'disabled' : null });
+      const del = UI.button( { class: 'icon-btn', type: 'button', text: '×', id: 'bdel-' + b.id, title: only ? 'The flight core needs a microcontroller: add another before removing this one' : 'Remove this board', 'aria-label': 'Remove ' + b.name, disabled: only || C.boards.length < 2 ? 'disabled' : null });
       del.addEventListener('click', () => {
         const C2 = JSON.parse(JSON.stringify(C)); C2.boards = C2.boards.filter(x => x.id !== b.id);
         if (b.tasks.includes('core')) C2.boards.find(x => BOARD_KINDS[x.kind].mcu).tasks.unshift('core');   // the flight core moves to another microcontroller
@@ -241,14 +241,14 @@ function renderComputers1(full) {
       const runs = b.tasks.length ? b.tasks.map(t => TASKS[t].label).join(' · ') : 'nothing yet (give it a task below)';
       const link = core && core.id !== b.id ? `Serial link to ${core.name}: ${(LINK_DELAY * 1000).toFixed(0)} ms each way` : C.boards.length > 1 ? 'The other boards talk to it over serial links' : '';
       const load = b.tasks.length ? `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(0)} KB of ${K.ramKB} KB` : ''}` : '';
-      const ex = el('div', { class: 'board-ex' }, el('button', { class: 'btn primary', type: 'button', id: 'binst-' + b.id, text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB and send it this design' : 'Put it on a real Pi: the steps and the commands to paste', onclick: () => openInstall(b) }));
-      const xb = (what, text, title) => el('button', { class: 'btn', type: 'button', text, title, id: `bex-${b.id}-${what}`, onclick: e => boardsExport(what, e.currentTarget) });
+      const ex = el('div', { class: 'board-ex' }, UI.button( { class: 'btn primary', type: 'button', id: 'binst-' + b.id, text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB and send it this design' : 'Put it on a real Pi: the steps and the commands to paste', onclick: () => openInstall(b) }));
+      const xb = (what, text, title) => UI.button( { class: 'btn', type: 'button', text, title, id: `bex-${b.id}-${what}`, onclick: e => boardsExport(what, e.currentTarget) });
       if (b.tasks.includes('core')) ex.append(xb('airframe', 'Export the airframe (.dfa)', 'What the flight core flies on: send it with fly.py airframe FILE.dfa'));
       if (b.tasks.includes('nav')) ex.append(xb('nav', 'Export the navigation config (.dnc)', K.mcu ? 'For the navigation on this board' : 'For dfb_pi on this Pi: ./dfb_pi --nav FILE.dnc'));
       if (!K.mcu && (b.tasks.includes('learn') || b.tasks.includes('super'))) ex.append(
         xb('airframe', 'Export the airframe (.dfa)', 'The learning and the supervisor start from the same airframe as the flight core: ./dfb_pi --airframe FILE.dfa'),
         xb('pi', 'Export the Pi config (.dlc)', 'Where the IMU sits, the motors\' heat and the battery, for the learning and the supervisor: ./dfb_pi --pi FILE.dlc'));
-      list.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': b.id },
+      list.append(UI.card( { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': b.id },
         el('div', { class: 'board-head' }, name, kind, del),
         el('p', { class: 'board-note', text: K.note }),
         el('dl', { class: 'kv board-kv' },
@@ -264,7 +264,7 @@ function renderComputers1(full) {
     // tasks: which board
     const rows = $('#taskRows'); rows.textContent = '';
     for (const [t, T] of Object.entries(TASKS)) {
-      const cur = boardOf(t), sel = el('select', { 'aria-label': T.label + ' runs on', id: 'task-' + t });
+      const cur = boardOf(t), sel = UI.select( { 'aria-label': T.label + ' runs on', id: 'task-' + t });
       if (!T.mcuOnly) sel.append(el('option', { value: '', text: 'No board (off)' }));
       for (const b of C.boards) if ((!T.mcuOnly || BOARD_KINDS[b.kind].mcu) && (!T.piOnly || !BOARD_KINDS[b.kind].mcu)) sel.append(el('option', { value: String(b.id), text: b.name, selected: cur && cur.id === b.id ? 'selected' : null }));
       if (!cur) sel.value = '';
@@ -295,11 +295,11 @@ function renderGroundCard(C) {
   const g = C.ground, K = BOARD_KINDS[g.kind], tlmB = boardOf('tlm'), bud = groundBudget();
   const set = (k, v) => { const C2 = JSON.parse(JSON.stringify(C)); C2.ground[k] = v; setComputers(C2, 'ground'); };
   const name = nameBox(g.name, 'Command module name', 'gname', v => renameComputer(C2 => { C2.ground.name = (v || 'Command module').slice(0, 24); }));
-  const kind = el('select', { 'aria-label': 'Command module computer', id: 'gkind' }, ...Object.entries(BOARD_KINDS).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
+  const kind = UI.select( { 'aria-label': 'Command module computer', id: 'gkind' }, ...Object.entries(BOARD_KINDS).map(([k, x]) => el('option', { value: k, text: x.label, selected: k === g.kind ? 'selected' : null })));
   commitSelect(kind, v => { if (v !== g.kind) set('kind', v); }, 'Press Enter to change it: it starts the flight again');
-  const prog = el('button', { class: 'btn', type: 'button', id: 'gprog', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: e => groundDownload(e.currentTarget) });
+  const prog = UI.button( { class: 'btn', type: 'button', id: 'gprog', text: 'Download its program (.rnp)', title: 'Its formulas as you edited them, for dfb_ground --program FILE.rnp on a Mac or a Pi (the ESP32 runs its built-in program)', onclick: e => groundDownload(e.currentTarget) });
   const box = $('#groundCard'); box.textContent = '';
-  box.append(el('div', { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': 'g' },
+  box.append(UI.card( { class: 'board' + (bud.load > 0.8 ? ' over' : ''), 'data-board': 'g' },
     el('div', { class: 'board-head' }, name, kind),
     el('p', { class: 'board-note', text: K.note }),
     el('dl', { class: 'kv board-kv' },
@@ -307,10 +307,10 @@ function renderGroundCard(C) {
       el('dt', { text: 'Wired to it' }), el('dd', { text: K.mcu ? 'buttons and sticks, a buzzer, the ExpressLRS transmitter module' : 'a gamepad, keys or your own code (UDP), the ExpressLRS transmitter module (USB serial)' }),
       el('dt', { text: 'Link' }), el('dd', { text: tlmB ? `ExpressLRS radio to the receiver on ${tlmB.name}` : 'none: the drone has no radio (no board runs Telemetry & radio), so it isn\'t used' }),
       el('dt', {}, srcDot('calc'), 'Load'), el('dd', { text: `${pct(bud.load)} of ${K.cores > 1 ? 'one core' : 'its core'}${K.mcu ? ` · program ${bud.memKB.toFixed(1)} KB of ${K.ramKB} KB` : ''}` })),
-    el('div', { class: 'board-ex' }, el('button', { class: 'btn primary', type: 'button', id: 'ginst', text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB' : 'Build and run it on a real computer: the steps and the commands', onclick: () => openInstall('ground') }), prog), errLine('g')));
+    el('div', { class: 'board-ex' }, UI.button( { class: 'btn primary', type: 'button', id: 'ginst', text: 'Install…', title: K.mcu ? 'Put it on a real board: flash it over USB' : 'Build and run it on a real computer: the steps and the commands', onclick: () => openInstall('ground') }), prog), errLine('g')));
 }
 // An export that failed says why under its button (kept across a re-render of the cards).
-const errLine = key => { const e = COMP.exErr && String(COMP.exErr.key) === String(key) ? COMP.exErr.msg : ''; return el('p', { class: 'law-err board-err' + (e ? ' on' : ''), role: 'status', text: e }); };
+const errLine = key => { const e = COMP.exErr && String(COMP.exErr.key) === String(key) ? COMP.exErr.msg : ''; return UI.status( { class: 'law-err board-err' + (e ? ' on' : ''), role: 'status', text: e }); };
 function exportErr(btn, msg) {
   const card = btn && btn.closest('.board'), p = card && card.querySelector('.board-err');
   if (!p) { if (msg) { rnEvent(msg, 'bad'); renderRunner(); } return; }

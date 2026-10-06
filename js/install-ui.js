@@ -125,14 +125,14 @@ function instDownload(what, t, msgEl) {
   a.download = (what === 'program' && t === 'ground' ? 'command-module' : designBase()) + f.ext; document.body.append(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
-const instMsg = (n, text, cls) => { if (!n) return; n.textContent = text; n.className = 'hint inst-msg' + (cls ? ' ' + cls : ''); };
+const instMsg = (n, text, cls) => { if (!n) return; n.textContent = text; n.className = 'ui-status hint inst-msg' + (cls ? ' ' + cls : ''); };
 const b64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
 async function sha256hex(bytes) { const h = await crypto.subtle.digest('SHA-256', bytes); return [...new Uint8Array(h)].map(x => x.toString(16).padStart(2, '0')).join(''); }
 
 /* ───────── the dialog ───────── */
 function cmdBox(text, label) {
   const code = el('code', { text });
-  const copy = el('button', { class: 'btn', type: 'button', text: 'Copy', 'aria-label': 'Copy ' + (label || 'the command') });
+  const copy = UI.button( { class: 'btn', type: 'button', text: 'Copy', 'aria-label': 'Copy ' + (label || 'the command') });
   copy.addEventListener('click', async () => {
     let ok = false; try { await navigator.clipboard.writeText(code.textContent); ok = true; } catch (e) {
       const r = document.createRange(); r.selectNodeContents(code); const s = getSelection(); s.removeAllRanges(); s.addRange(r); try { ok = document.execCommand('copy'); } catch (x) {}
@@ -141,7 +141,7 @@ function cmdBox(text, label) {
   });
   const box = el('div', { class: 'cmd' }, el('pre', {}, code), copy); box.code = code; return box;
 }
-const instStep = (n, title, ...kids) => el('section', { class: 'inst-step' }, el('h3', {}, el('span', { class: 'inst-n', text: String(n) }), title), ...kids);
+const instStep = (n, title, ...kids) => UI.section( { class: 'inst-step' }, el('h3', {}, el('span', { class: 'inst-n', text: String(n) }), title), ...kids);
 const instPara = (html, cls) => el('p', { class: cls || '', html });
 
 function openInstall(target) {
@@ -181,11 +181,11 @@ function espGuide(t) {
     el('li', { text: 'A USB cable that carries data (some only charge). Chrome or Edge on a computer.' }))));
   const serialOk = 'serial' in navigator;
   // 1: firmware
-  const prog = el('progress', { max: 1, value: 0, hidden: '' }), msg = el('p', { class: 'hint inst-msg', id: 'installBusy', role: 'status' });
-  const erase = el('label', { class: 'check' }, el('input', { type: 'checkbox', id: 'instErase' }), 'Erase the whole board first (forgets the wiring and airframe it saved)');
-  const go = el('button', { class: 'btn primary', type: 'button', id: 'instFlash', text: 'Install now over USB' });
-  const pick = el('input', { type: 'file', multiple: '', accept: '.bin', hidden: '', id: 'instFiles' });
-  const pickBtn = el('button', { class: 'btn', type: 'button', text: 'Use firmware files from this computer…', title: `The three .bin files from firmware/${profile.chip}-${fwName}/` });
+  const prog = el('progress', { max: 1, value: 0, hidden: '' }), msg = UI.status( { class: 'hint inst-msg', id: 'installBusy', role: 'status' });
+  const erase = el('label', { class: 'check' }, UI.input( { type: 'checkbox', id: 'instErase' }), 'Erase the whole board first (forgets the wiring and airframe it saved)');
+  const go = UI.button( { class: 'btn primary', type: 'button', id: 'instFlash', text: 'Install now over USB' });
+  const pick = UI.input( { type: 'file', multiple: '', accept: '.bin', hidden: '', id: 'instFiles' });
+  const pickBtn = UI.button( { class: 'btn', type: 'button', text: 'Use firmware files from this computer…', title: `The three .bin files from firmware/${profile.chip}-${fwName}/` });
   pickBtn.addEventListener('click', () => pick.click());
   pick.addEventListener('change', () => { INST.files = [...pick.files]; instMsg(msg, INST.files.length ? `Using ${INST.files.map(f => f.name).join(', ')}.` : ''); });
   go.addEventListener('click', () => espFlash(fwName, profile, prog, msg));
@@ -197,10 +197,10 @@ function espGuide(t) {
   // the board's messages
   const con = el('pre', { class: 'inst-console', id: 'instConsole', 'aria-live': 'polite' });
   const live = el('p', { class: 'hint inst-live', id: 'instLive' });
-  const line = el('input', { type: 'text', id: 'instLine', placeholder: ground ? 'A command: show, set tx=17,16, save, reboot, status…' : 'A setting: show, set baud=921600, save, reboot…', 'aria-label': 'Send a line to the board', spellcheck: 'false', autocomplete: 'off' });
-  const send = el('button', { class: 'btn', type: 'button', text: 'Send' });
-  const baud = el('select', { id: 'instBaud', 'aria-label': 'Speed' }, ...(ground ? [115200] : [921600, 460800, 230400, 115200]).map(b => el('option', { value: b, text: b + ' baud' })));
-  const conn = el('button', { class: 'btn', type: 'button', id: 'instConn', text: 'Connect' });
+  const line = UI.input( { type: 'text', id: 'instLine', placeholder: ground ? 'A command: show, set tx=17,16, save, reboot, status…' : 'A setting: show, set baud=921600, save, reboot…', 'aria-label': 'Send a line to the board', spellcheck: 'false', autocomplete: 'off' });
+  const send = UI.button( { class: 'btn', type: 'button', text: 'Send' });
+  const baud = UI.select( { id: 'instBaud', 'aria-label': 'Speed' }, ...(ground ? [115200] : [921600, 460800, 230400, 115200]).map(b => el('option', { value: b, text: b + ' baud' })));
+  const conn = UI.button( { class: 'btn', type: 'button', id: 'instConn', text: 'Connect' });
   conn.addEventListener('click', async () => { if (INST.conn) { await INST.conn.close(); INST.conn = null; instConnUi(); } else await espConnect(); });
   const sendLine = async () => {
     const s = line.value.trim(); if (!s) return;
@@ -221,9 +221,9 @@ function espGuide(t) {
 }
 function espDesign(t, edited) {
   const profile = instProfile(t), wiring = boardWiringPlan(t);
-  const acts = actuators(), js = joints(), msg = el('p', { class: 'hint inst-msg', role: 'status' });
-  const mp = el('input', { type: 'text', id: 'instMotors', value: wiring.motors.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Motor pins' });
-  const sp = el('input', { type: 'text', id: 'instServos', value: wiring.servos.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Servo pins' });
+  const acts = actuators(), js = joints(), msg = UI.status( { class: 'hint inst-msg', role: 'status' });
+  const mp = UI.input( { type: 'text', id: 'instMotors', value: wiring.motors.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Motor pins' });
+  const sp = UI.input( { type: 'text', id: 'instServos', value: wiring.servos.join(','), readonly: 'readonly', spellcheck: 'false', 'aria-label': 'Servo pins' });
   const map = el('ol', { class: 'inst-map' });
   const redraw = () => {
     map.textContent = ''; const m = mp.value.split(/[,\s]+/).filter(Boolean), s = sp.value.split(/[,\s]+/).filter(Boolean);
@@ -231,8 +231,8 @@ function espDesign(t, edited) {
     js.forEach((j, i) => map.append(el('li', {}, el('b', { text: j.name }), ` (servo) → GPIO ${s[i] ?? '?'}`, s[i] == null ? el('span', { class: 'bad', text: ' (no pin: it won\'t arm)' }) : null)));
   };
   mp.addEventListener('input', redraw); sp.addEventListener('input', redraw); redraw();
-  const sendAf = el('button', { class: 'btn primary', type: 'button', id: 'instSendAf', text: 'Send the airframe' });
-  const sendWire = el('button', { class: 'btn', type: 'button', id: 'instSendWire', text: 'Send hardware settings (it restarts)' });
+  const sendAf = UI.button( { class: 'btn primary', type: 'button', id: 'instSendAf', text: 'Send the airframe' });
+  const sendWire = UI.button( { class: 'btn', type: 'button', id: 'instSendWire', text: 'Send hardware settings (it restarts)' });
   sendAf.addEventListener('click', () => espSendAirframe(msg));
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
@@ -245,11 +245,11 @@ function espDesign(t, edited) {
     el('div', { class: 'inst-row' }, sendAf),
   ];
   if (edited.length) {
-    const sendP = el('button', { class: 'btn', type: 'button', id: 'instSendProg', text: 'Send the edited formulas' });
+    const sendP = UI.button( { class: 'btn', type: 'button', id: 'instSendProg', text: 'Send the edited formulas' });
     sendP.addEventListener('click', () => espSendProgram(msg));
     kids.push(instPara(`You edited ${edited.join(', ')}. The board checks the new formulas, runs them beside its own for a second, then swaps; they last until it restarts (it always starts on its built-in ones), so send them after each power-up, or before a flight.`), el('div', { class: 'inst-row' }, sendP));
   }
-  if(Object.values(wiring.sensors).some(s=>s.driver==='custom')) { const ack=el('input',{type:'checkbox',id:'instCustomBuilt'});ack.addEventListener('change',()=>{INST.customFirmware=ack.checked;});kids.push(el('label',{class:'check'},ack,'This board already runs firmware rebuilt with this design’s custom C driver')); }
+  if(Object.values(wiring.sensors).some(s=>s.driver==='custom')) { const ack=UI.input({type:'checkbox',id:'instCustomBuilt'});ack.addEventListener('change',()=>{INST.customFirmware=ack.checked;});kids.push(el('label',{class:'check'},ack,'This board already runs firmware rebuilt with this design’s custom C driver')); }
   for(const text of [...wiring.errors,...wiring.warnings]) kids.push(el('p',{class:'inst-note',text}));
   kids.push(msg);
   return instStep(2, 'Send this design', ...kids);
@@ -276,14 +276,14 @@ function espManual(t, ground, fwName, edited) {
     instPara('That keeps what the board saved. For a clean start, first <code>esptool.py -p PORT erase_flash</code>. To build it yourself instead (ESP-IDF 5.x):', 'hint'),
     cmdBox(`cd ${src}\nidf.py set-target ${profile.chip}\nidf.py -p ${port} build flash monitor`, 'the build command'));
   if (!ground) {
-    const msg = el('p', { class: 'hint inst-msg', role: 'status' });
-    const dl = (what, text) => el('button', { class: 'btn', type: 'button', text, onclick: () => instDownload(what, t, msg) });
+    const msg = UI.status( { class: 'hint inst-msg', role: 'status' });
+    const dl = (what, text) => UI.button( { class: 'btn', type: 'button', text, onclick: () => instDownload(what, t, msg) });
     kids.push(instPara('The design, sent with <code>runner/pi/fly.py</code> (<code>pip install pyserial</code>) from a computer or the Pi:'),
       el('div', { class: 'inst-row' }, dl('airframe', `${designBase()}.dfa: the airframe`), ...(edited.length ? [dl('program', `${designBase()}.rnp: the edited formulas`)] : [])), msg,
       cmdBox(`${hardwareSettings(boardWiringPlan(t)).map(line=>'python3 runner/pi/fly.py '+port+' set '+line).join('\n')}\npython3 runner/pi/fly.py ${port} save\npython3 runner/pi/fly.py ${port} reboot\npython3 runner/pi/fly.py ${port} airframe ${designBase()}.dfa${edited.length ? `\npython3 runner/pi/fly.py ${port} program ${designBase()}.rnp` : ''}\npython3 runner/pi/fly.py ${port} status`, 'the fly.py commands'),
       instPara('<code>.dfa</code>: the airframe the flight core flies on (each motor\'s force and torque, the servos, the mass and inertia, where the IMU sits), checked by the board and kept in its flash. <code>.rnp</code>: a program, the formulas compiled into the steps the board runs, with self-tests; it lasts until a restart. <code>fly.py PORT test 1 0.1</code> spins motor 1 at 10% for 2 s, props off.', 'hint'));
   } else kids.push(instPara('Its settings can also be typed in any serial terminal at 115200 baud (<code>screen PORT 115200</code>, the Arduino serial monitor).', 'hint'));
-  return el('details', { class: 'inst-manual' }, el('summary', { text: 'What the files are, and doing it by hand' }), ...kids);
+  return UI.details({ class: 'inst-manual', title: 'What the files are, and doing it by hand' }, ...kids);
 }
 
 function instLog(s, cls) {
@@ -421,7 +421,7 @@ async function espFlash(name, profile, prog, msg) {
     INST.customFirmware = !!(INST.files && INST.files.length);
     await loader.after('hard_reset');
     say('Installed and checked: the board restarted on the new firmware.' + (name === 'flight' ? ' Now send it this design (step 2).' : ' Now connect and set up its wiring (step 2).'));
-    msg.className = 'hint inst-msg good';
+    msg.className = 'ui-status hint inst-msg good';
   } catch (e) {
     const m = String(e && e.message || e);
     instMsg(msg, 'It didn\'t install: ' + m + (/timed? ?out|Failed to connect|sync/i.test(m) ? '. Hold the BOOT button while you press Install, try another cable, or close anything else using the port (Arduino, a serial monitor).' : '.'), 'bad');
@@ -436,7 +436,7 @@ async function espFlash(name, profile, prog, msg) {
 function piInputs(fields, onChange) {
   const box = el('div', { class: 'inst-pins' });
   for (const [k, label, def, hint, owned] of fields) {
-    const inp = el('input', { type: 'text', value: owned?def:instPref(k, def), readonly:owned?'readonly':null, spellcheck: 'false', autocomplete: 'off', 'aria-label': label, title: hint || '' });
+    const inp = UI.input( { type: 'text', value: owned?def:instPref(k, def), readonly:owned?'readonly':null, spellcheck: 'false', autocomplete: 'off', 'aria-label': label, title: hint || '' });
     inp.addEventListener('input', () => { instSave(k, inp.value.trim()); onChange(); });
     box.append(el('label', {}, el('span', { text: label }), inp));
   }
@@ -494,8 +494,8 @@ function piGuide(t, K) {
   cmds.build = cmdBox('', 'the build commands');
   out.push(instStep(4, 'Build it', instPara('The compiler first (it may already be there), then dfb_pi: a single compile, about a minute on a Pi Zero. It ends with <code>built dfb_pi</code>.'), cmds.build));
   cmds.files = cmdBox('', 'the design files block');
-  const dmsg = el('p', { class: 'hint inst-msg', role: 'status' });
-  const dl = el('div', { class: 'inst-row' }, ...need.map(w => el('button', { class: 'btn', type: 'button', text: `${designBase()}${w === 'nav' ? '.dnc' : w === 'airframe' ? '.dfa' : '.dlc'}`, title: 'Download it', onclick: () => instDownload(w, t, dmsg) })));
+  const dmsg = UI.status( { class: 'hint inst-msg', role: 'status' });
+  const dl = el('div', { class: 'inst-row' }, ...need.map(w => UI.button( { class: 'btn', type: 'button', text: `${designBase()}${w === 'nav' ? '.dnc' : w === 'airframe' ? '.dfa' : '.dlc'}`, title: 'Download it', onclick: () => instDownload(w, t, dmsg) })));
   out.push(instStep(5, 'Put this design on it', instPara(`One block with the files inside it: paste it into the Pi's terminal. It writes them to <code>~/dfb</code> and checks each arrived whole (<code>OK</code>). ${need.length > 1 ? '<code>drone.dnc</code>: where its sensors sit, for the navigation; <code>drone.dfa</code>: the airframe, as the flight controller has it, for the learning and the supervisor to start from; <code>drone.dlc</code>: where the IMU sits, each motor\'s heat model and the battery.' : '<code>drone.dnc</code>: the mass and where its sensors sit, for the navigation.'}`), cmds.files,
     instPara('Do this again whenever the design changes. Or download them and copy them across with <code>scp</code>, renamed to <code>drone.dnc</code>…:', 'hint'), dl, dmsg));
   cmds.run = cmdBox('', 'the run command');
@@ -503,7 +503,7 @@ function piGuide(t, K) {
   cmds.svc = cmdBox('', 'the service commands');
   out.push(instStep(7, 'Start it at power-up', instPara('As a service, it starts when the Pi boots and again if it ever stops. Its commands then come over UDP (port 14560) instead of the keyboard.'), cmds.svc,
     instPara('Its output: <code>journalctl -u dfb -f</code>. A command: <code>echo status | nc -u -w1 127.0.0.1 14560</code>. After a new design (step 5): <code>sudo systemctl restart dfb</code>. After new code (steps 3 and 4): the same.', 'hint')));
-  out.push(el('details', { class: 'inst-manual' }, el('summary', { text: 'Good to know' }),
+  out.push(UI.details({ class: 'inst-manual', title: 'Good to know' },
     instPara('<b>Power.</b> Cutting the drone\'s battery cuts the Pi without warning, which can damage what it was writing on the SD card. Its files are written once and only read in flight, so the risk is small; for more, turn on the read-only overlay (<code>sudo raspi-config</code> → Performance → Overlay file system) once it\'s all set up, and off again to change the design.'),
     instPara('<b>Boot time.</b> A Pi Zero takes 20–30 s to start. The ESP32 flies without it meanwhile (angle mode), and the navigation, learning and supervisor join in when it\'s up.'),
     instPara('<b>Where things are.</b> <code>~/dfb/runner</code>: the source and <code>runner/pi/dfb_pi</code>; <code>~/dfb/drone.*</code>: the design; <code>/etc/systemd/system/dfb.service</code>: the service. <code>runner/pi/fly.py</code> talks to the ESP32 from the Pi too (stop the service first: one program on the port at a time).')));

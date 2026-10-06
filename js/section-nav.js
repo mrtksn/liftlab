@@ -2,8 +2,8 @@
 // One navigation bar outside the panes: it survives tab and device rerenders.
 function initSectionNavigation(rootId){
   const root=document.getElementById(rootId),tabs=root.querySelector('.tabs'),panes=[...root.querySelectorAll(':scope > [role="tabpanel"]')];
-  const nav=el('nav',{class:'section-nav','aria-label':rootId==='airframe'?'Sections in this tab':'Sections in the readouts tab'}),menu=el('details',{class:'section-jump'}),summary=el('summary'),links=el('div',{class:'section-links'}),current=el('span',{class:'section-current'}),previous=el('a',{class:'section-neighbor section-previous'}),next=el('a',{class:'section-neighbor section-next'});
-  summary.append(current);menu.append(summary,links);nav.append(previous,menu,next);tabs.after(nav);
+  const nav=el('nav',{class:'section-nav','aria-label':rootId==='airframe'?'Sections in this tab':'Sections in the readouts tab'}),menu=UI.details({class:'section-jump',title:''}),summary=menu.querySelector('summary'),links=el('div',{class:'section-links'}),current=el('span',{class:'section-current'}),previous=el('a',{class:'section-neighbor section-previous'}),next=el('a',{class:'section-neighbor section-next'});
+  summary.append(current);menu.append(links);nav.append(previous,menu,next);tabs.after(nav);
   let sections=[],activePane=null,activeIndex=0,frame=0,nextId=0,refreshNeeded=true;
   const headingSelector='.sec > h2, .hw-group > h3, .ai-view h2, .ai-view h3';
   const title=h=>{const copy=h.cloneNode(true);copy.querySelectorAll('small,button,.srcs,.src-tag').forEach(n=>n.remove());return copy.textContent.trim();};

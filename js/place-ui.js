@@ -53,7 +53,7 @@ function openPlace(btn, type) {
   const box = el('div', { class: 'place-menu', role: 'menu', 'aria-label': 'Where to add the ' + word });
   box.append(el('div', { class: 'place-head', text: `Where does the ${word} go?` }));
   const pick = (label, place, depth, cls) => {
-    const b = el('button', { class: 'place-opt' + (cls ? ' ' + cls : ''), type: 'button', role: 'menuitem', style: `padding-left:${10 + 16 * depth}px` });
+    const b = UI.button( { class: 'place-opt' + (cls ? ' ' + cls : ''), type: 'button', role: 'menuitem', style: `padding-left:${10 + 16 * depth}px` });
     b.innerHTML = label;
     b.addEventListener('click', () => { closePlace(); addComp(type, place); });
     box.append(b);

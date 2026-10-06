@@ -12,7 +12,7 @@ const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, logKey: '',
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
-  const sec = (title, small, src) => { const s = el('section', { class: 'sec gs-sec' }); s.append(el('h2', { 'data-src': src || 'tlm' }, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
+  const sec = (title, small, src) => { const s = UI.section( { class: 'sec gs-sec' }); s.append(el('h2', { 'data-src': src || 'tlm' }, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
   pane.append(srcLegend(['tlm', 'gnd', 'sim', 'you']));
   const grid = (...kids) => el('div', { class: 'gs-grid' }, ...kids);
 
@@ -23,9 +23,8 @@ function buildGs() {
   // the radio
   const r = sec('Radio link', 'ExpressLRS 2.4 GHz', 'tlm gnd sim you');
   const sel = (id, label, opts, get, set) => {
-    const s = el('select', { id }); for (const [v, t] of opts) { const o = el('option', { value: String(v), text: t }); if (String(get()) === String(v)) o.selected = true; s.append(o); }
-    s.addEventListener('change', () => { set(s.value); save(); boardsRadioCfg(); });
-    return el('label', { class: 'gs-sel', for: id }, el('span', { class: 'lbl', text: label }), s);
+    const s = UI.choice({id,label,options:opts,value:get(),onChange:value=>{set(value);save();boardsRadioCfg();}});
+    return UI.field({label,class:'gs-sel'},s);
   };
   r.append(el('div', { class: 'gs-row' },
     sel('gsRate', 'Packet rate', Object.keys(ELRS_RATES).map(k => [k, k + ' Hz']), () => radioCfg.rate, v => { radioCfg.rate = +v; }),
@@ -57,7 +56,7 @@ function buildGs() {
   const row = el('div', { class: 'gs-logbar' }), chips = el('div', { class: 'gs-filters', role: 'group', 'aria-label': 'Show in the log' });
   for (const [k, label] of kinds) {
     const on = () => k === 'all' ? radioLogAll : GS_UI.logShow[k] !== false;
-    const b = el('button', { type: 'button', class: 'gs-filter', 'aria-pressed': String(on()), text: label });
+    const b = UI.button( { type: 'button', class: 'gs-filter', 'aria-pressed': String(on()), text: label });
     if (k === 'all') b.title = 'Log every telemetry frame too (busy). Off: only commands, switches, messages, the flight mode and link events.';
     b.addEventListener('click', () => { if (k === 'all') radioLogAll = !radioLogAll; else GS_UI.logShow[k] = !on(); b.setAttribute('aria-pressed', String(on())); renderGs(true); });
     chips.append(b);
@@ -67,7 +66,7 @@ function buildGs() {
   const PAUSE = 'M4 3h3v10H4zM9 3h3v10H9z', PLAY = 'M5 3l8 5-8 5z', svgNs = 'http://www.w3.org/2000/svg';
   const ico = document.createElementNS(svgNs, 'svg'), path = document.createElementNS(svgNs, 'path'); ico.setAttribute('viewBox', '0 0 16 16'); ico.setAttribute('aria-hidden', 'true'); ico.append(path);
   const pzLabel = el('span'), pzNew = el('span', { class: 'gs-new', hidden: '' });
-  const pz = GS_UI.pauseBtn = el('button', { type: 'button', class: 'btn btn-sm gs-pause' }, ico, pzLabel, pzNew);
+  const pz = GS_UI.pauseBtn = UI.button( { type: 'button', class: 'btn btn-sm gs-pause' }, ico, pzLabel, pzNew);
   let pzWas;
   GS_UI.setPause = () => {
     const p = GS_UI.paused;
@@ -80,7 +79,7 @@ function buildGs() {
     if (pzNew.textContent !== s) pzNew.textContent = s; pzNew.hidden = !s;
   };
   pz.addEventListener('click', () => { GS_UI.paused = GS_UI.paused ? null : { log: radio.log.slice(), n: radio.logN, t: radio.t }; GS_UI.setPause(); renderGs(true); });
-  const clr = el('button', { type: 'button', class: 'btn btn-sm', text: 'Clear', title: 'Start the log afresh from here' });
+  const clr = UI.button( { type: 'button', class: 'btn btn-sm', text: 'Clear', title: 'Start the log afresh from here' });
   clr.addEventListener('click', () => { GS_UI.clearId = radio.logN; GS_UI.paused = null; GS_UI.open.clear(); GS_UI.setPause(); renderGs(true); });
   GS_UI.setPause();
   row.append(chips, el('div', { class: 'gs-logbtns' }, pz, clr));
@@ -154,7 +153,7 @@ function logLine(e) {
   const li = el('li', { 'data-tone': e.tone || '' });
   if (!e.bytes) { li.append(el('div', { class: 'gs-line' }, ...kids)); return { li }; }
   li.className = 'has-raw';
-  const it = { li, btn: el('button', { type: 'button', class: 'gs-line', 'aria-expanded': 'false', title: 'Show the bytes' }, ...kids), raw: null };
+  const it = { li, btn: UI.button( { type: 'button', class: 'gs-line', 'aria-expanded': 'false', title: 'Show the bytes' }, ...kids), raw: null };
   li.append(it.btn);
   it.btn.addEventListener('click', () => { const open = !GS_UI.open.has(e.id); if (open) GS_UI.open.add(e.id); else GS_UI.open.delete(e.id); logLineOpen(e, it, open); });
   if (GS_UI.open.has(e.id)) logLineOpen(e, it, true);
@@ -235,7 +234,7 @@ function renderGs(force) {
     const ls = latches(); GS_UI.cargoSec.hidden = !ls.length && !v.cargo;
     if (GS_UI.cargoN !== ls.length) {
       GS_UI.cargoN = ls.length; const box = GS_UI.cargoBtns; box.textContent = '';
-      const b = (text, title, latch, action) => { const x = el('button', { type: 'button', class: 'btn btn-sm', text, title }); x.addEventListener('click', () => radioCommand(3, [latch, action])); return x; };
+      const b = (text, title, latch, action) => { const x = UI.button( { type: 'button', class: 'btn btn-sm', text, title }); x.addEventListener('click', () => radioCommand(3, [latch, action])); return x; };
       ls.forEach((l, i) => box.append(b(`Open ${l.name}`, `LATCH ${i + 1} open: drop what it holds`, i, 0), b(`Close ${l.name}`, `LATCH ${i + 1} close: grab what's in reach`, i, 1)));
       if (ls.length > 1) box.append(b('Open all', 'LATCH all open', -1, 0));
     }

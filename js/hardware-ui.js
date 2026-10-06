@@ -1,22 +1,20 @@
 'use strict';
 const HW_UI={open:new Set(),drafts:new Map()};
 function hardwareSelect(label,id,options,value,change) {
-  const sel=el('select',{'aria-label':label,id});
-  for(const [v,text,disabled] of options)sel.append(el('option',{value:String(v),text,disabled:disabled?'disabled':null}));
-  sel.value=String(value);commitSelect(sel,change,'Press Enter to apply the wiring change');return sel;
+  return UI.choice({label,id,options,value,onChange:change,commit:true});
 }
-function hardwareField(label,control){return el('label',{class:'hw-field'},el('span',{text:label}),control);}
+function hardwareField(label,control){return UI.field({label,class:'hw-field'},control);}
 function hardwareNumber(label,value,change,min,max) {
-  const inp=el('input',{type:'number','aria-label':label,value:String(value),min,max});
+  const inp=UI.input({type:'number','aria-label':label,value:String(value),min,max});
   inp.addEventListener('change',()=>{const v=Number(inp.value);if(Number.isFinite(v))change(v);});return hardwareField(label,inp);
 }
-function hardwareText(label,value,change){const inp=el('input',{type:'text','aria-label':label,value});inp.addEventListener('change',()=>change(inp.value.trim()));return hardwareField(label,inp);}
-function hardwareDetails(key,title,...children){const d=el('details',{class:'hw-advanced',open:HW_UI.open.has(key)?'open':null},el('summary',{text:title}),...children);d.addEventListener('toggle',()=>{if(d.open)HW_UI.open.add(key);else HW_UI.open.delete(key);});return d;}
-function hardwareCard(name,kind,connection,board,...children){return el('article',{class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:name}),el('span',{class:'hw-kind',text:kind})),board,hardwareField('Connection',el('span',{class:'hw-connection',text:connection})),...children);}
+function hardwareText(label,value,change){const inp=UI.input({type:'text','aria-label':label,value});inp.addEventListener('change',()=>change(inp.value.trim()));return hardwareField(label,inp);}
+function hardwareDetails(key,title,...children){return UI.details({title,class:'hw-advanced',open:HW_UI.open.has(key),onToggle:open=>{if(open)HW_UI.open.add(key);else HW_UI.open.delete(key);}},...children);}
+function hardwareCard(name,kind,connection,board,...children){return UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:name}),el('span',{class:'hw-kind',text:kind})),board,hardwareField('Connection',el('span',{class:'hw-connection',text:connection})),...children);}
 function renderWiringOverview(C){
   const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
   for(const g of [...data.groups,...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
-    const card=el('article',{class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
+    const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
     for(const r of g.rows)list.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
     card.append(g.rows.length?list:el('p',{class:'hint',text:'No device connections assigned.'}));section.append(card);
   }
@@ -43,7 +41,7 @@ function renderHardware() {
   const outputs=group('Motors & servos','Choose the board, motor driver and signal GPIO. Motor power comes through an ESC or MOSFET stage; servos use a PWM signal.');
   const sensors=group('Sensors','Choose a device driver, then wire the pins shown. I²C sensors on one board share SDA and SCL; each needs its own address.');
   const core=C.boards.find(b=>b.tasks.includes('core'));
-  if(core)sensors.append(el('button',{class:'btn hw-preset-btn',type:'button',id:'hw-10dof-'+core.id,text:'Use 10DOF module: MPU6050 + BMP180 + HMC5883L',onclick:()=>use10Dof(core)}));
+  if(core)sensors.append(UI.button({class:'btn hw-preset-btn',type:'button',id:'hw-10dof-'+core.id,text:'Use 10DOF module: MPU6050 + BMP180 + HMC5883L',onclick:()=>use10Dof(core)}));
   let cargo=null;
   for(const c of parts){
     const p=partWiring(c),owner=hardwareOwner(C,c),saved=C.wiring?.parts?.[c.id]||{};
@@ -83,7 +81,7 @@ function renderHardware() {
     if(c.kind==='fix')card.append(hardwareText(c.name+' serial port',saved.port||'/dev/ttyUSB0',v=>update({port:v})),el('p',{class:'hint',text:saved.port==='/dev/serial0'?'GPS TX → Pi GPIO 15 (RX), GPS RX ← GPIO 14 (TX), share GND. The flight link must use another port.':'GPS TX → USB adapter RX; GPS RX ← adapter TX (if needed); share GND. A USB adapter uses no Pi GPIO. Use /dev/serial0 for the fixed GPIO 14/15 UART.'}));
     if(c.kind==='flow')card.append(el('p',{class:'hint',text:'No physical driver yet. SPI/UART pin assignment will appear when a device driver is available.'}));
     if(c.kind==='mag'&&p.driver!=='none')card.append(hardwareDetails('mag'+c.id,'Compass calibration',hardwareText('Compass offsets (µT)',saved.bias||'0,0,0',v=>update({bias:v})),hardwareText('Compass scale XYZ',saved.scale||'1,1,1',v=>update({scale:v})),el('p',{class:'hint',text:'Three comma-separated values, X,Y,Z. Set orientation in Airframe.'})));
-    if(custom&&owner)card.append(el('button',{class:'btn',type:'button',text:'Edit C driver for '+owner.name,onclick:()=>{const d=$('#hw-editor-'+owner.id);if(d){d.open=true;HW_UI.open.add('driver'+owner.id);$('#hw-code-'+owner.id).focus();}}}));
+    if(custom&&owner)card.append(UI.button({class:'btn',type:'button',text:'Edit C driver for '+owner.name,onclick:()=>{const d=$('#hw-editor-'+owner.id);if(d){d.open=true;HW_UI.open.add('driver'+owner.id);$('#hw-code-'+owner.id).focus();}}}));
     sensors.append(card);
   }
   const auxiliary=group('Power & radio','These connections belong to the board running the corresponding task. Settings are included when installing the design.');
@@ -130,13 +128,13 @@ function renderGroundHardware(box,C){
 }
 function customDriverEditor(C,b){
   const saved=C.wiring?.boards?.[b.id]||{};
-  const preset=el('select',{'aria-label':b.name+' C driver preset',id:'hw-preset-'+b.id},...Object.entries(DRIVER_PRESETS).map(([key,p])=>el('option',{value:key,text:p.label})));
-  const code=el('textarea',{class:'code',rows:18,spellcheck:'false','aria-label':b.name+' custom sensor C code',id:'hw-code-'+b.id});code.value=HW_UI.drafts.get(b.id)??saved.driverCode??DRIVER_PRESETS['10dof'].code;
+  const preset=UI.select({'aria-label':b.name+' C driver preset',id:'hw-preset-'+b.id},...Object.entries(DRIVER_PRESETS).map(([key,p])=>el('option',{value:key,text:p.label})));
+  const code=UI.textarea({class:'code',rows:18,spellcheck:'false','aria-label':b.name+' custom sensor C code',id:'hw-code-'+b.id});code.value=HW_UI.drafts.get(b.id)??saved.driverCode??DRIVER_PRESETS['10dof'].code;
   code.addEventListener('input',()=>HW_UI.drafts.set(b.id,code.value));
-  const msg=el('p',{class:'hint',role:'status'});
-  const load=el('button',{class:'btn',type:'button',text:'Load preset into editor',onclick:()=>{code.value=DRIVER_PRESETS[preset.value].code;HW_UI.drafts.set(b.id,code.value);msg.textContent='Preset loaded. Save it to include it in this design.';}});
-  const apply=el('button',{class:'btn',type:'button',text:'Save driver code in design',onclick:()=>{if(code.value.length>65536){msg.textContent='Driver source limit: 64 KB.';return;}HW_UI.drafts.delete(b.id);editWiring(w=>{w.boards[b.id]={...hardwareBus(computers(),b),driverCode:code.value};},'driver'+b.id);}});
-  const download=el('button',{class:'btn',type:'button',text:'Export custom_sensors.h',onclick:()=>{const a=el('a',{href:URL.createObjectURL(new Blob([code.value],{type:'text/plain'})),download:'custom_sensors.h'});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);msg.textContent='Exported source. Rebuild firmware, install the custom .bin files, then send this design’s settings.';}});
+  const msg=UI.status({class:'hint',role:'status'});
+  const load=UI.button({class:'btn',type:'button',text:'Load preset into editor',onclick:()=>{code.value=DRIVER_PRESETS[preset.value].code;HW_UI.drafts.set(b.id,code.value);msg.textContent='Preset loaded. Save it to include it in this design.';}});
+  const apply=UI.button({class:'btn',type:'button',text:'Save driver code in design',onclick:()=>{if(code.value.length>65536){msg.textContent='Driver source limit: 64 KB.';return;}HW_UI.drafts.delete(b.id);editWiring(w=>{w.boards[b.id]={...hardwareBus(computers(),b),driverCode:code.value};},'driver'+b.id);}});
+  const download=UI.button({class:'btn',type:'button',text:'Export custom_sensors.h',onclick:()=>{const a=el('a',{href:URL.createObjectURL(new Blob([code.value],{type:'text/plain'})),download:'custom_sensors.h'});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);msg.textContent='Exported source. Rebuild firmware, install the custom .bin files, then send this design’s settings.';}});
   const d=hardwareDetails('driver'+b.id,b.name+' · custom sensor drivers (C)',el('p',{class:'hint',text:'Built-in drivers need no compilation. Custom C uses the same I²C pins shown on the device cards. Select Custom C driver on those cards to enable these callbacks.'}),hardwareField('Start from a preset',preset),load,code,el('div',{class:'hw-fields'},apply,download),msg,
     hardwareDetails('build'+b.id,'Build & install instructions',el('p',{class:'hint',text:'Browser compilation is possible, but LiftLab does not yet bundle a C compiler or emulate sensor registers. Export source and compile for your ESP chip with ESP-IDF. The simulator currently uses the sensor models in Airframe.'}),el('pre',{class:'inst-code',text:'cp /path/to/custom_sensors.h runner/fc/esp32/main/custom_sensors.h\nsh tools/build_firmware.sh\n# Install → Use firmware files from this computer\n# Select firmware/'+ESP_PROFILES[b.kind].chip+'-flight/*.bin'}),el('p',{class:'hint',text:'init: 0 success. IMU read: 0 success, gyro rad/s, acceleration m/s². Barometer/compass read: 1 new sample, 0 waiting, metres / µT. custom_read/custom_write access I²C registers. Keep reads nonblocking; native driver code affects flight timing.'})));
   d.id='hw-editor-'+b.id;return d;
