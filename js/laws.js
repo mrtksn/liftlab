@@ -52,10 +52,11 @@ function jointRotation(axis, theta) {
 
 
 
-function bodyDrag(v, wind, w) {
+function bodyDrag(v, wind, w, density) {
   const cd = 0.1;                                        // frame drag [N per m/s of airspeed]; the rotors add their own (rotorAero)
   const cw = 0.002;                                      // rotational damping [N·m per rad/s]
-  return { F: scl(sub(wind, v), cd), tau: scl(w, -cw) };
+  const scale = (density || 1.225) / 1.225;
+  return { F: scl(sub(wind, v), cd * scale), tau: scl(w, -cw * scale) };
 }
 
 function cableTension(stretch, stretchRate, m) {
@@ -65,14 +66,16 @@ function cableTension(stretch, stretchRate, m) {
   return Math.max(0, k * stretch + c * stretchRate);     // cables pull, never push
 }
 
-function payloadDrag(v, wind) {
-  return scl(sub(wind, v), 0.04);                        // [N per m/s of airspeed]
+function payloadDrag(v, wind, density) {
+  return scl(sub(wind, v), 0.04 * (density || 1.225) / 1.225);  // [N per m/s of airspeed]
 }
 
 function groundContact(depth, v) {
   // depth: how far the contact point is inside the surface [m]; v: its velocity in the surface's axes (z out of it)
   const k = 3000, c = 60, mu = 8;                        // stiffness, damping, sliding friction
-  return [-mu * v[0], -mu * v[1], Math.max(0, k * depth - c * v[2])];
+  const normal = Math.max(0, k * depth - c * v[2]), slip = Math.hypot(v[0], v[1]);
+  const drag = Math.min(mu, 0.6 * normal / Math.max(1e-9, slip));
+  return [-drag * v[0], -drag * v[1], normal];
 }
 
 // ─── Airflow. The simulator uses these to decide what really happens; the controller never sees them.
@@ -81,11 +84,19 @@ function motorDynamics(Omega, u, V, p, dt) {
   // A brushless motor and its prop. The ESC puts u·V across the motor; the current is what that voltage
   // leaves after the back-EMF, through the winding resistance (it may go negative: active braking).
   //   i = (u·V − Ke·Ω)/R,   τ = Ke·i,   J·dΩ/dt = τ − kQ·Ω²,   thrust = kT·Ω²,   prop drag torque = kQ·Ω²
-  // p: { Ke, R, J, kT, kQ, iMax }. Returns the new speed, current, motor torque and still-air thrust.
-  const i = clamp((u * V - p.Ke * Omega) / p.R, -0.5 * p.iMax, p.iMax);
+  // p: { Ke, R, J, kT, kQ, iMax }, optionally brushDrop/friction, density,
+  // lookup table and airflow load factors. Returns speed, winding current, torque and thrust.
+  const drop = u > 0 ? (p.brushDrop || 0) : 0;
+  const i = clamp((u * V - drop - p.Ke * Omega) / p.R, -0.5 * p.iMax, p.iMax);
   const tau = p.Ke * i;
-  const O = Math.max(0, Omega + (tau - p.kQ * Omega * Omega) / p.J * dt);   // props don't spin backwards
-  return { Omega: O, i, tau, T: p.kT * O * O };
+  const scale = (p.rho || 1.225) / (p.rhoRef || 1.225), qf = p.qFactor ?? 1, tf = p.tFactor ?? 1;
+  const load = p.table ? FlightPhysics.loadAt(p, Omega, p.rho, qf, tf).Q : p.kQ * Omega * Omega * scale * qf;
+  const friction = Omega > 0 ? (p.friction || 0) : Math.min(p.friction || 0, Math.max(0, tau));
+  // Semi-implicit damping avoids stiff low-inertia motors oscillating at the fixed step.
+  const damping = p.Ke * p.Ke / p.R + 2 * load / Math.max(1, Omega);
+  const O = Math.max(0, Omega + (tau - load - friction) * dt / (p.J + dt * damping));
+  const T = p.table ? FlightPhysics.loadAt(p, O, p.rho, qf, tf).T : p.kT * O * O * scale * tf;
+  return { Omega: O, i, tau, T };
 }
 
 function servoTorque(err, rate, p) {
@@ -123,7 +134,7 @@ function thermalModel(T, P, G, C, Tamb, dt) {
   return T + dt * (P - G * (T - Tamb)) / C;
 }
 
-function wakeVelocity(point, rotors) {
+function wakeVelocity(point, rotors, density) {
   // Air velocity that the rotors' wakes induce at `point`, body frame. rotors: [{ p, d, T, R, va }]
   // (p: disc center, d: thrust axis, T: thrust [N], R: prop radius [m], va: oncoming air at the disc, body
   // frame). Wind and forward flight blow the wake sideways as it travels down, so in forward flight the
@@ -131,7 +142,7 @@ function wakeVelocity(point, rotors) {
   let w = [0, 0, 0];
   for (const r of rotors) {
     if (r.T <= 0) continue;
-    const vh = Math.sqrt(r.T / (2 * 1.225 * Math.PI * r.R * r.R));  // induced velocity at the disc (momentum theory)
+    const vh = Math.sqrt(r.T / (2 * (density || 1.225) * Math.PI * r.R * r.R));  // induced velocity at the disc (momentum theory)
     const rel = sub(point, r.p), s = -dot(rel, r.d);               // how far downstream of the disc
     if (s < -r.R) continue;                                        // well above the disc: no effect
     const va = r.va || [0, 0, 0], vs = sub(va, scl(r.d, dot(va, r.d)));   // crosswind at the disc
@@ -147,53 +158,68 @@ function wakeVelocity(point, rotors) {
   return w;
 }
 
-function rotorAero(T, R, vAxial, vInPlane, h) {
+function rotorAero(T, R, vAxial, vInPlane, h, density) {
   // T: thrust this command would make in still air [N]; R: prop radius [m]
   // vAxial: air flowing into the disc from above along its axis [m/s] (climbing, or another rotor's wake)
   // vInPlane: air velocity across the disc, body frame [m/s]; h: height of the disc above the ground [m]
-  if (T <= 0) return { T: 0, H: [0, 0, 0] };
-  const vh = Math.sqrt(T / (2 * 1.225 * Math.PI * R * R));          // induced velocity in hover
+  if (T <= 0) return { T: 0, H: [0, 0, 0], Qfactor: 1 };
+  const vh = Math.sqrt(T / (2 * (density || 1.225) * Math.PI * R * R));          // induced velocity in hover
   const ve = nrm(vInPlane);
   let vi = vh;                                                      // induced velocity now (Glauert): edgewise flow lowers it
   for (let n = 0; n < 6; n++) vi = 0.5 * vi + 0.5 * vh * vh / Math.sqrt(ve * ve + (vAxial + vi) ** 2 + 1e-9);
   let k = clamp(1 - 0.5 * (vAxial + vi - vh) / vh, 0.3, 1.3);       // more air through the disc than in hover costs thrust
   const hh = Math.max(h, R / 2);
-  k *= Math.min(1.3, 1 / (1 - (R / (4 * hh)) ** 2));                 // ground effect (Cheeseman–Bennett)
+  const ground = Math.min(1.3, 1 / (1 - (R / (4 * hh)) ** 2));
+  k *= ground;                 // ground effect (Cheeseman–Bennett)
   const x = -vAxial / vh;                                           // descending into its own wake…
   k *= 1 - 0.3 * Math.exp(-(((x - 1.2) / 0.45) ** 2)) * Math.exp(-((ve / vh) ** 2));   // …vortex ring state costs up to 30%, less when moving sideways
   const cH = 0.03;                                                  // rotor drag from blade flapping [1/(m/s)]
-  return { T: T * k, H: scl(vInPlane, cH * T) };
+  // Generic induced/profile power split. The previous step's correction also
+  // loads the motor; forward flight and ground effect no longer change thrust alone.
+  const Qfactor = clamp(k * (0.2 * (1 + 0.02 * ve * ve / (vh * vh)) + 0.8 * Math.max(0.05, (vAxial + vi) / vh) / Math.sqrt(ground)), 0.15, 2.5);
+  return { T: T * k, H: scl(vInPlane, cH * T), Qfactor };
 }
 
-function wingAero(u, chord, span) {
+function wingAero(u, chord, span, density, polar) {
   // A wing in the air u [m/s] (the air's velocity past it, in the wing's own axes: x toward the leading edge, y along
   // the span, z up from its top). Lift rises with the angle of attack up to a stall at about 15°, then falls off to
   // what a flat plate gives; drag is a base drag, plus the lift's own (induced), plus a flat plate's once stalled.
   // Returns the force [N] in the wing's axes, and how far ahead of the wing's middle it acts (centre of pressure, m:
   // the quarter chord while the flow is attached, the middle once stalled).
-  const rho = 1.225, S = chord * span, AR = span / Math.max(1e-3, chord);
+  const rho = density || 1.225, S = chord * span, AR = span / Math.max(1e-3, chord);
   const V = Math.hypot(u[0], u[2]); if (V < 1e-3) return { F: [0, 0, 0], xcp: chord / 4 };
   const a = Math.atan2(u[2], -u[0]);                      // angle of attack: air from below and ahead is positive
   const cla = 2 * Math.PI / (1 + 2 / AR), stall = 15 * Math.PI / 180;
   const sa = Math.sin(a), ca = Math.cos(a);
   const att = 1 / (1 + Math.exp((Math.abs(Math.asin(sa)) - stall) / 0.035));   // 1 attached … 0 stalled (blended)
-  const cl = att * cla * Math.asin(sa) * Math.sign(ca || 1) + (1 - att) * 2 * sa * ca;
-  const cd = 0.02 + att * cl * cl / (Math.PI * 0.8 * AR) + (1 - att) * 1.9 * sa * sa;
+  let cl = att * cla * Math.asin(sa) * Math.sign(ca || 1) + (1 - att) * 2 * sa * ca;
+  let cd = 0.02 + att * cl * cl / (Math.PI * 0.8 * AR) + (1 - att) * 1.9 * sa * sa;
+  const degrees = a * 180 / Math.PI;
+  if (polar && polar.length > 1 && degrees >= polar[0][0] && degrees <= polar[polar.length - 1][0]) {
+    let lo = 0, hi = polar.length - 1;
+    while (hi - lo > 1) { const m = (hi + lo) >> 1; if (polar[m][0] <= degrees) lo = m; else hi = m; }
+    const f = (degrees - polar[lo][0]) / (polar[hi][0] - polar[lo][0]);
+    cl = polar[lo][1] + f * (polar[hi][1] - polar[lo][1]); cd = polar[lo][2] + f * (polar[hi][2] - polar[lo][2]);
+  } else if (polar && polar.length > 1) {
+    const edge = degrees < polar[0][0] ? polar[0] : polar[polar.length - 1];
+    const blend = clamp(Math.abs(degrees - edge[0]) / 10, 0, 1);
+    cl = edge[1] * (1 - blend) + cl * blend; cd = edge[2] * (1 - blend) + cd * blend;
+  }
   const q = 0.5 * rho * V * V * S, d = [u[0] / V, 0, u[2] / V], l = [d[2], 0, -d[0]];   // drag along the air, lift across it
   const F = [q * (cd * d[0] + cl * l[0]), 0.05 * 0.5 * rho * Math.abs(u[1]) * u[1] * S, q * (cd * d[2] + cl * l[2])];   // (and a little drag along the span)
   return { F, xcp: chord / 4 * att };
 }
 
-function bluffDrag(u, areas) {
+function bluffDrag(u, areas, density, coefficient) {
   // A blunt part (a box, a battery, a hub) in the air u [m/s], its own axes: each face's drag, as a box's
   // (Cd 1.05), on the frontal area it shows that way [m²].
-  const rho = 1.225, cd = 1.05, V = nrm(u);
+  const rho = density || 1.225, cd = coefficient ?? 1.05, V = nrm(u);
   return [0, 1, 2].map(i => 0.5 * rho * cd * areas[i] * V * u[i]);
 }
 
-function wakeLoad(w, area) {
+function wakeLoad(w, area, density) {
   // Force on a part with frontal area [m²] sitting in wake air moving at w [m/s]
-  return scl(w, 0.5 * 1.225 * 1.1 * area * nrm(w));
+  return scl(w, 0.5 * (density || 1.225) * 1.1 * area * nrm(w));
 }
 
 
@@ -1130,8 +1156,8 @@ const LAW_DEFS = [
     shape: 'mat3', sample: () => [[1, 0, 0], 0.3] },
   { key: 'motorDynamics', group: 'plant', fn: motorDynamics, title: 'Motor, ESC and prop',
     math: [`<i>i</i> = (<i>u V</i> − <i>K</i><sub>e</sub>Ω)/<i>R</i>, &nbsp;τ = <i>K</i><sub>e</sub><i>i</i>, &nbsp;<i>J</i>Ω̇ = τ − <i>k</i><sub>Q</sub>Ω²`, `<i>T</i> = <i>k</i><sub>T</sub>Ω², &nbsp;prop drag torque <i>k</i><sub>Q</sub>Ω², &nbsp;frame feels −τ about the motor axis and −ω × <i>J</i>Ω (gyroscopic)`],
-    doc: 'Each motor has a speed, not just a thrust. Throttle sets the voltage fraction; back-EMF and winding resistance set the current; current sets the torque; the prop\'s inertia sets how fast it spins up. From that come a throttle-to-thrust curve that bends upward, spin-up faster than spin-down, thrust that drops as the battery sags, the frame feeling the motor\'s torque while it accelerates (the reaction torque the Delft work identifies as B₂), and the gyroscopic torque of a spinning prop when the drone or its servo turns it. The constants come from the motor card: max thrust, prop radius, drag torque ratio and spin-up time.',
-    args: [['Omega', 'prop speed [rad/s]'], ['u', 'throttle 0–1'], ['V', 'battery voltage [V]'], ['p', '{ Ke, R, J, kT, kQ, iMax }'], ['dt', 'time step [s]']],
+    doc: 'Throttle sets voltage; back-EMF and winding resistance set winding current and torque. Rotor inertia determines spin-up; a semi-implicit damping step bounds stiff motor transients. Generic profiles infer electrical traits from the thrust rating; fixed profiles use KV, resistance, inertia and current limit, with brush voltage drop/friction for brushed motors. Static prop tables supply thrust and torque versus RPM. Density, bounded tip losses and the previous step’s inflow load affect the prop. Battery draw includes duty-weighted winding current, driver losses, avionics and servo power. Static tables do not validate forward flight.',
+    args: [['Omega', 'prop speed [rad/s]'], ['u', 'throttle 0–1'], ['V', 'battery voltage [V]'], ['p', '{ Ke, R, J, kT, kQ, iMax; optional table, rho, rhoRef, qFactor, tFactor, brushDrop, friction }'], ['dt', 'time step [s]']],
     returns: '{ Omega, i: current [A], tau: motor torque [N·m], T: still-air thrust [N] }', shape: { Omega: 1, i: 1, tau: 1, T: 1 },
     sample: () => [1300, 0.5, 15.4, { Ke: 0.0064, R: 0.2, J: 7e-6, kT: 1.4e-6, kQ: 2.2e-8, iMax: 30 }, 0.0005] },
   { key: 'servoTorque', group: 'plant', fn: servoTorque, title: 'Servo',
@@ -1142,17 +1168,17 @@ const LAW_DEFS = [
   { key: 'bodyDrag', group: 'plant', fn: bodyDrag, title: 'Aerodynamic drag',
     math: [`${V('F')}<sub>d</sub> = <i>c</i><sub>d</sub>(${V('v')}<sub>wind</sub> − ${V('v')})`, `${V('τ')}<sub>d</sub> = −<i>c</i><sub>ω</sub> ${V('ω')}`],
     doc: 'Linear drag on the airframe and a little rotational damping.',
-    args: [['v', 'velocity, world [m/s]'], ['wind', 'wind velocity, world [m/s]'], ['w', 'angular velocity, body [rad/s]']], returns: '{ F: force, world; tau: torque, body }',
+    args: [['v', 'velocity, world [m/s]'], ['wind', 'wind velocity, world [m/s]'], ['w', 'angular velocity, body [rad/s]'], ['density', 'air density [kg/m³], default 1.225']], returns: '{ F: force, world; tau: torque, body }',
     shape: { F: 3, tau: 3 }, sample: () => [[1, 0, 0], [0, 0, 0], [0, 0, 0.5]] },
   { key: 'wingAero', group: 'plant', fn: wingAero, title: 'Wing lift and drag',
     math: [`α = atan2(<i>u</i><sub>z</sub>, −<i>u</i><sub>x</sub>), &nbsp;<i>C</i><sub>L</sub> = 2π α / (1 + 2/AR) &nbsp;below the stall (15°), then a flat plate's 2 sin α cos α`, `<i>C</i><sub>D</sub> = 0.02 + <i>C</i><sub>L</sub>²/(0.8 π AR) &nbsp;(then a plate's 1.9 sin²α), &nbsp;<i>L</i>, <i>D</i> = ½ρ<i>V</i>²<i>S C</i><sub>L</sub>, <i>C</i><sub>D</sub>`],
     doc: 'Every part shaped as a wing (the frame, a rigid mass) in the air it meets: the wind, its own motion and the rotors\' wash. Lift across the airflow, drag along it, acting at the quarter chord (the middle once stalled). Physics only: the flight computers don\'t know about wings; they meet them as an oddly shaped body.',
-    args: [['u', 'air past the wing, its axes (x leading edge, y span, z up) [m/s]'], ['chord', 'chord [m]'], ['span', 'span [m]']], returns: '{ F: force, wing axes [N]; xcp: centre of pressure ahead of the middle [m] }',
+    args: [['u', 'air past the wing, its axes (x leading edge, y span, z up) [m/s]'], ['chord', 'chord [m]'], ['span', 'span [m]'], ['density', 'air density [kg/m³]'], ['polar', 'optional [angle degrees, Cl, Cd] rows; blend to generic stall outside coverage']], returns: '{ F: force, wing axes [N]; xcp: centre of pressure ahead of the middle [m] }',
     shape: { F: 3, xcp: 1 }, sample: () => [[-8, 0, 0.7], 0.2, 0.8] },
   { key: 'bluffDrag', group: 'plant', fn: bluffDrag, title: 'Drag on blunt parts',
     math: [`<i>F</i><sub><i>i</i></sub> = ½ρ <i>C</i><sub>d</sub> <i>A</i><sub><i>i</i></sub> |${V('u')}| <i>u</i><sub><i>i</i></sub>, &nbsp;<i>C</i><sub>d</sub> = 1.05`],
     doc: 'Every part shaped as a prism (rigid masses, and the frame unless it is a wing): drag on the face it shows the air, by direction. The frame also has its general drag (Aerodynamic drag).',
-    args: [['u', 'air past the part, its axes [m/s]'], ['areas', 'frontal area seen along x, y, z [m²]']], returns: 'force, the part\'s axes [N]',
+    args: [['u', 'air past the part, its axes [m/s]'], ['areas', 'frontal area seen along x, y, z [m²]'], ['density', 'air density [kg/m³]'], ['coefficient', 'drag coefficient, default 1.05']], returns: 'force, the part\'s axes [N]',
     shape: 3, sample: () => [[-5, 1, 0], [0.004, 0.008, 0.01]] },
   { key: 'cableTension', group: 'plant', fn: cableTension, title: 'Cable tension',
     math: [`<i>T</i><sub>c</sub> = max(0, <i>k</i>δ + <i>c</i>δ̇) &nbsp;if δ > 0, otherwise 0`, `<i>k</i> = 15800 <i>m</i><sub>p</sub>, &nbsp;<i>c</i> = 0.5 √(<i>k m</i><sub>p</sub>)`],
@@ -1165,7 +1191,7 @@ const LAW_DEFS = [
     args: [['v', 'payload velocity, world [m/s]'], ['wind', 'wind velocity, world [m/s]']], returns: 'force, world [N]',
     shape: 3, sample: () => [[1, 0, 0], [0, 0, 0]] },
   { key: 'groundContact', group: 'plant', fn: groundContact, title: 'Ground contact',
-    math: [`${V('F')} = (−μ<i>v</i><sub>x</sub>, −μ<i>v</i><sub>y</sub>, max(0, <i>k</i><sub>g</sub><i>h</i> − <i>c</i><sub>g</sub><i>v</i><sub>z</sub>))`],
+    math: [`<i>N</i> = max(0, <i>k</i><sub>g</sub><i>h</i> − <i>c</i><sub>g</sub><i>v</i><sub>z</sub>), &nbsp;${V('F')}<sub>t</sub> = −min(8, 0.6<i>N</i>/|${V('v')}<sub>t</sub>|) ${V('v')}<sub>t</sub>`],
     doc: 'A penalty spring at each contact point (hub corners, motors, arms, masses, rods, sensors) that is inside the ground or a building. For a building the same law is turned to face its surface: z is the way out, x and y lie along the surface.',
     args: [['depth', 'h, depth below ground [m]'], ['v', 'point velocity, world [m/s]']], returns: 'force, world [N]',
     shape: 3, sample: () => [0.01, [0.1, 0, -0.5]] },
@@ -1173,13 +1199,13 @@ const LAW_DEFS = [
   { key: 'wakeVelocity', group: 'plant', fn: wakeVelocity, title: 'Rotor wakes',
     math: [`<i>v</i><sub>h</sub> = √(<i>T</i> / 2ρ<i>A</i>), &nbsp;${V('w')}(<i>s</i>) = −${V('d')} <i>v</i><sub>h</sub>(1 + <i>s</i>/√(<i>s</i>² + <i>R</i>²)) · e<sup>−<i>s</i>/12<i>R</i></sup> &nbsp;inside the wake`, `wake radius <i>R</i>(0.71 + 0.29 e<sup>−<i>s</i>/<i>R</i></sup>), &nbsp;<i>s</i> = distance downstream, centre blown sideways by ${V('v')}<sub>cross</sub>·<i>s</i>/1.5<i>v</i><sub>h</sub>`],
     doc: 'Each rotor blows a column of air along −d that speeds up to twice its induced velocity and contracts. Another rotor inside that column loses thrust; parts and payloads inside it get pushed. Physics only: the controller never uses this.',
-    args: [['point', 'where to evaluate, body frame [m]'], ['rotors', '[{ p, d, T, R, va }] disc center, axis, thrust, prop radius, oncoming air']],
+    args: [['point', 'where to evaluate, body frame [m]'], ['rotors', '[{ p, d, T, R, va }] disc center, axis, thrust, prop radius, oncoming air'], ['density', 'air density [kg/m³]']],
     returns: 'induced air velocity, body frame [m/s]', shape: 3, sample: () => [[0, 0, -0.1], [{ p: [0, 0, 0], d: [0, 0, 1], T: 3, R: 0.08 }]] },
   { key: 'rotorAero', group: 'plant', fn: rotorAero, title: 'Rotor aerodynamics',
     math: [`<i>v</i><sub>i</sub> = <i>v</i><sub>h</sub>² / √(<i>V</i><sub>edge</sub>² + (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub>)²) &nbsp;(Glauert)`, `<i>T</i><sub>eff</sub> = <i>T</i> · sat(1 − 0.5 (<i>v</i><sub>ax</sub> + <i>v</i><sub>i</sub> − <i>v</i><sub>h</sub>)/<i>v</i><sub>h</sub>) · 1/(1 − (<i>R</i>/4<i>h</i>)²) · (1 − 0.3 e<sup>−((<i>x</i> − 1.2)/0.45)²</sup>), &nbsp;<i>x</i> = descent rate/<i>v</i><sub>h</sub> (vortex ring state)`, `${V('H')} = <i>c</i><sub>H</sub> <i>T</i> ${V('u')}<sub>in-plane</sub> &nbsp;(rotor drag)`],
     doc: 'Air coming down through the disc (from climbing or from another rotor\'s wake) costs thrust at the same command. Air crossing the disc edgewise, in forward flight, lowers the induced velocity and adds a little thrust (translational lift). The ground adds thrust within about a rotor diameter. Descending straight into its own wake at around its induced velocity puts a rotor in vortex ring state and costs it up to 30% of its thrust. Air moving across the disc tilts it back and makes rotor drag, which is most of a multirotor\'s drag.',
-    args: [['T', 'still-air thrust for this command [N]'], ['R', 'prop radius [m]'], ['vAxial', 'inflow from above along the axis [m/s]'], ['vInPlane', 'air velocity across the disc, body frame [m/s]'], ['h', 'height above ground [m]']],
-    returns: '{ T: effective thrust [N]; H: rotor drag force, body frame [N] }', shape: { T: 1, H: 3 }, sample: () => [3, 0.08, 0.5, [1, 0, 0], 2] },
+    args: [['T', 'still-air thrust for this command [N]'], ['R', 'prop radius [m]'], ['vAxial', 'inflow from above along the axis [m/s]'], ['vInPlane', 'air velocity across the disc, body frame [m/s]'], ['h', 'height above ground [m]'], ['density', 'air density [kg/m³]']],
+    returns: '{ T: effective thrust [N]; H: rotor drag force [N]; Qfactor: bounded torque correction for the next motor step }', shape: { T: 1, H: 3, Qfactor: 1 }, sample: () => [3, 0.08, 0.5, [1, 0, 0], 2] },
   { key: 'wakeLoad', group: 'plant', fn: wakeLoad, title: 'Downwash on parts',
     math: [`${V('F')} = ½ ρ <i>C</i><sub>d</sub> <i>A</i> |${V('w')}| ${V('w')}`],
     doc: 'Rotor wash hitting the hub, rigid masses and cable payloads pushes them along the wake.',
@@ -1190,7 +1216,7 @@ const LAW_DEFS = [
     args: [['st', 'battery state (soc)'], ['current', 'total draw [A]'], ['dt', 'time step [s]'], ['p', '{ cells, capacity [C], rInt [Ω], cut }']], returns: 'terminal voltage [V]', shape: 'n', sample: () => [{}, 12, 0.0005, { cells: 4, capacity: 4680, rInt: 0.06, cut: false }] },
   { key: 'thermalModel', group: 'plant', fn: thermalModel, title: 'Heating and cooling',
     math: [`<i>C</i> d<i>T</i>/d<i>t</i> = <i>P</i> − <i>G</i> (<i>T</i> − <i>T</i><sub>air</sub>)`, `motor: <i>P</i> = <i>i</i>²<i>R</i>(<i>T</i>), &nbsp;<i>G</i> = <i>G</i><sub>full</sub>(0.3 + 0.7 Ω/Ω<sub>max</sub>), &nbsp;<i>R</i> +0.39%/K, magnet −0.12%/K`, `battery: <i>P</i> = <i>I</i>²<i>R</i><sub>int</sub>`],
-    doc: 'Each motor and the battery warm up from the current through their resistance and cool into the air. A motor cools best with its prop at full speed. Its cooling is sized so that full throttle held without a break would settle 25% above its limit, so full throttle is for bursts; the card\'s Cooling setting scales it. A hot motor has more winding resistance and a weaker magnet, so it wastes more and pulls less. Past its limit its magnet weakens for good (0.06% of its thrust per second per degree over), and 35 °C past it, it fails the way its card says. The battery loses capacity past its limit and fails 25 °C past it.',
+    doc: 'Motor and battery I²R losses heat their lumped thermal masses. Motor cooling varies with speed; explicit heat capacity and conductance override generic estimates. Generic conductance uses a fixed reference temperature rise, independent of the failure threshold. Battery heat capacity uses the actual battery-part mass when available. Hot windings increase resistance and weaken the motor magnet; configured thresholds drive irreversible damage and failure. ESC and servo temperatures are not modeled.',
     args: [['T', 'temperature now [°C]'], ['P', 'heat made [W]'], ['G', 'cooling [W/K]'], ['C', 'heat capacity [J/K]'], ['Tamb', 'air temperature [°C]'], ['dt', 'time step [s]']], returns: 'temperature after dt [°C]', shape: 'n', sample: () => [40, 10, 0.2, 30, 25, 0.0005] },
   { key: 'imuModel', group: 'sensor', fn: imuModel, title: 'IMU (gyro + accelerometer)',
     math: [`${V('ω̃')} = sat(${V('ω')}<sub>s</sub> + ${V('ω')}<sub>vib</sub> + ${V('b')}<sub>g</sub> + ${V('n')}<sub>g</sub>), &nbsp;${V('ḃ')}<sub>g</sub> = random walk`, `${V('f̃')} = sat(<i>S</i><sub>a</sub>${V('f')} + ${V('a')}<sub>vib</sub> + ${V('b')}<sub>a</sub> + ${V('n')}<sub>a</sub>), &nbsp;${V('f')} = the acceleration of the body the IMU is on, at the IMU, minus gravity`, `<i>S</i> = scale errors on the diagonal, small axis misalignments off it`],

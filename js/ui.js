@@ -151,7 +151,7 @@ function propInfo(c) {
   const p = el('p', { class: 'hint derived' });
   const put = () => {
     const w = Math.pow(c.tmax / 2, 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
-    setText(p, `From the prop: ${Math.round(propOmega(c) * 60 / (2 * Math.PI)).toLocaleString()} rpm at full thrust · drag torque ratio κ ${kappaOf(c).toFixed(4)} m (its yaw) · ${Math.round(w)} W of air power at half thrust`);
+    setText(p, `At the 16 V reference: ${Math.round(propOmega(c) * 60 / (2 * Math.PI)).toLocaleString()} rpm · torque ratio κ ${kappaOf(c).toFixed(4)} m · ${Math.round(w)} W generic hover shaft-power estimate at half thrust${c.propPhysics?.rows ? ' (use imported torque for actual power)' : ''}`);
   };
   put(); if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(put);
   return p;
@@ -253,6 +253,10 @@ function compBody(c) {
   } else {
     b.append(el('p', { class: 'hint', text: 'Attachment point:' }), pos, slider(c, 'cable'), slider(c, 'mass'), checkF(c, 'known', 'Controller knows the static load'));
   }
+  if (typeof flightPhysicsFields === 'function') b.append(flightPhysicsFields(c));
+  if (c.type === 'motor' && (flightMotor(c).kind !== 'generic' || c.propPhysics?.rows)) {
+    for (const key of ['tmax', 'tau']) b.querySelectorAll(`[id^="f-${c.id}-${key}"]`).forEach(input => { input.disabled = true; input.title = 'Derived by the fixed physical model'; });
+  }
   return b;
 }
 function compCard(c) {
@@ -313,14 +317,21 @@ function renderComps1() {
   $('#compCount').textContent = `${na} motor${na === 1 ? '' : 's'} · ${nj} servo${nj === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} other`;
 }
 function edited(c, key) {
+  if (c.type === 'mass' && c.battery && key === 'mass') {
+    c.batteryAutoMass = false; const checkbox = document.getElementById(`physics-${c.id}-auto`); if (checkbox) checkbox.checked = false;
+  }
   undoKey = `${c.id}:${key}`;   // repeated edits to the same field (a slider or handle drag) are one undo step
   if (c.type === 'sensor' && c.kind === 'fix' && FIX_TUNED.includes(key) && c.quality !== 'custom') {
     c.quality = 'custom'; const q = document.getElementById(`f-${c.id}-quality`); if (q) q.value = 'custom';
   }
   if (isHolder(c)) carryAlong(c);
-  if (c.type === 'motor' && (key === 'prop' || key === 'tmax' || key === 'fm')) refreshCard(c);   // (what follows from the prop)
-  const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
   recomputeProps(); if (c.type === 'hang' && (key === 'cable' || key === 'x' || key === 'y' || key === 'z')) reseatPend(c);
+  if (c.type === 'motor' && (key === 'prop' || key === 'tmax' || key === 'fm')) refreshCard(c);
+  if (c.type === 'motor' && key === 'prop' && !c.propPhysics?.rows) {
+    const area = document.querySelector(`[data-id="${c.id}"] textarea[aria-label="Measured fixed-pitch prop data"]`);
+    if (area) { area.value = ''; const status = area.parentElement.querySelector('[role="status"]'); if (status) status.textContent = 'No imported data. Generic model in use.'; }
+  }
+  const s = document.querySelector(`[data-id="${c.id}"] .comp-sum`); if (s) s.textContent = summary(c);
   cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save();
   if (typeof edit !== 'undefined' && editMode && edit.sel === c.id && c.type === 'joint') updateEditMsg();   // keep the edit bar's servo tools in step
 }
@@ -464,12 +475,13 @@ function renderEnvelope() {
 }
 function renderMass() {
   const mp = cfg.comps.filter(c => c.type === 'hang').reduce((s, c) => s + c.mass, 0);
-  const tw = actuators().reduce((s, c) => s + c.tmax * motorEff(c), 0) / ((truth.m + mp) * G);
+  const tw = actuators().reduce((s, c) => s + flightAvailable(c) * motorEff(c), 0) / ((truth.m + mp) * G);
   const cm = truth.c.map(x => (x * 1000).toFixed(0)).join(', '); const dc = nrm(sub(truth.c, model.c)) * 1000;
   const rows = [['Rigid mass', truth.m.toFixed(3) + ' kg'], ['On cables', mp.toFixed(3) + ' kg'], ['Thrust / weight', tw.toFixed(2)], ['True CoG from hub', `(${cm}) mm`],
     ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller mass error', ((model.m - truth.m - mp) * 1000).toFixed(0) + ' g'],
     ['Inertia Ixx / Iyy / Izz', `${(truth.J[0] * 1000).toFixed(1)} / ${(truth.J[4] * 1000).toFixed(1)} / ${(truth.J[8] * 1000).toFixed(1)} g·m²`]];
   syncKv($('#massKv'), rows);
+  if (typeof renderBattSmall === 'function') renderBattSmall();
 }
 const goForm = () => UI_PANELS.editor.select('form');
 // Phones: the header is one line (play/pause, the airframe, share) until ⋯ opens the rest.
@@ -523,6 +535,7 @@ function setTile(id, value, sub, tone, title) {
   if (title != null && t.title !== title) t.title = title;
 }
 function updateLive() {
+  renderFlightPhysics();
   {   // flight
     const last = hist.err.length ? hist.err[hist.err.length - 1] : 0, P = flightPhaseText();
     if (S.crashed) setTile('tileFly', 'Crashed', S.crashed, 'bad', S.crashed);
@@ -756,6 +769,7 @@ const spRefs = [];
 function spSlider(key, label, min, max, step, u, obj, ends) {
   const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? (step < 0.1 ? 2 : 1) : 0, ends }, () => obj[key], v => {
     obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; }
+    else if (obj === envr) { refreshEnvelope(); renderMass(); save(); }
   });
   spRefs.push(f.refresh);
   return f.node;
@@ -793,7 +807,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
 }
 function afterLoad() {
   frameMassField.refresh(); renderFrameShape();
-  truth = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
+  truth = null; recomputeProps(); renderBattery(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
 }
 const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
   v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
@@ -812,6 +826,7 @@ function renderFrameShape() {
   box.append(el('div', { class: 'subgrid' }, f('span', { label: 'Span', min: 0.2, max: 2, hmin: 0.1, hmax: 4, step: 0.01, u: 'm', dp: 2 }), f('chord', { label: 'Chord', min: 0.05, max: 0.8, hmax: 1.5, step: 0.01, u: 'm', dp: 2 }), f('thick', { label: 'Thickness', min: 0.005, max: 0.1, hmax: 0.2, step: 0.005, u: 'm', dp: 3 })),
     f('inc', { label: 'Incidence (leading edge up)', min: -20, max: 20, step: 0.5, u: '°', dp: 1 }),
     el('p', { class: 'hint', text: 'The hub becomes a wing, chord along X, span along Y: it lifts in forward flight and catches the wind and the rotors\' wash (the Wing lift and drag formula). The flight computers aren\'t told: they fly it as an oddly shaped body.' }));
+  if (typeof flightPolarEditor === 'function') box.append(flightPolarEditor(cfg.frame, () => { changed(); renderFrameShape(); }, 'frame-physics'));
 }
 const MODE_DESC = { tilt: 'Leans to move; servos help turn.', mixed: 'Servos push part, leaning does the rest.', level: 'Stays level; servos push sideways.' };
 function setMode(m, recalc = true) {
@@ -998,6 +1013,7 @@ function syncFolds() {
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';
 function save() {
+  cfg.environment = flightEnvironment();
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
@@ -1051,6 +1067,7 @@ function load() {
     if (s.throwCfg && s.throwCfg.thenCalibrate === false) throwCfg.thenCalibrate = false;
     cfg.comps = migrateComps(cfg.comps);
     cfg.battery = { ...defaultBattery(), ...(s.cfg.battery || {}) };
+    flightRestoreEnvironment(s.cfg.environment);
     bootDesign = { cur: s.designCur || null, name: s.designName || '', preset: PRESETS[s.designPreset] ? s.designPreset : null, clean: !!s.designClean, edited: s.designEdited !== false && !(s.designCur && s.designClean) };
     return true;
   }
@@ -1069,19 +1086,29 @@ function boot() {
   const loaded = load(); if (!terrain.ver) setTerrain('parkour', 1); syncTerrainUi();
   if (loaded) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();
-  initDesigns(bootDesign); syncFlightUi();
+  initDesigns(bootDesign); syncFlightUi(); buildFlightPhysicsUI();
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   UI_PANELS.editor.select(tab);
   UI_PANELS.readouts.restore();
-  let lastT = performance.now(), envT = 0, uiT = 0;
+  let lastT = performance.now(), envT = 0, uiT = 0, physicsCostPerStep = .1;
   function frame(now) {
-    const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-    if (running) { const steps = Math.min(200, Math.round(dt * speed / PDT)); pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep(); }
-    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); if (!$('#paneForm').hidden) renderComputers(); }
+    const cpuStart = performance.now(), simStart = S.t, rawDt = Math.max(0, (now - lastT) / 1000);
+    const dt = Math.min(0.05, rawDt); lastT = now;
+    if (running) {
+      // Keep the 0.5 ms integration/control step. Bound work per rendered frame
+      // instead of letting a late frame request still more catch-up work.
+      const requested = Math.round(dt * speed / PDT), budgeted = Math.max(1, Math.floor(11 / physicsCostPerStep));
+      const steps = Math.min(200, requested, budgeted);
+      pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep();
+      if (steps > 0) physicsCostPerStep = .9 * physicsCostPerStep + .1 * Math.max(.001, (performance.now() - cpuStart) / steps);
+    }
+    const physicsMs = performance.now() - cpuStart;
+    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); renderMass(); if (!$('#paneForm').hidden) renderComputers(); }
     renderGs();
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); }
     renderLaunch();
-    updateScene(); renderer.render(scene, camera); requestAnimationFrame(frame);
+    updateScene(); renderer.render(scene, camera);
+    flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, S.t - simStart)); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }

@@ -27,7 +27,15 @@ function hsOf(c) {
 // Thrust a motor really delivers, as a share of its card's max: its health, any damage, 0 if dead or its prop is broken.
 const motorEff = c => { const s = hs.get(c.id); return c.health / 100 * (s ? (s.dead || s.prop ? 0 : 1 - s.loss) : 1); };
 const defaultBattery = () => ({ cells: 4, capacity: 1.3, rInt: 0.06, tmaxC: 60, failHeat: true, failMode: 'cell', vsens: true, isens: true, tsens: true, startSoc: 1, escCut: 2.8 });
-function battCfg() { if (!cfg.battery) cfg.battery = defaultBattery(); else for (const [k, v] of Object.entries(defaultBattery())) if (cfg.battery[k] === undefined) cfg.battery[k] = v; return cfg.battery; }
+const initializedBatteries = new WeakSet();
+function battCfg() {
+  if (!cfg.battery) cfg.battery = defaultBattery();
+  if (!initializedBatteries.has(cfg.battery)) {
+    for (const [k, v] of Object.entries(defaultBattery())) if (cfg.battery[k] === undefined) cfg.battery[k] = v;
+    initializedBatteries.add(cfg.battery);
+  }
+  return cfg.battery;
+}
 // What the battery model gets: cells still working, capacity after wear, resistance at this temperature.
 function battParams() {
   const b = battCfg();
@@ -45,14 +53,13 @@ function escCutoffStep(dt, anyThrottle) {
   if (hb.lvcT > 1.5) { hb.lvc = true; healthEvent(`ESCs: low-voltage cutoff, the pack is down to ${(S.battV / cells).toFixed(2)} V per cell under load. Motors stopped.`, 'bad'); }
   return hb.lvc;
 }
-// Thermal sizing: a motor's stator holds about 500 J/K per kg; its cooling is sized so that running at full
-// throttle without a break would settle 25% above its limit (full throttle is for bursts), and it cools
-// best with the prop at full speed (to 30% of that when stopped).
+// Cached generic thermal sizing uses 500 J/K per kg and a fixed 95 K reference
+// rise, independent of the failure threshold; explicit C/G override it.
 function motorThermal(c) {
-  const mp = motorParams(c), iF = mp.kQ * mp.Om * mp.Om / mp.Ke, Pf = iF * iF * mp.R;
-  return { C: 500 * Math.max(0.02, c.mass), Gf: (c.cool ?? 1) * Pf / (1.25 * Math.max(10, (c.tmaxC ?? 120) - 25)), Pf };
+  const t = motorParams(c).thermal;
+  return { C: t.C, Gf: (c.cool ?? 1) * t.G, Pf: t.referenceLoss };
 }
-const battMass = () => { const b = battCfg(); return 0.038 * b.capacity * b.cells; };
+const battMass = () => { const b = battCfg(); return flightBatteryThermalMass || 0.038 * b.capacity * b.cells; };
 // The motor as it is at its temperature: copper resistance +0.39 %/K, magnet strength −0.12 %/K.
 function heatParams(c, mp) {
   const s = hs.get(c.id); if (!s) return mp;
@@ -65,9 +72,9 @@ function coastStep(st, mp, dt) {
   return { Omega: O, i: 0, tau: 0, T: mp.kT * O * O };
 }
 function heatMotor(c, st, md, mp, dt) {
-  const s = hsOf(c), th = motorThermal(c), x = clamp((st.Omega || 0) / mp.Om, 0, 1.2);
+  const s = hsOf(c), th = mp.thermal, x = clamp((st.Omega || 0) / Math.max(1, mp.Om), 0, 1.2);
   const P = md.i * md.i * mp.R;
-  s.T = run('thermalModel', s.T, P, th.Gf * (0.3 + 0.7 * x), th.C, ambient(), dt);
+  s.T = run('thermalModel', s.T, P, th.G * (c.cool ?? 1) * (0.3 + 0.7 * x), th.C, ambient(), dt);
   s.P = P;
   if (c.failHeat === false) return;
   const lim = c.tmaxC ?? 120;
@@ -77,7 +84,7 @@ function heatMotor(c, st, md, mp, dt) {
 function heatBattery(I, dt) {
   const b = battCfg(), p = battParams(), m = battMass();
   hb.P = I * I * p.rInt;
-  hb.T = run('thermalModel', hb.T, hb.P, 1.4 * (m / 0.2) ** (2 / 3), 900 * m, ambient(), dt);
+  hb.T = run('thermalModel', hb.T, hb.P, b.cooling ?? 1.4 * (m / 0.2) ** (2 / 3), b.heatCapacity ?? 900 * m, ambient(), dt);
   if (b.failHeat === false) return;
   if (hb.T > b.tmaxC) hb.fade = Math.min(0.8, hb.fade + dt * 0.0004 * (hb.T - b.tmaxC));   // capacity lost, resistance up
   if (hb.T > b.tmaxC + 25 && !hb.failT) breakBattery(b.failMode || 'cell', 'overheated');

@@ -74,7 +74,7 @@ let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
 const flyMode = () => learn.view && learn.view.holdServos ? 'tilt' : mode;
 const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
-const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25 };   // texture and light matter to optical flow
+const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25, pressure: 101325, sensorEffects: false, rotorSamples: 5 };   // texture and light matter to optical flow
 // No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
 // (a few percent, its own every time, fixed by its id). The controller and supervisor aren't told.
 const spreadCache = new Map();
@@ -122,10 +122,11 @@ const frameWing = () => cfg.frame.aero === 'wing';
 const frameDims = () => frameWing() ? [cfg.frame.chord || 0.25, cfg.frame.span || 0.8, cfg.frame.thick || 0.03] : FRAME_BOX;
 function incR(deg) { const a = -(deg || 0) * D2R, c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }   // leading edge (+X) up by deg
 // The frame's shape, as a design keeps it.
-const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0 });
+const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0, polar: cfg.frame.polar, source: cfg.frame.source });
 function setFrameShape(o) {
   o = o || {}; const n = (v, d, lo, hi) => isFinite(+v) ? clamp(+v, lo, hi) : d;
   Object.assign(cfg.frame, { aero: o.aero === 'wing' ? 'wing' : 'prism', span: n(o.span, 0.8, 0.1, 4), chord: n(o.chord, 0.25, 0.05, 1.5), thick: n(o.thick, 0.03, 0.005, 0.2), inc: n(o.inc, 0, -20, 20) });
+  cfg.frame.polar = o.polar ? FlightPhysics.polar(o.polar) : undefined; cfg.frame.source = o.source;
 }
 const isWing = c => c.type === 'mass' && c.aero === 'wing' && c.shape === 'box';
 const massRot = c => c.type === 'mass' && c.inc ? incR(c.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -202,6 +203,7 @@ function reseatPend(c) {
   st.p = add(a, scl(unit(d), c.length)); st.v = S.v.slice();
 }
 function recomputeProps() {
+  flightPrepare();
   truth = massProps('truth'); model = massProps('model');
   buildBodies(); nb = nominalAxis(); syncRuntime();
 }
@@ -211,7 +213,7 @@ function recomputeProps() {
 // Weights for how the allocation breaks ties (see allocationPreferences). horizon: how far ahead a servo
 // move is planned [s]; what it can reach in that time bounds each step's servo change.
 const allocPrefs = { allowance: 0.02, efficiency: 0.02, servoMove: 0.01, horizon: 0.08 };
-const powerFull = c => Math.pow(c.tmax, 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));   // W at full thrust
+const powerFull = c => { const mp = flightMotor(c); return mp.ratedQ * mp.Om; };   // shaft power at the reference operating point
 // Each input's share of the steering: the size of its effect on rotation (over its whole range), relative to the largest.
 function setAuthority(rows) {
   const a = rows.map(r => Math.hypot(r.col[3], r.col[4], r.col[5]) * (r.hi - r.lo)), mx = Math.max(1e-9, ...a);
@@ -219,7 +221,7 @@ function setAuthority(rows) {
 }
 function servoReach(j) { const m = servoModelHat(j); return m.rate * Math.max(0.005, allocPrefs.horizon - m.lag); }
 // The throttle sent, what the controller believes it gives (thrust fraction), and what the motor will really make.
-function setThrottle(c, st, u, sent = u) { if(computers().wiring?.parts?.[c.id]?.driver==='brushed'){u=hardwareMotorThrottle(computers(),c,u);sent=hardwareMotorThrottle(computers(),c,sent);} st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = c.tmax * (isCollective(c) ? clamp(sent, 0, 1) : steadyX(sent, S.battV) ** 2); }
+function setThrottle(c, st, u, sent = u) { if(computers().wiring?.parts?.[c.id]?.driver==='brushed'){u=hardwareMotorThrottle(computers(),c,u);sent=hardwareMotorThrottle(computers(),c,sent);} st.u = sent; st.want = u; st.v = believedThrust(u, curveHat(c)); st.Tcmd = isCollective(c) ? c.tmax * clamp(sent, 0, 1) : FlightPhysics.commandThrust(flightMotor(c), sent, S.battV, flightAtmosphere().rho); }
 // Servo angles the flight software uses: the feedback reading, or its own prediction from what it commanded.
 function updateServoBelief(dt) {
   for (const j of joints()) {
@@ -302,8 +304,8 @@ const propR = c => c.prop || clamp(0.035 * Math.sqrt(c.tmax), 0.05, 0.2);   // p
 // the same at every thrust. κ also sets the yaw the props can make (their reaction torque), so the controller's
 // description uses it too. A bigger prop spins slower and costs less power for the same thrust.
 const PROP_CT = 0.10, AIR_RHO = 1.225;
-const propOmega = c => 2 * Math.PI * Math.sqrt(c.tmax / (PROP_CT * AIR_RHO * (2 * propR(c)) ** 4));   // full-thrust speed [rad/s]
-const kappaOf = c => Math.sqrt(PROP_CT) * 2 * propR(c) / (2 * Math.PI * clamp(c.fm || 0.6, 0.2, 0.95) * Math.sqrt(Math.PI / 2));
+const propOmega = c => flightMotor(c).Om;
+const kappaOf = c => { const mp = flightMotor(c); return mp.ratedQ / Math.max(1e-6, mp.ratedThrust); };
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area); a wing meets it in wingAero
   const parts = frameWing() ? [] : [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
@@ -320,15 +322,11 @@ function stepGusts(dt) {
 }
 
 /* ───────── motors ───────── */
-// Every motor is a brushless motor, ESC and prop sized from its card: max thrust at V_NOM with the tips at
-// 180 m/s, 80% of the voltage spent on back-EMF at full thrust (the rest across the windings), the prop's
-// torque/thrust ratio, and a prop-plus-rotor inertia that gives the card's spin-up time near hover. The ESC
-// limits the current to twice the full-thrust current.
+// Generic motors retain the inferred electrical model. Fixed motor profiles keep
+// KV/resistance/inertia independent of prop edits; their attainable thrust is derived.
 const V_NOM = 16;   // pack voltage the max thrust is rated at (a charged 4S pack under load)
 function motorParams(c) {
-  const Om = propOmega(c), kT = c.tmax / (Om * Om), kap = Math.max(1e-4, kappaOf(c)), kQ = kap * kT, Qm = kap * c.tmax;
-  const Ke = 0.8 * V_NOM / Om, R = 0.2 * V_NOM * Ke / Qm, Oh = Math.sqrt(0.4) * Om;
-  return { Om, kT, kQ, Ke, R, J: Math.max(0.005, c.tau || 0.03) * (Ke * Ke / R + 2 * kQ * Oh), iMax: 2 * Qm / Ke };
+  return flightMotor(c);
 }
 // Steady prop speed for throttle u at pack voltage V, as a fraction of the speed at max thrust. With the
 // sizing above, k_QΩ² + (K_e²/R)Ω = K_e·uV/R becomes x² + 4x = 5uV/V_NOM for every motor.
@@ -349,29 +347,36 @@ function collectiveLoad(c, mp, col) {                    // thrust and drag coef
 // One step of a motor: speed from the throttle (fixed pitch), or pitch from the command with the governor
 // holding speed (collective). Returns motorDynamics' result; st.esc is the ESC duty (for the battery current).
 function rotorStep(c, st, mp, V, dt) {
-  if (!isCollective(c)) { st.esc = st.u || 0; return run('motorDynamics', st.Omega || 0, st.esc, V, mp, dt); }
+  const air = flightAtmosphere(), mach = Math.hypot((st.Omega || 0) * propR(c) + (st.airPlane || 0), st.airAx || 0) / air.sound;
+  const loss = FlightPhysics.propLoss(mp, st.Omega || 0, mach, air.sound);
+  st.mach = mach; st.outsidePropData = !!(mp.table && (st.Omega || 0) > mp.table[mp.table.length - 1][0]);
+  const actual = { ...mp, rho: air.rho, qFactor: (st.airQ || 1) * loss.torque * (mp.propTorqueScale || 1), tFactor: loss.thrust * (mp.propThrustScale || 1) };
+  if (!isCollective(c)) { st.esc = st.u || 0; return run('motorDynamics', st.Omega || 0, st.esc, V, actual, dt); }
   st.col = (st.col ?? 0) + ((st.u || 0) - (st.col ?? 0)) * Math.min(1, dt / 0.03);   // pitch servo
   const L = collectiveLoad(c, mp, clamp(st.col, 0, 1)), Om = st.Omega || 0, e = (L.Og - Om) / L.Og;
   st.gi = clamp((st.gi || 0) + 4 * e * dt, -0.3, 0.3);
   const ff = (mp.Ke * L.Og + mp.R * L.kQ * L.Og * L.Og / mp.Ke) / Math.max(1, V);   // duty that holds the speed under this load
-  st.esc = clamp(ff + 3 * e + st.gi, 0, 1);
-  return run('motorDynamics', Om, st.esc, V, { ...mp, kT: L.kT, kQ: L.kQ }, dt);
+  st.esc = clamp(ff + 3 * e + st.gi, 0, flightDuty(c));
+  return run('motorDynamics', Om, st.esc, V, { ...actual, table: null, kT: L.kT, kQ: L.kQ }, dt);
 }
 
 // The air each rotor meets (wind, its own motion, the other rotors' wash) and what that does to its thrust.
 // Each disc also meets churned air of its own: small eddies (a tenth of a second) from turbulence and from its own
 // wash curling back, much stronger close to the ground or a roof. That's what makes a real hover twitch.
 function rotorAir(rotors, K, R, RT, wv, dt) {
+  const rho = flightAtmosphere().rho;
   for (const ro of rotors) ro.va = sub(m3v(RT, wv), mbPointVel(K, ro.b, ro.p));   // oncoming air at each disc
   for (const ro of rotors) {
-    const u = add(ro.va, run('wakeVelocity', ro.p, rotors.filter(o => o !== ro)));   // plus the other rotors' wash
+    const u = add(ro.va, flightRotorWake(ro, rotors, rho));   // plus the other rotors' wash, averaged over overlapping disks
     const pw = add(S.p, m3v(R, ro.p)), h = pw[2] - (terrain.boxes.length ? surfaceBelow(pw) : 0);   // height above the ground or the roof below
     if (dt) {
       const tr = 0.1, sr = (0.15 + (envr.turb ?? 0)) * 1.3 * (1 + 2.5 * Math.exp(-Math.max(0, h) / (6 * ro.R))) * Math.min(1, ro.T / 0.2);
       ro.st.gz = (ro.st.gz || 0) * (1 - dt / tr) + sr * Math.sqrt(2 * dt / tr) * randn();
     }
     const ua = dot(u, ro.d) + (ro.st.gz || 0);
-    ro.ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h);
+    ro.st.airAx = ua; ro.st.airPlane = nrm(sub(u, scl(ro.d, dot(u, ro.d))));
+    ro.ae = run('rotorAero', ro.T, ro.R, -ua, sub(u, scl(ro.d, ua)), h, rho);
+    ro.st.airQ = ro.ae.Qfactor ?? 1;   // lagged by one 0.5 ms step; no additional global airflow solve
     ro.st.k = ro.T > 1e-6 ? ro.ae.T / ro.T : 1; ro.st.Teff = ro.ae.T;
   }
 }
@@ -410,17 +415,21 @@ function dynamics(dt) {
   MB.bodies.forEach((B, i) => { if (B.I.m > 0) push(i, m3v(RT, run('gravity', B.I.m, G)), posed(i, add(B.pivot, B.I.c))); });
 
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
-  let Ibatt = cargo.power ? 0.5 : 0;   // avionics (no battery on board: nothing at all, cargo.js)
+  let Ibatt = cargo.power ? flightDevicePower() / Math.max(1, S.battV) : 0;
+  S.motorW = 0; S.shaftW = 0;
   const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0)) || !cargo.power;
   const rotors = acts.map(c => {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
-    const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, J: mp0.J * sp.J };   // this particular motor and prop
-    const mp = hsc.prop ? { ...mpx, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
+    const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, propThrustScale: mp0.table ? sp.kT : 1, propTorqueScale: mp0.table ? sp.kQ : 1, J: mp0.J * sp.J };   // this particular motor and prop
+    const mp = hsc.prop ? { ...mpx, table: null, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
     const off = (isCollective(c) && !(st.u > 0)) || lvc;   // a helicopter's ESC spools the rotor up only once it gets a throttle signal; the low-voltage cutoff stops them all
-    const md = dead || off ? coastStep(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
+    const md = dead || off ? flightCoast(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
     if (dead || off) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
-    Ibatt += st.esc * md.i;
+    const watts = Math.max(0, st.esc * S.battV * md.i) / mp.escEfficiency + (cargo.power ? mp.idleW : 0);
+    Ibatt += watts / Math.max(1, S.battV); S.motorW += watts;
+    S.shaftW += Math.max(0, md.tau * md.Omega);
+    st.overspeed = mp.maxRpm > 0 && md.Omega * 60 / (2 * Math.PI) > mp.maxRpm;
     heatMotor(c, st, md, mp, dt);
     const b = MB.of.get(c.id) || 0;
     let d = m3v(K.Rb[b], actDir(c));
@@ -454,23 +463,24 @@ function dynamics(dt) {
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
   }
   S.rotors = rotors;
-  for (const part of washParts()) { const P = posed(part.b, part.rest); push(part.b, run('wakeLoad', run('wakeVelocity', P, rotors), part.area), P); }
-  const dr = run('bodyDrag', S.v, wv, S.w); push(0, m3v(RT, dr.F), [0, 0, 0]); pushT(0, dr.tau);
+  const airDensity = flightAtmosphere().rho;
+  for (const part of washParts()) { const P = posed(part.b, part.rest); push(part.b, run('wakeLoad', run('wakeVelocity', P, rotors, airDensity), part.area, airDensity), P); }
+  const dr = run('bodyDrag', S.v, wv, S.w, airDensity); push(0, m3v(RT, dr.F), [0, 0, 0]); pushT(0, dr.tau);
   // Shapes in the air: each wing's lift and drag (in the wind, its own motion and the rotors' wash), each blunt part's drag.
   S.aero = [];
-  const aeroPart = (b, P, Rw, wing, dims, areas) => {
-    const air = sub(m3v(RT, wv), mbPointVel(K, b, P)), u = m3v(m3T(Rw), wing ? add(air, run('wakeVelocity', P, rotors)) : air);
+  const aeroPart = (b, P, Rw, wing, dims, areas, settings) => {
+    const air = sub(m3v(RT, wv), mbPointVel(K, b, P)), u = m3v(m3T(Rw), wing ? add(air, run('wakeVelocity', P, rotors, airDensity)) : air);
     let F, at = P;
-    if (wing) { const w = run('wingAero', u, dims[0], dims[1]); F = m3v(Rw, w.F); at = add(P, m3v(Rw, [w.xcp, 0, 0])); }
-    else F = m3v(Rw, run('bluffDrag', u, areas));
+    if (wing) { const w = run('wingAero', u, dims[0], dims[1], airDensity, settings?.polar); F = m3v(Rw, w.F); at = add(P, m3v(Rw, [w.xcp, 0, 0])); }
+    else F = m3v(Rw, run('bluffDrag', u, areas, airDensity, settings?.dragCd));
     push(b, F, at);
     if (wing) {   // for the view: drag is the part along the air past it, lift the rest (across it); its angle of attack and airspeed
       const a = m3v(Rw, u), V = nrm(a), dh = V > 1e-6 ? scl(a, 1 / V) : [0, 0, 0], D = scl(dh, dot(F, dh));
       S.aero.push({ b, P: at, F, L: sub(F, D), D, alpha: Math.atan2(u[2], -u[0]) * R2D, V: Math.hypot(u[0], u[2]) });
     }
   };
-  if (frameWing()) aeroPart(0, [0, 0, 0], frameRot(), true, frameDims());
-  for (const c of liveComps()) if (c.type === 'mass') { const b = MB.of.get(c.id) || 0; aeroPart(b, posed(b, c.pos), m3m(K.Rb[b], massRot(c)), isWing(c), c.size, isWing(c) ? null : frontalAreas(c)); }
+  if (frameWing()) aeroPart(0, [0, 0, 0], frameRot(), true, frameDims(), null, cfg.frame);
+  for (const c of liveComps()) if (c.type === 'mass') { const b = MB.of.get(c.id) || 0; aeroPart(b, posed(b, c.pos), m3m(K.Rb[b], massRot(c)), isWing(c), c.size, isWing(c) ? null : frontalAreas(c), c); }
 
   // Hanging payloads on cables.
   for (const c of liveComps()) {
@@ -479,8 +489,8 @@ function dynamics(dt) {
     const dv = sub(st.p, aw), L = nrm(dv); let Fc = [0, 0, 0], Tn = 0;
     if (L > 1e-9) { const n = scl(dv, 1 / L); Tn = run('cableTension', L - c.length, dot(sub(st.v, va), n), c.mass); Fc = scl(n, Tn); }
     st.Tn = Tn; push(b, m3v(RT, Fc), P);
-    const wash = m3v(R, run('wakeLoad', run('wakeVelocity', m3v(RT, sub(st.p, S.p)), rotors), Math.PI * payloadR(c) ** 2));
-    const Fp = add(add(add(scl(Fc, -1), run('gravity', c.mass, G)), run('payloadDrag', st.v, wv)), wash);
+    const wash = m3v(R, run('wakeLoad', run('wakeVelocity', m3v(RT, sub(st.p, S.p)), rotors, airDensity), Math.PI * payloadR(c) ** 2, airDensity));
+    const Fp = add(add(add(scl(Fc, -1), run('gravity', c.mass, G)), run('payloadDrag', st.v, wv, airDensity)), wash);
     st.v = add(st.v, scl(Fp, dt / c.mass)); st.p = add(st.p, scl(st.v, dt));
     if (st.p[2] < 0.03) { st.p[2] = 0.03; if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
     if (terrain.boxes.length) for (const h of terrainContacts(st.p, payloadR(c), terrainNear(st.p, payloadR(c) + 0.05), st.prev)) {   // a payload swung into a building
@@ -558,6 +568,7 @@ function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynami
 // the way); the flight computers then start as if just powered on, and the simulator arms and takes off for you.
 let spawnAt = [0, 0, 0];
 function resetSim() {
+  flightLimitCache = new WeakMap();
   thr = null;
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
   cargoReset();                        // every part back on board, the items to pick up where they're set
@@ -608,7 +619,7 @@ function envelopeCalc() {
   const sj = steerJoints();
   const sets = [];   // what each rotor can really make: its thrust (0 to full) along any direction its servos can swing it to
   for (const c of liveMotors()) {
-    const h = motorEff(c); if (h <= 0) continue;   // what it really delivers: health, damage, or nothing if it has failed
+    const h = motorEff(c) * flightAvailable(c) / Math.max(1e-6, c.tmax); if (h <= 0) continue;   // actual voltage, density and output ceiling
     const toK = col => { const f = scl([col[0], col[1], col[2]], 1 / truth.m), al = m3v(truth.Jinv, [col[3], col[4], col[5]]); return k === 4 ? [dot(f, nb), al[0], al[1], al[2]] : [f[0], f[1], f[2], al[0], al[1], al[2]]; };
     const js = chainOf(c).filter(x => sj.includes(x));
     if (js.length) {   // a rotor its steering joints can swing: its thrust at the middle, plus each joint's swing (linearized over its range)

@@ -371,7 +371,7 @@ function deliverFrames() {
     else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
     else if (m.kind === 'model') { if (coreB && m.to.id === coreB.id) w.fc_model(n); if (superB && m.to.id === superB.id) w.super_model(n); }
     else if (m.kind === 'set') {
-      if (coreB && m.to.id === coreB.id) { w.fc_set(n); setJointView(m.data); }
+      if (coreB && m.to.id === coreB.id) { flightRememberSettings(w, m.data); w.fc_set(n); setJointView(m.data); }
       if (navB && m.to.id === navB.id) w.nav_set(n);
       if (learnB && m.to.id === learnB.id) { frIn(w, m.data); w.learn_set(n); }
     } else if (m.kind === 'ltel') {
@@ -461,12 +461,13 @@ function boardsControl(dt) {
     const baro = drv.baro && drv.baroTs !== brt.baroTs; if (baro) brt.baroTs = drv.baroTs;
     b.set([...(est.haveImu ? est.fGyro : [0, 0, 0]), ...(est.haveImu ? est.fAccel : [0, 0, 0]), est.haveImu ? 1 : 0, coreDt, fc.vComp && hread.b.V > 1 ? hread.b.V : 0,
       baro ? drv.baro.alt : 0, baro ? 1 : 0, ...(drv.mag || [0, 0, 0]), drv.mag ? 1 : 0], 0);
+    flightApplyLimits(W, fc.vComp && hread.b.V > 1 ? hread.b.V : 0, acts);
     W.fc_tick();
     acts.forEach((c, i) => { const st = act.get(c.id); if (st) { const u = S.crashed || wiredTo(c) !== coreB ? 0 : b[IO_OUT + i]; setThrottle(c, st, u, u); } });
     joints().forEach((j, k) => { const st = jst.get(j.id); if (st && wiredTo(j) === coreB) st.thCmd = b[IO_OUT + 12 + k]; });
     const s = b.subarray(IO_STATE);
     est.q = [s[0], s[1], s[2], s[3]]; est.R = qmat(est.q); est.w = [s[4], s[5], s[6]];
-    brt.out = { attOk: s[9] > 0.5, alt: s[14], haveAlt: s[15] > 0.5, vz: s[13], tau: [s[16], s[17], s[18]], sat: acts.some((c, i) => b[IO_OUT + i] >= 0.995) };
+    brt.out = { attOk: s[9] > 0.5, alt: s[14], haveAlt: s[15] > 0.5, vz: s[13], tau: [s[16], s[17], s[18]], sat: acts.some((c, i) => b[IO_OUT + i] >= Math.max(.001, flightDuty(c) - .005)) };
     const st = W.state(); if (st !== brt.fcState || (S.steps % 400 === 0)) { brt.fcState = st; brt.fcWhy = cstr(W, W.why_ptr()); }
   }
   if (brt.fcState === 3 && thr) thr = null;   // crashed: the throw is over

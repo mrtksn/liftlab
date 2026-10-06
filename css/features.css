@@ -713,7 +713,9 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .share-dlg h2:not(:first-child){margin-top:var(--space-14);padding-top:var(--space-12);border-top:1px solid var(--line)}
 .share-row{display:flex;gap:var(--space-6);margin-bottom:var(--space-6)}
 .share-row input{flex:1;min-width:0;font-family:var(--f-mono);font-size:var(--text-xs);border:1px solid var(--line-strong);border-radius:var(--radius-control);padding:var(--space-6) var(--space-8);background:var(--panel-2);color:var(--ink)}
-.share-dlg textarea{width:100%;box-sizing:border-box;font-family:var(--f-mono);font-size:var(--text-xs);border:1px solid var(--line-strong);border-radius:var(--radius-control);padding:var(--space-6) var(--space-8);background:var(--panel);color:var(--ink);resize:vertical}
+.share-dlg textarea,.flight-curve{width:100%;box-sizing:border-box;font-family:var(--f-mono);font-size:var(--text-xs);border:1px solid var(--line-strong);border-radius:var(--radius-control);padding:var(--space-6) var(--space-8);background:var(--panel);color:var(--ink);resize:vertical}
+#flightPhysicsKv,#flightPerformanceKv{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+#flightPhysicsKv dd,#flightPerformanceKv dd{overflow-wrap:anywhere}
 .share-dlg .hint{margin:0 0 var(--space-6)}
 .share-dlg .hint:empty{display:none}
 .share-dlg.paste-only .share-out{display:none}
