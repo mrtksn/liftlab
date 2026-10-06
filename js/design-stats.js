@@ -25,15 +25,12 @@ function droneDesignStats() {
   designStatsCache = {key,value}; return value;
 }
 function renderDesignHud() {
-  const box = document.getElementById('hudDesign'); if (!box) return;
-  box.hidden = !editMode || !view.readouts;
-  if (box.hidden) return;
+  if (!editMode) return;
   const s = droneDesignStats();
   const rows = [
     `mass ${s.mass.toFixed(3)} kg · ${s.motors} rotors / ${s.area.toFixed(4)} m²`,
-    `disk loading ${s.diskLoading==null?'—':s.diskLoading.toFixed(1)+' N/m²'} · T/W ${s.tw.toFixed(2)}×`,
-    `CoG (${s.rigid.c.map(x=>(x*1000).toFixed(0)).join(',')}) mm · battery ${s.energy.toFixed(1)} Wh`,
-    `max ${s.motors?Math.round(s.rpm).toLocaleString():'—'} rpm · tip Mach ${s.motors?s.mach.toFixed(2):'—'}`,
+    `disk loading ${s.diskLoading==null?'—':s.diskLoading.toFixed(1)+' N/m²'} · T/W ${s.tw.toFixed(2)}× · battery ${s.energy.toFixed(1)} Wh`,
+    `CoG (${s.rigid.c.map(x=>(x*1000).toFixed(0)).join(',')}) mm · max ${s.motors?Math.round(s.rpm).toLocaleString():'—'} rpm · tip Mach ${s.motors?s.mach.toFixed(2):'—'}`,
   ];
-  document.querySelectorAll('#hudDesignStats .hud-design-row').forEach((node,i) => setText(node,rows[i]));
+  ['hudTime','hudPos','hudCmd'].forEach((id,i) => setText(document.getElementById(id),rows[i]));
 }

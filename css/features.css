@@ -113,11 +113,7 @@ button.chip{background:transparent;cursor:pointer}
 #viewport canvas{display:block;width:100%;height:100%}
 .hud{position:absolute;pointer-events:none;font-family:var(--f-mono);font-size:var(--text-xs);color:var(--ink-2)}
 .hud-tl{top:10px;left:12px;display:flex;flex-direction:column;gap:var(--space-3)}
-.hud-design{pointer-events:none}
-.hud-design[hidden]{display:none}
-#hudDesignStats{display:flex;flex-direction:column;gap:var(--space-3);overflow-wrap:anywhere}
-.view.editing #hudTime,.view.editing #hudPos,.view.editing #hudCmd,.view.editing #hudTq,.view.editing #hudWing,.view.editing #hudSup,.view.editing .hud-tl > .hud-src{display:none}
-.view.editing #legend [data-layer]:not([data-layer="thrust"]):not([data-layer="cog"]){display:none}
+.view.editing #hudTq,.view.editing #hudWing,.view.editing #hudSup{display:none}
 .hud-tr{top:8px;right:8px;pointer-events:none;display:flex;flex-direction:column;align-items:flex-end;gap:var(--space-6);max-width:calc(100% - 16px)}
 .tog-row{pointer-events:auto;display:flex;gap:var(--space-6);flex-wrap:wrap;justify-content:flex-end}
 .show-wrap{position:relative}
@@ -556,7 +552,6 @@ button.chip{background:transparent;cursor:pointer}
   .crash,.liftoff{bottom:232px}
   .hud-tl{max-width:calc(100% - 210px)}
   .legend{display:none}
-  .view.editing .hud-tl{top:78px;right:12px;max-width:calc(100% - 24px)}
 }
 .gs-cargo{flex-wrap:wrap;gap:var(--space-6)}
 /* where a new part goes (place-ui.js) */

@@ -40,19 +40,20 @@ try{
     loadPreset('quadx');running=false;while(!brt.ready)await new Promise(r=>setTimeout(r,20));view.readouts=true;showApply();setEditMode(true);updateLive();
     const s=droneDesignStats(),mass=cfg.frame.mass+cfg.comps.reduce((n,c)=>n+c.mass,0),area=actuators().reduce((n,c)=>n+Math.PI*propR(c)**2,0);
     close(s.mass,mass);close(s.area,area);close(s.diskLoading,mass*G/area);close(s.energy,battCfg().cells*3.7*battCfg().capacity);check(s.tw>1&&s.rpm>0,'Thrust/RPM estimate missing');
-    check(!document.getElementById('hudDesign').hidden,'Edit HUD hidden');for(const id of ['hudTime','hudPos','hudCmd','hudTq'])check(getComputedStyle(document.getElementById(id)).display==='none','Flight readout visible in edit mode: '+id);
-    const hudStyle=getComputedStyle(document.getElementById('hudDesign'));
+    for(const id of ['hudTime','hudPos','hudCmd'])check(getComputedStyle(document.getElementById(id)).display!=='none','Existing readout hidden: '+id);
+    check(document.getElementById('hudTime').textContent.startsWith('mass ')&&document.getElementById('hudPos').textContent.includes('disk loading')&&document.getElementById('hudCmd').textContent.includes('tip Mach'),'Design text not in original flight spans');
+    const hudStyle=getComputedStyle(document.querySelector('.hud-tl'));
     check(hudStyle.pointerEvents==='none'&&hudStyle.backgroundColor==='rgba(0, 0, 0, 0)'&&parseFloat(hudStyle.borderTopWidth)===0,'Design HUD blocks the view');
-    check(document.querySelectorAll('#hudDesignStats .hud-design-row').length===4,'Design HUD is not compact');
+    check(!document.getElementById('hudDesign')&&getComputedStyle(document.querySelector('.hud-tl > .hud-src')).display!=='none','Separate design UI replaced original badge');
     const baseline={mass:s.mass,tw:s.tw,rpm:s.rpm};S.battV=1;S.batt.soc=0;hb.cellsLost=3;hb.cut=true;
     for(const c of actuators())hsOf(c).dead=true;const battery=cfg.comps.find(c=>c.battery);cargo.off.add(battery.id);
     designStatsCache=null;const independent=droneDesignStats();close(independent.mass,baseline.mass);close(independent.tw,baseline.tw);close(independent.rpm,baseline.rpm);
     const added=mkMass('Unknown payload',.3,0,0,{mass:.5,known:false});cfg.comps.push(added);recomputeProps();const heavy=droneDesignStats();close(heavy.mass,baseline.mass+.5);check(heavy.rigid.c[0]>s.rigid.c[0]&&heavy.tw<s.tw,'Unknown design mass excluded');
     const c=actuators()[0],small=heavy.diskLoading;c.prop*=1.2;recomputeProps();check(droneDesignStats().diskLoading<small,'Prop change did not refresh disk loading');
     computers().wiring ||= {parts:{},boards:{}};for(const motor of actuators())computers().wiring.parts[motor.id]={driver:'brushed',maxDuty:20};check(droneDesignStats().tw<heavy.tw*.5,'Output limits missing from stats');
-    cfg.comps=cfg.comps.filter(c=>c.type!=='motor');recomputeProps();renderDesignHud();check(droneDesignStats().diskLoading===null&&!document.getElementById('hudDesignStats').textContent.includes('NaN'),'No-motor design is invalid');
-    setEditMode(false);updateLive();check(document.getElementById('hudDesign').hidden&&getComputedStyle(document.getElementById('hudTime')).display!=='none','Flight HUD did not return');
-    loadPreset('quadx');running=false;while(!brt.ready)await new Promise(r=>setTimeout(r,20));setEditMode(true);view.readouts=false;showApply();check(document.getElementById('hudDesign').hidden,'Show readouts off ignored');view.readouts=true;showApply();check(!document.getElementById('hudDesign').hidden,'Show readouts on ignored');
+    cfg.comps=cfg.comps.filter(c=>c.type!=='motor');recomputeProps();renderDesignHud();check(droneDesignStats().diskLoading===null&&!document.querySelector('.hud-tl').textContent.includes('NaN'),'No-motor design is invalid');
+    setEditMode(false);updateLive();check(document.getElementById('hudTime').textContent.startsWith('t ')&&document.getElementById('hudCmd').textContent.startsWith('speed '),'Flight HUD did not return');
+    loadPreset('quadx');running=false;while(!brt.ready)await new Promise(r=>setTimeout(r,20));setEditMode(true);view.readouts=false;showApply();check(getComputedStyle(document.getElementById('hudPos')).display==='none','Show readouts off ignored');view.readouts=true;showApply();check(getComputedStyle(document.getElementById('hudPos')).display!=='none','Show readouts on ignored');
     resetHealth();doReset();while(!brt.ready)await new Promise(r=>setTimeout(r,20));updateLive();
     const snap=designSnap();renderDesignHud();check(designSnap()===snap,'Reading design stats changed the design');
     const beforeMass=droneDesignStats().mass,input=document.getElementById('frameMass-n');input.value=String(cfg.frame.mass+.2);input.dispatchEvent(new Event('input',{bubbles:true}));close(droneDesignStats().mass,beforeMass+.2);undoStep();close(droneDesignStats().mass,beforeMass);
@@ -66,7 +67,7 @@ try{
     await page.waitForTimeout(250);
     await page.evaluate(()=>{view.readouts=true;showApply();renderDesignHud();});
     assert(await page.evaluate(()=>{
-      const hud=document.getElementById('hudDesign'),r=hud.getBoundingClientRect(),v=document.querySelector('.view').getBoundingClientRect();
+      const hud=document.querySelector('.hud-tl'),r=hud.getBoundingClientRect(),v=document.querySelector('.view').getBoundingClientRect();
       return r.width>0&&r.right<=v.right+1&&r.left>=v.left&&hud.scrollWidth<=hud.clientWidth+1&&r.bottom<document.getElementById('editBar').getBoundingClientRect().top;
     }),'Mobile design HUD overflows');
     if(process.env.TEST_SCREENSHOTS)await page.screenshot({path:process.env.TEST_SCREENSHOTS+'-'+theme+'-mobile.png'});

@@ -571,10 +571,12 @@ function updateLive() {
     if (L.className !== cls) L.className = cls; if (L.dataset.t !== txt) { L.dataset.t = txt; L.textContent = (w.length ? '⚠ ' : '✓ ') + txt; L.title = txt; }
   }
   const R = qmat(S.q); const { hub } = hubState(R);
-  setText($('#hudTime'), `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`);
-  setText($('#hudPos'), `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`);
-  const vh = hubState(R).vh, gs = Math.hypot(vh[0], vh[1]);
-  setText($('#hudCmd'), `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`);
+  if (!editMode) {
+    setText($('#hudTime'), `t ${S.t.toFixed(1)} s · ${running ? 'running' : 'paused'}`);
+    setText($('#hudPos'), `hub (${hub.map(x => x.toFixed(2)).join(', ')}) m`);
+    const vh = hubState(R).vh, gs = Math.hypot(vh[0], vh[1]);
+    setText($('#hudCmd'), `speed ${gs.toFixed(1)} m/s · climb ${fmtSign(vh[2])} m/s · heading ${Math.round(setpoint.yaw)}°`);
+  }
   {   // the net torque on the drone about its centre of mass, in body axes (roll: X forward, pitch: Y left, yaw: Z up)
     const t = S.tq, f = x => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
     setText($('#hudTq'), view.readouts && (view.rtorque || view.ntorque || view.want) && t && !S.crashed ? `torque · roll ${f(t[0])} · pitch ${f(t[1])} · yaw ${f(t[2])} N·m` : '');
