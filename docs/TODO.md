@@ -1,5 +1,9 @@
 # Project memory
 
+## Serial/nRF24 publication verification — 2026-10-06
+- Confirmed Claude's serial commit 1072b3c and nRF24 commit 9aece65 were already pushed to their source branches and main; fast-forwarded this checkout and confirmed the push is current.
+- All eight latest board/host CI jobs and Pages deployment passed at 9aece65. Live serial/nRF24 scripts, embedded board WASM and firmware manifest matched main. Local asset fingerprints, firmware/install/wiring/physics checks and browser flight/persistence regressions passed, including serial, half-duplex serial, nRF24, ESP-NOW and Wi-Fi. Physical link validation remains pending as documented below.
+
 ## nRF24L01 link and a compact packet layer — 2026-10-06
 - `runner/fc/clink.c`: 32-byte packets for small-packet radios. Ground on a fixed beat (100/s; 50 at 250 kbit/s), drone answers in ESB ACK payloads. Channels 22 B up; commands/telemetry/messages as a reliable selective-repeat byte stream (21-byte chunks, window 8). 4-byte SipHash tag over both sessions (never sent) + seq high bits; hello handshake; 8-channel hopping from the phrase, drone parks on hop[0] after 0.5 s. `nrf24.c`: portable register driver (HAL: SPI xfer, CE, delay).
 - plink security fix: frames delivered only from packets naming this end's current session (a recording replayed to a restarted drone is ignored); test added.
