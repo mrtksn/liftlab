@@ -6,7 +6,7 @@ An interactive 3D simulator for a drone frame you can change while it flies. You
 
 Every physical law and control law is a plain function in `js/laws.js`, and you can read and edit each one live in the **Computers** tab.
 
-Guides: [board support](docs/boards.md), [hardware wiring and custom drivers](docs/hardware-wiring.md), [GitHub Pages deployment](docs/deployment.md), and [review findings and validation](docs/review-2026-10-06.md).
+Guides: [board support](docs/boards.md), [hardware wiring and custom drivers](docs/hardware-wiring.md), [flight physics and physical profiles](docs/simulation-physics.md), [simulation performance](docs/simulation-performance.md), [GitHub Pages deployment](docs/deployment.md), and [review findings and validation](docs/review-2026-10-06.md).
 
 ## Run it
 
@@ -190,6 +190,8 @@ Results on the stock presets (thrown to 7 m, the default), with the learning on 
 It hovers, manoeuvres and calibrates (98% of the rotation and 100% of the force explained). With a single rotor and nothing to counter its torque, the body spins the opposite way to the rotor.
 
 ## Airflow (physics only)
+
+Motor cards now have **Physical model** settings for fixed KV/resistance/inertia, brushed motors and measured static prop data. Battery capacity/cell edits scale flagged battery masses unless their weight is manual. **Flight physics** shows battery amps/power, disk loading, RPM/tip Mach and timing; bounded inflow/torque coupling and optional rotor-overlap/GPS/barometer refinements extend the generic models. See [profiles and limitations](docs/simulation-physics.md) and [measured performance](docs/simulation-performance.md). Playback can slow under its frame CPU budget while the fixed physics timestep stays unchanged.
 
 The simulated world has effects the controller is never told about:
 

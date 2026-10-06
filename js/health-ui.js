@@ -4,8 +4,8 @@
 // each one mid-flight, and the supervisor's log.
 
 /* ───────── battery settings ───────── */
-function battEdited() { undoKey = 'battery'; recomputeProps(); refreshEnvelope(); renderMass(); save(); renderBattSmall(); }
-function renderBattSmall() { const b = battCfg(); $('#battSmall').textContent = `${b.cells}S · ${b.capacity.toFixed(1)} Ah · ${(0.038 * b.capacity * b.cells * 1000).toFixed(0)} g`; }
+function battEdited() { undoKey = 'battery'; recomputeProps(); refreshEnvelope(); renderMass(); save(); renderBattSmall(); for (const refresh of flightBatteryFieldRefs) refresh(); }
+function renderBattSmall() { const b = battCfg(); $('#battSmall').textContent = `${b.cells}S · ${b.capacity.toFixed(1)} Ah · ${(battMass() * 1000).toFixed(0)} g`; }
 function renderBattery() {
   const box = $('#battFields'); if (!box) return; box.textContent = '';
   const b = battCfg();
@@ -24,8 +24,9 @@ function renderBattery() {
     chk('vsens', 'Voltage sensor (the flight controller corrects the throttle for sag)'), chk('isens', 'Current sensor'), chk('tsens', 'Temperature sensor'),
     chk('failHeat', 'Overheating damages it'),
     el('div', { class: 'field' }, el('label', { for: 'batt-failMode', text: 'When it fails' }), sel),
-    el('p', { class: 'hint', text: 'Its weight isn\'t added for you: the layouts carry it as a mass part. It heats from the current through its internal resistance, which falls as it warms (so a warm pack sags less); past its limit it loses capacity and gains resistance for good, and 25 °C past it, it fails the way you set. Near empty its voltage falls away and sags more, so the thrust drops until it can\'t hover; over-discharged it collapses. The ESCs\' cutoff stops the motors once the pack stays under it (per cell, under load) for 1.5 s; they restart only after the throttle has been at zero.' }));
+    el('p', { class: 'hint', text: 'Battery mass parts scale from their saved mass with capacity and cell count; editing a part’s mass selects manual weight. A design without a battery mass part uses an estimated thermal mass only. Pack current includes motors, ESC losses, avionics and servos. The battery heats through internal resistance; wear reduces capacity and increases resistance. Near empty its voltage drops. Low-voltage cutoff stops the motors after 1.5 s below the per-cell threshold; zero throttle resets it.' }));
   renderBattSmall();
+  box.append(flightBatteryFields(b));
 }
 
 /* ───────── health panel ───────── */

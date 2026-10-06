@@ -33,6 +33,9 @@ jobs:
       - run: sh runner/ground/build.sh
       - if: runner.os == 'Linux'
         run: sh runner/pi/build.sh
+      - if: runner.os == 'Linux'
+        name: Ground and Pi radio integration tests
+        run: sh tools/test_radio_e2e.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -40,11 +43,18 @@ jobs:
       - run: node tools/test_hardware_wiring.js
       - run: node tools/test_agent_hardware.js
       - run: node tools/test_driver_presets.js
+      - run: node tools/test_flight_physics.js
       - run: python3 tools/sync_driver_presets.py --check
       - name: Sensor driver register tests
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/fc -Irunner tools/test_sensor_drivers.c -lm -o /tmp/test-sensors
           /tmp/test-sensors
+      - name: Packet radio and USB bridge tests
+        run: |
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_plink.c runner/fc/plink.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-plink
+          /tmp/test-plink
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
+          /tmp/test-esp-radio
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do

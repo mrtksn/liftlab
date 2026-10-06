@@ -109,7 +109,17 @@ function measure(c, rt, dt) {
     const fl = run('flowModel', f, q, { noise: c.noise, scale: c.scale, maxRate: c.maxRate }, rt.st, dt);
     return { flow: [fl[0], fl[1]], q: fl[2], range: run('rangeModel', d, { noise: c.rangeNoise, minRange: c.minRange, maxRange: c.maxRange }, rt.st) };
   }
-  if (c.kind === 'baro') return run('baroModel', ps[2], { noise: c.noise, drift: c.drift }, rt.st, dt);
+  if (c.kind === 'baro') {
+    const wash = envr.sensorEffects ? nrm(run('wakeVelocity', P, S.rotors || [], flightAtmosphere().rho)) : 0;
+    const bias = -Math.min(5, (c.baroWash ?? .05) * wash * wash / (2 * G));
+    return run('baroModel', ps[2] + bias, { noise: c.noise, drift: c.drift }, rt.st, dt);
+  }
+  if (envr.sensorEffects && c.kind === 'fix' && (c.quality === 'gps' || c.quality === 'rtk')) {
+    const sky = flightSkyVisibility(ps, rt);
+    if (sky < .4) return null;
+    const degradation = 1 + 3 * (1 - sky);
+    return run('posFixModel', ps, vs, { noise: c.noise * degradation, wander: c.wander * degradation, velNoise: c.velNoise * degradation }, rt.st, dt);
+  }
   return run('posFixModel', ps, vs, { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
 }
 function sampleSensors(dt) {
@@ -120,7 +130,8 @@ function sampleSensors(dt) {
     rt.acc += dt; if (rt.acc + 1e-9 < period) continue;
     rt.acc = rt.acc % period;
     if (c.kind === 'fix' && c.dropout) continue;              // no fix while dropped out
-    rt.queue.push({ t: S.t + c.latency / 1000, ts: S.t, m: measure(c, rt, period) });
+    const measured = measure(c, rt, period);
+    if (measured != null) rt.queue.push({ t: S.t + c.latency / 1000, ts: S.t, m: measured });
     if (rt.queue.length > 400) rt.queue.shift();
   }
 }
