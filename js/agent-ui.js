@@ -206,7 +206,8 @@ function agentRenderFeed(th) {
       F.append(box); continue;
     }
     F.append(el('div', { class: 'ai-msg w-' + it.who + (it.tone ? ' t-' + it.tone : '') },
-      it.who === 'trigger' ? el('b', { text: `⚡ ${it.t != null ? (+it.t).toFixed(1) + ' s · ' : ''}` }) : null, el('span', { text: it.text })));
+      it.who === 'trigger' ? el('b', { text: `⚡ ${it.t != null ? (+it.t).toFixed(1) + ' s · ' : ''}` }) : null,
+      it.who === 'ai' ? ChatMarkdown.message(it) : el('span', { text: it.text })));
   }
   if (agent.turn === th) F.append(el('div', { class: 'ai-typing', 'aria-label': 'Thinking' }, el('i'), el('i'), el('i')));
   if (atEnd || agent.turn === th) F.scrollTop = F.scrollHeight;

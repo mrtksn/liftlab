@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=e900d0cdc4">
+<link rel="stylesheet" href="css/style.css?v=232f9d8d12">
 </head>
 <body>
 <div class="app">
@@ -147,6 +147,14 @@
       <div id="viewport"></div>
       <div class="hud hud-tl">
         <span class="hud-src" data-src="sim"></span>
+        <div id="hudDesign" class="hud-design" data-layer="readouts" hidden>
+          <div id="hudDesignStats" aria-label="Drone design statistics: saved geometry at rest, full-pack static estimates">
+            <span class="hud-design-row"></span>
+            <span class="hud-design-row"></span>
+            <span class="hud-design-row"></span>
+            <span class="hud-design-row"></span>
+          </div>
+        </div>
         <span id="hudTime">t 0.0 s</span>
         <span id="hudPos" data-layer="readouts"></span>
         <span id="hudCmd" data-layer="readouts"></span>
@@ -434,18 +442,19 @@
 <script src="js/rn-wasm.js?v=57aa3966fb"></script>
 <script src="js/rn-bridge.js?v=bffc67a733"></script>
 <script src="js/flight-physics.js?v=42d90f7013"></script>
-<script src="js/sim.js?v=eb4214102e"></script>
+<script src="js/sim.js?v=16dd51180a"></script>
 <script src="js/flight-model.js?v=4b6da32aed"></script>
 <script src="js/joints.js?v=3fc4d783ab"></script>
 <script src="js/multibody.js?v=8ebcaadfdb"></script>
 <script src="js/cargo.js?v=d3a4267220"></script>
 <script src="js/sensors.js?v=719f82ea09"></script>
 <script src="js/health.js?v=29f7d5297a"></script>
+<script src="js/design-stats.js?v=b8d72d9b56"></script>
 <script src="js/learn.js?v=c8cd75bea1"></script>
 <script src="js/view3d.js?v=256588fbe1"></script>
 <script src="js/pilot.js?v=0b46445ed6"></script>
 <script src="js/computers-ui.js?v=fdab19c540"></script>
-<script src="js/ui.js?v=bda0413e58"></script>
+<script src="js/ui.js?v=bc5f980f7c"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
 <script src="js/flight-physics-ui.js?v=83817933aa"></script>
@@ -457,7 +466,7 @@
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=374f7643fa"></script>
 <script src="js/install-ui.js?v=872191cef9"></script>
-<script src="js/editor.js?v=956cb50980"></script>
+<script src="js/editor.js?v=d532ccb7bc"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=7a62419e07"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
@@ -473,7 +482,10 @@
 <script src="js/agent-tools.js?v=607908ba36"></script>
 <script src="js/agent-tools-more.js?v=12586e76c1"></script>
 <script src="js/agent-hardware.js?v=3dfb149f42"></script>
-<script src="js/agent-ui.js?v=e02c00aa03"></script>
+<script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
+<script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
+<script src="js/chat-markdown.js?v=5af3250f82"></script>
+<script src="js/agent-ui.js?v=562834b98b"></script>
 <script src="js/audio.js?v=126beda013"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=55293d65c7"></script>

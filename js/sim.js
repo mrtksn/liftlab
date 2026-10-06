@@ -155,10 +155,9 @@ const frameI = () => boxI(cfg.frame.mass, ...frameDims());
 // A thin rod's inertia about its middle: m L²/12 across it, nothing along it.
 function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; return [0, 1, 2].flatMap(i => [0, 1, 2].map(j => k * ((i === j ? 1 : 0) - d[i] * d[j]))); }
 // The truth is what's on the drone now (a load dropped or picked up, cargo.js); the model is the design.
-function massProps(which) {
-  const ang = which === 'truth' ? angleTrue : angleSeen;
+function massProps(which, comps = which === 'truth' ? liveComps() : cfg.comps, ang = which === 'truth' ? angleTrue : angleSeen) {
   const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() }];
-  for (const c of which === 'truth' ? liveComps() : cfg.comps) {
+  for (const c of comps) {
     const pose = () => poseOf(c, ang);
     if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
@@ -202,7 +201,9 @@ function reseatPend(c) {
   let d = sub(st.p, a); if (nrm(d) < 1e-6) d = [0, 0, -1];
   st.p = add(a, scl(unit(d), c.length)); st.v = S.v.slice();
 }
+let designRevision = 0;
 function recomputeProps() {
+  designRevision++;
   flightPrepare();
   truth = massProps('truth'); model = massProps('model');
   buildBodies(); nb = nominalAxis(); syncRuntime();

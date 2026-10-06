@@ -2,6 +2,12 @@
 
 The simulator now supports the inexpensive and bounded models from the [impact assessment](simulation-impact.md). They improve internal consistency and component experiments; measured accuracy against real flight remains unverified.
 
+## Design readouts
+
+In **Edit** mode, the viewport replaces flight time, position and speed with design mass, rotor count/summed disk area, disk loading, upward static thrust-to-weight, rigid center of gravity, nominal battery energy and estimated maximum RPM/tip Mach. **Show → Readouts** controls their visibility. Leaving Edit restores the flight HUD.
+
+These values use the saved components at joint rest angles, including unknown masses and cable payloads in total weight. They ignore dropped cargo, simulated failures, battery depletion and live joint poses. Disk loading is weight divided by summed disk area, without correcting overlaps or rotor tilt. Thrust-to-weight sums upward thrust at rest with configured wiring/duty limits, current air density and full-pack resting voltage; it omits voltage sag and is not a hover feasibility verdict. Battery energy uses 3.7 V per LiPo cell and the configured Ah capacity. Center of gravity describes only rigid parts, in millimeters from the hub. RPM/tip Mach is a static motor estimate, not a manufacturer speed limit or efficiency target.
+
 ## Motor and propeller
 
 Open a motor’s **Physical model** section. Generic mode preserves the existing inferred motor: changing its thrust/prop settings also changes its inferred KV, resistance and inertia. Fixed brushless or brushed mode freezes those traits, so a prop swap changes the load on the same motor. Initial fixed values are estimates, not specifications of an identified product.

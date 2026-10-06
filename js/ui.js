@@ -535,6 +535,7 @@ function setTile(id, value, sub, tone, title) {
   if (title != null && t.title !== title) t.title = title;
 }
 function updateLive() {
+  renderDesignHud();
   renderFlightPhysics();
   {   // flight
     const last = hist.err.length ? hist.err[hist.err.length - 1] : 0, P = flightPhaseText();
@@ -949,6 +950,7 @@ function showApply() {   // buttons, legend keys and readouts follow the layers
     const k = el.dataset.layer; el.hidden = !(k === 'torque' ? torque : view[k]);
   }
   $('#legend').hidden = !view.legend;
+  if (typeof editMode !== 'undefined') renderDesignHud();
   const base = typeof phoneMode === 'function' && phoneMode() ? SHOW_PRESETS.Phone() : null, n = LAYERS.filter(L => view[L.key] !== (base ? base[L.key] : L.on)).length;   // (changed from this layout's own starting set)
   $('#tShow').firstChild.textContent = n ? `Show (${n} changed) ` : 'Show ';
 }

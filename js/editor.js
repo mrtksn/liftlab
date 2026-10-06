@@ -73,6 +73,7 @@ function setEditMode(on) {
   $('.view').classList.toggle('editing', on);
   $('#editBar').hidden = !on;
   updateEditMsg();
+  renderDesignHud();
 }
 
 function selectComp(id) {

@@ -1,5 +1,12 @@
 # Project memory
 
+## Chat Markdown and edit-mode design readouts — 2026-10-07
+- Brought in Claude's already-published Bluetooth LE commit 7182783. Added locally vendored Marked/DOMPurify for assistant Markdown (lists, emphasis, tables, links and code), with sanitized output, inert raw HTML, image links and per-message parsing caches. User messages/tool output retain plain text.
+- Edit HUD now replaces time/speed/flight readouts with design mass, summed rotor area/disk loading, upward static thrust/weight, rigid CoG, nominal battery energy and estimated maximum RPM/tip Mach. Uses saved geometry at rest and full-pack voltage, independent of dropped cargo, live failures and drained batteries. Static estimates omit voltage sag and rotor overlap correction; cache invalidates with design/environment/output-limit edits.
+- Regression checklist: saved replies/nested lists/tables/code/link safety; edit/fly transitions and Show readouts; no-motor designs; cargo/unknown masses; servo rest pose; prop/battery/wiring edits and undo; mobile/light/dark layout; existing flight and BLE regressions.
+- UI decision: design values replace the existing flight HUD as four transparent text lines; no stats card/background or pointer interception over the drone view.
+- Passed: Markdown formatting/sanitization/cache updates and saved-chat reload; design equations, drained/damaged live-state independence, unknown mass, prop/output edits, empty motors, mode/Show transitions and actual edit/undo; desktop/mobile light/dark layout and transparent pointer passthrough. Full flight/radio browser regression (including BLE), physics/formula, wiring/install/agent and C preset checks passed. Native firmware artifacts are unchanged. Publishing with Claude's BLE work; verify CI, Pages and live assets after push.
+
 ## Bluetooth LE link — 2026-10-07
 - Link kind `ble` (RLINK_BLE=5), `radio=ble` + `bind=`. `runner/esp_radio/radio_ble.c` (NimBLE): drone = peripheral (128-bit service, UP write-no-rsp / DOWN notify, advertising with mfg data 0xFFFF + 4-byte SipHash mark of the phrase); ground = central (scan for the mark, connect 7.5–15 ms interval, 1 s supervision timeout, MTU 256, subscribe). plink packets up to min(250, MTU−3), 64 before the exchange.
 - ESP32-S3/C3 only (classic ESP32: BT controller's ~64 KB static DRAM overflows; built without BT, `radio=ble` refused there). BT config in sdkconfig.defaults.esp32s3/.esp32c3; controller memory released at boot when the link isn't ble. Flash +170 KB (S3) / +200 KB (C3); C3 flight partition 13% free.

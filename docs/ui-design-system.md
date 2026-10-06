@@ -63,6 +63,14 @@ The tool versions HTML asset references and nested CSS imports. It leaves the ex
 
 Serve the repository and open `/tools/test_ui_components.html` for nine browser DOM regression checks. Its theme picker previews shared styles. Also run existing agent, hardware, installation and driver-preset checks. Verify desktop/narrow layouts, flight controls/readouts, part editing/undo/save, formula apply/revert, driver drafts, installation guides and AI/ground panels. UI tests do not verify physical flashing or live-model reasoning.
 
+## AI chat and design HUD
+
+Assistant replies render GitHub-flavored Markdown with pinned local Marked/DOMPurify distributions; attribution and versions are in [the vendor note](../js/vendor/markdown-README.md). User messages and tool results remain plain text. Raw HTML is shown as text, images become links, code is inert and link protocols are restricted. Parsed assistant content is cached per feed item; rebuilding the feed clones those nodes instead of reparsing unchanged replies.
+
+The Edit viewport shows saved-design characteristics through `js/design-stats.js`, cached until geometry, environment, battery or output-limit settings change. It reuses mass-property math with saved components/rest angles and does not read live battery/health/cargo state. Four plain text lines replace the flight HUD in the same area, with a transparent background and pointer events passing through to the view. Narrow layouts place the text below the view controls. [Physics definitions](simulation-physics.md#design-readouts) explain the estimates.
+
+Run `node tools/test_chat_design.cjs` for Markdown safety, design equations, mode/visibility transitions and responsive light/dark checks. Set `LIVE_URL` to verify a deployment or `TEST_SCREENSHOTS` to a path prefix for previews. Use `--hardware-gpu` for hardware-rendered screenshots. This is separate from the full flight/radio regression in `tools/test_flight_browser.cjs`.
+
 ## Checkpoint and rollback
 
 The complete pre-refactor state is commit `53cf25c`, tagged `ui-before-refactor-2026-10-06`. The refactor is on `codex/ui-components`. Compare with `git diff ui-before-refactor-2026-10-06..codex/ui-components`. With a clean checkout, switching to the tag restores the original version in detached HEAD; switching back to `codex/ui-components` restores this version. Preserve subsequent local work before switching. Avoid a hard reset as a rollback shortcut.
