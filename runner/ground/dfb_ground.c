@@ -53,6 +53,7 @@
 #include "ground_core.h"
 #include "rc_core.h"
 #include "ground_text.h"
+#include "radio_serial.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -73,39 +74,18 @@
 
 extern const uint8_t *const rn_builtin_ground_img;
 extern const uint32_t rn_builtin_ground_len;
-int serial_custom_baud(int fd, int baud);
+
 
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
-static int open_serial(const char *dev, int baud) {
-  int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
-  if (fd < 0) { perror(dev); return -1; }
-  struct termios t; tcgetattr(fd, &t); cfmakeraw(&t); t.c_cflag &= ~(tcflag_t)CRTSCTS;   /* (no flow control: the module has no RTS/CTS) */
-  speed_t sp = B115200; int standard = baud == 115200;
-#ifdef B230400
-  if (baud == 230400) { sp = B230400; standard = 1; }
-#endif
-#ifdef B460800
-  if (baud == 460800) { sp = B460800; standard = 1; }
-#endif
-#ifdef B921600
-  if (baud == 921600) { sp = B921600; standard = 1; }
-#endif
-  cfsetispeed(&t, sp); cfsetospeed(&t, sp); t.c_cflag |= CLOCAL | CREAD; t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0;
-  tcsetattr(fd, TCSANOW, &t);
-  if (!standard && serial_custom_baud(fd, baud)) { fprintf(stderr, "%s: can't set %d baud\n", dev, baud); close(fd); return -1; }
-  tcflush(fd, TCIOFLUSH);
-  return fd;
-}
-
 /* ── the inputs: text commands (ground_text.c), the terminal's keys, a gamepad ── */
 static gnd_state G; static gnd_text_in IN; static int running = 1, status_line = 0;
 /* what goes to the module: a frame the port didn't take whole waits here, so none is cut (cut, it would fail its CRC,
  * and the frame after it too); while it waits, the next beat waits too (no frames pile up to go late, back to back) */
 static uint8_t txq[CRSF_MAX_FRAME]; static int txn;
-static int tx_flush(int fd) {
+static int tx_flush(radio_io *R) {
   while (txn > 0) {
-    ssize_t w = write(fd, txq, (size_t)txn);
-    if (w < 0) return errno == EAGAIN || errno == EINTR ? 0 : -1;
+    int w = R->write(R, txq, txn);
+    if (w < 0) return -1;
     if (w == 0) return 0;
     memmove(txq, txq + w, (size_t)(txn - w)); txn -= (int)w;
   }
@@ -197,7 +177,7 @@ int main(int argc, char **argv) {
     else printf("%s: checked; runs in the background for a second, then takes over\n", prog);
   }
 
-  int tx = tx_dev ? open_serial(tx_dev, baud) : -1; if (tx_dev && tx < 0) return 1;
+  radio_io *R = tx_dev ? radio_serial_open(tx_dev, baud, "ExpressLRS transmitter module (serial)") : 0; if (tx_dev && !R) return 1;   /* the pilot's radio link (radio_io.h) */
   int udp = -1;
   if (port > 0) {
     udp = socket(AF_INET, SOCK_DGRAM, 0); struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(listen_all ? INADDR_ANY : INADDR_LOOPBACK);
@@ -221,7 +201,7 @@ int main(int argc, char **argv) {
   while (running) {
     double t = now_s();
     struct pollfd p[4]; int np = 0, itx = -1, iudp = -1, iin = -1, ijs = -1;
-    if (tx >= 0) { itx = np; p[np].fd = tx; p[np++].events = POLLIN | (txn ? POLLOUT : 0); }
+    if (R) { itx = np; p[np].fd = R->fd; p[np++].events = POLLIN | (txn ? POLLOUT : 0); }
     if (udp >= 0) { iudp = np; p[np].fd = udp; p[np++].events = POLLIN; }
     if (stdin_open) { iin = np; p[np].fd = 0; p[np++].events = POLLIN; }
     if (js >= 0) { ijs = np; p[np].fd = js; p[np++].events = POLLIN; }
@@ -229,14 +209,14 @@ int main(int argc, char **argv) {
     poll(p, (nfds_t)np, wait);
     t = now_s();
     if (itx >= 0 && (p[itx].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL))) {
-      uint8_t b[512]; ssize_t n = read(tx, b, sizeof b);
-      if (n > 0) gnd_from_radio(&G, b, (int)n, t - t0);
-      else if ((n == 0 && (p[itx].revents & POLLHUP)) || (n < 0 && errno != EAGAIN && errno != EINTR)) {   /* unplugged */
+      uint8_t b[512]; int n = R->read(R, b, sizeof b, 0);
+      if (n > 0) gnd_from_radio(&G, b, n, t - t0);
+      else if ((n == 0 && (p[itx].revents & (POLLHUP | POLLERR | POLLNVAL))) || n < 0) {   /* unplugged */
         fprintf(stderr, "\rtransmitter module: gone (%s): nothing goes up any more; the drone will count the link lost\r\n", n < 0 ? strerror(errno) : "hung up");
-        close(tx); tx = -1;
+        radio_serial_close(R); R = 0;
       }
     }
-    if (tx >= 0 && txn && (p[itx].revents & POLLOUT) && tx_flush(tx)) { perror("\rtransmitter module"); close(tx); tx = -1; }
+    if (R && txn && (p[itx].revents & POLLOUT) && tx_flush(R)) { perror("\rtransmitter module"); radio_serial_close(R); R = 0; }
     if (iudp >= 0 && (p[iudp].revents & POLLIN)) {
       char b[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n = recvfrom(udp, b, sizeof b - 1, 0, (struct sockaddr *)&from, &fl);
       if (n > 0) { b[n] = 0; char reply[1200]; for (char *s = strtok(b, "\n"), *nx; s; s = nx) { nx = strtok(0, "\n"); char cp[256]; snprintf(cp, sizeof cp, "%s", s); command(cp, reply, sizeof reply, t - t0); if (reply[0]) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl); } }
@@ -272,7 +252,7 @@ int main(int argc, char **argv) {
     rn_host_tick(&H, dt);
     gnd_input in; input_now(t - t0, &in);
     uint8_t out[CRSF_MAX_FRAME]; int n = gnd_step(&G, &in, t - t0, dt, out, txn ? 0 : (int)sizeof out);   /* (cap 0: no frame due) */
-    if (n && tx >= 0) { memcpy(txq, out, (size_t)n); txn = n; if (tx_flush(tx)) { perror("\rtransmitter module"); close(tx); tx = -1; } }
+    if (n && R) { memcpy(txq, out, (size_t)n); txn = n; if (tx_flush(R)) { perror("\rtransmitter module"); radio_serial_close(R); R = 0; } }
     if (H.last_event) { int ev = H.last_event; H.last_event = 0; printf("\rprogram: %s\r\n", ev == RN_EV_SWAPPED ? "the new program runs now" : ev == RN_EV_REJECTED ? "the new program was rejected" : ev == RN_EV_FELL_BACK ? "the new program stopped: back to the one before" : ev == RN_EV_LOADED ? "checking the new program in the background" : "event"); }
     /* what to tell the pilot */
     if (G.V.nmsg - msgs_seen > GND_MSGS) msgs_seen = G.V.nmsg - GND_MSGS;   /* (more came than the ring keeps: the newest) */

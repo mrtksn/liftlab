@@ -24,6 +24,7 @@
 #include "super_core.h"
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
+#include "radio_link.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
 
@@ -162,24 +163,25 @@ EXPORT("nav_set") void nav_set_(int n) { nav_set(&N, fr, n); }
 
 /* ── the telemetry task and the pilot's radio ── */
 static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
-static int tlm_local, elrs_rate = 250, elrs_ratio = 4;
+static int tlm_local; static rlink_cfg RL = { RLINK_ELRS, 250, 4 };   /* the radio link: which, and its settings (radio_link.h) */
 static pickup_state PK; static double nav_clock; static uint32_t pk_seen_r, pk_seen_l;   /* the pickup without a radio (below) */
 static nav_out last_o; static nav_sp last_sp; static int have_nav_out;
 static uint8_t rbuf[2048];                 /* the receiver's UART, both ways */
 EXPORT("rbuf_ptr") uint8_t *rbuf_ptr(void) { return rbuf; }
-/* local: this board has the radio receiver (runs the telemetry task); rate, ratio: the ExpressLRS link's */
-EXPORT("tlm_setup") void tlm_setup(int local, int rate, int ratio) {
+/* local: this board has the radio receiver (runs the telemetry task) */
+EXPORT("tlm_setup") void tlm_setup(int local) {
   tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP); pickup_init(&PK); pk_seen_r = pk_seen_l = 0;
   char *p = (char *)&RCI; for (unsigned i = 0; i < sizeof RCI; i++) p[i] = 0;
   p = (char *)&CP; for (unsigned i = 0; i < sizeof CP; i++) p[i] = 0;
-  tlm_local = local; elrs_rate = rate; elrs_ratio = ratio; have_nav_out = 0;
+  tlm_local = local; have_nav_out = 0;
 }
-/* the radio's rate and telemetry ratio changed, in flight: the budget follows, nothing else is touched */
-EXPORT("tlm_link") void tlm_link(int rate, int ratio) { elrs_rate = rate; elrs_ratio = ratio; }
+/* the radio link: which (radio_link.h RLINK_*) and its settings (ExpressLRS: a packet rate, b telemetry ratio). At
+ * any time, in flight too: the telemetry's budget follows, nothing else is touched. 0, or −1 (unknown, unchanged). */
+EXPORT("radio_link") int radio_link(int kind, int a, int b) { return rlink_make(&RL, kind, a, b); }
 /* n bytes from the receiver, in rbuf */
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
-EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(elrs_rate, elrs_ratio, &RCI, t), rbuf, (int)sizeof rbuf); }
+EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), rbuf, (int)sizeof rbuf); }
 static cargo_state CG;
 /* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor, 16 cargo */
 EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {

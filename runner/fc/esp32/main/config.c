@@ -1,6 +1,7 @@
 /* Portable wiring defaults, settings validation and diagnostics. */
 #include "hw.h"
 #include "esp_board.h"
+#include "radio_link.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,11 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   char key[24]; const char *eq = strchr(line, '='); float v[FC_MAX_MOTORS]; int n;
   if (!eq || eq - line >= (int)sizeof key) { snprintf(err, errn, "expected key=value"); return -1; }
   memcpy(key, line, (size_t)(eq - line)); key[eq - line] = 0;
+  if (!strcmp(key, "radio") || !strcmp(key, "elrs")) {   /* the radio link: radio=elrs,250,4 (elrs=250,4 as before) */
+    rlink_cfg L; if (rlink_parse(&L, eq + 1, err, errn)) return -1;
+    if (L.kind != RLINK_ELRS) { snprintf(err, errn, "this firmware's radio is ExpressLRS"); return -1; }
+    c->elrs_rate = (int16_t)L.rate_hz; c->elrs_ratio = (int16_t)L.ratio; return 0;
+  }
   n = parse_list(eq + 1, v, FC_MAX_MOTORS);
   for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
   if (n < 0) { snprintf(err, errn, "%s: not a list of numbers", key); return -1; }
@@ -122,9 +128,7 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     if (n == 1 && v[0] == -1) c->crsf_rx = c->crsf_tx = -1;
     else if (n != 2 || !lb_input_pin((int)v[0]) || !pin_ok((int)v[1]) || v[1] < 0) { snprintf(err, errn, "crsf=rx,tx: free input and output pins (or crsf=-1)"); return -1; }
     else { c->crsf_rx = (int8_t)v[0]; c->crsf_tx = (int8_t)v[1]; }
-  } else if (!strcmp(key, "elrs")) {
-    if (n != 2 || (v[0] != 50 && v[0] != 150 && v[0] != 250 && v[0] != 500) || v[1] < 2 || v[1] > 128) { snprintf(err, errn, "elrs=rate,ratio as set on the radio: 50, 150, 250 or 500 Hz; telemetry 1:2 to 1:128"); return -1; }
-    c->elrs_rate = (int16_t)v[0]; c->elrs_ratio = (int16_t)v[1];
+
   } else if (!strcmp(key, "telemetry")) {
     if (n != 1 || v[0] < 0 || v[0] > 50) { snprintf(err, errn, "telemetry: 0 to 50 Hz"); return -1; }
     c->telem_hz = (int16_t)v[0];
@@ -138,7 +142,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" motor_driver=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%u",i?",":"",c->motor_driver[i]);
   APP(" motor_max=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%u",i?",":"",c->motor_max_pct[i]);
   APP(" brushed_hz=%ld servos=",(long)c->brushed_hz);for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_pin[i]);
-  APP(" esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d elrs=%d,%d servo_center=",
+  APP(" esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=elrs,%d,%d servo_center=",
       c->esc_hz,c->esc_min_us,c->esc_max_us,c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,c->elrs_rate,c->elrs_ratio);
   for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_center_us[i]);
   APP(" servo_us_per_rad=");for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%.0f",i?",":"",(double)c->servo_us_per_rad[i]);

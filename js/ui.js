@@ -1038,7 +1038,7 @@ function load() {
     try { applyLaw(key, src); } catch (e) { const L = LAWS[key]; L.src = src; L.status = 'error'; L.err = e.message; }
   }
   if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
-  if (s.radio) for (const k of ['rate', 'ratio', 'power', 'extra']) if (isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
+  if (s.radio) { if (RADIO_LINKS[s.radio.kind]) radioCfg.kind = s.radio.kind; for (const k of ['rate', 'ratio', 'power', 'extra']) if (isFinite(s.radio[k])) radioCfg[k] = +s.radio[k]; }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';

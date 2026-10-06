@@ -1,5 +1,5 @@
 'use strict';
-// The Ground station tab: what came down the radio (elrs.js decodes it into gs), shown with the data displays of
+// The Ground station tab: what came down the radio (link.js decodes it into gs), shown with the data displays of
 // gs-widgets.js, and the radio's settings. Nothing here reads the simulator's truth or the boards directly: if the
 // link can't carry it, it isn't here.
 
@@ -8,7 +8,7 @@ const SUP_WHY = ['', 'a motor is running hot', 'the battery is hot', 'lift margi
 const SUP_MODE = ['normal', 'careful', 'returning home', 'landing'];
 // paused: the log as it was when paused. items: the link log's lines on screen, by entry id ({ li, btn, raw }), kept
 // as they are while new ones come (so a line keeps its focus, its open bytes and a press in progress).
-const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, logKey: '', items: new Map(), open: new Set(), paused: null, clearId: 0, cfgNote: '' };
+const GS_UI = { built: false, w: {}, next: 0, logShow: {}, logN: -1, logKey: '', items: new Map(), open: new Set(), paused: null, clearId: 0 };
 
 function buildGs() {
   const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
@@ -21,16 +21,13 @@ function buildGs() {
   W.alert = GSW.badge(); al.append(el('div', { class: 'gs-moderow' }, W.alert.el), el('p', { class: 'hint', id: 'gsCmdNote' }));
 
   // the radio
-  const r = sec('Radio link', 'ExpressLRS 2.4 GHz', 'tlm gnd sim you');
+  const r = sec('Radio link', radioModel().label, 'tlm gnd sim you');
   const sel = (id, label, opts, get, set) => {
     const s = UI.choice({id,label,options:opts,value:get(),onChange:value=>{set(value);save();boardsRadioCfg();}});
     return UI.field({label,class:'gs-sel'},s);
   };
-  r.append(el('div', { class: 'gs-row' },
-    sel('gsRate', 'Packet rate', Object.keys(ELRS_RATES).map(k => [k, k + ' Hz']), () => radioCfg.rate, v => { radioCfg.rate = +v; }),
-    sel('gsRatio', 'Telemetry', ELRS_RATIOS.map(k => [k, '1:' + k]), () => radioCfg.ratio, v => { radioCfg.ratio = +v; }),
-    sel('gsPower', 'Power', ELRS_POWERS.map(k => [k, k + ' mW']), () => radioCfg.power, v => { radioCfg.power = +v; })),
-    el('p', { class: 'hint warn', id: 'gsCfgNote', hidden: '' }));
+  r.append(el('div', { class: 'gs-row' },                             // the link's own settings (its model in link-*.js says which)
+    ...radioModel().settings.map(s => sel('gs-' + s.key, s.label, s.options, () => radioCfg[s.key], v => { radioCfg[s.key] = +v; }))));
   const extra = numField('gsExtra', { label: 'Extra path loss (distance, walls, interference)', min: 0, max: 120, step: 1, u: 'dB', dp: 0 }, () => radioCfg.extra, v => { radioCfg.extra = v; save(); });
   r.append(el('p', { class: 'hint warn' }, srcDot('calc'), el('span', { id: 'gsRoom' })), extra.node, el('p', { class: 'hint' }, srcDot('sim'), el('span', { id: 'gsEquiv' })));
   W.linkUp = GSW.bar('Uplink LQ', { min: 0, max: 100, unit: '%', tone: v => v < 50 ? 'bad' : v < 80 ? 'warn' : '' });
@@ -129,19 +126,6 @@ function buildGs() {
   applySrcTags(pane);
   GS_UI.built = true;
 }
-// The radio's settings changed: the boards' telemetry budget follows at once (as if set on both ends); nothing else
-// resets. A build without tlm_link can only set them with the full tlm_setup, which starts the telemetry and the
-// radio's pilot state afresh: done only disarmed on the ground; in flight they wait for the next reset (and it says so).
-function boardsRadioCfg() {
-  if (!brt.ready) return;                                            // (starting: the boards take radioCfg as they start)
-  const ws = computers().boards.map(b => [b, brt.inst.get(b.id)]).filter(([, w]) => w);
-  const say = (s, tone) => { GS_UI.cfgNote = tone ? s : ''; rnEvent(s, tone || ''); };
-  if (ws.every(([, w]) => w.tlm_link)) { for (const [, w] of ws) w.tlm_link(radioCfg.rate, radioCfg.ratio); GS_UI.cfgNote = ''; return; }
-  if (brt.fcState === 0 && (brt.pilot.phase === 'ground' || brt.pilot.phase === 'landed')) {
-    for (const [b, w] of ws) w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0, radioCfg.rate, radioCfg.ratio);
-    say(`Radio: the boards took ${radioCfg.rate} Hz, telemetry 1:${radioCfg.ratio} (their telemetry started afresh, on the ground)`);
-  } else say(`Radio: the boards take ${radioCfg.rate} Hz, telemetry 1:${radioCfg.ratio} at the next reset (this build can't change them in flight); until then the drone's telemetry keeps to the old budget`, 'warn');
-}
 // What the link log shows: by the filters, after the last Clear.
 const LOG_GROUP = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
 const LOG_TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
@@ -190,24 +174,22 @@ function renderGs(force) {
   setText($('#gsRadioNote'), has ? `The receiver is on ${boardOf('tlm').name}. Its channels fly the drone${hasTask('nav') ? ' (the sticks move its target; arm, take off, hold and home are switches)' : ' (angle mode)'}; everything below came down the link.`
     : 'No board runs the Telemetry & radio task (Computers tab): the drone has no radio, so nothing comes down and the simulator\'s pilot reaches the boards directly.');
   setText($('#gsCmdNote'), !has ? '' : !brt.gnd ? (brt.err ? `Not running: ${brt.err}` : 'Starting…') : brt.gndErr ? brt.gndErr : `Your keys and the simulator's pilot are the buttons of the command module (${gname}): it shapes them (stickInput${gs.shaped === false ? ', not answering: the raw sticks go up' : ''}), sends the channels and commands to the transmitter module, decodes what comes back and warns (groundAlerts).`);
-  setText($('#gsCfgNote'), GS_UI.cfgNote); $('#gsCfgNote').hidden = !GS_UI.cfgNote;
   if (has && gs.alert) {
     const a = gs.alert, cap = s => s.charAt(0).toUpperCase() + s.slice(1);
     if (a.level) W.alert.set(cap(a.text), t, a.level >= 2 ? 'bad' : 'warn');
     else if (!brt.gndOk) W.alert.set('Not checked: groundAlerts isn\'t running', t, 'warn');   // (its program didn't load: no alerts can come)
     else W.alert.set('All fine', t, 'good');
   }
-  const rf = radio.rf;
-  const room = radioCfg.rate / radioCfg.ratio * 5;
-  setText($('#gsRoom'), room < 40 ? `At ${radioCfg.rate} Hz with telemetry 1:${radioCfg.ratio}, only ${room < 10 ? room.toFixed(1) : Math.round(room)} bytes a second can come down (one packet in ${radioCfg.ratio}, 5 bytes each); a frame is 10–40 bytes, so values arrive seconds apart. The channels and commands go up in the other packets, so control isn't affected. 1:2 to 1:8 leaves the Ground station enough.` : '');
-  $('#gsRoom').parentNode.hidden = room >= 40;
-  setText($('#gsEquiv'), rf ? `Now ${rf.d.toFixed(0)} m from the handset${rf.walls ? `, ${rf.walls} building${rf.walls > 1 ? 's' : ''} in the way` : ''}; with the extra loss that is like ${fmtDist(rf.d * Math.pow(10, radioCfg.extra / 20))} in the open. Signal ${rf.rssi.toFixed(0)} dBm, the receiver needs ${ELRS_RATES[radioCfg.rate]} dBm at ${radioCfg.rate} Hz.` : '');
+  const LM = radioModel(), roomNote = LM.roomNote(radioCfg);         // what the link's model says of its room and its signal
+  setText($('#gsRoom'), roomNote);
+  $('#gsRoom').parentNode.hidden = !roomNote;
+  setText($('#gsEquiv'), LM.signalNote(radioCfg));
   const L = gs.link;
   if (has && L) { W.linkUp.set(L.upLq, L.t); W.linkDown.set(L.downLq, L.t); W.rssi.set(L.upRssi, L.t); W.snr.set(L.upSnr, L.t); }
   // throughput over the last second
   gs.rate.push([t, gs.bytes]); while (gs.rate.length > 2 && t - gs.rate[0][0] > 1) gs.rate.shift();
   const dt = gs.rate.length > 1 ? t - gs.rate[0][0] : 0;
-  if (has) { W.thru.set(dt > 0 ? (gs.bytes - gs.rate[0][1]) / dt : 0, t); W.budget.set(radioCfg.rate / radioCfg.ratio * 5, t); }
+  if (has) { W.thru.set(dt > 0 ? (gs.bytes - gs.rate[0][1]) / dt : 0, t); W.budget.set(LM.room(radioCfg), t); }
   if (has) W.age.set(gs.lastAge >= 0 ? gs.lastAge : null, gs.lastAge >= 0 ? t : null);   // (the command module's own count: −1 until a frame comes)
   if (has && gs.sent) W.chans.set(gs.sent.slice(0, 9).map(v => (v + 1) / 2), t, ['Ail', 'Ele', 'Thr', 'Rud', 'Arm', 'Spd', 'Fly', 'Hold', 'Home']);
 
