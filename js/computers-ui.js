@@ -222,7 +222,7 @@ function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if (!COMP.built) return;
   const C = computers(), core = boardOf('core');
-  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';') + '|' + [radioCfg.kind, radioCfg.channel, radioCfg.lr, radioCfg.sta, radioCfg.bind].join();   // (the radio's card follows the link)
+  const sig = JSON.stringify(C) + '|' + actuators().length + '|' + cfg.comps.map(c => [c.id,c.type,c.kind,c.name,c.mount]).join(';') + '|' + [radioCfg.kind, radioCfg.channel, radioCfg.lr, radioCfg.sta, radioCfg.baud, radioCfg.half, radioCfg.bind].join();   // (the radio's card follows the link)
   if (full || COMP.sig !== sig) {
     COMP.sig = sig;
     const list = $('#boardList'); list.textContent = '';
@@ -253,7 +253,7 @@ function renderComputers1(full) {
         el('p', { class: 'board-note', text: K.note }),
         el('dl', { class: 'kv board-kv' },
           el('dt', { text: 'Runs' }), el('dd', { text: runs }),
-          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? ['ExpressLRS receiver'] : [])].join(', ') || '—' }),
+          el('dt', { text: 'Wired to it' }), el('dd', { text: [...wired.map(c => c.name), ...(b.tasks.includes('tlm') ? [radioModel().receiver || 'ExpressLRS receiver'] : [])].join(', ') || '—' }),
           ...(link ? [el('dt', { text: 'Link' }), el('dd', { text: link })] : []),
           ...(load ? [el('dt', {}, srcDot('calc'), 'Load'), el('dd', { class: bud.load > 0.8 ? 'bad' : '', text: load + (bud.load > 1 ? ': too much for this board' : '') })] : [])),
         ex, errLine(b.id)));

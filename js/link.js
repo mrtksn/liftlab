@@ -37,10 +37,11 @@
 
 const RADIO_LINKS = {};
 // kind; ExpressLRS: rate [Hz], ratio, power [mW]; ESP-NOW: channel, lr (long range); Wi-Fi: sta (the drone joins a
-// network: 1; makes one: 0), channel; the packet links: bind (the binding phrase, the same at both ends); every link:
-// extra (path loss [dB], the simulator's)
-const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, bind: 'liftlab' };
-const RADIO_KINDS = ['elrs', 'espnow', 'wifi'];
+// network: 1; makes one: 0), channel; a serial line: baud, half (one way at a time), and the simulator's medium (0 a
+// fibre or a wire, tether [m] long; 1 a laser; 2 infrared LEDs; 3 a radio modem); the packet links: bind (the binding
+// phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
+const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, bind: 'liftlab' };
+const RADIO_KINDS = ['elrs', 'espnow', 'wifi', 'serial'];
 // A binding phrase as both ends take it (the boards' bind=: 1–31 printable characters, no spaces at the ends;
 // runner/esp_radio/radio_cfg.h), or null.
 function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
@@ -144,7 +145,7 @@ function radioLinkSetup() {
 function plinkSetup(w, role, phrase) {
   const b = new TextEncoder().encode(String(phrase)).slice(0, 63);
   new Uint8Array(w.memory.buffer, w.rbuf_ptr(), b.length).set(b);
-  w.plink_setup(role, b.length, 1 + Math.floor(radioRand() * 0x7FFFFFFE));
+  w.plink_setup(role, b.length, 1 + Math.floor(radioRand() * 0x7FFFFFFE), ...radioModel().wasm(radioCfg));   // (the link: a serial line's packet sizes follow its speed)
 }
 // One end given another phrase (as if its program had been installed with it): to try a mismatch. end 'gnd' or 'drone'.
 function radioBindEnd(end, phrase) {

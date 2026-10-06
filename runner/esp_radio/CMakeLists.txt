@@ -1,7 +1,7 @@
-# The packet links on an ESP32 (ESP-NOW, Wi-Fi UDP) as an ESP-IDF component, for the flight firmware (fc/esp32) and
-# the command module's (ground/esp32): see esp_radio.h. plink.c (the packet layer, portable) is built by the fc
+# The packet links on an ESP32 (ESP-NOW, Wi-Fi UDP, a serial line) as an ESP-IDF component, for the flight firmware (fc/esp32) and
+# the command module's (ground/esp32): see esp_radio.h. plink.c and pframe.c (the packet layer and the framing, portable) are built by the fc
 # component. radio_cfg.h and usb_split.c are portable too (test_esp_radio.c tests them on a PC).
-idf_component_register(SRCS "radio_packet.c" "radio_espnow.c" "radio_wifi.c" "wifi_start.c" "usb_split.c"
+idf_component_register(SRCS "radio_packet.c" "radio_espnow.c" "radio_wifi.c" "radio_uart.c" "wifi_start.c" "usb_split.c"
                        INCLUDE_DIRS "."
-                       REQUIRES runner fc esp_wifi esp_netif esp_event lwip esp_timer esp_hw_support log freertos)
+                       REQUIRES runner fc esp_driver_uart esp_wifi esp_netif esp_event lwip esp_timer esp_hw_support log freertos)
 target_compile_options(${COMPONENT_LIB} PRIVATE -O2)

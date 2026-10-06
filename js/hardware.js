@@ -116,21 +116,24 @@ function hardwarePlan(C, comps, b) {
   return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings,radioBoard:b.tasks.includes('tlm')};
 }
 // The pilot's radio link as settings lines (runner/fc/radio_link.h rlink_parse; the packet links' binding phrase):
-// radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta, then bind=PHRASE for a packet link.
+// radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta | serial,BAUD[,half], then bind=PHRASE
+// for a packet link. (A serial line is on the receiver's pins: crsf= comes first in the settings, as the board wants.)
 // r: radioCfg (link.js) or one like it; none (a test without the page): no lines.
 const hardwareRadio = () => typeof radioCfg !== 'undefined' ? radioCfg : null;
 function radioSettingLines(r) {
   if (!r) return [];
   if (r.kind === 'espnow') return ['radio=espnow,'+(r.channel||1)+(r.lr?',lr':''),'bind='+(r.bind||'liftlab')];
   if (r.kind === 'wifi') return [r.sta?'radio=wifi,sta':'radio=wifi,ap,'+(r.channel||1),'bind='+(r.bind||'liftlab')];
+  if (r.kind === 'serial') return ['radio=serial,'+(r.baud||115200)+(r.half?',half':''),'bind='+(r.bind||'liftlab')];
   return ['radio=elrs,'+(r.rate||250)+','+(r.ratio||4)];
 }
 // What each link needs wired to the radio's board: an ExpressLRS receiver on a UART; nothing for ESP-NOW (built into
-// the ESP32) or Wi-Fi (the ESP32's or the Pi's own).
+// the ESP32) or Wi-Fi (the ESP32's or the Pi's own); a serial line on the receiver's UART pins (or a Pi's port).
 function radioWiringRow(b,bus,esp,r) {
   const kind=r?.kind||'elrs';
   if(kind==='espnow')return {device:'ESP-NOW radio',connection:esp?'Built into the ESP32 · no wiring':'Not available on '+b.kind+' · needs an ESP32',note:'Channel '+(r.channel||1)+(r.lr?' · long range':'')+' · the command module needs an ESP32 too'};
   if(kind==='wifi')return {device:'Wi-Fi radio',connection:'Built into the board · no wiring',note:(r.sta?'Joins a network':'Makes the network (access point), channel '+(r.channel||1))+' · UDP port 14570'};
+  if(kind==='serial')return {device:'Serial line',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← the line\'s output; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → its input':(bus.receiverPort||'/dev/ttyUSB1')+' · a serial port',note:(r.baud||115200)+' baud'+(r.half?', one way at a time':'')+' · laser, fibre, infrared, a radio modem or a wire · share GND'};
   return {device:'ExpressLRS receiver',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← receiver TX; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'};
 }
 function hardwareSettings(plan, radio=hardwareRadio()) {

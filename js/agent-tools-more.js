@@ -82,18 +82,20 @@ Object.assign(AGENT_TOOLS, {
       wifi: pk.assoc && radioModel().packets ? pk.assoc.state : undefined, link: hasTask('tlm') ? linkStats(radio.t) : null, note: radioModel().roomNote(radioCfg) || undefined,
       ground: { alert: gs.alert, link: gs.link, telemetry: gs.v, frames: gs.frames, log: (gs.log || []).slice(-10).map(l => typeof l === 'string' ? l : (l.msg || l.text || JSON.stringify(l)).slice(0, 160)) } },
       (k, v) => (typeof v === 'number' ? +v.toFixed(2) : v))) },
-  set_radio: { desc: 'The radio\'s settings; both ends take them at once, in flight too. kind: elrs, espnow or wifi (another link: the drone sees a short gap; Wi-Fi then joins its network, 1–3 s). ExpressLRS: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet: 2…128), power [mW: 10, 25, 100, 250, 500, 1000]. ESP-NOW: channel (1–13), lr (long range, true/false). Wi-Fi: sta (true: the drone joins a network; false: it makes one, an access point), channel (1–13, the access point\'s). ESP-NOW and Wi-Fi: bind (the binding phrase, the same at both ends, 1–31 characters). Any link: extra (extra path loss [dB]: distance, walls).',
-    params: obj({ kind: { type: 'string', enum: ['elrs', 'espnow', 'wifi'] }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' },
+  set_radio: { desc: 'The radio\'s settings; both ends take them at once, in flight too. kind: elrs, espnow, wifi or serial (another link: the drone sees a short gap; Wi-Fi then joins its network, 1–3 s). ExpressLRS: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet: 2…128), power [mW: 10, 25, 100, 250, 500, 1000]. ESP-NOW: channel (1–13), lr (long range, true/false). Wi-Fi: sta (true: the drone joins a network; false: it makes one, an access point), channel (1–13, the access point\'s). Serial line (a laser, fibre, infrared, a radio modem or a wire carrying a UART\'s bytes): baud (19200, 38400, 57600, 115200, 230400, 460800, 921600), half (true: one way at a time, as radio modems; 38400 and up), medium (the simulator\'s: 0 fibre or wire, 1 laser, 2 infrared, 3 radio modem), tether [m: 10, 25, 50, 100, 300] for fibre or wire. ESP-NOW, Wi-Fi and serial: bind (the binding phrase, the same at both ends, 1–31 characters). Any link: extra (extra path loss [dB]: distance, walls).',
+    params: obj({ kind: { type: 'string', enum: ['elrs', 'espnow', 'wifi', 'serial'] }, baud: { type: 'integer' }, half: { type: 'boolean' }, medium: { type: 'integer' }, tether: { type: 'number' }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' },
       channel: { type: 'integer' }, lr: { type: 'boolean' }, sta: { type: 'boolean' }, bind: { type: 'string' } }),
     run: a => {
       const bad = [], ok = (k, test, why) => { if (a[k] != null && !test(a[k])) bad.push(`${k}: ${why}`); };
-      ok('kind', v => !!RADIO_LINKS[v], 'elrs, espnow or wifi');
+      ok('kind', v => !!RADIO_LINKS[v], 'elrs, espnow, wifi or serial');
+      ok('baud', v => SL_BAUDS.includes(+v), SL_BAUDS.join(', ')); ok('medium', v => [0, 1, 2, 3].includes(+v), '0 fibre or wire, 1 laser, 2 infrared, 3 radio modem'); ok('tether', v => [10, 25, 50, 100, 300].includes(+v), '10, 25, 50, 100 or 300');
+      if ((a.half ?? radioCfg.half) && +(a.baud ?? radioCfg.baud) < 38400 && (a.kind || radioCfg.kind) === 'serial') bad.push('half: one way at a time needs 38400 baud or more');
       ok('rate', v => ELRS_RATES[v] != null, '50, 150, 250 or 500'); ok('ratio', v => ELRS_RATIOS.includes(+v), 'one of ' + ELRS_RATIOS.join(', '));
       ok('power', v => ELRS_POWERS.includes(+v), 'one of ' + ELRS_POWERS.join(', ')); ok('extra', v => isFinite(v) && v >= 0 && v <= 200, '0 to 200 dB');
       ok('channel', v => Number.isInteger(+v) && v >= 1 && v <= 13, '1 to 13'); ok('bind', v => !!radioPhraseOk(v), '1–31 plain characters');
       if (bad.length) throw new Error('Radio not changed: ' + bad.join('; '));
-      for (const k of ['rate', 'ratio', 'power', 'extra', 'channel']) if (a[k] != null) radioCfg[k] = +a[k];
-      for (const k of ['lr', 'sta']) if (a[k] != null) radioCfg[k] = a[k] ? 1 : 0;
+      for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'baud', 'medium', 'tether']) if (a[k] != null) radioCfg[k] = +a[k];
+      for (const k of ['lr', 'sta', 'half']) if (a[k] != null) radioCfg[k] = a[k] ? 1 : 0;
       if (a.bind != null) radioCfg.bind = radioPhraseOk(a.bind);
       if (a.kind) radioCfg.kind = a.kind;
       save(); boardsRadioCfg(); if (typeof renderGs === 'function') renderGs(true);

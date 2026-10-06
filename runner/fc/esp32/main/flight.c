@@ -30,13 +30,18 @@
  *   radio=wifi,ap,6       Wi-Fi: the drone makes a network on channel 6 (LiftLab-XXXX, XXXX from its MAC address, as
  *                         it says at power-on; 192.168.4.1) and takes UDP on port 14570
  *   radio=wifi,sta        Wi-Fi: the drone joins wifi= (it says its address once joined)
+ *   radio=serial,115200   a serial line on crsf=RX,TX (set those first) at that speed (19200 to 4000000 baud, the same
+ *                         at both ends): whatever carries the UART's bytes to the command module, a laser or LED and a
+ *                         photodiode, fibre transceivers, an infrared pair, a radio modem in transparent mode, a wire.
+ *                         serial,57600,half: a line that goes one way at a time (most radio modems; 38400 and up):
+ *                         the drone answers each packet. The packets are framed in the byte stream (pframe.h)
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
  *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
  *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
  *                         its password then the binding phrase if it has 8+ characters, else liftlab1, with a warning).
  *                         wifi=SSID alone: that name, the default password. wifi= alone: the defaults
  * ESP-NOW and Wi-Fi need no crsf= wiring (crsf=-1 is fine): the ESP32's own radio is the receiver. The telemetry and
- * link statistics work as with ExpressLRS (plink.h does the receiver's part), the failsafe too.
+ * link statistics work as with ExpressLRS (plink.h does the receiver's part), the failsafe too, on a serial line as well.
  * Flying from a laptop over Wi-Fi: set radio=wifi,ap,6 and bind=YOUR PHRASE (8+ characters: it's also the network's
  * password), save, reboot. Join the laptop to LiftLab-XXXX with that password, then
  *   dfb_ground --radio wifi --drone 192.168.4.1 --bind "YOUR PHRASE" --keys
@@ -402,8 +407,9 @@ static radio_io *radio_start(void) {
   rlink_cfg L; hw_radio(&HW, &L);
   if (L.kind == RLINK_ELRS) return radio_elrs_start(&HW);
   if (rcfg_bind_default(HW.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly this drone. set bind=YOUR PHRASE (the same on the command module)\n");
-  if (HW.crsf_rx >= 0) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
+  if (HW.crsf_rx >= 0 && L.kind != RLINK_SERIAL) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
   radio_io *R = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_DRONE, HW.bind, post)
+              : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_DRONE, HW.bind, LB_RADIO_UART, HW.crsf_tx, HW.crsf_rx, post)   /* (the receiver's pins: the line's) */
               : radio_wifi_start(&L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
   printf("radio: %s; free heap %u bytes\n", R ? R->name : "DIDN'T START (see the next messages): no pilot's radio", (unsigned)esp_get_free_heap_size());
   return R;

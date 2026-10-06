@@ -31,6 +31,7 @@
 #define PLINK_H
 #include <stdint.h>
 #include "crsf.h"
+#include "radio_link.h"
 
 #define PLINK_MTU 250          /* the biggest packet (ESP-NOW's); a link with smaller ones sets mtu */
 #define PLINK_HDR 16
@@ -43,14 +44,18 @@ enum { PLINK_GROUND = 0, PLINK_DRONE = 1 };
 
 typedef struct {
   int role;                    /* which end this is */
-  int mtu;                     /* the link's biggest packet [bytes] (≤ PLINK_MTU) */
+  int mtu;                     /* this end's biggest packet [bytes] (≤ PLINK_MTU) */
   float up_hz;                 /* packets up a second (both ends know it: the drone counts what it misses by it) */
   float down_hz_min, down_hz_max;
+  int half;                    /* one way at a time (a half-duplex line: most radio modems): the drone sends only in
+                                * answer to a packet from the ground, one each, and the ground sends its next once the
+                                * answer came (or once it's clearly lost: awaiting), so the two never talk at once; the
+                                * ground's beat leaves room for the answer (radio_link.c rlink_sizing) */
   uint64_t k0, k1;             /* the key (plink_key from the binding phrase) */
 } plink_cfg;
 
 typedef struct {
-  uint32_t sent, got, bad, replays, stale_sessions, uq_dropped, resent;
+  uint32_t sent, got, bad, replays, stale_sessions, uq_dropped, resent, skipped;   /* skipped: reliable frames the other end dropped */
 } plink_counts;
 
 typedef struct {
@@ -62,6 +67,11 @@ typedef struct {
   /* theirs: the newest number, which of the last 128 came (by number), for replays and link quality */
   uint16_t rx_top, rx_first; int rx_any; uint64_t rx_bits[2];
   int lq, rssi;                /* what we hear of them: link quality [%], signal [dBm] (0: unknown) */
+  int polled;                  /* half duplex, the drone: a packet came that it hasn't answered yet */
+  int awaiting;                /* half duplex, the ground: its last packet not answered yet (it waits for the answer:
+                                * a slow modem's delay stretches the beat rather than the two colliding) */
+  float rtt;                   /* half duplex, the ground: how long an answer takes [s] (averaged); it waits for one
+                                * one and a half times that, at least one and a half beats, at most four (four until measured) */
   float rate;                  /* their packets a second, as they come (numbers over time) */
   int peer_lq, peer_rssi;      /* what they hear of us, as they last said */
   /* reliable frames out: number, length, frame; the next number; and theirs we took last */
@@ -78,6 +88,11 @@ typedef struct {
 /* The key from a binding phrase (both ends the same phrase: the same key). */
 void plink_key(const char *phrase, uint64_t *k0, uint64_t *k1);
 void plink_cfg_default(plink_cfg *C, int role);        /* ESP-NOW's numbers: up 100 Hz, down 20–100 Hz, mtu 250 */
+/* The packet sizes and rates for a link as set (a serial line's from its speed: radio_link.h rlink_sizing). */
+static inline void plink_cfg_link(plink_cfg *C, const rlink_cfg *L) {
+  int up_mtu, down_mtu; rlink_sizing(L, &down_mtu, &up_mtu, &C->up_hz, &C->down_hz_min, &C->down_hz_max, &C->half);
+  C->mtu = C->role == PLINK_GROUND ? up_mtu : down_mtu;
+}
 /* session: a number of this start's own (a random one: the other end tells restarts by it), not 0 */
 void plink_init(plink *L, const plink_cfg *C, uint32_t session);
 /* What the stack wrote (any split of whole frames: they're put together here). */

@@ -1,10 +1,10 @@
 /* The pilot's radio link: see radio_link.h. (No C library: it also builds for the simulator.) */
 #include "radio_link.h"
 
-const char *const rlink_names[RLINK_KINDS] = { "elrs", "espnow", "wifi" };
-const char *const rlink_labels[RLINK_KINDS] = { "ExpressLRS 2.4 GHz", "ESP-NOW (ESP32 to ESP32)", "Wi-Fi (UDP)" };
+const char *const rlink_names[RLINK_KINDS] = { "elrs", "espnow", "wifi", "serial" };
+const char *const rlink_labels[RLINK_KINDS] = { "ExpressLRS 2.4 GHz", "ESP-NOW (ESP32 to ESP32)", "Wi-Fi (UDP)", "Serial line (laser, fibre, radio modem)" };
 
-void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; }
+void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; L->baud = 115200; L->half = 0; }
 
 static int say(char *err, int en, const char *s) { int k = 0; if (en > 0) { while (s[k] && k < en - 1) { err[k] = s[k]; k++; } err[k] = 0; } return -1; }
 static int same(const char *a, int n, const char *b) { int k = 0; while (k < n && b[k] && a[k] == b[k]) k++; return k == n && !b[k]; }
@@ -14,7 +14,7 @@ static int ints(const char *s, int *v, int max) {
   while (*s) {
     int neg = *s == '-'; if (neg) s++;
     if (*s < '0' || *s > '9' || n >= max) return -1;
-    long x = 0; while (*s >= '0' && *s <= '9') { x = x * 10 + (*s - '0'); if (x > 100000) return -1; s++; }
+    long x = 0; while (*s >= '0' && *s <= '9') { x = x * 10 + (*s - '0'); if (x > 100000000) return -1; s++; }
     v[n++] = (int)(neg ? -x : x);
     if (*s == ',') { s++; if (!*s) return -1; } else if (*s) return -1;
   }
@@ -28,7 +28,7 @@ int rlink_parse(rlink_cfg *L, const char *s, char *err, int en) {
   const char *v = s;
   if (kind >= 0) v = s[k] ? s + k + 1 : s + k;
   else if (s[0] >= '0' && s[0] <= '9') kind = RLINK_ELRS;            /* (just numbers: ExpressLRS's, as before) */
-  else return say(err, en, "no such link (elrs, espnow or wifi)");
+  else return say(err, en, "no such link (elrs, espnow, wifi or serial)");
   int x[2] = { 0, 0 };
   if (kind == RLINK_ELRS && (ints(v, x, 2) != 2 || rlink_make(L, kind, x[0], x[1])))
     return say(err, en, "elrs,rate,ratio as set on the radio: 50, 150, 250 or 500 Hz; telemetry 1:2 to 1:128");
@@ -43,6 +43,13 @@ int rlink_parse(rlink_cfg *L, const char *s, char *err, int en) {
     else if (v[0] == 'a' && v[1] == 'p' && v[2] == ',' && ints(v + 3, x, 1) == 1 && !rlink_make(L, kind, 0, x[0])) {}
     else return say(err, en, "wifi,ap,channel (the drone makes the network, channel 1 to 13) or wifi,sta (it joins one)");
   }
+  if (kind == RLINK_SERIAL) {                                        /* serial,BAUD[,half] */
+    int k2 = 0; while (v[k2] && v[k2] != ',') k2++;
+    char num[12]; int m = 0; while (m < k2 && m < 11) { num[m] = v[m]; m++; } num[m] = 0;
+    int half = v[k2] == ',' ? (same(v + k2 + 1, 4, "half") && !v[k2 + 5] ? 1 : -1) : 0;
+    if (k2 == 0 || k2 > 11 || ints(num, x, 1) != 1 || half < 0) return say(err, en, "serial,baud[,half]: the line's speed, the same at both ends (115200, say), and half for a line that goes one way at a time (most radio modems)");
+    if (rlink_make(L, kind, x[0], half)) return say(err, en, half ? "serial,baud,half: 38400 to 4000000 baud (slower can't carry the channels often enough, answers and all)" : "serial,baud: 19200 to 4000000 baud (slower can't carry the channels often enough)");
+  }
   return 0;
 }
 int rlink_make(rlink_cfg *L, int kind, int a, int b) {
@@ -50,6 +57,7 @@ int rlink_make(rlink_cfg *L, int kind, int a, int b) {
   if (kind == RLINK_ELRS && elrs_ok(a, b)) { c.rate_hz = a; c.ratio = b; }
   else if (kind == RLINK_ESPNOW && a >= 1 && a <= 13 && (b == 0 || b == 1)) { c.channel = a; c.lr = b; }
   else if (kind == RLINK_WIFI && (a == 0 || a == 1) && b >= 1 && b <= 13) { c.sta = a; c.channel = b; }
+  else if (kind == RLINK_SERIAL && (b == 0 || b == 1) && a >= (b ? RLINK_BAUD_HALF_MIN : RLINK_BAUD_MIN) && a <= RLINK_BAUD_MAX) { c.baud = a; c.half = b; }
   else return -1;
   *L = c; return 0;
 }
@@ -58,8 +66,49 @@ static int put_int(char *o, int n, int k, int x) { char b[12]; int i = 11; b[i] 
 int rlink_describe(const rlink_cfg *L, char *out, int n) {
   if (L->kind == RLINK_ESPNOW) { int k = put(out, n, 0, "espnow,"); k = put_int(out, n, k, L->channel); return L->lr ? put(out, n, k, ",lr") : k; }
   if (L->kind == RLINK_WIFI) { if (L->sta) return put(out, n, 0, "wifi,sta"); int k = put(out, n, 0, "wifi,ap,"); return put_int(out, n, k, L->channel); }
+  if (L->kind == RLINK_SERIAL) { int k = put(out, n, 0, "serial,"); k = put_int(out, n, k, L->baud); return L->half ? put(out, n, k, ",half") : k; }
   if (L->kind != RLINK_ELRS) return put(out, n, 0, "?");
   int k = put(out, n, 0, "elrs,"); k = put_int(out, n, k, L->rate_hz); k = put(out, n, k, ","); return put_int(out, n, k, L->ratio);
+}
+
+/* A serial line's packets, from its speed: B = baud / 10 bytes a second each way (8 data bits, a start and a stop).
+ * An uplink packet is a 16-byte header, the channel frame (26 bytes and its record's byte) and the 8-byte signature:
+ * 51 bytes, 56 on the line with the framing (pframe.h) and a little to spare.
+ *   - Both ways at once (a laser and a photodiode each way, two fibres, a wire pair): the channels take at most half
+ *     the line up, 100 a second at most (19200 baud: 17); an uplink packet with commands waiting can be bigger, up
+ *     to nine tenths of the line at that rate (the channels go first in it). Down, a packet as soon as there is something, at most 50 a
+ *     second and fewer on a slow line (so the 30 bytes each costs stay under 15% of it); the telemetry gets what is
+ *     left of three quarters of the line, and each packet has room for its share.
+ *   - One way at a time (half): the ground sends, the drone answers at once, then the ground's next. A cycle holds an
+ *     uplink packet, an answer of up to mtu bytes and the turnarounds (a quarter of it left as margin), 50 a second at
+ *     most; the telemetry gets the answers' room. An uplink packet with commands can use some of that margin.
+ * At least 15 channel packets a second either way: the drone counts the sticks centred after 0.1 s without channels
+ * (rc_core.h), so slower would stutter on every loss. Hence the slowest speeds (RLINK_BAUD_MIN, RLINK_BAUD_HALF_MIN). */
+typedef struct { int mtu, mtu_up; float up, dmin, dmax, room; } serial_plan;
+#define UP_WIRE 56.0f
+#define DOWN_COST 30.0f
+static float clampf(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }
+static void serial_sizing(const rlink_cfg *L, serial_plan *P) {
+  float B = (float)L->baud / 10;
+  if (!L->half) {
+    P->up = clampf(0.5f * B / UP_WIRE, 1, 100);
+    P->dmax = clampf(0.15f * B / DOWN_COST, 1, 50); P->dmin = P->dmax < 20 ? P->dmax : 20;
+    float room = 0.75f * B - P->dmax * DOWN_COST;
+    P->mtu = (int)clampf(room / P->dmax + 40, 96, 250);
+    P->room = clampf(room * 0.85f, 0, 6000);
+    P->mtu_up = (int)clampf(0.9f * B / P->up - 3, 72, 250);           /* (commands waiting with the channels: still within the line) */
+  } else {
+    P->mtu = (int)clampf(B * 0.012f, 64, 200);
+    P->up = clampf(0.75f * B / (UP_WIRE + P->mtu + 3), 1, 50); P->dmin = P->dmax = P->up;
+    P->room = clampf(P->up * (P->mtu - DOWN_COST) * 0.85f, 0, 6000);
+    P->mtu_up = (int)clampf(UP_WIRE + 0.2f * (UP_WIRE + P->mtu), 72, 250);   /* (a command or two with the channels: within the cycle's margin) */
+  }
+}
+void rlink_sizing(const rlink_cfg *L, int *mtu_down, int *mtu_up, float *up_hz, float *down_min, float *down_max, int *half) {
+  *mtu_down = *mtu_up = 250; *up_hz = 100; *down_min = 20; *down_max = 100; *half = 0;    /* ESP-NOW, Wi-Fi (plink_cfg_default) */
+  if (L->kind != RLINK_SERIAL) return;
+  serial_plan P; serial_sizing(L, &P);
+  *mtu_down = P.mtu; *mtu_up = P.mtu_up; *up_hz = P.up; *down_min = P.dmin; *down_max = P.dmax; *half = L->half;
 }
 
 /* ExpressLRS: each telemetry packet carries 5 bytes of a frame (the stubborn sender's chunks); one packet in `ratio`
@@ -70,6 +119,7 @@ float rlink_budget(const rlink_cfg *L) {
    * telemetry gets a share that leaves room for messages and repeats on a poor link (ESP-NOW's long-range mode, at
    * 0.5 Mbit/s, still carries it) */
   if (L->kind == RLINK_ESPNOW || L->kind == RLINK_WIFI) return 6000;
+  if (L->kind == RLINK_SERIAL) { serial_plan P; serial_sizing(L, &P); return P.room; }
   return 0;
 }
 /* As the link is now: scaled by the telemetry link quality the receiver reports (a lost chunk is sent again, so half

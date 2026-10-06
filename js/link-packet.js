@@ -115,7 +115,7 @@ function pkReset(kind) {
     kind, dq: [], cq: [], gIn: [], dIn: [], rcMade: [], air: [], busy: { gnd: t, drone: t }, last: { gnd: t, drone: t }, stallUntil: { gnd: -1, drone: -1 },
     nextStats: t, gS: null, dS: null, gPrev: null, dPrev: null, rej: { gnd: 0, drone: 0 }, rejLog: { gnd: -1e9, drone: -1e9 }, dropRun: null,
     lastUpOk: t, upGap: false, upEver: false, lastDownOk: t, downGap: false, downEver: false, lqLow: false, lqSeen: false,
-    assoc: PK_AIR[kind].assoc ? { state: 'down', since: t - 1, heard: -1e9, nextBeacon: t + 0.05, joinAt: 0, joinT0: 0, ever: false } : null,
+    assoc: PK_AIR[kind] && PK_AIR[kind].assoc ? { state: 'down', since: t - 1, heard: -1e9, nextBeacon: t + 0.05, joinAt: 0, joinT0: 0, ever: false } : null,
   });
 }
 
@@ -132,8 +132,12 @@ function pkStep(dt, t, E) {
     pk.air = pk.air.filter(a => a.at > t + 1e-9);
     for (const a of due) pkArrive(a, a.from === 'gnd' ? drone : gnd, t);
   }
+  pkEvents(t, gnd, drone);
+}
+// Ten times a second the ends' numbers; the link's events: a direction quiet (after it first worked), the uplink's
+// quality, frames dropped.
+function pkEvents(t, gnd, drone) {
   if (t >= pk.nextStats - 1e-9) { pk.nextStats = t + 0.1; pkPoll(t, gnd, drone); }
-  // the link's events: a direction quiet (after it first worked), the uplink's quality
   if (pk.upEver && !pk.upGap && t - pk.lastUpOk > 0.5) { pk.upGap = true; linkLog('↑', 'link', 'uplink lost', 'no packets for 0.5 s', 'bad'); }
   if (pk.downEver && !pk.downGap && t - pk.lastDownOk > 1) { pk.downGap = true; linkLog('↓', 'link', 'telemetry lost', 'nothing for 1 s', 'bad'); }
   const D = pk.dropRun;
@@ -143,23 +147,7 @@ function pkStep(dt, t, E) {
 // A packet one end's plink made: through the air (or not), to arrive at the other end.
 let pkN = 0;
 function pkSend(from, bytes, t) {
-  const A = PK_AIR[pk.kind], up = from === 'gnd', recs = plinkRecords(bytes), a = { from, bytes, n: ++pkN, recs: [], cmds: [], made: null, at: 0 };
-  // what it carries, for the log: the channels (their age), the commands and messages (how many packets each took),
-  // the telemetry frames (which of the drone's are in it; the ones before them that aren't were dropped from its queue)
-  for (const r of recs) {
-    const key = pkKey(r.f);
-    if (up) {
-      if (r.f[2] === CRSF.RC) a.made = radio.txChT;
-      else if (r.rel) { const c = pk.cq.find(x => !x.got && x.key === key); if (c) { c.tries++; a.cmds.push(c); } }
-    } else if (r.rel) {
-      const e = pk.dq.find(x => x.rel && !x.got && x.key === key); if (e) { const m = radio.meta.get(e.id); if (m) m.tries++; a.recs.push(e); }
-    } else {
-      const i = pk.dq.findIndex(x => !x.rel && x.key === key); if (i < 0) continue;
-      const gone = [];
-      pk.dq = pk.dq.filter((x, j) => { if (j === i) { a.recs.push(x); return false; } if (j < i && !x.rel) { gone.push(x); return false; } return true; });
-      for (const x of gone) pkGone(x, t);
-    }
-  }
+  const A = PK_AIR[pk.kind], up = from === 'gnd', a = pkCarry(from, bytes, t);
   // the network (Wi-Fi): not joined, nothing goes
   if (pk.assoc && pk.assoc.state !== 'up') { pkLost(a, t); return; }
   const rf = radio.rf, margin = up ? rf.margin : rf.margin - 1, ph = A.phy(radioCfg, margin), rssi = margin + (pk.kind === 'wifi' ? PK_MCS[0][1] : ph.sens);
@@ -179,6 +167,27 @@ function pkSend(from, bytes, t) {
   a.at = at; a.rssi = Math.round(rssi + (radioRand() - 0.5) * 2);
   pk.air.push(a);
 }
+// A packet one end's plink made, before the air has it: what it carries, for the log and the link's numbers.
+function pkCarry(from, bytes, t) {
+  const up = from === 'gnd', recs = plinkRecords(bytes), a = { from, bytes, n: ++pkN, recs: [], cmds: [], made: null, at: 0 };
+  // what it carries, for the log: the channels (their age), the commands and messages (how many packets each took),
+  // the telemetry frames (which of the drone's are in it; the ones before them that aren't were dropped from its queue)
+  for (const r of recs) {
+    const key = pkKey(r.f);
+    if (up) {
+      if (r.f[2] === CRSF.RC) a.made = radio.txChT;
+      else if (r.rel) { const c = pk.cq.find(x => !x.got && x.key === key); if (c) { c.tries++; a.cmds.push(c); } }
+    } else if (r.rel) {
+      const e = pk.dq.find(x => x.rel && !x.got && x.key === key); if (e) { const m = radio.meta.get(e.id); if (m) m.tries++; a.recs.push(e); }
+    } else {
+      const i = pk.dq.findIndex(x => !x.rel && x.key === key); if (i < 0) continue;
+      const gone = [];
+      pk.dq = pk.dq.filter((x, j) => { if (j === i) { a.recs.push(x); return false; } if (j < i && !x.rel) { gone.push(x); return false; } return true; });
+      for (const x of gone) pkGone(x, t);
+    }
+  }
+  return a;
+}
 // A packet that didn't get through: its once-frames are gone; its commands and messages go again in the next ones.
 function pkLost(a, t) {
   linkEv(a.from === 'gnd' ? 'upLost' : 'downLost', t);
@@ -188,8 +197,10 @@ function pkLost(a, t) {
 // A packet at the other end: its plink checks it and takes it, or not.
 function pkArrive(a, w, t) {
   if (!w) { pkLost(a, t); return; }                                   // (the drone's radio is dark)
-  new Uint8Array(w.memory.buffer, w.pbuf_ptr(), a.bytes.length).set(a.bytes);
-  if (!w.plink_air_in(a.bytes.length, a.rssi, t)) { pkLost(a, t); return; }   // (a bad signature, a replay: counted in its numbers; pkPoll says)
+  let took;
+  if (a.wire) { new Uint8Array(w.memory.buffer, w.sbuf_ptr(), a.wire.length).set(a.wire); took = w.plink_serial_in(a.wire.length, t); }   // (a serial line: its bytes through the deframer)
+  else { new Uint8Array(w.memory.buffer, w.pbuf_ptr(), a.bytes.length).set(a.bytes); took = w.plink_air_in(a.bytes.length, a.rssi, t); }
+  if (!took) { pkLost(a, t); return; }                               // (a bad signature, a replay, damaged on the line: counted in its numbers; pkPoll says)
   if (a.from === 'gnd') {
     linkEv('upOk', t);
     if (pk.upGap) linkLog('↑', 'link', 'uplink back', `after ${(t - pk.lastUpOk).toFixed(1)} s`, 'good');
@@ -242,7 +253,7 @@ function pkPoll(t, gnd, drone) {
     if (again > 0) linkEv('resent', t, again);
     if (bad > 0) {
       pk.rej[end] += bad;
-      if (t - pk.rejLog[end] >= 5) { linkLog(end === 'drone' ? '↑' : '↓', 'drop', `${pk.rej[end]} packet${pk.rej[end] > 1 ? 's' : ''} rejected`, `by ${end === 'drone' ? 'the drone' : 'the command module'}: a bad signature · a different binding phrase?`, 'bad'); pk.rej[end] = 0; pk.rejLog[end] = t; }
+      if (t - pk.rejLog[end] >= 5) { linkLog(end === 'drone' ? '↑' : '↓', 'drop', `${pk.rej[end]} packet${pk.rej[end] > 1 ? 's' : ''} rejected`, `by ${end === 'drone' ? 'the drone' : 'the command module'}: a bad signature · ${pk.kind === 'serial' ? 'damaged on the line, or a different binding phrase' : 'a different binding phrase?'}`, pk.kind === 'serial' ? 'warn' : 'bad'); pk.rej[end] = 0; pk.rejLog[end] = t; }
     }
     if (old > 0) linkLog(end === 'drone' ? '↑' : '↓', 'drop', `${old} packet${old > 1 ? 's' : ''} rejected`, 'a replay, or the other end\'s old session', 'warn');
     if (dropped > 0) { linkEv('cmdDrop', t); linkLog('↑', 'drop', `${dropped} command${dropped > 1 ? 's' : ''} dropped`, `the command module had ${PK_RQ} waiting`, 'bad'); }

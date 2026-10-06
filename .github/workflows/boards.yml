@@ -51,8 +51,10 @@ jobs:
           /tmp/test-sensors
       - name: Packet radio and USB bridge tests
         run: |
-          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_plink.c runner/fc/plink.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-plink
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_plink.c runner/fc/plink.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-plink
           /tmp/test-plink
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_pserial.c runner/fc/pframe.c runner/fc/plink.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-pserial
+          /tmp/test-pserial
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
           /tmp/test-esp-radio
       - name: Motor output and legacy wiring tests

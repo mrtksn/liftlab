@@ -14,6 +14,11 @@
  * and answers whoever sent the last packet it took (a command module, or a laptop's dfb_ground). The command module
  * is always a station: it joins wifi= and sends to the drone's address (drone=).
  *
+ * A serial line (radio=serial,BAUD[,half]): a UART to whatever carries its bytes to the other end (a laser or LED
+ * and a photodiode, fibre transceivers, an infrared pair, a radio modem in transparent mode, a wire), at that speed,
+ * the same at both ends; the packets framed in the byte stream (pframe.h), signed with the binding phrase. The drone's
+ * on the receiver's pins (crsf=), the command module's on the module's (tx=); half: the drone answers each packet.
+ *
  * say: where the link's news goes (a line of text: joined the network, its address…), from any task. */
 #ifndef ESP_RADIO_H
 #define ESP_RADIO_H
@@ -26,6 +31,8 @@ typedef void (*esp_radio_say)(const char *text);
 radio_io *radio_espnow_start(const rlink_cfg *L, int role, const char *bind, esp_radio_say say);
 /* ssid, pass: wifi= (empty: the defaults); drone_ip: the command module's drone= (the drone: ignored). */
 radio_io *radio_wifi_start(const rlink_cfg *L, int role, const char *bind, const char *ssid, const char *pass, const char *drone_ip, esp_radio_say say);
+/* uart: the UART to use; tx_pin to the line's input, rx_pin from its output. */
+radio_io *radio_uart_start(const rlink_cfg *L, int role, const char *bind, int uart, int tx_pin, int rx_pin, esp_radio_say say);
 /* The link's counts (plink_counts) and what it hears, for status: a line into out. */
 void esp_radio_status(radio_io *R, char *out, int n);
 #endif

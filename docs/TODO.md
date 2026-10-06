@@ -1,5 +1,11 @@
 # Project memory
 
+## Serial-line radio link (laser, fibre, infrared, radio modem, wire) — 2026-10-06
+- New link kind `serial,BAUD[,half]`: packets framed in the byte stream with COBS between zeros (`runner/fc/pframe.c`), the same plink above, sized from the line speed (`rlink_sizing`). Half duplex: the drone answers each ground packet; the ground waits for the answer (1.5× measured round trip, 1.5–4 beats). Uplink packets put channels first; a receiver skips reliable frames the sender had to drop (fixes a stall after a long cut with >16 commands queued).
+- ESP32: `radio_uart.c` on the receiver pins (flight `crsf=`) / module pins (ground `tx=`); flight hw_config v8 and ground cfg v3 add `radio_baud`. Pi/computer: `radio_pserial.c`, `dfb_pi --radio serial,… --radio-dev`, `dfb_ground --radio serial,… --tx`. Simulator: `js/link-serial.js` (fibre/tether, laser, infrared, 433 MHz modem), real pframe/plink in WASM; Hardware page radio card now has the link picker.
+- Tests: `fc/test_pserial.c` (byte-level line, damage, cuts, half duplex, modem delay), `ground/test_ground_serial_e2e.c` (dfb_ground ⇄ paced pty line ⇄ dfb_pi, noise, cut, wrong phrase, half duplex 57600).
+- NOT verified on real optical/fibre/modem hardware.
+
 ## Combined flight/radio publication — 2026-10-06
 - Committed flight work as fc4c58b; fast-forwarded main to Claude's packet-links commit 631cb4a and merged the flight branch. Retained both script dependencies, board hooks, documentation and firmware bundles; regenerated combined asset fingerprints.
 - Added flight equation and packet/USB regression checks to both host CI jobs, plus Linux ground/Pi radio end-to-end checks. Browser regression now flies the combined physics over both ESP-NOW and Wi-Fi with bidirectional traffic and power accounting.

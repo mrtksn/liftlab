@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 7
+#define HW_VERSION 8
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -30,12 +30,14 @@ typedef struct {
   int32_t brushed_hz;                 /* one shared brushed timer frequency, 1000–30000 Hz */
   /* Appended in v7 (v6 blobs migrate to ExpressLRS and the defaults): the pilot's radio link (radio_link.h) and the
    * packet links' settings (esp_radio/radio_cfg.h). */
-  int8_t radio_kind;                  /* RLINK_ELRS (its rate and ratio above), RLINK_ESPNOW, RLINK_WIFI */
+  int8_t radio_kind;                  /* RLINK_ELRS (its rate and ratio above), RLINK_ESPNOW, RLINK_WIFI, RLINK_SERIAL */
   int8_t radio_channel;               /* ESP-NOW, Wi-Fi access point: the Wi-Fi channel, 1–13 */
-  int8_t radio_opt;                   /* ESP-NOW: long range (1); Wi-Fi: joins a network (1) or makes one (0) */
+  int8_t radio_opt;                   /* ESP-NOW: long range (1); Wi-Fi: joins a network (1) or makes one (0); serial: half (1) */
   int8_t radio_pad;
   char bind[32];                      /* the binding phrase, 1–31 characters (both ends the same) */
   char wifi_ssid[33], wifi_pass[64];  /* wifi=SSID,PASSWORD (empty: the defaults) */
+  /* Appended in v8 (v7 blobs migrate with the default): a serial line's speed (radio=serial,BAUD; radio_opt: half). */
+  int32_t radio_baud;
 } hw_config;
 
 void hw_defaults(hw_config *c);

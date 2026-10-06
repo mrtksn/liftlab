@@ -34,7 +34,7 @@ void plink_key(const char *phrase, uint64_t *k0, uint64_t *k1) {
 }
 
 void plink_cfg_default(plink_cfg *C, int role) {
-  C->role = role; C->mtu = PLINK_MTU; C->up_hz = 100; C->down_hz_min = 20; C->down_hz_max = 100;
+  C->role = role; C->mtu = PLINK_MTU; C->up_hz = 100; C->down_hz_min = 20; C->down_hz_max = 100; C->half = 0;
   plink_key("liftlab", &C->k0, &C->k1);
 }
 void plink_init(plink *L, const plink_cfg *C, uint32_t session) {
@@ -104,7 +104,8 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
     else if (d > -64 && !bit(L, seq)) set_bit(L, seq, 1);           /* late, not seen: fine */
     else { L->N.replays++; return 0; }
   }
-  L->t_peer = t; L->N.got++;
+  if (L->awaiting) { float r = (float)(t - L->t_sent); L->rtt = L->rtt > 0 ? L->rtt * 0.8f + r * 0.2f : r; }
+  L->t_peer = t; L->N.got++; L->polled = 1; L->awaiting = 0;
   if (rssi) L->rssi = L->rssi ? (L->rssi * 3 + rssi) / 4 : rssi;
   /* what they took of ours, and what they hear of us: only if it's about us (not a session of ours before a restart) */
   if (get32(p + 8) == L->session) {
@@ -115,10 +116,17 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
     L->peer_rssi = (int8_t)p[14];
   } else { L->peer_lq = 0; L->peer_rssi = 0; }
   /* the records */
-  int k = PLINK_HDR, end = n - PLINK_TAG;
+  int k = PLINK_HDR, end = n - PLINK_TAG, first = 1;
   while (k + 1 < end) {
     int kind = p[k++], num = -1;
-    if (kind == REC_RELIABLE) num = p[k++];
+    if (kind == REC_RELIABLE) {
+      num = p[k++];
+      /* The first reliable record is the oldest the sender still has (it sends them oldest first): one further on than
+       * the next we want means the ones between are gone from its queue (it overflowed, with the link down), so
+       * waiting for them would wait for ever. Go on from it. */
+      if (first && (uint8_t)(num - L->rx_next) < 128 && (uint8_t)num != L->rx_next) { L->N.skipped += (uint8_t)(num - L->rx_next); L->rx_next = (uint8_t)num; }
+      first = 0;
+    }
     if (k + 2 > end) break;
     int len = p[k + 1] + 2; if (len < 4 || k + len > end) break;
     if (num < 0) to_stack(L, p + k, len);
@@ -135,7 +143,16 @@ int plink_to_air(plink *L, double t, uint8_t *p, int cap) {
   if (L->C.role == PLINK_GROUND) {                                   /* on a fixed beat: asked every 4 ms, a 10 ms beat stays 10 */
     double per = 1.0 / L->C.up_hz;
     if (t < L->t_up - 1e-6) return 0;
+    if (L->C.half && L->awaiting) {                                  /* the answer still on its way? */
+      double wait = L->rtt > 0 ? 1.5 * L->rtt : 4 * per; if (wait < 1.5 * per) wait = 1.5 * per; if (wait > 4 * per) wait = 4 * per;   /* (not measured yet: the longest) */
+      if (t < L->t_sent + wait) return 0;
+    }
+    L->awaiting = L->C.half;
     L->t_up = t - L->t_up < per ? L->t_up + per : t + per;           /* (late by more than a beat, after a stall: from now) */
+  }
+  else if (L->C.half) {                                              /* half duplex: an answer to each packet that came, at once */
+    if (!L->polled) return 0;
+    L->polled = 0;
   }
   else {
     int has = L->uq_n || L->rq_n;
@@ -146,12 +163,12 @@ int plink_to_air(plink *L, double t, uint8_t *p, int cap) {
   p[12] = (uint8_t)(L->rx_next - 1);
   p[13] = (uint8_t)plink_lq(L, t); p[14] = (uint8_t)(int8_t)L->rssi; p[15] = 0;
   int k = PLINK_HDR, room = mtu - PLINK_TAG;
-  for (int i = 0; i < L->rq_n; i++) {                                /* the reliable ones not yet taken, oldest first */
+  if (L->rc_n && t - L->t_rc <= PLINK_RC_STALE && k + 1 + L->rc_n <= room) { p[k++] = REC_ONCE; copy(p + k, L->rc, L->rc_n); k += L->rc_n; }   /* the channels as they are now, first */
+  for (int i = 0; i < L->rq_n; i++) {                                /* the reliable ones not yet taken, oldest first, as many as fit */
     int n = L->rq[i].n; if (k + 2 + n > room) break;
     p[k++] = REC_RELIABLE; p[k++] = L->rq[i].num; copy(p + k, L->rq[i].f, n); k += n;
     if (L->rq[i].tries++) L->N.resent++;
   }
-  if (L->rc_n && t - L->t_rc <= PLINK_RC_STALE && k + 1 + L->rc_n <= room) { p[k++] = REC_ONCE; copy(p + k, L->rc, L->rc_n); k += L->rc_n; }   /* the channels as they are now */
   int u = 0;                                                         /* then the frames that go once, as many as fit */
   while (u < L->uq_n) { int n = L->uq[u + 1] + 2; if (k + 1 + n > room) break; p[k++] = REC_ONCE; copy(p + k, L->uq + u, n); k += n; u += n; }
   if (u) { for (int i = u; i < L->uq_n; i++) L->uq[i - u] = L->uq[i]; L->uq_n -= u; }
