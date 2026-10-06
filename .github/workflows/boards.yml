@@ -48,6 +48,6 @@ jobs:
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do
-            cc -Wall -Wextra -Werror -fsanitize=undefined -DCONFIG_IDF_TARGET_$chip=1 -Itools/pwm-stubs -Irunner -Irunner/fc tools/test_motor_outputs.c -lm -o /tmp/test-motors
+            cc -Wall -Wextra -Werror -fsanitize=undefined -DCONFIG_IDF_TARGET_$chip=1 -Itools/pwm-stubs -Irunner -Irunner/fc tools/test_motor_outputs.c runner/fc/radio_link.c -lm -o /tmp/test-motors
             /tmp/test-motors
           done
