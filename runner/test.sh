@@ -21,11 +21,11 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_fc" fc/test_fc.c fc/fc_core.c rn_host.c rn.
 "$T/test_fc" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_nav" fc/testdata
-cc -O2 -Wall -Wextra -I. -o "$T/test_cargo" fc/test_cargo.c fc/cargo_core.c fc/tlm_core.c fc/tlm_crsf.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm
+cc -O2 -Wall -Wextra -I. -o "$T/test_cargo" fc/test_cargo.c fc/cargo_core.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_cargo"
-cc -O2 -Wall -Wextra -I. -o "$T/test_tlm" fc/test_tlm.c fc/tlm_core.c fc/tlm_crsf.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm
+cc -O2 -Wall -Wextra -I. -o "$T/test_tlm" fc/test_tlm.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_tlm"
 (cd pi && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_dfb_pi" test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../fc/pickup_core.c ../rn_builtin.c -lm -lutil && "$T/test_dfb_pi")
-cc -O2 -Wall -Wextra -Wno-unused-parameter -I. -Ifc -o "$T/test_ground" ground/test_ground.c ground/ground_core.c ground/rn_builtin_ground.c fc/tlm_core.c fc/tlm_crsf.c fc/crsf.c fc/rc_core.c fc/pickup_core.c rn_host.c rn.c -lm
+cc -O2 -Wall -Wextra -Wno-unused-parameter -I. -Ifc -o "$T/test_ground" ground/test_ground.c ground/ground_core.c ground/rn_builtin_ground.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/crsf.c fc/rc_core.c fc/pickup_core.c rn_host.c rn.c -lm
 "$T/test_ground"
 (cd ground && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_ground_e2e" test_ground_e2e.c ../fc/nav_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_e2e")

@@ -16,8 +16,8 @@
  *     supervisor works from the flight core's data stream (a failed or weakened motor, a stuck servo, the lift left).
  *
  *   - the pilot's radio and the telemetry (rc_core.h, tlm_core.h): with an ExpressLRS (or Crossfire) receiver on a
- *     serial port here (--crsf /dev/ttyAMA1; CRSF at 420000 baud; --elrs 250,4: the link's packet rate and telemetry
- *     ratio), its channels fly the navigation (the sticks move the target; switches arm, take off, hold, fly home; a
+ *     serial port here (--crsf /dev/ttyAMA1; CRSF at 420000 baud; --radio elrs,250,4: the link and its settings, here
+ *     the packet rate and telemetry ratio; radio_link.h), its channels fly the navigation (the sticks move the target; switches arm, take off, hold, fly home; a
  *     second without channels in flight and it flies home and lands), and this program sends the telemetry of all
  *     the tasks, the ESP32's included (it asks for them: RN_LINK_WANT bit 2), down the radio. With the receiver on
  *     the ESP32 instead, the channels come from it (RN_LINK_RC) and this program sends its tasks' telemetry there
@@ -39,7 +39,7 @@
  *
  * Build:  sh runner/pi/build.sh
  * Run:    ./dfb_pi --link /dev/serial0 --baud 921600 --nav drone.dnc [--gps /dev/ttyUSB0] [--airframe drone.dfa --pi drone.dlc]
- *                  [--crsf /dev/ttyAMA1 --elrs 250,4] [--latch pwm0,gpio17 [--latch-us 1000,2000]]
+ *                  [--crsf /dev/ttyAMA1 --radio elrs,250,4] [--latch pwm0,gpio17 [--latch-us 1000,2000]]
  * While the radio's channels come, they fly it; the text commands are for when there is no radio.
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
@@ -48,6 +48,8 @@
 #include "super_core.h"
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
+#include "radio_link.h"
+#include "radio_serial.h"
 #include "rn_link.h"
 #include "latch_hw.h"
 #include <arpa/inet.h>
@@ -220,7 +222,7 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
 
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
-  int elrs_rate = 250, elrs_ratio = 4; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
+  rlink_cfg RL; rlink_default(&RL); const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -229,12 +231,12 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
-    else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--elrs")) sscanf(argv[++i], "%d,%d", &elrs_rate, &elrs_ratio);
+    else if (!strcmp(argv[i], "--crsf")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--radio") || !strcmp(argv[i], "--elrs")) { char err[120]; if (rlink_parse(&RL, argv[++i], err, sizeof err)) { fprintf(stderr, "%s: %s\n", argv[i - 1], err); return 2; } }
     else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
-    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560] [--crsf /dev/ttyAMA1 --elrs 250,4]\n"
+    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560] [--crsf /dev/ttyAMA1 --radio elrs,250,4]\n"
     "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"); return 2; }
 
@@ -264,7 +266,8 @@ int main(int argc, char **argv) {
   }
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
   int crsf = -1;
-  if (crsf_dev) { crsf = open_serial(crsf_dev, 115200); if (crsf < 0) return 1; if (serial_custom_baud(crsf, CRSF_BAUD)) fprintf(stderr, "%s: couldn't set %d baud\n", crsf_dev, CRSF_BAUD); }
+  radio_io *R = 0;                                  /* the pilot's radio link's bytes (radio_io.h) */
+  if (crsf_dev) { R = radio_serial_open(crsf_dev, CRSF_BAUD, "ExpressLRS receiver (serial)"); if (!R) return 1; crsf = R->fd; }
   static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
   tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
   double tlm_want = -10, next_pub = 0, next_radio = 0, next_pack = 0; nav_sp last_sp; memset(&last_sp, 0, sizeof last_sp);
@@ -288,7 +291,7 @@ int main(int argc, char **argv) {
     struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
-    if (crsf >= 0 && (pf[4].revents & POLLIN)) { uint8_t b[256]; ssize_t n = read(crsf, b, sizeof b); for (ssize_t i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t); }
+    if (R && (pf[4].revents & POLLIN)) { uint8_t b[256]; int n = R->read(R, b, sizeof b, 0); for (int i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t); }
     if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
     for (int k = 2; k < 4; k++) if (pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot */
       static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
@@ -415,8 +418,8 @@ int main(int argc, char **argv) {
     }
     if (crsf >= 0 && t >= next_radio) {
       next_radio = t + 0.005; static uint8_t out[512];
-      int n = tlm_service(&TS, &tlm_crsf, t, tlm_crsf_budget_now(elrs_rate, elrs_ratio, &RCI, t), out, sizeof out);
-      if (n && write(crsf, out, (size_t)n) < 0 && errno != EAGAIN) perror("crsf");
+      int n = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), out, sizeof out);
+      if (n && R->write(R, out, n) < 0) perror("crsf");
     } else if (crsf < 0 && t - tlm_want < 1 && t >= next_pack) {
       next_pack = t + 0.05; static float pk[TLM_PACK_MAX]; int n = tlm_pack(&TS, pk, TLM_PACK_MAX); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
     }

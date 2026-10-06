@@ -223,7 +223,7 @@ function boardsStart() {
   for (const b of C.boards) {
     let w = brt.inst.get(b.id);
     if (!w) { w = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports; brt.inst.set(b.id, w); }
-    w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0, radioCfg.rate, radioCfg.ratio);
+    w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0); w.radio_link(...radioModel().wasm(radioCfg));
     if (b.tasks.includes('cargo')) {                                // the latches, as they were set up: closed or open
       const ls = latches().slice(0, 8); frIn(w, ls.map(l => l.travel ?? 0.15));
       w.cargo_setup(ls.length, ls.reduce((m, l, i) => m | (l.closed ? 1 << i : 0), 0)); brt.cargoN = w.cargo_nmsg();
@@ -541,7 +541,7 @@ function boardsControl(dt) {
 }
 
 /* ───────── the radio: the receiver on the telemetry task's board ───────── */
-// Each control step: the air link's packets (elrs.js); what the receiver got goes to its board's UART; what the
+// Each control step: the link's packets (link.js, and its model); what the receiver got goes to its board's UART; what the
 // board wrote goes down. The tasks put their telemetry in every 10 ms; boards without the radio send theirs over
 // the link every 50 ms; the channels go to the navigation's board 50 times a second, or (no navigation) the
 // receiver's board makes the flight core's stick command.

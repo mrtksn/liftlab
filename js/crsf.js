@@ -1,5 +1,5 @@
 'use strict';
-// CRSF as the simulated ExpressLRS modules handle it (elrs.js): splitting the byte streams into frames, the channel
+// CRSF, what travels over every simulated radio link (link.js): splitting the byte streams into frames, the channel
 // frames the receiver writes to the drone, the link statistics both modules report. The code on either end is C:
 // the drone's (runner/fc/crsf.h, tlm_crsf.c) and the command module's (runner/ground/ground_core.c).
 // Frames: address, length, type, payload, CRC-8 (polynomial 0xD5) over type and payload; big-endian fields.

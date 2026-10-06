@@ -2,7 +2,7 @@
 // Manual flight. Keys and the on-screen pads don't drive the motors directly: they move the target
 // the controller is holding, at a commanded velocity that is also fed forward to the position law.
 // With a radio (a board runs the telemetry & radio task) they are the handset's sticks and switches instead
-// (elrs.js): the drone moves its own target from them (runner/fc/rc_core.c).
+// (link.js): the drone moves its own target from them (runner/fc/rc_core.c).
 //
 //   W / S       climb / descend          ↑ / ↓   forward / back   (relative to the heading)
 //   A / D       turn left / right        ← / →   left / right

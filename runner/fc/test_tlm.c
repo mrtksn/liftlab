@@ -2,6 +2,7 @@
  *   cc -O2 -I.. -o test_tlm test_tlm.c tlm_core.c tlm_crsf.c tlm_sources.c crsf.c rc_core.c -lm && ./test_tlm */
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
+#include "radio_link.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -157,10 +158,10 @@ int main(void) {
     CHECK(in.tx_power == 50, "50 mW: read back as %d mW", in.tx_power);
     /* a receiver that leaves the downlink figures 0: the budget goes by the uplink */
     L.down_lq = 0; L.down_rssi = 0; L.up_lq = 100; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 1.2);
-    float b = tlm_crsf_budget_now(250, 4, &in, 1.3), full = tlm_crsf_budget(250, 4);
+    rlink_cfg EL; rlink_default(&EL); float b = rlink_budget_now(&EL, &in, 1.3), full = rlink_budget(&EL);
     CHECK(fabsf(b - full) < 1, "downlink LQ and RSSI 0 (not reported): budget %.0f B/s, the full %.0f", b, full);
     L.down_lq = 0; L.down_rssi = -100; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 1.4);
-    b = tlm_crsf_budget_now(250, 4, &in, 1.5);
+    b = rlink_budget_now(&EL, &in, 1.5);
     CHECK(b < full * 0.06f, "downlink LQ 0 with a downlink RSSI (really lost): budget %.0f B/s", b);
     /* a NaN budget doesn't poison the token bucket */
     static tlm_store T; tlm_init(&T); uint8_t o[256]; float att[3] = { 0.1f, 0, 0 }; tlm_put(&T, TLM_ATT, att, 3, 0);
@@ -212,6 +213,17 @@ int main(void) {
     L.up_lq = 80; n = crsf_link_stats(f, CRSF_ADDR_FC, &L); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.5);
     n = crsf_rc(f, CRSF_ADDR_FC, ch0); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &z2, 20.5);
     CHECK(rc_link_ok(&z2, 20.51), "LQ 80 again: the link is back");
+  }
+  printf("the radio link's settings\n");
+  {
+    rlink_cfg L; rlink_default(&L); char err[96] = "", d[32];
+    CHECK(!rlink_parse(&L, "elrs,50,64", err, sizeof err) && L.kind == RLINK_ELRS && L.rate_hz == 50 && L.ratio == 64, "elrs,50,64: ExpressLRS at 50 Hz, telemetry 1:64");
+    CHECK(!rlink_parse(&L, "500,2", err, sizeof err) && L.rate_hz == 500 && L.ratio == 2, "500,2 (the old setting, numbers only): ExpressLRS");
+    rlink_describe(&L, d, sizeof d); CHECK(!strcmp(d, "elrs,500,2"), "written back: %s", d);
+    CHECK(rlink_parse(&L, "elrs,300,4", err, sizeof err) && L.rate_hz == 500, "elrs,300,4 refused, unchanged (%s)", err);
+    CHECK(rlink_parse(&L, "elrs,250", err, sizeof err) && rlink_parse(&L, "elrs,250,4,1", err, sizeof err) && rlink_parse(&L, "elrs,250,x", err, sizeof err), "a number short, one too many, not a number: refused");
+    CHECK(rlink_parse(&L, "carrier-pigeon,1", err, sizeof err) && L.kind == RLINK_ELRS, "a link this build doesn't have: refused (%s)", err);
+    rlink_default(&L); CHECK(fabsf(rlink_budget(&L) - 281.25f) < 0.01f, "250 Hz, 1:4: %.0f bytes a second of telemetry", rlink_budget(&L));
   }
   printf(fails ? "%d FAILED\n" : "all passed\n", fails);
   return fails != 0;

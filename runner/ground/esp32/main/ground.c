@@ -44,16 +44,14 @@
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_attr.h"
-#include "esp_rom_gpio.h"
-#include "soc/gpio_sig_map.h"
 #include "ground_core.h"
 #include "ground_text.h"
 #include "esp_board.h"
+#include "radio_module.h"
 
 extern const uint8_t *const rn_builtin_ground_img;
 extern const uint32_t rn_builtin_ground_len;
 #define CONSOLE UART_NUM_0
-#define TXU LB_RADIO_UART
 
 /* ── the wiring ── */
 #define CFG_VERSION 1
@@ -154,25 +152,7 @@ static int setting(char *kv, char *err, int en) {
 }
 
 /* ── the hardware ── */
-/* One wire both ways (tx = rx, a module bay's CRSF pin), as ExpressLRS's CRSFHandset runs it from the module's side:
- * inverted serial (the UART inverts both ways), so the line idles low; listening, the pin is an input pulled down
- * (as the module's is); talking, it drives the line, with our receiver held at idle so we don't hear ourselves. */
-static int one_wire;
-static void wire_listen(void) {
-  gpio_set_direction(C.tx, GPIO_MODE_INPUT); gpio_set_pull_mode(C.tx, GPIO_PULLDOWN_ONLY);
-  esp_rom_gpio_connect_in_signal(C.tx, LB_RX_SIGNAL, false);
-}
-static void wire_talk(void) {
-  gpio_set_pull_mode(C.tx, GPIO_FLOATING);
-  esp_rom_gpio_connect_in_signal(GPIO_MATRIX_CONST_ZERO_INPUT, LB_RX_SIGNAL, false);   /* (0, inverted: idle) */
-  gpio_set_level(C.tx, 0); gpio_set_direction(C.tx, GPIO_MODE_OUTPUT);                  /* (idle low, then the UART's) */
-  esp_rom_gpio_connect_out_signal(C.tx, LB_TX_SIGNAL, false, false);
-}
-static void to_module(const uint8_t *b, int n) {
-  if (!one_wire) { uart_write_bytes(TXU, b, (size_t)n); return; }
-  wire_talk(); uart_write_bytes(TXU, b, (size_t)n);
-  uart_wait_tx_done(TXU, pdMS_TO_TICKS(10)); wire_listen();     /* the last bit out: let go at once, the module answers now */
-}
+static radio_io *RADIO;
 static adc_oneshot_unit_handle_t adc; static adc_channel_t ax_ch[GND_AXES]; static int ax_ok[GND_AXES]; static float ax_mid[GND_AXES];
 static void hw_init(void) {
   for (int b = 0; b < GB_N; b++) if (C.btn[b] >= 0) {
@@ -190,11 +170,7 @@ static void hw_init(void) {
       ax_mid[a] = sum / 16.0f; ax_ok[a] = 1;   /* centred where it rests at power-on */
     }
   }
-  uart_config_t uc = { .baud_rate = C.baud, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };
-  uart_driver_install(TXU, 1024, 1024, 0, NULL, 0); uart_param_config(TXU, &uc);
-  uart_set_pin(TXU, C.tx, C.rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-  one_wire = C.tx == C.rx;
-  if (one_wire) { uart_set_line_inverse(TXU, UART_SIGNAL_TXD_INV | UART_SIGNAL_RXD_INV); wire_listen(); }
+  RADIO = radio_module_start(C.tx, C.rx, (int)C.baud);   /* the pilot's radio link (radio_io.h) */
 }
 /* buttons, debounced: one changes once it has read the other way DEBOUNCE steps running; the first read is taken as
  * it is (held at power-on: held, not pressed) */
@@ -249,7 +225,7 @@ void app_main(void) {
   { char s[400]; show(s, sizeof s); printf("wiring: %s\n", s); }
   if (pin_note(C.tx) || pin_note(C.rx)) printf("(on a WROVER board, with PSRAM, GPIO 16 and 17 are the PSRAM's: there, set tx= to other pins)\n");
   printf("type \"show\", \"set key=value\", \"save\", \"reboot\", or a command (status, goto X Y Z, calibrate…)\n");
-  if (one_wire) printf("one wire to the module (GPIO %d): inverted, half duplex, as a module bay's\n", C.tx);
+  if (C.tx == C.rx) printf("one wire to the module (GPIO %d): inverted, half duplex, as a module bay's\n", C.tx);
   uart_driver_install(CONSOLE, 1024, 1024, 0, NULL, 0); uart_vfs_dev_use_driver(CONSOLE);
 
   TickType_t wake = xTaskGetTickCount(); int64_t t0 = esp_timer_get_time(), last = t0;
@@ -277,13 +253,13 @@ void app_main(void) {
       if (reply[0]) printf("%s\n", reply);
     }
     /* what the module hands back */
-    n = uart_read_bytes(TXU, b, sizeof b, 0);
-    while (n > 0) { gnd_from_radio(&G, b, n, t); n = uart_read_bytes(TXU, b, sizeof b, 0); }
+    n = RADIO->read(RADIO, b, sizeof b, 0);
+    while (n > 0) { gnd_from_radio(&G, b, n, t); n = RADIO->read(RADIO, b, sizeof b, 0); }
     /* a step */
     rn_host_tick(&H, dt);
     gnd_input in; read_inputs(&in); gnd_text_inputs(&TI, t, &in);
     uint8_t out[128]; int m = gnd_step(&G, &in, t, dt, out, sizeof out);
-    if (m) to_module(out, m);
+    if (m) RADIO->write(RADIO, out, m);
     keep.on = G.on; keep.check = ~G.on; keep.magic = KEEP_MAGIC;
     /* the pilot: the drone's messages, the alerts on the buzzer and the LED */
     if (G.V.nmsg - msgs > GND_MSGS) msgs = G.V.nmsg - GND_MSGS;      /* (more came than the ring keeps: the newest) */
