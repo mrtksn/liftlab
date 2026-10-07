@@ -535,6 +535,10 @@ function setTile(id, value, sub, tone, title) {
   if (title != null && t.title !== title) t.title = title;
 }
 function updateLive() {
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) {
+    setText($('#hudTime'), `t ${fleet.time.toFixed(1)} s · ${running ? 'running' : 'paused'} · ${fleet.drones.length} drones`);
+    syncSp(); return;
+  }
   renderDesignHud();
   renderFlightPhysics();
   {   // flight
@@ -780,8 +784,10 @@ function spSlider(key, label, min, max, step, u, obj, ends) {
 function syncSp() { for (const r of spRefs) r(); }  // keep the target fields in step with flying
 function buildSp() {
   const b = $('#spFields'); b.textContent = '';
-  b.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
-    spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint), spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
+  const target = $('#targetFields'); target.replaceChildren();
+  target.append(spSlider('x', 'Target X', -3, 3, 0.1, 'm', setpoint), spSlider('y', 'Target Y', -3, 3, 0.1, 'm', setpoint), spSlider('z', 'Target altitude', 0.3, 5, 0.1, 'm', setpoint),
+    spSlider('yaw', 'Target heading', -180, 180, 5, '°', setpoint));
+  b.append(spSlider('wind', 'Wind speed', 0, 10, 0.5, 'm/s', envr), spSlider('windDir', 'Wind toward', -180, 180, 5, '°', envr),
     spSlider('turb', 'Turbulence', 0, 1, 0.05, '', envr, ['0 still air', '1 gusty']), spSlider('spread', 'Motor and prop differences', 0, 3, 0.1, '× typical', envr, ['0 identical', '3× typical']),
     spSlider('texture', 'Ground texture', 0, 1, 0.05, '', envr, ['0 water', '1 gravel']), spSlider('light', 'Light', 0, 1, 0.05, '', envr, ['0 dark', '1 daylight']), spSlider('ambient', 'Air temperature', -10, 45, 1, '°C', envr));
 }
@@ -895,6 +901,7 @@ pokeBtn.addEventListener('keydown', e => {   // Enter/Space on the focused butto
 pokeBtn.addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); e.stopPropagation(); pokeEnd('key:btn', true); } });
 pokeBtn.addEventListener('blur', () => pokeEnd('key:btn', true));
 window.addEventListener('keydown', e => {
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   if (e.code !== 'KeyP' || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
   e.preventDefault(); if (!e.repeat) pokeStart('key:P');
 });
@@ -1021,6 +1028,7 @@ function syncFolds() {
 /* ───────── persistence (this browser only) ───────── */
 const LS = 'drone-force-bench-v1';
 function save() {
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected && !fleet.restoring) { fleetSave(); return; }
   cfg.environment = flightEnvironment();
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
@@ -1122,10 +1130,10 @@ function boot() {
       if (steps > 0) physicsCostPerStep = .9 * physicsCostPerStep + .1 * Math.max(.001, (performance.now() - cpuStart) / steps);
     }
     const physicsMs = performance.now() - cpuStart;
-    envT += dt; if (envT > 1) { envT = 0; refreshEnvelope(); renderMass(); if (!$('#paneForm').hidden) renderComputers(); }
-    renderGs();
-    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); }
-    renderLaunch();
+    envT += dt; if (fleet.selected && envT > 1) { envT = 0; refreshEnvelope(); renderMass(); if (!$('#paneForm').hidden) renderComputers(); }
+    if (fleet.selected) renderGs();
+    uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); if (fleet.selected) { drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); } }
+    if (fleet.selected) renderLaunch();
     fleetScene(); renderer.render(scene, camera);
     flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, fleet.time - simStart)); requestAnimationFrame(frame);
   }

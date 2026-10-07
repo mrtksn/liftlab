@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=fe18a2d416">
+<link rel="stylesheet" href="css/style.css?v=d0933b5368">
 </head>
 <body>
 <div class="app">
@@ -34,14 +34,7 @@
     <div class="hgroup" role="group" aria-labelledby="grpWorld">
       <span class="lbl" id="grpWorld">World</span>
       <div class="hrow">
-        <select id="terrainSel" aria-label="World" title="Where the drone flies: open ground, a compact parkour city, or the same city at full scale">
-          <option value="open">Open field</option>
-          <option value="parkour">Parkour city</option>
-          <option value="city">Full-scale city</option>
-        </select>
-        <button class="btn icon" id="terrainNew" type="button" aria-label="Build another city" title="Build another city">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.4" cy="5.4" r="1.2"/><circle cx="10.6" cy="10.6" r="1.2"/><circle cx="8" cy="8" r="1.2"/></svg>
-        </button>
+        <button class="btn" id="worldView" type="button" title="Deselect the drone and open world settings">World settings</button>
       </div>
     </div>
     <div class="hgroup" role="group" aria-labelledby="grpSim">
@@ -162,6 +155,26 @@
 
     <section class="view" aria-label="3D view">
       <div id="viewport"></div>
+      <div id="droneHover" class="drone-hover" hidden></div>
+      <aside id="worldPanel" class="world-panel" aria-label="World settings" hidden>
+        <button class="btn world-toggle" id="worldSettingsToggle" type="button" aria-expanded="true" aria-controls="worldSettingsBody">World settings <span aria-hidden="true">▾</span></button>
+        <div id="worldSettingsBody">
+          <section class="sec">
+            <h2>Terrain</h2>
+            <div class="hrow">
+              <select id="terrainSel" aria-label="World" title="Where the drone flies: open ground, a compact parkour city, or the same city at full scale">
+                <option value="open">Open field</option>
+                <option value="parkour">Parkour city</option>
+                <option value="city">Full-scale city</option>
+              </select>
+              <button class="btn icon" id="terrainNew" type="button" aria-label="Build another city" title="Build another city">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.4" cy="5.4" r="1.2"/><circle cx="10.6" cy="10.6" r="1.2"/><circle cx="8" cy="8" r="1.2"/></svg>
+              </button>
+            </div>
+          </section>
+          <section class="sec"><h2>Environment</h2><div class="sp" id="spFields"></div></section>
+        </div>
+      </aside>
       <div class="hud hud-tl">
         <span class="hud-src" data-src="sim"></span>
         <span id="hudTime">t 0.0 s</span>
@@ -403,6 +416,7 @@
         </section>
       </div>
       <div class="rpane" id="rpane-control" role="tabpanel" aria-labelledby="rtab-control" hidden>
+        <section class="sec"><h2 data-src="you">Flight target</h2><div class="sp" id="targetFields"></div></section>
         <section class="sec" id="learnSec">
           <h2 data-src="board">Learning <small id="learnSmall"></small></h2>
           <p class="hint" id="learnWhere"></p>
@@ -451,19 +465,13 @@
           <dl class="kv" id="massKv"></dl>
         </section>
       </div>
-      <div class="rpane" id="rpane-world" role="tabpanel" aria-labelledby="rtab-world" hidden>
-        <section class="sec">
-          <h2 data-src="you">Target &amp; environment</h2>
-          <div class="sp" id="spFields"></div>
-        </section>
-      </div>
     </aside>
   </main>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/ui-components.js?v=7bee7a1164"></script>
-<script src="js/ui-shell.js?v=4e2fcdab66"></script>
+<script src="js/ui-shell.js?v=7070ab6f99"></script>
 <script src="js/math.js?v=d02edf9672"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=7f3f1b0df1"></script>
@@ -487,22 +495,22 @@
 <script src="js/health.js?v=b5b2a8d06c"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=a736a09f3a"></script>
-<script src="js/view3d.js?v=745002e9c6"></script>
-<script src="js/pilot.js?v=52cf1a9d65"></script>
+<script src="js/view3d.js?v=d9cb24f547"></script>
+<script src="js/pilot.js?v=af81383dba"></script>
 <script src="js/computers-ui.js?v=f3fa4c9f63"></script>
-<script src="js/ui.js?v=05735e53a6"></script>
+<script src="js/ui.js?v=b08c5cce1e"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
 <script src="js/flight-physics-ui.js?v=7af6d96079"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
-<script src="js/designs.js?v=7cf171c5d1"></script>
-<script src="js/share.js?v=edbc08e171"></script>
+<script src="js/designs.js?v=305628778a"></script>
+<script src="js/share.js?v=026e34bc2b"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=271889915e"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=a6234ec2c8"></script>
 <script src="js/install-ui.js?v=b63297106b"></script>
-<script src="js/editor.js?v=d532ccb7bc"></script>
+<script src="js/editor.js?v=0df261a63b"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=3a752bd79a"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
@@ -515,17 +523,17 @@
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
 <script src="js/live.js?v=3ef1c4007f"></script>
 <script src="js/gs-ui.js?v=b8a3312c93"></script>
-<script src="js/agent.js?v=086556f09a"></script>
+<script src="js/agent.js?v=5799b72006"></script>
 <script src="js/agent-tools.js?v=6f3b4bf3bc"></script>
 <script src="js/agent-tools-more.js?v=2a71220340"></script>
 <script src="js/agent-hardware.js?v=3dfb149f42"></script>
 <script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>
-<script src="js/agent-ui.js?v=92a315e631"></script>
-<script src="js/audio.js?v=126beda013"></script>
+<script src="js/agent-ui.js?v=3d52b5e041"></script>
+<script src="js/audio.js?v=18855a0738"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=2afa1a5818"></script>
+<script src="js/fleet.js?v=d7b4358cc8"></script>
 <script src="js/fleet-collisions.js?v=c7d66b4f9f"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=55293d65c7"></script>

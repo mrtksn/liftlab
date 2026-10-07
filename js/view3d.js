@@ -610,6 +610,10 @@ function updateScene(selected = true) {
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.az += d * 0.06;
   }
+  updateCamera();
+}
+// World view keeps its orbit centre instead of following an internal drone context.
+function updateCamera() {
   stepCamAnim();
   const ce = Math.cos(cam.el);
   if (camera.isOrthographicCamera) {   // frame what the perspective camera shows at the orbit's centre

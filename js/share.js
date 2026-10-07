@@ -29,6 +29,12 @@ async function readDesignCode(text) {
 }
 async function openDesignCode(text, from) {
   const got = await readDesignCode(text), name = got.name || 'Shared design';
+  // The locked shared-code operation can add its own drone from world view.
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) {
+    if (!fleetCreate('quadx',{design:got.design,name,designName:name},true)) return false;
+    designNote(`Added “${name}” from ${from}. Save it to keep it in your designs.`);
+    return true;
+  }
   if (!await askToSave(name)) return false;
   applyDesign(got.design); designLoaded(null, name); afterLoad();
   designNote(`Opened “${name}” from ${from}. Save it to keep it in your designs.`);

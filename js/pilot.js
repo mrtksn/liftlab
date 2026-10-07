@@ -115,6 +115,7 @@ function ownsKey(t, e) {
 let spaceHold = false;   // Space went to Hold, not to a control: its keyup mustn't click anything
 window.addEventListener('keydown', e => {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || ownsKey(e.target, e) || document.querySelector('dialog[open]')) return;
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected && !['KeyK','KeyQ'].includes(e.code)) return;
   const c = KEYMAP[e.code];
   if (c) { e.preventDefault(); if (!e.repeat) press(c, 'key:' + e.code); return; }
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }

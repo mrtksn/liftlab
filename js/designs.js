@@ -56,6 +56,7 @@ function renderUndo() {
 }
 window.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target)) return;   // text fields keep their own undo
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoStep(); }
   else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redoStep(); }

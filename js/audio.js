@@ -10,7 +10,7 @@
 // three rising beeps. A battery under 20%: a beeper every few seconds.
 
 const SND_BLADES = 2, SND_POLES = 7, SND_MAX_MOTORS = 8, SND_MAX_SERVOS = 6;
-const snd = { on: false, ctx: null, master: null, noise: null, wave: null, motors: new Map(), servos: new Map(), last: {}, lowT: 0 };
+const snd = { on: false, ctx: null, master: null, noise: null, wave: null, motors: new Map(), servos: new Map(), events: new Map() };
 
 function sndNoiseBuffer(ctx) {
   const b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = b.getChannelData(0);
@@ -70,17 +70,37 @@ function sndPan(world) {   // left–right from the camera, and how far
   sndTmp.set(...world).applyMatrix4(camera.matrixWorldInverse);
   const d = sndTmp.length(); return { pan: clamp(sndTmp.x / Math.max(0.3, d), -0.9, 0.9), d };
 }
+function sndResetScope() {
+  for (const v of [...snd.motors.values(),...snd.servos.values()]) v.stop();
+  snd.motors.clear();snd.servos.clear();snd.events.clear();
+}
 function sndTick() {
   if (!snd.on || !snd.ctx) return;
-  const ctx = snd.ctx, t = ctx.currentTime, k = 0.04;
   const live = running && !editMode && !document.hidden;
-  snd.master.gain.setTargetAtTime(live ? 0.9 : 0, t, 0.05);
+  snd.master.gain.setTargetAtTime(live ? .9 : 0,snd.ctx.currentTime,.05);
+  const seen=new Set(), sj=new Set();
+  if (typeof fleet !== 'undefined' && fleet.ready) {
+    const drones=fleet.selected ? [fleet.selected] : fleet.drones;
+    for(const d of drones)withDrone(d,()=>sndDroneTick(d.id,live,seen,sj));
+    for(const id of snd.events.keys())if(!fleet.drones.some(d=>d.id===id))snd.events.delete(id);
+  } else sndDroneTick('boot',live,seen,sj);
+  for(const [id,v] of snd.motors)if(!seen.has(id)){v.stop();snd.motors.delete(id);}
+  for(const [id,v] of snd.servos)if(!sj.has(id)){v.stop();snd.servos.delete(id);}
+}
+function sndDroneTick(owner,live,seen,sj) {
+  const ctx=snd.ctx,t=ctx.currentTime,k=.04;
+  let last=snd.events.get(owner);
+  if(!last){
+    last={fc:brt.fcState,crash:!!S.crashed,lowT:0};
+    for(const c of actuators())last['p'+c.id]=!!hs.get(c.id)?.prop;
+    snd.events.set(owner,last);
+  }
   const R = qmat(S.q), at = p => add(S.p, m3v(R, p));
   // motors
-  const ms = actuators().slice(0, SND_MAX_MOTORS), seen = new Set();
+  const ms = actuators().slice(0, SND_MAX_MOTORS);
   for (const c of ms) {
-    seen.add(c.id);
-    let v = snd.motors.get(c.id); if (!v) { v = motorVoice(); snd.motors.set(c.id, v); }
+    const key=owner+':'+c.id;seen.add(key);
+    let v = snd.motors.get(key); if (!v) { v = motorVoice(); snd.motors.set(key, v); }
     const st = act.get(c.id) || {}, rps = Math.max(0, (st.Omega || 0) / (2 * Math.PI)), hsc = hs.get(c.id) || {};
     const full = propOmega(c) / (2 * Math.PI), frac = clamp(rps / Math.max(1, full), 0, 1.3), on = cargo.power && !cargo.off.has(c.id);
     const { pan, d } = sndPan(at(c.pos)), near = 1 / (1 + Math.max(0, d - 1) * 0.35);
@@ -93,44 +113,42 @@ function sndTick() {
     v.ng.gain.setTargetAtTime(0.2 * clamp((st.T || 0) / Math.max(0.5, c.tmax), 0, 1) * near, t, k);
     v.g.gain.setTargetAtTime(1, t, k); v.out.pan.setTargetAtTime(pan, t, k);
     // a prop strike: once, when the prop breaks
-    const was = snd.last['p' + c.id]; if (hsc.prop && !was) sndStrike(pan); snd.last['p' + c.id] = !!hsc.prop;
+    const was = last['p' + c.id]; if (hsc.prop && !was) sndStrike(pan); last['p' + c.id] = !!hsc.prop;
   }
-  for (const [id, v] of snd.motors) if (!seen.has(id)) { v.stop(); snd.motors.delete(id); }
   // servos: a gear whine while they move
-  const js = joints().slice(0, SND_MAX_SERVOS), sj = new Set();
+  const js = joints().slice(0, SND_MAX_SERVOS);
   for (const j of js) {
-    sj.add(j.id);
-    let v = snd.servos.get(j.id); if (!v) { v = servoVoice(); snd.servos.set(j.id, v); }
+    const key=owner+':'+j.id;sj.add(key);
+    let v = snd.servos.get(key); if (!v) { v = servoVoice(); snd.servos.set(key, v); }
     const st = jst.get(j.id) || {}, w = Math.abs(st.rate || 0), { pan, d } = sndPan(at(j.pos)), near = 1 / (1 + Math.max(0, d - 1) * 0.35);
     const g = clamp(w / 4, 0, 1);
     v.o.frequency.setTargetAtTime(120 + 260 * clamp(w / 6, 0, 1.5), t, 0.02); v.f.frequency.setTargetAtTime(900 + 1400 * clamp(w / 6, 0, 1.5), t, 0.02);
     v.g.gain.setTargetAtTime(0.07 * g * near * (g > 0.03 ? 1 : 0), t, 0.02); v.out.pan.setTargetAtTime(pan, t, 0.05);
   }
-  for (const [id, v] of snd.servos) if (!sj.has(id)) { v.stop(); snd.servos.delete(id); }
   // latches: a click opening, a clunk closing (and a short whirr while they move, as their servo)
   for (const l of latches()) {
     const st = cargo.lat.get(l.id); if (!st) continue;
-    const prev = snd.last['l' + l.id], { pan } = sndPan(at(l.pos));
+    const prev = last['l' + l.id], { pan } = sndPan(at(l.pos));
     if (prev != null && st.pos !== prev) {
       if (Math.abs(st.pos - prev) > 0.001) sndBurst({ dur: 0.05, f: 1800, q: 6, gain: 0.05, pan });
       if (st.pos >= 1 && prev < 1) sndClunk(pan); else if (st.pos <= 0 && prev > 0) sndClick(pan);
     }
-    snd.last['l' + l.id] = st.pos;
+    last['l' + l.id] = st.pos;
   }
   // a crash: a thud as hard as the hit; arming: the ESCs' beeps; a low battery: the beeper
-  if (S.crashed && !snd.last.crash) { const m = /([\d.]+) m\/s/.exec(S.crashed); sndCrash(clamp(m ? +m[1] / 6 : 0.7, 0.3, 1), sndPan(S.p).pan); }
-  snd.last.crash = !!S.crashed;
-  if (brt.fcState === 1 && snd.last.fc !== 1 && snd.last.fc != null) sndArm();
-  snd.last.fc = brt.fcState;
+  if (S.crashed && !last.crash) { const m = /([\d.]+) m\/s/.exec(S.crashed); sndCrash(clamp(m ? +m[1] / 6 : 0.7, 0.3, 1), sndPan(S.p).pan); }
+  last.crash = !!S.crashed;
+  if (brt.fcState === 1 && last.fc !== 1 && last.fc != null) sndArm();
+  last.fc = brt.fcState;
   const soc = S.batt && S.batt.soc != null ? S.batt.soc : 1;
-  if (live && cargo.power && soc < 0.2 && brt.fcState === 1 && performance.now() - snd.lowT > 3000) { snd.lowT = performance.now(); sndLowBatt(); }
+  if (live && cargo.power && soc < 0.2 && brt.fcState === 1 && performance.now() - last.lowT > 3000) { last.lowT = performance.now(); sndLowBatt(); }
 }
 (function sndLoop() { try { sndTick(); } catch (e) {} requestAnimationFrame(sndLoop); })();
 
 /* ───────── the button ───────── */
 function setSound(on) {
   snd.on = !!on;
-  if (snd.on) { sndStart(); snd.last = { fc: brt.fcState, crash: !!S.crashed }; for (const c of actuators()) snd.last['p' + c.id] = !!(hs.get(c.id) || {}).prop; }
+  if (snd.on) { sndStart(); sndResetScope(); }
   else if (snd.ctx) { snd.master.gain.setTargetAtTime(0, snd.ctx.currentTime, 0.03); setTimeout(() => { if (!snd.on && snd.ctx) snd.ctx.suspend(); }, 200); }
   const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.classList.toggle('on', snd.on); b.title = snd.on ? 'Sound is on: click to mute (M)' : 'Sound is off: turn it on to hear the motors, servos, latches and crashes (M)';
 }

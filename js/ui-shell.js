@@ -60,14 +60,6 @@ const READOUT_TABS = [
     icon: `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v12M10 4v12M16 4v12"/><circle cx="4" cy="12" r="1.8" fill="currentColor"/><circle cx="10" cy="7" r="1.8" fill="currentColor"/><circle cx="16" cy="11" r="1.8" fill="currentColor"/></svg>`,
     title: "Learning, allocation, headroom and mass",
   },
-  {
-    key: "world",
-    id: "rtab-world",
-    panel: "rpane-world",
-    label: "World",
-    icon: `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg>`,
-    title: "The target and the environment",
-  },
 ];
 
 const UI_PANELS = {

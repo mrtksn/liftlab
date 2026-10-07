@@ -1,5 +1,13 @@
 # Project memory
 
+## World view and fleet audio — 2026-10-07
+- Added persistent no-selection world view: both drone sidebars hide, the shared canvas expands, and collapsible world settings appear at the right. Drone flight targets stay in Control; World is removed from drone readout tabs. Empty viewport clicks/dropdown/header switch to world view; orbit, pinch and editor handles keep their gestures.
+- Added hovered craft outline/name and scoped audio: selected craft only, or all craft in world view, with drone-qualified voice/event ownership and shared distance/pan mixing. Existing per-airframe voice caps remain.
+- Selection is independent of the retained internal runtime/graphics context; fleet physics continues and camera orbit stays in place without a selected craft. Hidden drone keyboard/edit/undo/AI controls are gated. World settings save without adding undo changes to the retained drone.
+- Passed: null selection/reload, pointer hover/tap/returning orbit drag/pinch/cancel, world vs target ownership and keyboard guards, actual all/selected-craft audio graphs and independent crash/prop events, pause/mute, add/shared-code imports, collapsed preferences and phone themes. Existing fleet, full flight/radio, mock BLE, Markdown/HUD and agent hardware checks passed. Actual editor-handle clicks and empty-canvas deselection while editing also passed; native DOM component fixtures passed 9/9.
+- FIXED: shared-code import from world view adds/selects a new drone instead of silently replacing the retained internal drone. Regression: add a shared code with no selection and compare both existing designs unchanged.
+- M1 world-view audio check: 1/4/8 quads held ~60 FPS / 0.99× with sound off/on; audio callback p95 was 0.2/0.2/0.3 ms with 4/16/32 motor voices. Raw trace and limits in docs/simulation-performance.md. Mobile audio performance and larger-fleet costs remain unmeasured.
+
 ## Shared-world multi-drone implementation — 2026-10-07
 - Integrated Claude's already-pushed 81bf2ff (browser BLE control, two links and one-way links); implementation is isolated on codex/multi-drone.
 - Added per-drone runtime/graphics ownership with a synchronous compatibility boundary for existing feature modules. Physics/boards/WASM, designs/laws, sensors/health, radio, targets and undo are separate; world/environment, clock, renderer and camera are shared. Async board/formula callbacks carry their owning runtime.

@@ -105,7 +105,7 @@ function agentEvents(n = 8) {
 function agentState() {
   const s = agentSample();
   return {
-    drone: typeof fleet !== 'undefined' && fleet.ready ? {id:fleet.selected.id,name:fleetName(fleet.selected),world_count:fleet.drones.length} : undefined,
+    drone: typeof fleet !== 'undefined' && fleet.ready && fleet.selected ? {id:fleet.selected.id,name:fleetName(fleet.selected),world_count:fleet.drones.length} : undefined,
     time: s.t, simulation: running ? 'running' : 'paused', speed, crashed: S.crashed || null, phase: flightPhaseText(),
     position: [s.x, s.y, s.alt], velocity: [s.vx, s.vy, s.climb], attitude_deg: { roll: s.roll, pitch: s.pitch, yaw: s.yaw, tilt: s.tilt },
     target: { x: s.tx, y: s.ty, z: s.tz, heading: s.heading }, distance_to_target: s.err,
@@ -181,7 +181,7 @@ function agentSystem() {
 }
 /* threads */
 const threadOf = id => agent.threads.find(t => t.id === id) || null;
-const threadBelongsToDrone = t => typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected.id;
+const threadBelongsToDrone = t => typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected?.id;
 function threadNew(kind = 'chat', o = {}) {
   const t = { id: (kind === 'trigger' ? 'g' : 'c') + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind, title: o.title || 'New chat',
     droneId: typeof fleet !== 'undefined' && fleet.selected ? fleet.selected.id : 'drone-1',
@@ -208,6 +208,7 @@ function agentFeed(item, th) {
 }
 // Ask the agent something: what you typed (in a thread), or a trigger (in its own). Waits its turn if one is running.
 function agentAsk(text, o = {}) {
+  if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   o.thread = o.thread || (o.trigger ? threadForTrigger(o.trigger) : threadOf(agent.cur) || threadNew());
   if (agent.busy) {
     if (o.trigger && agent.queue.some(q => q.o.trigger === o.trigger)) return;   // (that trigger is already waiting)

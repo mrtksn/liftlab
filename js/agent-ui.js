@@ -81,7 +81,7 @@ function listView() {
   const list = el('div', { class: 'ai-list' });
   const newChat = UI.button( { class: 'btn primary ai-new', type: 'button', id: 'aiNewChat', text: '+ New chat', onclick: () => { agent.cur = threadNew().id; aiUi.view = 'chat'; agentRender(); setTimeout(() => { const i = $('#aiInput'); if (i) i.focus(); }); } });
   list.append(newChat);
-  const chats = agent.threads.filter(t => t.kind === 'chat' && (typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected.id) && (t.msgs.length || t.feed.length)).sort((a, b) => b.updated - a.updated);
+  const chats = agent.threads.filter(t => t.kind === 'chat' && (typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected?.id) && (t.msgs.length || t.feed.length)).sort((a, b) => b.updated - a.updated);
   list.append(el('div', { class: 'ai-group' }, el('span', { class: 'lbl', text: 'Chats' })));
   if (!chats.length) list.append(el('p', { class: 'hint ai-none', text: 'No chats yet.' }));
   for (const t of chats) list.append(threadRow(t, t.title, `${ago(t.updated)}${t.tokens.in ? ' · ' + kfmt(t.tokens.in + t.tokens.out) + ' tokens' : ''}`));

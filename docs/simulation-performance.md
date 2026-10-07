@@ -127,3 +127,15 @@ A separate deliberately overlapping collision microbenchmark resets positions/ve
 | 8 | 3.8 / 5.5 ms |
 
 Close contacts substantially reduce the number of 0.5 ms ticks that fit in a frame. Craft and component sphere bounds avoid detailed box contacts for distant parts; large crowded fleets still need spatial indexing/contact simplification before scaling. [Ownership and collision approximations](multi-drone.md) describe the current boundary.
+
+## World-view audio measurements — 2026-10-07
+
+Same M1 hardware renderer and 240-frame production-loop method, world view with the settings overlay open, open terrain and 1× speed. `node tools/benchmark_fleet.cjs --hardware-gpu --world-audio` compares sound off/on for 1/4/8 quads. [Raw audio trace](benchmarks/fleet/m1-world-audio-2026-10-07.json) includes the separate audio animation-callback timing; frame CPU excludes that callback and Web Audio DSP runs separately. Frame intervals include their scheduling impact.
+
+| Quads | Motor voices with sound on | FPS off / on | Simulation rate off / on | Audio callback p95 on |
+| --- | --- | --- | --- | --- |
+| 1 | 4 | 60.0 / 60.0 | 0.99× / 0.99× | 0.2 ms |
+| 4 | 16 | 60.0 / 60.0 | 0.99× / 0.99× | 0.2 ms |
+| 8 | 32 | 60.0 / 60.0 | 0.99× / 0.99× | 0.3 ms |
+
+No craft crashed or page errors occurred. This short desktop run shows no measurable FPS penalty for these fleets; it does not establish mobile/audio hardware latency or large-swarm performance. The benchmark does not exercise sustained hover raycasts. Existing eight-motor/six-servo caps are per craft, so audio graph size grows with fleet size; distance/pan attenuation and a shared compressor mix all craft in world view. Muting suspends the audio context.

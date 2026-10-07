@@ -64,6 +64,7 @@ function buildGizmo() {
 }
 
 function setEditMode(on) {
+  if (on && typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   if (on === editMode) return;
   editMode = on;
   if (on) { editWasRunning = running; running = false; releaseAll(); UI_PANELS.editor.select('air'); }
