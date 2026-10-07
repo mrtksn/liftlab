@@ -11,6 +11,8 @@ for (const f of ['rn-parse.js', 'rn-ops.js', 'rn-compile.js', 'rn-sigs.js', 'rn-
 const lawSource = key => vm.runInContext(`(LAW_DEFS.find(d => d.key === ${JSON.stringify(key)}) || { fn: null }).fn`, ctx)?.toString() ?? null;
 const lawSample = key => vm.runInContext(`(() => { const d = LAW_DEFS.find(d => d.key === ${JSON.stringify(key)}); return d && d.sample ? d.sample() : null; })()`, ctx);
 const defaultSources = () => { const s = {}; for (const k of Object.keys(RN_SIGS)) s[k] = lawSource(k); return s; };
+// The constants the formulas read (laws.js TUNE: the controller's gains), as the compiler takes them: the defaults.
+const defaultConsts = () => ({ TUNE: JSON.parse(JSON.stringify(vm.runInContext('TUNE_DEFAULTS', ctx))) });
 // Real calls recorded in simulated flights (every layout, a calibration, a throw, optical flow): { key: [{ args, ret, stAfter }] }.
 const golden = () => JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'golden.json.gz'))).toString());
 // The C runner built to WebAssembly (runner/build_wasm.sh), if it's there.
@@ -19,4 +21,4 @@ async function wasmRunner() {
   if (!fs.existsSync(f)) return null;
   return RnWasm.create(fs.readFileSync(f));
 }
-module.exports = { lawSource, lawSample, defaultSources, golden, wasmRunner };
+module.exports = { lawSource, lawSample, defaultSources, defaultConsts, golden, wasmRunner };

@@ -58,7 +58,7 @@ function fleetRefresh() {
   HW_UI.open ||= new Set();
   buildComputers(); renderComps(); buildActRows(); frameMassField.refresh(); renderFrameShape();
   spRefs.length=0;buildSp();buildFlightEnvironmentFields();
-  throwFieldRefs.length=0;buildThrowFields();allocFieldRefs.length=0;$('#mixSlot').replaceChildren();buildAllocFields();
+  throwFieldRefs.length=0;buildThrowFields();allocFieldRefs.length=0;$('#mixSlot').replaceChildren();buildAllocFields();buildTuning();
   renderBattery(); syncFlightUi(); syncSp(); syncAllocFields(); setPilotLevel(pilot.level);
   $('#keepLearn').checked=learnPrefs.keep;$('#holdPulses').checked=learnPrefs.holdPulses;$('#thenCal').checked=throwCfg.thenCalibrate;
   setLaunch(launchMode,false); for (const f of throwFieldRefs) f(); for (const f of allocFieldRefs) f();
@@ -135,7 +135,7 @@ function fleetCreate(key = 'quadx', saved = null, ownedEdit = false) {
     launchMode = saved.launch === 'throw' ? 'throw' : 'hover'; steerMix.share = saved.mixShare ?? .5;
     designLoaded(saved.designId || null,saved.designName || ''); designs.preset = PRESETS[saved.preset] ? saved.preset : null;
   } else {
-    const p = PRESETS[key].build(); cfg.frame.mass = p.frame; setFrameShape(p.frameShape); cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery();
+    const p = PRESETS[key].build(); cfg.frame.mass = p.frame; setFrameShape(p.frameShape); cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); cfg.tuning = tuneDefaults();
     const C = PRESETS[key].computers ? PRESETS[key].computers() : defaultComputers(); if (PRESETS[key].cargoTask) C.boards.find(b=>b.tasks.includes('core')).tasks.push('cargo');
     cfg.computers = fixComputers(C); mode = p.mode; designLoaded(null,''); designs.preset = key;
   }
@@ -201,7 +201,7 @@ function fleetSnapshot() {
   if (fleet.active) captureDroneState(fleet.active.state);
   return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},environment:{...envr},drones:fleet.drones.map(d=>{
     const s=d.state;
-    return {id:d.id,name:d.name,setpoint:{...s.setpoint},design:{frame:s.cfg.frame.mass,frameShape:{...s.cfg.frame},comps:s.cfg.comps,mode:s.mode,battery:s.cfg.battery,computers:s.cfg.computers,laws:Object.fromEntries(Object.entries(s.LAWS).filter(([,L])=>L.src!==L.defSrc).map(([k,L])=>[k,L.src]))},radio:{...s.radioCfg},radio2:{...s.radioCfg2},allocPrefs:{...s.allocPrefs},throwCfg:{...s.throwCfg},learnPrefs:{...s.learnPrefs},launch:s.launchMode,mixShare:s.steerMix.share,designId:s.designs.cur,designName:s.designs.name,preset:s.designs.preset,triggers:s.agentTriggers.map(({fired,last,was,...t})=>t),chat:s.agentChat};
+    return {id:d.id,name:d.name,setpoint:{...s.setpoint},design:{frame:s.cfg.frame.mass,frameShape:{...s.cfg.frame},comps:s.cfg.comps,mode:s.mode,battery:s.cfg.battery,computers:s.cfg.computers,tuning:s.cfg.tuning,laws:Object.fromEntries(Object.entries(s.LAWS).filter(([,L])=>L.src!==L.defSrc).map(([k,L])=>[k,L.src]))},radio:{...s.radioCfg},radio2:{...s.radioCfg2},allocPrefs:{...s.allocPrefs},throwCfg:{...s.throwCfg},learnPrefs:{...s.learnPrefs},launch:s.launchMode,mixShare:s.steerMix.share,designId:s.designs.cur,designName:s.designs.name,preset:s.designs.preset,triggers:s.agentTriggers.map(({fired,last,was,...t})=>t),chat:s.agentChat};
   })};
 }
 function fleetSave() {

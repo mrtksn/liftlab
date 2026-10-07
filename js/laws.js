@@ -884,6 +884,21 @@ function fleetProgram(st, me, others, msg, dt) {
 
 // ═════════════ Controller ═════════════
 
+// The controller's gains are part of the design (Airframe tab → Tuning), not of the formulas: a formula reads them
+// from TUNE. The step compiler fills them in as constants when it builds a board's program (rn-compile.js
+// opts.consts), so a new tuning reaches the boards the way an edited formula does, and needs no new firmware.
+// Attitude (per axis: roll, pitch, yaw) in angular-acceleration units: kR [1/s²] on the attitude error, kW [1/s]
+// on the body rate, kI [1/s³] on the error's integral. Position (every axis) in acceleration units: kp [1/s²],
+// kd [1/s], ki [1/s³].
+const TUNE_DEFAULTS = Object.freeze({
+  att: Object.freeze({ kR: Object.freeze([100, 100, 40]), kW: Object.freeze([16, 16, 10]), kI: Object.freeze([80, 80, 20]) }),
+  pos: Object.freeze({ kp: 4, kd: 3.6, ki: 1.0 }),
+});
+// The gains the selected drone flies with, when a formula runs as JavaScript (the simulator points tuneSource at
+// its design; tools use the defaults).
+let tuneSource = () => TUNE_DEFAULTS;
+const TUNE = { get att() { return (tuneSource() || TUNE_DEFAULTS).att; }, get pos() { return (tuneSource() || TUNE_DEFAULTS).pos; } };
+
 function positionControl(ep, v, ip, m, g, lim) {
   // ep: position error, v: velocity error (hub velocity − commanded velocity), ip: integral of ep; world frame
   // lim: { accel, speed } the most horizontal acceleration [m/s²] and speed toward the target [m/s] (the supervisor
@@ -892,7 +907,7 @@ function positionControl(ep, v, ip, m, g, lim) {
   // capped at the speed limit sideways and at 3 m/s up, 1.5 m/s down. A drone sinking faster than that into its
   // own downwash can't brake (its rotors lose thrust in the turbulent air), so it would drop past the target.
   // Near the target it's the plain PID: kp·ep − kd·v + ki·∫ep.
-  const kp = 4, kd = 3.6, ki = 1.0;                      // acceleration units, so they fit any mass
+  const kp = TUNE.pos.kp, kd = TUNE.pos.kd, ki = TUNE.pos.ki;   // acceleration units, so they fit any mass
   const vh = lim && lim.speed > 0 ? lim.speed : 6, k = kp / kd;
   const vx = k * ep[0], vy = k * ep[1], vxy = Math.hypot(vx, vy), sh = vxy > vh ? vh / vxy : 1;
   const want = [vx * sh, vy * sh, clamp(k * ep[2], -1.5, 3)];
@@ -924,7 +939,7 @@ function attitudeError(R, Rd) {
 }
 
 function attitudeControl(eR, w, ia, J) {
-  const kR = [100, 100, 40], kW = [16, 16, 10], kI = [80, 80, 20];
+  const kR = TUNE.att.kR, kW = TUNE.att.kW, kI = TUNE.att.kI;   // roll, pitch, yaw (the design's: Airframe → Tuning)
   const alpha = [0, 1, 2].map(i => -kR[i] * eR[i] - kW[i] * w[i] - kI[i] * ia[i]);
   return add(m3v(J, alpha), crs(w, m3v(J, w)));         // torque = J·α + ω × Jω
 }
@@ -1374,7 +1389,7 @@ const LAW_DEFS = [
       [{ from: 5, v: [1, 1] }], 0.1] },
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>d</sub>(sat(<i>K</i><sub>p</sub>/<i>K</i><sub>d</sub> ${V('e')}<sub>p</sub>) − (${V('v')} − ${V('v')}<sub>cmd</sub>)) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `sat: sideways ≤ the speed limit, up ≤ 3 m/s, down ≤ 1.5 m/s`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
-    doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',
+    doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in. The gains kp, kd, ki are the design\'s (Airframe → Tuning), read from TUNE.pos.',
     args: [['ep', 'position error, world [m]'], ['v', 'hub velocity − commanded velocity, world [m/s]'], ['ip', '∫ ep dt [m·s]'], ['m', 'modeled mass [kg]'], ['g', '9.81 m/s²'], ['lim', '{ accel, speed }: most horizontal acceleration [m/s²] and speed [m/s], from the supervisor']], returns: 'desired total force, world [N]',
     shape: 3, sample: () => [[0.1, 0, 0.1], [0, 0, 0], [0, 0, 0], 1, 9.81, { accel: 6 }] },
   { key: 'thrustAxisTarget', group: 'ctrl', fn: thrustAxisTarget, title: 'Thrust-axis target',
@@ -1389,7 +1404,7 @@ const LAW_DEFS = [
     shape: 3, sample: () => [qmat([1, 0, 0, 0]), qmat(qnorm([1, 0.05, 0, 0]))] },
   { key: 'attitudeControl', group: 'ctrl', fn: attitudeControl, title: 'Attitude control',
     math: [`${V('α')} = −<i>K</i><sub>R</sub>${V('e')}<sub>R</sub> − <i>K</i><sub>ω</sub>${V('ω')} − <i>K</i><sub>I</sub>∫${V('e')}<sub>R</sub> d<i>t</i>`, `${V('τ')}<sub>d</sub> = <i>J</i>${V('α')} + ${V('ω')} × <i>J</i>${V('ω')}`],
-    doc: 'Gains are in angular-acceleration units and multiplied by the modeled inertia, so they carry over to new geometry. On the learned model J is the identity and the result is a desired angular acceleration.',
+    doc: 'Gains are in angular-acceleration units and multiplied by the modeled inertia, so they carry over to new geometry. They are the design\'s (Airframe → Tuning), read from TUNE.att: kR, kW, kI for roll, pitch and yaw; replace them with numbers here and the tuning no longer reaches this formula. On the learned model J is the identity and the result is a desired angular acceleration.',
     args: [['eR', 'attitude error [rad]'], ['w', 'angular velocity, body [rad/s]'], ['ia', '∫ eR dt'], ['J', 'modeled inertia']], returns: 'desired torque, body [N·m]',
     shape: 3, sample: () => [[0.01, 0, 0], [0, 0, 0], [0, 0, 0], [.01, 0, 0, 0, .01, 0, 0, 0, .02]] },
   { key: 'forceDemand', group: 'ctrl', fn: forceDemand, title: 'Body force demand',

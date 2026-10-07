@@ -132,10 +132,10 @@ function groundBudget() {
 // A board's program: the formulas of its tasks (sizes from the compiled image, cached by task set).
 const boardProgCache = new Map();
 function boardProgram(tasks, srcs = rnSources()) {
-  const keys = rnTaskFormulas(tasks), key = tasks.join(',') + '|' + keys.map(k => srcs[k]).join('\u0000');
+  const keys = rnTaskFormulas(tasks), tune = rnTuneKey(), key = tasks.join(',') + '|' + keys.map(k => srcs[k]).join('\u0000') + '|' + tune;
   let P = boardProgCache.get(key);
   if (!P) {
-    P = rnCompileAll(Object.fromEntries(keys.map(k => [k, srcs[k]])), RN_SIGS);
+    P = rnCompileAll(Object.fromEntries(keys.map(k => [k, srcs[k]])), RN_SIGS, { consts: { TUNE: JSON.parse(tune) } });
     const bad = Object.entries(P.errors); if (bad.length) throw new Error(`${bad[0][0]}: ${bad[0][1]}`);
     rnVerify(P);
     if (boardProgCache.size > 12) boardProgCache.clear();
@@ -278,8 +278,9 @@ function groundStart() {
   brt.gnd = g;
 }
 let learnPrefs = { keep: true, holdPulses: true };
-const boardSrcKey = (tasks, srcs) => rnTaskFormulas(tasks).map(k => srcs[k]).join('\u0000');
-// A formula edited in flight: every board whose tasks use it stages its new program through its own loading steps.
+// What a board's program is made of: its formulas, and the tuning when one of them reads it.
+const boardSrcKey = (tasks, srcs) => { const ks = rnTaskFormulas(tasks); return ks.map(k => srcs[k]).join('\u0000') + (ks.some(k => rnReadsTune(srcs[k])) ? '\u0001' + rnTuneKey() : ''); };
+// A formula edited in flight (or a new tuning): every board whose tasks use it stages its new program through its own loading steps.
 function boardsStageProgram() {
   if (!brt.ready) return;
   const srcs = rnSources();

@@ -1,8 +1,8 @@
 'use strict';
 // Designs: undo and redo of airframe edits, a library of saved designs, and design files.
 //
-// A design is the airframe alone: frame mass, every part, and the steering mode. Flight state, learning and
-// edited formulas aren't part of it.
+// A design is the airframe: frame mass, every part and the steering mode, with its computers, edited formulas
+// and tuning (the controller's gains). Flight state and learning aren't part of it.
 //
 // Saved designs live in your account when this page runs as a published artifact (private to you, on any
 // device), otherwise in this browser. "Save to file" and "Open file…" move a design anywhere, such as into
@@ -11,7 +11,7 @@
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
 let undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
-const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, environment: flightEnvironment(), computers: computers(), laws: lawSet() });
+const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, environment: flightEnvironment(), computers: computers(), laws: lawSet(), tuning: tuneOf() });
 const designSnap = () => JSON.stringify(designOf());
 
 // Called from save() after every change. Records a step when the design itself changed.
@@ -41,6 +41,7 @@ function restoreSnap(s) {
       if (JSON.stringify(cfg.computers) !== was) { brt.sig = null; restart = true; }
     }
     if (d.laws) setLaws(d.laws);
+    if (!tuneSame(d.tuning, tuneOf())) { cfg.tuning = tuneFix(d.tuning); if (typeof refreshTuning === 'function') refreshTuning(); if (!restart) rnRestage(30); }
     setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof renderBattery === 'function') renderBattery();
     if (typeof edit !== 'undefined' && edit.sel != null) selectComp(compById(edit.sel) ? edit.sel : null);
@@ -128,6 +129,7 @@ function applyDesign(d) {
   flightRestoreEnvironment(d.environment);
   if (d.computers) cfg.computers = fixComputers(computersWithRadio(d.computers));   // (a design saved before boards keeps the ones you have)
   if (d.laws) setLaws(d.laws);   // its formulas (a design saved before formulas were part of it keeps the ones you have)
+  cfg.tuning = tuneFix(d.tuning);   // its gains (one saved before tuning was part of it flew on the defaults)
   if (typeof syncFlightUi === 'function') setTimeout(syncFlightUi);
   uid = Math.max(uid, ...cfg.comps.map(c => c.id + 1));
   setMode(['level', 'mixed'].includes(d.mode) ? d.mode : 'tilt', false); openSet.clear();
@@ -156,7 +158,7 @@ async function exportDesign(rec) {
 }
 function readDesignFile(text) {   // a design file, or a design copied from the page's own storage
   const o = JSON.parse(text);
-  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode, battery: o.cfg.battery, computers: o.cfg.computers, environment: o.cfg.environment, laws: o.laws } : o;
+  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode, battery: o.cfg.battery, computers: o.cfg.computers, environment: o.cfg.environment, laws: o.laws, tuning: o.cfg.tuning } : o;
   if (!d || !Array.isArray(d.comps) || !d.comps.every(c => c && typeof c.type === 'string' && Array.isArray(c.pos))) throw new Error('not a design');
   for (const c of d.comps) { if (c.propPhysics?.rows) FlightPhysics.propTable(c.propPhysics.rows); if (c.polar) FlightPhysics.polar(c.polar); }
   if (d.frameShape?.polar) FlightPhysics.polar(d.frameShape.polar);
@@ -164,6 +166,7 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
   if (d.battery && typeof d.battery === 'object') keep.battery = d.battery;
   if (d.environment && typeof d.environment === 'object') keep.environment = d.environment;
   if (d.computers && Array.isArray(d.computers.boards)) keep.computers = d.computers;
+  if (d.tuning && typeof d.tuning === 'object') keep.tuning = tuneFix(d.tuning);
   if (d.laws && typeof d.laws === 'object') keep.laws = Object.fromEntries(Object.entries(d.laws).filter(([k, v]) => typeof v === 'string' && LAWS[k]));
   return { name: (o.name || '').toString().slice(0, 60), design: keep };
 }

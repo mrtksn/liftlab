@@ -3,18 +3,18 @@
 //   node tools/host_test_data.js /tmp/rn   (writes builtin.rnp edit.rnp nan.rnp trap.rnp sig.rnp calls.bin there)
 'use strict';
 const fs = require('fs'), path = require('path');
-const { defaultSources, golden } = require('./lib');
+const { defaultSources, defaultConsts, golden } = require('./lib');
 const dir = process.argv[2] || '.'; fs.mkdirSync(dir, { recursive: true });
 const G = golden(), all = defaultSources(), def = Object.fromEntries(rnTaskFormulas(['core', 'nav']).map(k => [k, all[k]]));   // the ESP32's program
 const samples = []; for (const [key, ss] of Object.entries(G)) samples.push(...ss.slice(0, 2).map(s => ({ key, args: s.args })));
 function image(srcs, sigs = RN_SIGS, tests = true) {
-  const P = rnCompileAll(srcs, sigs, { throw: true }); rnVerify(P);
+  const P = rnCompileAll(srcs, sigs, { throw: true, consts: defaultConsts() }); rnVerify(P);
   return { P, img: rnImage(P, { tests: tests ? rnMakeTests(P, samples) : [] }) };
 }
 const w = (f, b) => fs.writeFileSync(path.join(dir, f), b);
 const B = image(def); w('builtin.rnp', B.img);
 const ac = def.attitudeControl;
-w('edit.rnp', image({ ...def, attitudeControl: ac.replace('kR = [100, 100, 40]', 'kR = [130, 130, 40]') }).img);
+w('edit.rnp', image({ ...def, attitudeControl: ac.replace('kR = TUNE.att.kR', 'kR = [130, 130, 40]') }).img);
 w('nan.rnp', image({ ...def, attitudeControl: ac.replace('return add(', 'if (Math.abs(w[0]) + Math.abs(w[1]) + Math.abs(w[2]) > 0) return [0 / 0, 0, 0];\n  return add(') }, RN_SIGS, false).img);
 w('trap.rnp', image({ ...def, servoPredictor: def.servoPredictor.replace('if (st.h == null)', 'st.n = (st.n || 0) + 1; if (st.n > 1600) { const a = [1, 2]; return a[Math.round(st.n)]; }\n  if (st.h == null)') }).img);
 const sig2 = { ...RN_SIGS, thrustLinearization: { ...RN_SIGS.thrustLinearization, args: [RT.num, RT.arr(RT.num, 2)] } };

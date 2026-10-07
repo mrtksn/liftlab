@@ -111,8 +111,8 @@ class RnProgram {
 
 /* ───────── the compiler for one formula ───────── */
 class RnFn {
-  constructor(prog, key, src, sig, helpers) {
-    this.prog = prog; this.key = key; this.src = src; this.sig = sig; this.helpers = helpers || RN_HELPERS;
+  constructor(prog, key, src, sig, helpers, consts) {
+    this.prog = prog; this.key = key; this.src = src; this.sig = sig; this.helpers = helpers || RN_HELPERS; this.consts = consts || {};
     this.code = []; this.slots = []; this.scopes = []; this.loops = []; this.inlines = []; this.labelN = 0; this.depth = 0;
     this.weight = 1;                 // how many times an instruction emitted now can run per call (enclosing loops' bounds)
     this.stateSlots = [];
@@ -447,9 +447,18 @@ class RnFn {
       return b;
     }
     const g = RN_GLOBALS[node.name]; if (g !== undefined) return { t: RT.num, c: g, lb: g, ub: g };
+    if (Object.prototype.hasOwnProperty.call(this.consts, node.name)) return this.constVal(this.consts[node.name], node.name, node);
     if (this.helpers[node.name] || RN_KERNELS[node.name]) return { k: 'kernel', name: node.name };
     if (node.name === 'Math' || node.name === 'Array') return { k: 'ns', name: node.name };
     this.err(`Unknown name "${node.name}"`, node);
+  }
+  // A named constant given to the compiler (opts.consts, such as the design's gains in TUNE): a number, an array of
+  // numbers (a read-only block, as a literal array of constants) or a record of those, read with dots.
+  constVal(v, path, node) {
+    if (typeof v === 'number' && Number.isFinite(v)) return { t: RT.num, c: v, lb: v, ub: v };
+    if (Array.isArray(v) && v.length && v.every(x => typeof x === 'number' && Number.isFinite(x))) return { t: RT.arr(RT.num, v.length), s: this.prog.constBlock(v), off: 0, cvals: v.slice(), ro: true };
+    if (v && typeof v === 'object' && !Array.isArray(v)) return { k: 'cobj', v, path };
+    this.err(`${path} isn't a number, a list of numbers or a record of them`, node);
   }
   member(node) {
     if (!node.computed && node.obj.type === 'Id' && node.obj.name === 'Math' && !this.lookup('Math')) {
@@ -458,6 +467,11 @@ class RnFn {
     }
     const o = this.expr(node.obj);
     if (o.k === 'null') this.err('Reading a field of null', node);
+    if (o.k === 'cobj') {
+      const name = node.computed ? this.constOf(node.index) : node.prop;
+      if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(o.v, name)) this.err(`${o.path} has no ${typeof name === 'string' ? `"${name}"` : 'such field'} (it has ${Object.keys(o.v).join(', ')})`, node);
+      return this.constVal(o.v[name], o.path + '.' + name, node);
+    }
     if (!node.computed) {
       if (node.prop === 'length') { if (o.t && o.t.k === 'state') return this.field(o, 'length', node); return this.lenV(o, node); }
       return this.field(o, node.prop, node);
@@ -858,7 +872,7 @@ class RnFn {
     this.err('Unsupported pattern', node);
   }
   bindName(name, v, kind, node, param, from) {
-    if (v.k === 'fn' || v.k === 'kernel' || v.k === 'str' || v.k === 'null' || v.k === 'undef') {
+    if (v.k === 'fn' || v.k === 'kernel' || v.k === 'str' || v.k === 'null' || v.k === 'undef' || v.k === 'cobj') {
       if (kind === 'let' && (v.k === 'null' || v.k === 'undef')) this.err('A variable needs a starting value with a type', node);
       return this.bind(name, { kind: 'const', v, param }, node);
     }
@@ -1375,7 +1389,7 @@ class RnFn {
   // statement by statement, to learn the fields' types; the real pass then knows them all.
   discover() {
     const si = this.sig.args.findIndex(t => t.k === 'state'); if (si < 0) return this.sig;
-    const probe = new RnFn(new RnProgram(), this.key, this.src, this.sig, this.helpers); probe.lenient = true;
+    const probe = new RnFn(new RnProgram(), this.key, this.src, this.sig, this.helpers, this.consts); probe.lenient = true;
     try { probe.compile(); } catch (e) { }
     const decl = { ...this.sig.args[si].decl };
     if (probe.stateT && probe.stateT.fields) for (const [name, f] of probe.stateT.fields) if (f.t && !decl[name]) decl[name] = f.t;
@@ -1566,10 +1580,11 @@ function rnListing(prog, key) {
   return lines.join('\n');
 }
 
+// opts.consts: named constants the formulas may read ({ TUNE: { att: { kR: [...] } } }), filled in at compile time.
 function rnCompileAll(sources, sigs, opts = {}) {
   const prog = new RnProgram(), fns = [], errors = {};
   for (const [key, src] of Object.entries(sources)) {
-    try { fns.push(new RnFn(prog, key, src, sigs[key], opts.helpers).compile()); }
+    try { fns.push(new RnFn(prog, key, src, sigs[key], opts.helpers, opts.consts).compile()); }
     catch (e) { if (opts.throw) throw e; errors[key] = e.message; }
   }
   const P = rnLink(prog, fns); P.errors = errors; return P;

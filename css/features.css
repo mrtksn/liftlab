@@ -732,6 +732,31 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 #bodySec{gap:0;padding-bottom:0}
 #bodySec h2{margin-bottom:var(--space-8)}
 #bodySec .fold:last-child{border-bottom:0}
+/* controller tuning (tuning-ui.js) */
+#tuneSec > .hint{margin-bottom:var(--space-4)}
+#tuneSec .fold:last-of-type{border-bottom:1px solid var(--line)}
+#tuneSec > .design-tools{margin-top:var(--space-8)}
+.tune-loop{display:grid;gap:var(--space-8)}
+.tune-fig{margin:0;display:grid;gap:var(--space-4)}
+.tune-chart{display:block;width:100%;height:auto;max-height:140px;touch-action:none;cursor:crosshair}
+.tune-chart .tune-base{stroke:var(--line);stroke-width:1}
+.tune-chart .tune-target{stroke:var(--line-strong);stroke-width:1;stroke-dasharray:3 3}
+.tune-chart .tune-ax{fill:var(--muted);font:var(--text-xs) var(--f-mono)}
+.tune-chart .tune-cur{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.tune-chart .tune-def{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
+.tune-chart .tune-cross{stroke:var(--muted);stroke-width:1}
+.tune-chart .tune-dot{fill:var(--accent);stroke:var(--panel);stroke-width:2}
+.tune-legend{display:flex;gap:var(--space-14);font-size:var(--text-xs);color:var(--muted)}
+.tune-legend[hidden]{display:none}
+.tune-key::before{content:"";display:inline-block;width:16px;margin-right:var(--space-5);vertical-align:middle;border-top:2px solid var(--accent)}
+.tune-key.def::before{border-top:1.5px dashed var(--muted)}
+.tune-read{font-family:var(--f-mono);font-size:var(--text-xs)}
+.tune-verdict{margin:0}
+.tune-raw{display:grid;grid-template-columns:minmax(64px,auto) repeat(3,minmax(0,1fr));gap:var(--space-4) var(--space-5);align-items:center;margin-top:var(--space-8)}
+.tune-raw-h{font-size:var(--text-xs);color:var(--muted);text-align:center}
+.tune-raw-k{font-size:var(--text-xs);color:var(--muted);white-space:nowrap}
+.tune-raw-k b{font-family:var(--f-mono);color:var(--ink);font-weight:500}
+.tune-raw .num{width:100%;min-width:0}
 .addrow .btn{padding:var(--space-4) var(--space-8);font-size:var(--text-sm)}
 #learnSec > .fold:last-of-type{border-bottom:1px solid var(--line)}
 .ai-img{display:block;max-width:100%;border-radius:var(--radius-control);border:1px solid var(--line);margin-top:var(--space-4)}

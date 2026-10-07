@@ -64,9 +64,14 @@ function rnSourceOf(key) {
   return RN.flying[key] || L.defSrc;
 }
 function rnSources() { const s = {}; for (const k of Object.keys(RN_SIGS)) s[k] = rnSourceOf(k); return s; }
-function rnCompile(srcs) {
+// The constants the formulas read, filled in when a program is compiled: the selected drone's tuning (tuning.js;
+// laws.js TUNE). rnTuneKey says which tuning a program was compiled with; a formula reads it if it names TUNE.
+const rnConsts = () => ({ TUNE: typeof tuneOf === 'function' ? tuneOf() : TUNE_DEFAULTS });
+const rnTuneKey = () => JSON.stringify(rnConsts().TUNE);
+const rnReadsTune = src => typeof src === 'string' && /\bTUNE\b/.test(src);
+function rnCompile(srcs, tune = rnTuneKey()) {
   const t0 = performance.now();
-  const P = rnCompileAll(srcs, RN_SIGS); rnVerify(P);
+  const P = rnCompileAll(srcs, RN_SIGS, { consts: { TUNE: JSON.parse(tune) } }); rnVerify(P);
   RN.compileMs = performance.now() - t0;
   return P;
 }
@@ -76,7 +81,7 @@ function rnEvent(msg, tone) { RN.log.unshift({ t: typeof S !== 'undefined' ? S.t
 function rnRebuild() {
   rnCancelStage();
   let P;
-  try { P = rnCompile(RN.srcs = rnSources()); }
+  try { P = rnCompile(RN.srcs = rnSources(), RN.tune = rnTuneKey()); }
   catch (e) { RN.P = null; RN.buildErr = e.message; rnRender(); return; }
   const E = rnTakeEngine(), err = E.load(P);
   if (err) { RN.wasmErr = 'the C runner rejected the program: ' + err; rnGiveBack(E); return rnInstall(Object.assign(new RnEngine(null), {}), P); }
@@ -84,10 +89,10 @@ function rnRebuild() {
 }
 function rnInstall(E, P) {
   if (!E.P) E.load(P);
-  E.srcs = { ...RN.srcs };
+  E.srcs = { ...RN.srcs }; E.tune = RN.tune;
   rnGiveBack(RN.prev); RN.prev = RN.act; RN.act = E;
   RN.P = E.P; RN.A = E.A; RN.engine = E.kind; RN.buildErr = ''; RN.trapped = {};
-  RN.flying = { ...RN.srcs };
+  RN.flying = { ...RN.srcs }; RN.flyingTune = RN.tune;
   RN.steps = {}; RN.calls = {}; RN.maxSteps = {};
   rnFillPool(); rnRender();
 }
@@ -98,13 +103,15 @@ function rnCancelStage() { if (RN.stage) { rnGiveBack(RN.stage.E); RN.stage = nu
 function rnStage() {
   if (!RN.want || !RN.act) return rnRebuild();
   rnCancelStage();
-  const srcs = rnSources(), keys = Object.keys(srcs).filter(k => srcs[k] !== RN.flying[k]);
-  if (!keys.length) { rnRender(); return; }
-  const st = { keys, srcs, phase: 'compile', msg: '', t0: null, tStart: typeof S !== 'undefined' ? S.t : 0, diff: {}, pairs: [], clones: new WeakMap(), calls: 0 };
+  // What changed: edited formulas, and (a new tuning) every formula that reads TUNE.
+  const srcs = rnSources(), tune = rnTuneKey(), retuned = tune !== RN.flyingTune;
+  const keys = Object.keys(srcs).filter(k => srcs[k] !== RN.flying[k] || (retuned && rnReadsTune(srcs[k])));
+  if (!keys.length) { RN.flyingTune = RN.tune = tune; rnRender(); return; }
+  const st = { keys, srcs, tune, phase: 'compile', msg: '', t0: null, tStart: typeof S !== 'undefined' ? S.t : 0, diff: {}, pairs: [], clones: new WeakMap(), calls: 0 };
   RN.stage = st;
-  const names = keys.map(k => LAWS[k].def.title).join(', ');
+  const names = keys.map(k => LAWS[k].def.title).join(', ') + (retuned && keys.some(k => srcs[k] === RN.flying[k]) ? ' (new tuning)' : '');
   let P;
-  try { P = rnCompile(srcs); }
+  try { P = rnCompile(srcs, tune); }
   catch (e) { return rnStageFail(st, 'it doesn\'t compile: ' + e.message); }
   for (const k of keys) if (P.errors[k]) return rnStageFail(st, P.errors[k]);
   // Self-tests: recent real inputs of every formula, expected outputs from the JavaScript runner on the new program.
@@ -138,7 +145,7 @@ function rnCommit(st) {
     for (const k of Object.keys(real)) if (!(k in clone)) delete real[k];
     Object.assign(real, clone); st.E.seen.add(real);
   }
-  RN.srcs = st.srcs; RN.stage = null;
+  RN.srcs = st.srcs; RN.tune = st.tune; RN.stage = null;
   rnInstall(st.E, st.P);
   rnEvent(`${st.keys.map(k => LAWS[k].def.title).join(', ')}: flying${st.maxDiffTxt ? ` (${st.maxDiffTxt})` : ''}.`, 'good');
 }
@@ -242,13 +249,13 @@ function rnTrapped(key, msg) {
 }
 function rnFallback(key, msg, at) {
   const old = RN.prev, bad = RN.act;
-  if (!old.P.fns[key] || !old.srcs || old.srcs[key] === RN.flying[key]) return false;   // only when this formula just changed
+  if (!old.P.fns[key] || !old.srcs || (old.srcs[key] === RN.flying[key] && !(old.tune !== RN.flyingTune && rnReadsTune(old.srcs[key])))) return false;   // only when this formula (or the tuning it reads) just changed
   rnTransfer(old.P, old.A, bad.P, bad.A);
   RN.act = old; RN.prev = null; RN.P = old.P; RN.A = old.A; RN.engine = old.kind;
   for (const k of Object.keys(RN.flying)) if (LAWS[k].status === 'edited' && RN.flying[k] === LAWS[k].src && k === key) {
     const L = LAWS[k]; L.status = 'error'; L.fn = L.def.fn; L.err = `Stopped at t = ${at} s in the step runner: ${msg}. The program before it took over again.`; notifyLawQuiet(k);
   }
-  RN.flying = { ...old.srcs }; RN.srcs = { ...old.srcs };
+  RN.flying = { ...old.srcs }; RN.srcs = { ...old.srcs }; RN.flyingTune = RN.tune = old.tune;
   rnGiveBack(bad);
   rnEvent(`${LAWS[key].def.title}: ${msg} at t = ${at} s. The previous program took over.`, 'bad');
   rnRender();
@@ -260,7 +267,7 @@ function rnFallback(key, msg, at) {
 function rnCheck(key, src) {
   if (!RN_SIGS[key]) return '';
   let P;
-  try { P = rnCompileAll({ [key]: src }, RN_SIGS, { throw: true }); rnVerify(P); }
+  try { P = rnCompileAll({ [key]: src }, RN_SIGS, { throw: true, consts: rnConsts() }); rnVerify(P); }
   catch (e) { return e.message; }
   const L = LAWS[key], f = P.fns[key], A = rnArena(P);
   let args; try { args = L.def.sample(); } catch (e) { return ''; }
@@ -289,7 +296,9 @@ function rnDownload() {
 }
 
 // Start: compile now (the JavaScript runner can fly at once), then switch to the C runner when it's ready.
-function rnOnLaw(key) { if (RN_SIGS[key]) { const owner = RN; clearTimeout(RN.pending); RN.pending = setTimeout(() => { const f = () => { rnStage(); if (typeof boardsStageProgram === 'function') boardsStageProgram(); }; if (typeof window.runDroneCallback === 'function') window.runDroneCallback(owner,f); else f(); }, 30); } }
+function rnOnLaw(key) { if (RN_SIGS[key]) rnRestage(30); }
+// Stage the program again after an edit or a new tuning (a slider being dragged: once it rests for a moment).
+function rnRestage(ms) { const owner = RN; clearTimeout(RN.pending); RN.pending = setTimeout(() => { const f = () => { rnStage(); if (typeof boardsStageProgram === 'function') boardsStageProgram(); }; if (typeof window.runDroneCallback === 'function') window.runDroneCallback(owner,f); else f(); }, ms); }
 rnRebuild();
 lawListeners.add(rnOnLaw);
 let runnerModulePromise = null;

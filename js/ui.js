@@ -810,13 +810,13 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     if (PRESETS[key].cargoTask) C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo');
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
-  setLaws({});   // (and the formulas as they come)
+  setLaws({}); cfg.tuning = tuneDefaults();   // (and the formulas and gains as they come)
   designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
 function afterLoad() {
   frameMassField.refresh(); renderFrameShape();
-  truth = null; recomputeProps(); renderBattery(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); save();
+  truth = null; recomputeProps(); renderBattery(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); if (typeof refreshTuning === 'function') refreshTuning(); save();
 }
 const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
   v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
@@ -1090,7 +1090,7 @@ function load() {
     for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps']) if (s.radio2[k] != null && isFinite(s.radio2[k])) radioCfg2[k] = +s.radio2[k];
   }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; cfg.tuning = tuneFix(s.cfg.tuning); if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learnPrefs.keep = false;
     if (s.holdPulses === false) learnPrefs.holdPulses = false;
@@ -1116,7 +1116,7 @@ new MutationObserver(onTheme).observe(document.documentElement, { attributes: tr
 /* ───────── boot ───────── */
 function boot() {
   UI.hydrate(document);
-  buildSp(); buildThrowFields(); buildAllocFields(); buildComputers(); bindPads();
+  buildSp(); buildThrowFields(); buildAllocFields(); buildTuning(); buildComputers(); bindPads();
   const loaded = load(); if (!terrain.ver) setTerrain('parkour', 1); syncTerrainUi();
   if (loaded) setMode(mode, false); else { const p = PRESETS.quadx.build(); cfg.frame.mass = p.frame; cfg.comps = p.comps; setMode(p.mode, false); }
   setSensing(sensing); setLaunch(launchMode, false); for (const r of throwFieldRefs) r(); for (const r of allocFieldRefs) r(); buildMaterials(); applyTheme(); afterLoad(); refreshFormulaStatus();

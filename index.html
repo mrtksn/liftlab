@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=5c9caece6e">
+<link rel="stylesheet" href="css/style.css?v=d85965a0f2">
 </head>
 <body>
 <div class="app">
@@ -149,6 +149,16 @@
           <summary><span>Battery</span><small id="battSmall"></small></summary>
           <div id="battFields"></div>
         </details>
+      </section>
+      <section class="sec" id="tuneSec">
+        <h2>Tuning <small id="tuneState"></small></h2>
+        <p class="hint">How firmly the flight controller steers. Response is how quickly a loop gets where it's asked, damping how much it overshoots, the integral how quickly it trims out a steady push (an off-centre weight, wind). Part of the design; a change flies at once, after the boards check it and fly it in the background for a second.</p>
+        <div id="tuneLoops"></div>
+        <details class="fold" id="tuneRawFold">
+          <summary><span>Raw gains</span><small>what the formulas get</small></summary>
+          <div id="tuneRaw"></div>
+        </details>
+        <div class="design-tools"><button class="btn sm" id="tuneReset" type="button" title="Back to the default gains">Reset to defaults</button></div>
       </section>
       </div>
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
@@ -479,18 +489,19 @@
 <script src="js/math.js?v=d02edf9672"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=7f3f1b0df1"></script>
-<script src="js/laws.js?v=a2f4a4ea23"></script>
+<script src="js/laws.js?v=bb168f742a"></script>
 <script src="js/runtime.js?v=ce54484755"></script>
 <script src="js/budget.js?v=00771e400d"></script>
 <script src="js/rn-parse.js?v=cc79bcdaf9"></script>
 <script src="js/rn-ops.js?v=c53390b2b4"></script>
-<script src="js/rn-compile.js?v=6406d11fac"></script>
+<script src="js/rn-compile.js?v=1705549279"></script>
 <script src="js/rn-sigs.js?v=5d09224ef3"></script>
 <script src="js/rn-vm.js?v=eaf422615c"></script>
 <script src="js/rn-wasm.js?v=57aa3966fb"></script>
-<script src="js/rn-bridge.js?v=5590bca63a"></script>
+<script src="js/rn-bridge.js?v=d37e8571c9"></script>
 <script src="js/flight-physics.js?v=42d90f7013"></script>
 <script src="js/sim.js?v=4eefeab495"></script>
+<script src="js/tuning.js?v=113a9c04af"></script>
 <script src="js/flight-model.js?v=4b6da32aed"></script>
 <script src="js/joints.js?v=0b25b1a019"></script>
 <script src="js/multibody.js?v=8ebcaadfdb"></script>
@@ -502,18 +513,19 @@
 <script src="js/view3d.js?v=6b6856b603"></script>
 <script src="js/pilot.js?v=8f44f0defc"></script>
 <script src="js/computers-ui.js?v=f3fa4c9f63"></script>
-<script src="js/ui.js?v=a4274aae64"></script>
+<script src="js/ui.js?v=e487976a73"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
 <script src="js/flight-physics-ui.js?v=4335c744e7"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
-<script src="js/designs.js?v=305628778a"></script>
+<script src="js/tuning-ui.js?v=ec3806aa4a"></script>
+<script src="js/designs.js?v=b5d1a330bf"></script>
 <script src="js/share.js?v=026e34bc2b"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=392833d0f9"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=f500c5d066"></script>
-<script src="js/install-ui.js?v=b63297106b"></script>
+<script src="js/install-ui.js?v=73a5f67e8b"></script>
 <script src="js/editor.js?v=c4bfd59c41"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=ec761089ab"></script>
@@ -524,7 +536,7 @@
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
 <script src="js/peer-air.js?v=bf272986c9"></script>
-<script src="js/boards.js?v=7e19921f63"></script>
+<script src="js/boards.js?v=b4e286d1f7"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
 <script src="js/live.js?v=3ef1c4007f"></script>
 <script src="js/gs-ui.js?v=aad49bce1b"></script>
@@ -538,7 +550,7 @@
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
 <script src="js/audio.js?v=82fc0795cb"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=c9b498c372"></script>
+<script src="js/fleet.js?v=1ae3f5a20e"></script>
 <script src="js/fleet-collisions.js?v=bc231a68ff"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=55293d65c7"></script>

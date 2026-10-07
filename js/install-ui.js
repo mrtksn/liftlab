@@ -110,7 +110,9 @@ const instKind = t => t === 'ground' ? computers().ground.kind : t.kind;
 const instProfile = t => ESP_PROFILES[instKind(t)];
 const instName = t => t === 'ground' ? computers().ground.name : t.name;
 const instTasks = t => t === 'ground' ? ['ground'] : t.tasks;
-const editedFor = tasks => rnTaskFormulas(tasks).filter(k => LAWS[k] && LAWS[k].status === 'edited');
+// What differs from the board's built-in program: edited formulas, and a tuning that isn't the default when one
+// of its formulas reads it (the gains are compiled into the program, so they travel with it).
+const editedFor = tasks => { const ks = rnTaskFormulas(tasks); return [...ks.filter(k => LAWS[k] && LAWS[k].status === 'edited'), ...(!tuneIsDefault() && ks.some(k => LAWS[k] && rnReadsTune(rnSourceOf(k))) ? ['the tuning (Airframe → Tuning)'] : [])]; };
 const designBase = () => ((typeof designs !== 'undefined' && designs.name) || 'drone').replace(/[^\w.-]+/g, '-');
 // A file the design makes for a board: the airframe (.dfa), the navigation config (.dnc), the Pi config (.dlc), a program (.rnp).
 function instFile(what, t) {

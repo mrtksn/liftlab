@@ -5,9 +5,9 @@
 // rounding. Also prints each formula's steps per call.
 //   node tools/check_formulas.js
 'use strict';
-const { defaultSources, golden, wasmRunner } = require('./lib');
+const { defaultSources, defaultConsts, golden, wasmRunner } = require('./lib');
 (async () => {
-  const P = rnCompileAll(defaultSources(), RN_SIGS);
+  const P = rnCompileAll(defaultSources(), RN_SIGS, { consts: defaultConsts() });
   let bad = 0;
   for (const [k, e] of Object.entries(P.errors)) { console.log('does not compile:', k, e); bad++; }
   rnVerify(P);
