@@ -139,3 +139,18 @@ Same M1 hardware renderer and 240-frame production-loop method, world view with 
 | 8 | 32 | 60.0 / 60.0 | 0.99× / 0.99× | 0.3 ms |
 
 No craft crashed or page errors occurred. This short desktop run shows no measurable FPS penalty for these fleets; it does not establish mobile/audio hardware latency or large-swarm performance. The benchmark does not exercise sustained hover raycasts. Existing eight-motor/six-servo caps are per craft, so audio graph size grows with fleet size; distance/pan attenuation and a shared compressor mix all craft in world view. Muting suspends the audio context.
+
+
+## Cable payload contacts — 2026-10-07
+
+Same Apple M1 / ANGLE Metal hardware renderer, 1440×1000, open terrain and 1× speed. Each quad carries one 0.25 kg mass on a 0.35 m cable; the comparison disables/enables payload contact handling (including deferred sensor sampling). Each case warms for three simulated seconds, then measures 240 production render frames. Claude's published peer transport and fleet program are retained. [Raw results](benchmarks/fleet/m1-payloads-2026-10-07.json); reproduce with `BENCH_OUTPUT=/tmp/payloads.json node tools/benchmark_fleet.cjs --hardware-gpu --payloads`.
+
+| Loaded quads | CPU median off → on | CPU p95 off → on | FPS off / on |
+| --- | --- | --- | --- |
+| 1 | 2.4 → 2.6 ms | 5.1 → 5.9 ms | 60.0 / 60.0 |
+| 2 | 4.2 → 4.3 ms | 6.2 → 11.1 ms | 60.0 / 60.0 |
+| 4 | 6.8 → 6.9 ms | 8.8 → 8.9 ms | 60.0 / 60.0 |
+
+All craft stayed airborne, with no crashes, contacts or page errors; playback achieved about 0.991× requested speed. This short desktop hover comparison is not a mobile or dense-contact guarantee. The two-craft enabled case had a 13.1 ms CPU p99; median cost alone hides these tails. Existing frame budgeting still slows the shared world if physics cannot keep up.
+
+`tools/test_payload_collisions.cjs` also times two separated craft with one ball: the distant-ball path is at/below the ~0.001 ms/tick batch resolution, while a freshly reset ball/body contact measured 0.007 ms median and 0.008 ms p95 per tick (geometry, impulse and reset setup included; no rendering/integration). At 34 ticks/frame, that contact fixture is roughly 0.27 ms p95. Multiple simultaneous masses, repeated prop strikes, articulated designs and high-speed/dense contact scenes need further measurements. Cable-line, ball/ball and general loose rigid cargo contacts remain outside this change.

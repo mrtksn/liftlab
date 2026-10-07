@@ -93,9 +93,9 @@ try{
  }));
  const timing=await page.evaluate(()=>{
   running=false;const enabled=fleetPayloadCollisions,results=[],summary=a=>{a.sort((a,b)=>a-b);return{median:a[Math.floor(a.length/2)],p95:a[Math.floor(a.length*.95)]};};
-  for(const mode of ['without payload contacts','payload contacts']){
-   fleetPayloadCollisions=mode==='payload contacts'?enabled:()=>{};
-   const samples=[];for(let n=0;n<120;n++){const t=performance.now();for(let k=0;k<100;k++)fleetCollisions();samples.push((performance.now()-t)/100);}results.push({mode,tickMs:summary(samples)});
+  for(const mode of ['without payload contacts','payload contacts','payload body contact']){
+   fleetPayloadCollisions=mode==='without payload contacts'?()=>{}:enabled;
+   const samples=[];for(let n=0;n<120;n++){const t=performance.now();for(let k=0;k<100;k++){if(mode==='payload body contact'){const target=fleet.drones[1],ball=[...fleet.drones[0].state.pend.values()][0],part=fleet.drones[0].state.cfg.comps.find(c=>c.type==='hang');target.state.S.p=[1,0,3];target.state.S.v=[0,0,0];target.state.S.w=[0,0,0];ball.p=[1-.06-payloadRad(part)+.005,0,3];ball.v=[1,0,0];}fleetCollisions();}samples.push((performance.now()-t)/100);}results.push({mode,tickMs:summary(samples)});
   }fleetPayloadCollisions=enabled;return results;
  });console.log('Collision microbenchmark (two separated craft, one cable): '+JSON.stringify(timing));
  assert.deepStrictEqual(errors,[]);console.log('No page errors');

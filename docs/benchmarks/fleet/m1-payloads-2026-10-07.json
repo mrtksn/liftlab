@@ -1,0 +1,236 @@
+{
+  "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+  "errors": [],
+  "frames": [
+    {
+      "key": "quadx",
+      "count": 1,
+      "payloadContacts": false,
+      "cpuMs": {
+        "median": 2.4000000059604645,
+        "p95": 5.0999999940395355,
+        "p99": 5.9000000059604645
+      },
+      "intervalMs": {
+        "median": 16.699999999999818,
+        "p95": 16.800000000000182,
+        "p99": 16.800000000000182
+      },
+      "fps": 60.00150003750101,
+      "realtime": 0.9918997974946091,
+      "physics95": 3.9000000059604645,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.575290385237209,
+          "t": 6.974999999998854,
+          "contacts": 0
+        }
+      ]
+    },
+    {
+      "key": "quadx",
+      "count": 1,
+      "payloadContacts": true,
+      "cpuMs": {
+        "median": 2.5999999940395355,
+        "p95": 5.9000000059604645,
+        "p99": 6.5999999940395355
+      },
+      "intervalMs": {
+        "median": 16.69999999999891,
+        "p95": 16.799999999999272,
+        "p99": 16.80000000000109
+      },
+      "fps": 60.00300015000756,
+      "realtime": 0.9915495774785453,
+      "physics95": 4.0999999940395355,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.537584249465373,
+          "t": 6.974999999998854,
+          "contacts": 0
+        }
+      ]
+    },
+    {
+      "key": "quadx",
+      "count": 2,
+      "payloadContacts": false,
+      "cpuMs": {
+        "median": 4.199999988079071,
+        "p95": 6.199999988079071,
+        "p99": 6.699999988079071
+      },
+      "intervalMs": {
+        "median": 16.700000000000728,
+        "p95": 16.700000000000728,
+        "p99": 16.799999999999272
+      },
+      "fps": 60.00150003750091,
+      "realtime": 0.9913997849942954,
+      "physics95": 3.9000000059604645,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.6401449343976844,
+          "t": 6.971999999998856,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.711021139505699,
+          "t": 6.971999999998856,
+          "contacts": 0
+        }
+      ]
+    },
+    {
+      "key": "quadx",
+      "count": 2,
+      "payloadContacts": true,
+      "cpuMs": {
+        "median": 4.300000011920929,
+        "p95": 11.099999994039536,
+        "p99": 13.099999994039536
+      },
+      "intervalMs": {
+        "median": 16.700000000000728,
+        "p95": 16.799999999999272,
+        "p99": 16.799999999999272
+      },
+      "fps": 60.00300015000746,
+      "realtime": 0.9916745837288564,
+      "physics95": 10.400000005960464,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.7428358454620072,
+          "t": 6.9739999999988544,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.7284496708529598,
+          "t": 6.9739999999988544,
+          "contacts": 0
+        }
+      ]
+    },
+    {
+      "key": "quadx",
+      "count": 4,
+      "payloadContacts": false,
+      "cpuMs": {
+        "median": 6.800000011920929,
+        "p95": 8.800000011920929,
+        "p99": 9
+      },
+      "intervalMs": {
+        "median": 16.69999999999709,
+        "p95": 16.700000000004366,
+        "p99": 16.80000000000291
+      },
+      "fps": 60.001500037500975,
+      "realtime": 0.9908997724939835,
+      "physics95": 6.5999999940395355,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.6015312706701936,
+          "t": 6.973499999998855,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.6590754831746894,
+          "t": 6.973499999998855,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.683810704008233,
+          "t": 6.973499999998855,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.69250242195998,
+          "t": 6.973499999998855,
+          "contacts": 0
+        }
+      ]
+    },
+    {
+      "key": "quadx",
+      "count": 4,
+      "payloadContacts": true,
+      "cpuMs": {
+        "median": 6.9000000059604645,
+        "p95": 8.899999976158142,
+        "p99": 9.199999988079071
+      },
+      "intervalMs": {
+        "median": 16.69999999999709,
+        "p95": 16.799999999995634,
+        "p99": 16.80000000000291
+      },
+      "fps": 60.00300015000755,
+      "realtime": 0.9915495774785467,
+      "physics95": 6.600000023841858,
+      "drones": [
+        {
+          "crashed": null,
+          "altitude": 1.6528101158172666,
+          "t": 6.9684999999988575,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.768149669673508,
+          "t": 6.9684999999988575,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.7296917919237091,
+          "t": 6.9684999999988575,
+          "contacts": 0
+        },
+        {
+          "crashed": null,
+          "altitude": 1.6941255454953044,
+          "t": 6.9684999999988575,
+          "contacts": 0
+        }
+      ]
+    }
+  ],
+  "collisions": [
+    {
+      "count": 2,
+      "collisionTickMs": {
+        "median": 0.19999998807907104,
+        "p95": 0.4000000059604645
+      }
+    },
+    {
+      "count": 4,
+      "collisionTickMs": {
+        "median": 0.5999999940395355,
+        "p95": 1.100000023841858
+      }
+    },
+    {
+      "count": 8,
+      "collisionTickMs": {
+        "median": 1.9000000059604645,
+        "p95": 2.800000011920929
+      }
+    }
+  ],
+  "revision": "a2427793172e953b0d89cb1b771c3d96ec1c3a8b",
+  "date": "2026-10-07",
+  "method": "Chrome hardware GPU, 1440x1000, open terrain, 1x speed, 240 rendered frames after 3 simulated seconds; 1/2/4 quads each with a 0.25 kg, 0.35 m cable load; contact handling off/on."
+}

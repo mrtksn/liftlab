@@ -61,6 +61,7 @@ try{
     }return result;
   });console.log(JSON.stringify({collisions}));
   const out={gpu,errors,frames,collisions};if(process.env.BENCH_OUTPUT)fs.writeFileSync(process.env.BENCH_OUTPUT,JSON.stringify(out,null,2));
+  if(payloads && frames.some(f=>f.drones.some(d=>d.altitude<.5)))throw Error('Loaded quad did not become airborne');
   if(errors.length||frames.some(f=>f.drones.some(d=>d.crashed)))throw Error('Fleet/console failure: '+JSON.stringify(out));
 }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});
