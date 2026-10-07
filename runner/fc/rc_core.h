@@ -34,8 +34,9 @@ enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD,
  *          board runs it; the navigation ignores it
  *   PICKUP x y z [m from home], heading [rad], latch: fly the hub to x y z (below the floor if need be), facing
  *          heading, hold still and have the cargo task close the latch, then climb (pickup_core.h). The sticks,
- *          hold, home, a go-to or the link lost stop it */
-enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4 };
+ *          hold, home, a go-to or the link lost stop it
+ *   FLEET  on (1) or off (0): let the fleet program fly the drone (fleet.h), or not; the same things stop it */
+enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4, RC_CMD_FLEET = 5 };
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 #define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'
@@ -60,6 +61,12 @@ typedef struct {
   int learn_req;                          /* a LEARN command came: its code, for the learning (the board passes it on) */
   pickup_state pk;                        /* a PICKUP under way (its requests to the cargo task: pk.nreq, the board passes them on) */
   int lost;                               /* the link is lost (flying home if it was flying) */
+  /* Something else flying the target (the fleet program: fleet.h), set by the caller before each step: while
+   * mis_on, the target is mis_t (from home), its velocity mis_v, the heading mis_h, as a pickup's. The sticks, hold,
+   * home, a go-to, the link lost, the fly switch, or the drone flying home or landing by itself end it: mis_on goes
+   * to 0 and mis_why says why (the caller tells the fleet). fleet_req: a FLEET command came (1 on, 2 off). */
+  int mis_on; float mis_t[3], mis_v[3], mis_h; const char *mis_why;
+  int fleet_req;
   int landed_was;                         /* the navigation had landed by itself at the last step */
   char msg[64]; int said;                 /* something to tell the pilot (said: new since last read) */
 } rc_pilot;

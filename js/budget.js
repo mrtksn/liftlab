@@ -22,6 +22,7 @@ const FLIGHT_COST = {
   servoPredictor: () => 12,
   positionEstimator: (st, R, accel, baro, fix, flow) => 180 + (fix ? 60 : 0) + (flow ? 40 : 0) + (baro ? 15 : 0) + (!fix && !(flow && flow.v) ? 60 : 0),
   positionControl: () => 45,
+  fleetProgram: () => 900,
   stickInput: () => 20,
   groundAlerts: () => 30,
   thrustAxisTarget: () => 60,

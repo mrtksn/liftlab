@@ -48,8 +48,10 @@ function peerStep() {
   const t = brt.t, now = fleet.time;
   if (!radio.peer.next || t >= radio.peer.next) {                    // (what it publishes: 10 times a second is plenty)
     radio.peer.next = t + 0.1;
-    const f = new Float32Array(w.memory.buffer, w.fr_ptr(), 3); f[0] = brt.fcState; f[1] = Math.round((S.batt ? S.batt.soc : 0) * 100); f[2] = est.p ? est.p[2] - (spawnAt ? spawnAt[2] : 0) : 0;
-    w.peer_publish(3);
+    const head = [brt.fcState, Math.round((S.batt ? S.batt.soc : 0) * 100), est.p ? est.p[2] - (spawnAt ? spawnAt[2] : 0) : 0];
+    frIn(w, head); w.fleet_publish(t);                               // (then what the navigation's board and its fleet program said: fleet.h)
+    const navB = boardOf('nav');                                     // the table, to the fleet program beside the navigation
+    if (navB && w.fleet_pack) { frIn(w, head); const n = w.fleet_pack(t); if (n) sendFrame(b, navB, 'fleet', frOut(w, n)); }
   }
   for (let k = 0; k < 8; k++) {
     const n = w.peer_air_out(t); if (!n) break;
@@ -71,13 +73,14 @@ function peerStep() {
   if (peerAir.q.length > 64 || (peerAir.q.length && (peerAir.q[0].at < now - 0.02 || peerAir.q[0].at > now + 0.05))) peerAir.q = peerAir.q.filter(pk => pk.at >= now - 0.02 && pk.at <= now + 0.05);   // (late ones gone; and from before a world reset)
   if (!radio.peer.logAt || t >= radio.peer.logAt) { radio.peer.logAt = t + 0.2; peerLogChanges(w, t); }
 }
-// The drone's table, as its end has it (board_wasm.c peer_list): [{ state, id, name, lq, heardUs, heard, valsAge, rtt, vals }].
+// The drone's table, as its end has it (board_wasm.c peer_list, 8 + PEER_VALS a drone): [{ state, id, name, lq, heardUs, heard, valsAge, rtt, vals }].
+const PEER_VALS = 20;
 const PEER_STATES = ['lost', 'heard', 'stale', 'connected'];
 function peerTable(w, t) {
   if (!w || !w.peer_list) return [];
   const n = w.peer_list(t), o = new Float32Array(w.memory.buffer, w.fr_ptr(), n), out = [];
   for (let i = 0; i < 8; i++) {
-    const k = i * 24; if (o[k] < 0) continue;
+    const k = i * (8 + PEER_VALS); if (o[k] < 0) continue;
     out.push({ slot: i, state: o[k], id: w.peer_id(i) >>> 0, name: cstr(w, w.peer_name_ptr(i), 16), lq: o[k + 2], heardUs: o[k + 3], heard: o[k + 4], valsAge: o[k + 5], rtt: o[k + 6], vals: Array.from(o.subarray(k + 8, k + 8 + o[k + 7])) });
   }
   return out;
@@ -90,6 +93,22 @@ function peerLogChanges(w, t) {
     if (was == null && p.state < 3) continue;                        // (first only heard: said when it connects)
     linkLog('↔', 'peer', `${p.name || 'a drone'}: ${PEER_STATES[p.state]}`, p.state === 3 ? (was == null ? 'found, a session with it' : 'back') : p.state === 2 ? 'nothing for a second' : p.state === 0 ? 'nothing for 3 s' : '', p.state === 3 ? 'good' : p.state === 0 ? 'bad' : 'warn');
   }
+}
+// The fleet program beside the navigation (fleet.h): what it is doing, and the pilot's switch for it. Values a drone
+// publishes before its program's: the flight core's 3, the navigation's 8 (position, velocity, heading, flags).
+const FLEET_HEAD_N = 11;
+function fleetView() {
+  const b = typeof boardOf === 'function' ? boardOf('nav') : null, w = b && brt.ready && brt.inst.get(b.id); if (!w || !w.fleet_view) return null;
+  const n = w.fleet_view(), o = new Float32Array(w.memory.buffer, w.fr_ptr(), n);
+  return { ok: o[0] > 0.5, engaged: o[1] > 0.5, go: [o[2], o[3], o[4]], heading: o[5], calls: o[6], fails: o[7], sent: o[8], got: o[9], pub: Array.from(o.subarray(11, 11 + o[10])) };
+}
+// On (1) or off: with a radio, the pilot's FLEET command up the link (rc_core.h), as the drone would get it; without,
+// straight to the navigation's board. '' or why not.
+function fleetEngage(on) {
+  if (!hasTask('nav')) return 'No navigation: the fleet program runs beside it.';
+  if (brt.gnd && hasTask('tlm')) return radioCommand(5, [on ? 1 : 0]) ? 'The command module has too many commands waiting.' : '';
+  const b = boardOf('nav'), w = b && brt.inst.get(b.id); if (!w) return 'The boards aren\'t running.';
+  return w.fleet_cmd(on ? 1 : 0) ? cstr(w, w.fleet_msg_ptr()) : '';
 }
 // A ping from this drone to another (the Ground tab's button): its round trip shows in the table.
 function peerPing(id) { const b = peerBoard(), w = b && brt.inst.get(b.id); return w && peerOn() ? w.peer_ping(id | 0, brt.t) : -1; }

@@ -61,6 +61,7 @@ typedef struct {
   float home[3]; int have_home, home_from_fix;
   float iPos[3];
   float p[3], v[3];
+  float pa[3]; int have_pa;              /* the estimate as it is (not from home): in the GPS frame once GPS is heard (fleet.h) */
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */

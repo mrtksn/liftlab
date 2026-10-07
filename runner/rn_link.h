@@ -32,7 +32,8 @@ enum { RN_LINK_CMD = 3, RN_LINK_AIRFRAME = 4, RN_LINK_SETTING = 5, RN_LINK_TELEM
  *                RN_LINK_MODEL the model to fly on (learned or the description), the servos' measured speed and lag
  *                RN_LINK_SET   the supervisor's settings: parts out, scaled or capped, the flight mode and its limits
  *                RN_LINK_WANT  one float, bits: 1 = send LTEL (twice a second while the Pi runs the learning or the
- *                              supervisor); 2 = send your telemetry items (RN_LINK_TLM): the sender runs the telemetry task
+ *                              supervisor); 2 = send your telemetry items (RN_LINK_TLM): the sender runs the telemetry task;
+ *                              4 = send the peer table (RN_LINK_PEER): the sender runs the fleet program
  *   drone → Pi:  RN_LINK_LTEL  the learning's and the supervisor's telemetry, 200 times a second (at 921600 baud; fewer
  *                              at slower links) */
 enum { RN_LINK_EXC = 6, RN_LINK_MODEL = 7, RN_LINK_SET = 8, RN_LINK_WANT = 9, RN_LINK_LTEL = 0x85 };
@@ -41,6 +42,11 @@ enum { RN_LINK_EXC = 6, RN_LINK_MODEL = 7, RN_LINK_SET = 8, RN_LINK_WANT = 9, RN
  *                asks for them with RN_LINK_WANT bit 2)
  *   RN_LINK_RC   the radio's board → the navigation's: what the receiver got (rc_pack), 50 times a second */
 enum { RN_LINK_TLM = 10, RN_LINK_RC = 11 };
+/* The fleet program (fc/fleet.h), beside the navigation, and the peer link on the flight controller's ESP32:
+ *   RN_LINK_PEER      drone → Pi: the peer table and the program's messages that came (fleet_link_pack), 10 times a
+ *                     second while the Pi asks (RN_LINK_WANT bit 4)
+ *   RN_LINK_PEER_OUT  Pi → drone: what the program publishes, and its messages to send (fleet_out) */
+enum { RN_LINK_PEER_OUT = 12, RN_LINK_PEER = 0x86 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

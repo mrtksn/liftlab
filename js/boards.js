@@ -373,6 +373,8 @@ function deliverFrames() {
     else if (m.kind === 'tlm') w.tlm_unpack(n, brt.t);
     else if (m.kind === 'rc') w.rc_unpack(n, brt.t);
     else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
+    else if (m.kind === 'fleet') w.fleet_in(n);                       // the peer table, for the fleet program (fleet.h)
+    else if (m.kind === 'fleetout') w.fleet_apply(n, brt.t);         // what the fleet program publishes and sends
     else if (m.kind === 'model') { if (coreB && m.to.id === coreB.id) w.fc_model(n); if (superB && m.to.id === superB.id) w.super_model(n); }
     else if (m.kind === 'set') {
       if (coreB && m.to.id === coreB.id) { flightRememberSettings(w, m.data); w.fc_set(n); setJointView(m.data); }
@@ -530,6 +532,10 @@ function boardsControl(dt) {
       if (!tw && nav.pk_said()) cargoLog(`${navB.name}: ${cstr(nav, nav.pk_msg_ptr())}`, 'board');
       brt.pickup = nav.pk_view(); const v = new Float32Array(nav.memory.buffer, nav.fr_ptr(), 4);
       if (brt.pickup && !tw && brt.home) { setpoint.x = brt.home[0] + v[0]; setpoint.y = brt.home[1] + v[1]; setpoint.z = brt.home[2] + v[2]; }
+    }
+    {   // the fleet program (fleet.h): what it publishes and sends, to the peer end's board; what it says, to the pilot
+      const fo = nav.fleet_take(); if (fo) sendFrame(navB, coreB, 'fleetout', frOut(nav, fo));
+      if (!tw && nav.fleet_said()) rnEvent(`${navB.name}: ${cstr(nav, nav.fleet_msg_ptr())}`, '');
     }
     brt.navReady = brt.navOut.ready;
     if (S.steps % 400 === 0 || err) brt.navWhy = cstr(nav, nav.nav_why_ptr());

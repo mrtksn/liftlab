@@ -7,6 +7,7 @@
  *   goto X Y Z [HEADING]                   fly to X north, Y west, Z up [m] from home (each within ±327 m: what the
  *                                          command carries), facing HEADING [°]
  *   calibrate                              the learning's hover calibration
+ *   fleet on|off                           let the drone's fleet program fly it (fc/fleet.h), or take it back
  *   latch N|all open|close|toggle          the cargo task's latches (N from 1): drop what one holds, or grab
  *   pickup X Y Z [LATCH]                   fly the hook onto a thing whose top is at X Y Z [m] from home and close
  *                                          the latch (1 by default; open it first): gnd_pickup, gnd_config.hook

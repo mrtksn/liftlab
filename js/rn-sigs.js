@@ -7,6 +7,7 @@ const RN_IN = 24;
 const RN_MOT = 12, RN_JNT = 8;     // motors and servo joints (as the flight core: FC_MAX_MOTORS, FC_MAX_JOINTS)
 const RN_THROW_IN = 12;            // inputs the throw start can identify (a quadcopter with a tilting motor on each arm)
 const RN_WIN = 128;                // samples in one actuator-test window (0.6 s at 200 Hz)
+const RN_FLEET_N = 8, RN_FLEET_VALS = 8, RN_FLEET_MSG = 4;   // the fleet program: drones it sees, numbers each publishes or sends, messages a call
 const RN_SIGS = (() => {
   const { num, arr, list, ring, rec, opt, enm, state } = RT;
   const V2 = arr(num, 2), V3 = arr(num, 3), V4 = arr(num, 4), V6 = arr(num, 6), M3 = arr(num, 9);
@@ -23,6 +24,12 @@ const RN_SIGS = (() => {
         opt(rec({ age: num, h: opt(num), v: opt(V2) })), num, num], rec({ p: V3, v: V3 })),
     identifyEffectiveness: S(['st', 'u', 'f', 'w', 'r', 'dt', 'init', 'memory', 'lags', 'mot'],
       [state(), L, V3, V3, V3, num, arr(L, 6), num, opt(L), opt(rec({ coll: L, m: L, phi: L, v: L }))], rec({ B: arr(L, 6), B2: opt(arr(L, 3)) }), { ownPool: true }),
+    // The fleet (beside the navigation): this drone's program, on what it hears from the others (fleet_core.c).
+    fleetProgram: S(['st', 'me', 'others', 'msg', 'dt'],
+      [state(), rec({ id: num, p: V3, v: V3, heading: num, flying: num, battery: num, shared: num, engaged: num, t: num }),
+        list(rec({ id: num, link: num, lq: num, age: num, flying: num, battery: num, p: opt(V3), v: V3, heading: num, engaged: num, vals: list(num, RN_FLEET_VALS) }), RN_FLEET_N),
+        list(rec({ from: num, v: list(num, RN_FLEET_VALS) }), RN_FLEET_MSG), num],
+      rec({ publish: opt(list(num, RN_FLEET_VALS)), go: opt(rec({ p: V3, v: opt(V3), heading: opt(num) })), send: opt(list(rec({ to: num, v: list(num, RN_FLEET_VALS) }), RN_FLEET_MSG)) })),
     positionControl: S(['ep', 'v', 'ip', 'm', 'g', 'lim'], [V3, V3, V3, num, num, opt(rec({ accel: opt(num), lean: opt(num), speed: opt(num) }))], V3),
     thrustAxisTarget: S(['Fd', 'mode', 'share', 'leanMax'], [V3, MODE, num, num], V3),
     attitudeError: S(['R', 'Rd'], [M3, M3], V3),
@@ -65,10 +72,10 @@ const RN_SIGS = (() => {
 // Which formulas each task runs (js/boards.js TASKS): a board's program has those of its tasks.
 const RN_TASK_FORMULAS = {
   core: ['attitudeEstimator', 'servoPredictor', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
-  nav: ['positionEstimator', 'flowVelocity', 'positionControl'],
+  nav: ['positionEstimator', 'flowVelocity', 'positionControl', 'fleetProgram'],
   learn: ['identifyEffectiveness', 'identifyMotorResponse', 'identifyServoResponse', 'identifyThrow'],
   super: ['actuatorHealth', 'faultDecision', 'flightPolicy', 'liftMargin', 'thermalModel'],
   ground: ['stickInput', 'groundAlerts'],   // the command module, on the pilot's side of the radio
 };
 const rnTaskFormulas = tasks => { const out = []; for (const t of tasks) for (const k of RN_TASK_FORMULAS[t] || []) if (!out.includes(k)) out.push(k); return out; };
-if (typeof module !== 'undefined') module.exports = { RN_SIGS, RN_IN, RN_MOT, RN_JNT, RN_THROW_IN, RN_WIN, RN_TASK_FORMULAS, rnTaskFormulas };
+if (typeof module !== 'undefined') module.exports = { RN_SIGS, RN_FLEET_N, RN_FLEET_VALS, RN_FLEET_MSG, RN_IN, RN_MOT, RN_JNT, RN_THROW_IN, RN_WIN, RN_TASK_FORMULAS, rnTaskFormulas };

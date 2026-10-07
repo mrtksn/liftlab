@@ -49,7 +49,10 @@
  *   peers=6               the other drones (fc/peer.h): found by their beacons on Wi-Fi channel 6 over ESP-NOW (with
  *                         an ESP-NOW link, its channel; not beside a Wi-Fi or Bluetooth link), a session with each,
  *                         its state, battery and height (what each publishes), pings and messages. "peers" lists
- *                         them, "ping NODE" pings one. peers=off (the default): none
+ *                         them, "ping NODE" pings one. peers=off (the default): none. With a Pi running the
+ *                         navigation, its fleet program (fc/fleet.h) gets the table (RN_LINK_PEER, 10 times a
+ *                         second while it asks: RN_LINK_WANT bit 4) and says what to publish and send back
+ *                         (RN_LINK_PEER_OUT)
  *   fleet=PHRASE          the other drones': 1–31 characters, the same on each drone of the fleet (only those hear
  *                         each other). The default (liftlab) is everyone's
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
@@ -91,6 +94,7 @@
 #include "radio_elrs.h"
 #include "esp_radio.h"
 #include "radio_cfg.h"
+#include "fleet.h"
 #include "hw.h"
 #include "esp_board.h"
 
@@ -192,6 +196,8 @@ static void snap_fields(fc_state *d, const fc_state *f) {   /* (just those field
 }
 static void snap_put(const fc_state *f) { portENTER_CRITICAL(&snap_mux); snap_fields(&F_tlm, f); F_tlm_new = 1; portEXIT_CRITICAL(&snap_mux); }
 static float tlm_in[TLM_PACK_MAX]; static volatile int tlm_in_n;
+/* the fleet program on the Pi (fleet.h): what it says back (link task → radio task), and whether it wants the table */
+static float peer_out_box[FLEET_OUT_MAX]; static volatile int peer_out_n; static volatile int64_t peer_want_us = -10000000;
 
 /* ── the control loop ── */
 static volatile int64_t loop_us, loop_max; static volatile int loop_late;
@@ -277,7 +283,7 @@ static void link_send(uint8_t type, const void *p, uint32_t n) {
   if (k) uart_write_bytes(LINK, fr, k);
 }
 static void link_send2(uint8_t type, const void *p, uint32_t n) {   /* (the radio task's own buffer) */
-  static uint8_t fr[1100]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
+  static uint8_t fr[FLEET_PACK_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
 }
 static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
@@ -327,7 +333,7 @@ static uint32_t frame_limit(uint8_t type) {
   switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
     case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP;
     case RN_LINK_EXC: return sizeof exc_box; case RN_LINK_SET: return sizeof set_box; case RN_LINK_MODEL: return sizeof model_box; case RN_LINK_WANT: return 4;
-    case RN_LINK_TLM: return sizeof tlm_in; }
+    case RN_LINK_TLM: return sizeof tlm_in; case RN_LINK_PEER_OUT: return sizeof peer_out_box; }
   return 0;
 }
 static void link_task(void *arg) {
@@ -384,6 +390,9 @@ static void link_task(void *arg) {
         float w = 1; if (L.len == 4) memcpy(&w, L.buf, 4);
         if ((int)w & 1) want_us = now;
         if ((int)w & 2) tlm_want_us = now;
+        if ((int)w & 4) peer_want_us = now;
+      } else if (type == RN_LINK_PEER_OUT) {              /* the Pi's fleet program: what to publish and send */
+        portENTER_CRITICAL(&tlm_mux); memcpy(peer_out_box, L.buf, L.len & ~3u); peer_out_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
       } else if (type == RN_LINK_TLM) {                   /* the Pi's tasks' telemetry, for the radio */
         portENTER_CRITICAL(&tlm_mux); memcpy(tlm_in, L.buf, L.len & ~3u); tlm_in_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
       }
@@ -429,7 +438,9 @@ static void radio_task(void *arg) {
     if (now >= next_peer) {                                  /* the other drones: what we publish, 10 times a second */
       float pv[3] = { (float)Fs->state, batt_pct(Fs->vbatt), Fs->have_alt ? Fs->alt_e : 0 };
       next_peer = now + 100000; radio_peer_poll(pv, 3);
+      if (now - peer_want_us < 1000000) { static float pk[FLEET_PACK_MAX]; int k = radio_peer_pack(pv, pk); if (k) link_send2(RN_LINK_PEER, pk, (uint32_t)k * 4); }   /* the table, to the Pi's fleet program */
     } else radio_peer_poll(0, 0);
+    if (peer_out_n) { static float po[FLEET_OUT_MAX]; int k; portENTER_CRITICAL(&tlm_mux); k = peer_out_n; memcpy(po, peer_out_box, (size_t)k * 4); peer_out_n = 0; portEXIT_CRITICAL(&tlm_mux); radio_peer_apply(po, k); }
     if (radio) {
       const rlink_cfg *Lnow = radio_mux_is(R) ? radio_mux_link(R) : &RL;   /* (two links: the room of the one it goes by now) */
       int m = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(Lnow, &RCI, t), out, sizeof out); if (m) R->write(R, out, m);
