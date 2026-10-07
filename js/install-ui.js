@@ -112,7 +112,7 @@ const instName = t => t === 'ground' ? computers().ground.name : t.name;
 const instTasks = t => t === 'ground' ? ['ground'] : t.tasks;
 // What differs from the board's built-in program: edited formulas, and a tuning that isn't the default when one
 // of its formulas reads it (the gains are compiled into the program, so they travel with it).
-const editedFor = tasks => { const ks = rnTaskFormulas(tasks); return [...ks.filter(k => LAWS[k] && LAWS[k].status === 'edited'), ...(!tuneIsDefault() && ks.some(k => LAWS[k] && rnReadsTune(rnSourceOf(k))) ? ['the tuning (Airframe → Tuning)'] : [])]; };
+const editedFor = tasks => { const ks = rnTaskFormulas(tasks); return [...ks.filter(k => LAWS[k] && LAWS[k].status === 'edited'), ...(!tuneIsDefault() && ks.some(k => LAWS[k] && rnReadsTune(rnSourceOf(k))) ? ['the tuning (Tune tab)'] : [])]; };
 const designBase = () => ((typeof designs !== 'undefined' && designs.name) || 'drone').replace(/[^\w.-]+/g, '-');
 // A file the design makes for a board: the airframe (.dfa), the navigation config (.dnc), the Pi config (.dlc), a program (.rnp).
 function instFile(what, t) {
@@ -150,9 +150,14 @@ const instPara = (html, cls) => el('p', { class: cls || '', html });
 function openInstall(target) {
   INST.target = target;
   const dlg = $('#installDlg'), kind = instKind(target), K = BOARD_KINDS[kind];
-  setText($('#installTitle'), `Install on a real board: ${instName(target)}`);
+  setText($('#installTitle'), `Install / export: ${instName(target)}`);
   setText($('#installSub'), `${K.label} · runs ${instTasks(target).map(t => t === 'ground' ? 'the command module' : TASKS[t].label).join(', ') || 'nothing yet'}`);
   const body = $('#installBody'); body.textContent = '';
+  const exports=el('div',{class:'computer-export-files'}),message=UI.status({role:'status'}),tasks=instTasks(target);
+  const files=[...(target==='ground'?['program']:[]),...(target!=='ground'&&needsProgram(target)?['program']:[]),...(tasks.includes('core')||tasks.includes('learn')||tasks.includes('super')?['airframe']:[]),...(tasks.includes('nav')?['nav']:[]),...(tasks.includes('learn')||tasks.includes('super')?['pi']:[])];
+  const names={program:'Program (.rnp)',airframe:'Airframe (.dfa)',nav:'Navigation (.dnc)',pi:'Pi configuration (.dlc)'};
+  for(const file of files)exports.append(UI.button({class:'btn sm','data-export-file':file,text:names[file],onclick:()=>instDownload(file,target,message)}));
+  body.append(UI.details({class:'computer-export',title:'Export files',open:true},exports,message));
   if (K.mcu) body.append(...espGuide(target));
   else if (target === 'ground') body.append(...groundPiGuide(K));
   else body.append(...piGuide(target, K));
@@ -242,7 +247,7 @@ function espDesign(t, edited) {
     ...(wiring.motorConfigs.some(m=>m.driver==='brushed')?[el('p',{class:'inst-note',text:'For MOSFET motors, keep motor power disconnected until these saved driver settings have been sent and the board has restarted. Factory/default wiring uses ESC pulses, which are not a stopped MOSFET signal.'})]:[]),
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
     instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. ${!wiring.radioBoard?'':radioCfg.kind==='elrs'||radioCfg.kind==='serial'?`${radioCfg.kind==='serial'?'Serial line':'Receiver'} UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}. `:''}${wiring.radioBoard&&radioCfg.kind==='nrf24'?`nRF24L01 SPI: ${(wiring.bus.nrfPins||[]).every(p=>p>=0)?'GPIO '+wiring.bus.nrfPins.join(', '):'not connected'} (SCK, MOSI, MISO, CSN, CE). `:''}${wiring.radioBoard?`Radio: <code>${radioSettingLines(radioCfg).join(' ')}</code> (the link and binding phrase from the Ground tab, sent with the hardware settings)${radioCfg.kind==='elrs'||radioCfg.kind==='serial'?'':'; built in, nothing to wire'}.`:''}`),
-    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in <b>Hardware wiring</b> in Computers. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
+    instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in the board and device cards in <b>Computers</b>. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
     el('div', { class: 'inst-pins' }, el('label', {}, el('span', { text: 'Motors' }), mp), js.length ? el('label', {}, el('span', { text: 'Servos' }), sp) : null), map,
     el('div', { class: 'inst-row' }, sendWire),
     el('div', { class: 'inst-row' }, sendAf),
@@ -259,7 +264,7 @@ function espDesign(t, edited) {
 }
 function espGroundWiring(profile) {
   const errors=groundHardwareErrors(computers());
-  return instStep(2, 'Wire it up', instPara('Choose transmitter, button, stick and buzzer GPIOs in <b>Hardware wiring</b> in Computers. These saved settings take effect after <code>save</code> and <code>reboot</code>.'),
+  return instStep(2, 'Wire it up', instPara('Choose transmitter, button, stick and buzzer GPIOs in the board and device cards in <b>Computers</b>. These saved settings take effect after <code>save</code> and <code>reboot</code>.'),
     ...(errors.length?errors.map(text=>el('p',{class:'bad',text})):[cmdBox(groundHardwareSettings(computers()), 'the settings')]),
     instPara(`<code>tx=TX,RX</code>: to the module's CRSF input, then from its output; one pin for a module bay's single wire. Buttons connect to ground; sticks use free ADC1 pins (${profile.adc.join(', ')}). Keep all assignments distinct. ${profile.chip === 'esp32' ? 'On WROVER modules 16/17 belong to PSRAM; choose other pins.' : 'Native USB, flash/PSRAM and boot strap pins are reserved.'}`, 'hint'));
 
@@ -457,17 +462,17 @@ async function pastePack(files, after) {
 }
 function piGuide(t, K) {
   const plan=boardWiringPlan(t);
-  if(plan.errors.length)return [instStep(1,'Fix hardware connections',instPara('Change the connections in Hardware wiring before installing.'),...plan.errors.map(text=>el('p',{class:'bad',text})))];
+  if(plan.errors.length)return [instStep(1,'Fix hardware connections',instPara('Change the connections in the Computers board and device details before installing.'),...plan.errors.map(text=>el('p',{class:'bad',text})))];
   const tasks = t.tasks, learnOrSuper = tasks.includes('learn') || tasks.includes('super');
   const gpsSensor=sensorsOf('fix').find(c=>wiredTo(c)===t);
   const fix = sensorsOf('fix').some(c => wiredTo(c) === t) && tasks.includes('nav'), nL = latches().length, cargo = tasks.includes('cargo') && nL > 0, radio = tasks.includes('tlm');
   const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
-  if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in Hardware wiring',true]);
-  fields.push(['link', 'Link to the ESP32', hardwareBus(computers(),t).linkPort||'/dev/serial0', 'Change the serial connection in Hardware wiring',true]);
-  if (cargo) fields.push(['latch', 'Latch outputs', piLatchSettings(computers(),cfg.comps,t), 'Saved GPIO/PWM connections from Hardware wiring',true]);
+  if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in the Computers board and device details',true]);
+  fields.push(['link', 'Link to the ESP32', hardwareBus(computers(),t).linkPort||'/dev/serial0', 'Change the serial connection in the Computers board and device details',true]);
+  if (cargo) fields.push(['latch', 'Latch outputs', piLatchSettings(computers(),cfg.comps,t), 'Saved GPIO/PWM connections from Computers wiring',true]);
   const rk = radioCfg.kind, rlines = radioSettingLines(radioCfg);   // the link (Ground tab): a receiver on a serial port, or the Pi's own Wi-Fi
-  if (radio && (rk === 'elrs' || rk === 'serial')) fields.push(['crsf', rk === 'serial' ? 'Serial line port' : 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in Hardware wiring',true]);
+  if (radio && (rk === 'elrs' || rk === 'serial')) fields.push(['crsf', rk === 'serial' ? 'Serial line port' : 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in the Computers board and device details',true]);
   const need = ['nav', ...(learnOrSuper ? ['airframe', 'pi'] : [])];
   const cmds = {};
   const out = [];
@@ -492,7 +497,7 @@ function piGuide(t, K) {
       el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX0)` })),
       el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: `Flight controller GPIO ${linkPins[0]} (TX0)` })),
       el('tr', {}, el('td', { text: 'Pi pin 6 (GND)' }), el('td', { text: '—' }), el('td', { text: 'ESP32 GND' })))),
-      instPara('These are also connected to the ESP32’s USB serial adapter: unplug that USB cable while the Pi is wired here. A USB serial connection instead can be selected in Hardware wiring.', 'hint')] : [])));
+      instPara('These are also connected to the ESP32’s USB serial adapter: unplug that USB cable while the Pi is wired here. A USB serial connection instead can be selected in the Computers board and device details.', 'hint')] : [])));
   cmds.serial = cmdBox('', 'the interface setup commands');
   out.push(instStep(2, 'Prepare its interfaces', instPara(gpioSerial ? 'Free the Pi GPIO UART from the login console and Bluetooth, grant GPIO/serial access, then restart.' : 'Grant GPIO/USB serial access, then restart. The saved USB connections do not need the Pi GPIO UART.'), cmds.serial));
   cmds.copy = cmdBox('', 'the copy command'); cmds.clone = cmdBox('', 'the clone command');

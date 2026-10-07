@@ -40,7 +40,7 @@ function restoreSnap(s) {
       const was = JSON.stringify(computers()); cfg.computers = fixComputers(d.computers); if (typeof syncFlightUi === 'function') syncFlightUi();
       if (JSON.stringify(cfg.computers) !== was) { brt.sig = null; restart = true; }
     }
-    if (d.laws) setLaws(d.laws);
+    if (d.laws) setLaws(d.laws, true);
     if (!tuneSame(d.tuning, tuneOf())) { cfg.tuning = tuneFix(d.tuning); if (typeof refreshTuning === 'function') refreshTuning(); if (!restart) rnRestage(30); }
     setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof renderBattery === 'function') renderBattery();
@@ -52,8 +52,8 @@ function restoreSnap(s) {
 function undoStep() { if (undo.i > 0) { undo.i--; restoreSnap(undo.stack[undo.i]); } }
 function redoStep() { if (undo.i < undo.stack.length - 1) { undo.i++; restoreSnap(undo.stack[undo.i]); } }
 function renderUndo() {
-  for (const id of ['undoBtn', 'undoBtn2']) { const b = document.getElementById(id); if (b) b.disabled = undo.i <= 0; }
-  for (const id of ['redoBtn', 'redoBtn2']) { const b = document.getElementById(id); if (b) b.disabled = undo.i >= undo.stack.length - 1; }
+  for (const id of ['undoBtn', 'undoBtn2', 'computerDlgUndo', 'formulaDlgUndo']) { const b = document.getElementById(id); if (b) b.disabled = undo.i <= 0; }
+  for (const id of ['redoBtn', 'redoBtn2', 'computerDlgRedo', 'formulaDlgRedo']) { const b = document.getElementById(id); if (b) b.disabled = undo.i >= undo.stack.length - 1; }
 }
 window.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;   // text fields keep their own undo

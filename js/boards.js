@@ -7,7 +7,7 @@
 //
 // Tasks:
 //   core   the flight core (fc_core.c), 1 kHz: attitude, control, mixing, arming and the failsafes. It needs exact
-//          timing, so it runs on a microcontroller (an ESP32). Every drone has exactly one.
+//          timing, so it runs on a microcontroller (an ESP32). At most one; an unassigned core leaves outputs idle.
 //   nav    the navigation (nav_core.c), 100 Hz: position from GPS, optical flow and the barometer, and holding or
 //          moving it. It sends the flight core guided commands (an acceleration and a heading). On a Pi it talks to
 //          the ESP32 over the serial link (runner/pi/dfb_pi.c); it can also run on the ESP32 itself.
@@ -81,7 +81,7 @@ function fixComputers(C) {
   const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
-  if (!C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
+  if (!C.unassignedCore && !C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
   C.radio = 1;
   return C;
 }

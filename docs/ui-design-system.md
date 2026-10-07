@@ -84,3 +84,11 @@ World view (no selected drone) hides both drone sidebars and expands the canvas.
 ## Design sidebar
 
 Airframe holds the name, design actions and parts; Tune holds body, steering, battery, controller tuning and flight physics. Keep existing field IDs and controller bindings when moving controls between tabs. Native design dialogs provide Save as (new copy), file import/export and saved-library management. The Add a part dialog groups the palette; after choosing a kind it closes before the existing attachment menu opens. Component editors are an accordion; attachment-tree folding is independent. The sticky design-history toolbar belongs to the sidebar and hides on Ground/AI. The viewport HUD/edit bar is unchanged.
+
+## Computers sidebar
+
+Boards are keyboard-focusable inventory cards with an Onboard/Ground label, model/specs and one Install/export action. Assignments and physical devices use compact duty cards: an empty card shows its explanation and Assign, while an assigned card shows its board. Native dialogs hold compatible-board choices, removal, scoped hardware controls and confirmed board deletion. Keep existing hardware field IDs and validation callbacks when hosting them in a detail view; each control has one DOM instance. The fixed command slot and last onboard microcontroller remain required by the current runtime model.
+
+Wiring overview opens all connections plus command-module controls. The dedicated Formula editor shows one selected formula, with code and Apply first, folded reference/compiler/export information and independent drafts per drone. Unrelated undo/redo retains unapplied drafts; undoing the formula itself restores its applied source. Dialogs lock drone ownership and use native Escape/Close/focus behavior, with history buttons in the sticky header. None of these views adds an overlay to the idle flight/edit viewport.
+
+Run `node tools/test_computer_cards.cjs` for inventory, board/device/duty/radio ownership, wiring and driver edits, deletion confirmation/history, actual export bytes, formula edits/drafts and desktop/phone themes. `LIVE_URL` checks the same workflows on deployment; `TEST_SCREENSHOTS` saves layout previews. Physical flashing remains covered separately by hardware testing.

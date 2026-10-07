@@ -9,8 +9,9 @@ function hardwareNumber(label,value,change,min,max) {
   inp.addEventListener('change',()=>{const v=Number(inp.value);if(Number.isFinite(v))change(v);});return hardwareField(label,inp);
 }
 function hardwareText(label,value,change){const inp=UI.input({type:'text','aria-label':label,value});inp.addEventListener('change',()=>change(inp.value.trim()));return hardwareField(label,inp);}
-function hardwareDetails(key,title,...children){return UI.details({title,class:'hw-advanced',open:HW_UI.open.has(key),onToggle:open=>{if(open)HW_UI.open.add(key);else HW_UI.open.delete(key);}},...children);}
+function hardwareDetails(key,title,...children){const d=UI.details({title,class:'hw-advanced',open:HW_UI.open.has(key),onToggle:open=>{if(open)HW_UI.open.add(key);else HW_UI.open.delete(key);}},...children);const board=/^(?:timing|driver)(\d+)$/.exec(key);if(board)d.dataset.hwBoard=board[1];return d;}
 function hardwareCard(name,kind,connection,board,...children){return UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:name}),el('span',{class:'hw-kind',text:kind})),board,hardwareField('Connection',el('span',{class:'hw-connection',text:connection})),...children);}
+function hardwareBoardCard(b,...args){const card=hardwareCard(...args);card.dataset.hwBoard=b.id;return card;}
 function renderWiringOverview(C){
   const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
   for(const g of [...data.groups,...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
@@ -22,9 +23,9 @@ function renderWiringOverview(C){
   return section;
 }
 function renderHardware() {
-  const box=$('#hardwareRows');if(!box)return;box.textContent='';
+  const box=$('#hardwareRows');if(!box)return;box.textContent='';$('#computerDlgBody')?.querySelectorAll('[data-hw-part],[data-hw-board],[data-hw-role],#hardwareReport').forEach(n=>n.remove());
   const C=computers(),parts=cfg.comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type));
-  box.append(renderWiringOverview(C));
+  // The complete overview is opened on demand from Computers.
   const pinsFor=b=>ESP_PROFILES[b.kind]?ESP_PROFILES[b.kind].pins:PI_GPIO_PINS;
   const pinPicker=(b,label,id,value,key,pins,change)=>{
     const claims=hardwarePinClaims(C,cfg.comps,b).filter(x=>x.key!==key),used=new Map(claims.map(x=>[x.pin,x.name]));
@@ -61,14 +62,14 @@ function renderHardware() {
       if(brushed&&bus)card.append(hardwareNumber(c.name+' PWM frequency (Hz)',bus.brushedHz,v=>editBoard(owner,{brushedHz:v},'brushedHz'),1000,30000),hardwareNumber(c.name+' maximum duty (%)',p.maxDuty??100,v=>update({maxDuty:v}),1,100),el('p',{class:'hint',text:'Frequency is shared by MOSFET motors on this board. Active-high, one direction; zero duty when stopped. Use an external gate pulldown and a suitable MOSFET power stage with flyback protection. Set the motor’s thrust/response in Airframe.'}));
       if(c.type==='motor'&&!brushed&&bus)card.append(el('p',{class:'hint',text:bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs · timing in Board settings below'}));
       if(c.type==='joint')card.append(hardwareDetails('servo'+c.id,'Pulse calibration',hardwareNumber(c.name+' centre µs',saved.center??1500,v=>update({center:v}),800,2200),hardwareNumber(c.name+' µs/radian',saved.usPerRad??(500/(Math.PI/4)),v=>update({usPerRad:v}),-2000,2000)));
-      outputs.append(card);continue;
+      card.dataset.hwPart=c.id;outputs.append(card);continue;
     }
     if(c.type==='latch'){
       cargo||=group('Cargo latches','A Pi can drive a servo latch with PWM or a switched latch with a digital GPIO. Set the cargo task to that Pi.');
       const card=hardwareCard(c.name,'Latch',p.driver==='pwm'?'PWM servo · 50 Hz':'Digital on/off · high = closed',board,
         hardwareField('Driver',hardwareSelect(c.name+' latch driver','hw-driver-'+c.id,[['pwm','PWM servo'],['gpio','Digital on/off']],p.driver,v=>update({driver:v,pin:v==='pwm'?18:-1}))));
       if(owner)card.append(pinPicker(owner,c.name+' signal GPIO','hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
-      card.append(el('p',{class:'hint',text:owner?.kind.startsWith('pi')?'PWM GPIO 18/19 uses Pi hardware PWM. Digital outputs control an external latch driver.':'Real latch drivers currently run on a Pi.'}));cargo.append(card);continue;
+      card.append(el('p',{class:'hint',text:owner?.kind.startsWith('pi')?'PWM GPIO 18/19 uses Pi hardware PWM. Digital outputs control an external latch driver.':'Real latch drivers currently run on a Pi.'}));card.dataset.hwPart=c.id;cargo.append(card);continue;
     }
     const defs=DEVICE_PROFILES[c.kind],def=defs[p.driver],i2c=['imu','baro','mag'].includes(c.kind),custom=p.driver==='custom';
     const card=hardwareCard(c.name,SENSOR_KINDS[c.kind],i2c?'I²C · SDA + SCL':c.kind==='fix'?(p.port==='/dev/serial0'?'UART NMEA · Pi GPIO 14/15':'Serial NMEA · USB adapter'):'Simulation only',board,
@@ -81,24 +82,24 @@ function renderHardware() {
     if(c.kind==='fix')card.append(hardwareText(c.name+' serial port',saved.port||'/dev/ttyUSB0',v=>update({port:v})),el('p',{class:'hint',text:saved.port==='/dev/serial0'?'GPS TX → Pi GPIO 15 (RX), GPS RX ← GPIO 14 (TX), share GND. The flight link must use another port.':'GPS TX → USB adapter RX; GPS RX ← adapter TX (if needed); share GND. A USB adapter uses no Pi GPIO. Use /dev/serial0 for the fixed GPIO 14/15 UART.'}));
     if(c.kind==='flow')card.append(el('p',{class:'hint',text:'No physical driver yet. SPI/UART pin assignment will appear when a device driver is available.'}));
     if(c.kind==='mag'&&p.driver!=='none')card.append(hardwareDetails('mag'+c.id,'Compass calibration',hardwareText('Compass offsets (µT)',saved.bias||'0,0,0',v=>update({bias:v})),hardwareText('Compass scale XYZ',saved.scale||'1,1,1',v=>update({scale:v})),el('p',{class:'hint',text:'Three comma-separated values, X,Y,Z. Set orientation in Airframe.'})));
-    if(custom&&owner)card.append(UI.button({class:'btn',type:'button',text:'Edit C driver for '+owner.name,onclick:()=>{const d=$('#hw-editor-'+owner.id);if(d){d.open=true;HW_UI.open.add('driver'+owner.id);$('#hw-code-'+owner.id).focus();}}}));
-    sensors.append(card);
+    if(custom&&owner)card.append(UI.button({class:'btn',type:'button',text:'Edit C driver for '+owner.name,onclick:()=>{openComputerView({kind:'board',id:owner.id});const d=$('#hw-editor-'+owner.id);if(d){d.open=true;HW_UI.open.add('driver'+owner.id);$('#hw-code-'+owner.id).focus();}}}));
+    card.dataset.hwPart=c.id;sensors.append(card);
   }
   const auxiliary=group('Power & radio','These connections belong to the board running the corresponding task. Settings are included when installing the design.');
   if(core&&ESP_PROFILES[core.kind]){
     const bus=hardwareBus(C,core),battery=cfg.comps.find(c=>c.battery);
-    auxiliary.append(hardwareCard(battery?.name||'Battery voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
+    auxiliary.append(hardwareBoardCard(core,battery?.name||'Battery voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
       pinPicker(core,'Battery ADC GPIO','hw-battery-'+core.id,bus.batteryPin,'battery',ESP_PROFILES[core.kind].adc,v=>editBoard(core,{batteryPin:Number(v)},'battery')),
       hardwareDetails('battery'+core.id,'Voltage divider',hardwareNumber('Battery divider ratio',bus.batteryDivider,v=>editBoard(core,{batteryDivider:v},'divider'),1,30),el('p',{class:'hint',text:'Ratio = battery voltage / voltage at the ADC pin. Connect the pack through a suitable resistor divider, never directly to a GPIO.'}))));
   }
-  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareCard('Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));}
+  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareBoardCard(b,'Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));}
   const radio=C.boards.find(b=>b.tasks.includes('tlm'));
   // the link's card (r: radioCfg, or the second link's, radioCfg2): what it needs wired, its picker
   const radioCard=(r,second)=>{
     const rk=r.kind;
     // the link itself is picked here as on the Ground tab (both ends switch at once); the card shows what it needs wired
-    const pick=second?hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],radioTwo()?radioCfg2.kind:'',v=>{if(v===radioCfg2.kind)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderHardware();})
-      :hardwareSelect('Link','hw-link-'+radio.id,RADIO_KINDS.filter(k=>RADIO_LINKS[k]).map(k=>[k,RADIO_LINKS[k].label]),rk,v=>{if(v===radioCfg.kind||!RADIO_LINKS[v])return;radioCfg.kind=v;save();boardsRadioCfg();if(typeof renderGs==='function')renderGs(true);renderHardware();});
+    const pick=second?hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],radioTwo()?radioCfg2.kind:'',v=>{if(v===radioCfg2.kind)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderComputers(true);})
+      :hardwareSelect('Link','hw-link-'+radio.id,RADIO_KINDS.filter(k=>RADIO_LINKS[k]).map(k=>[k,RADIO_LINKS[k].label]),rk,v=>{if(v===radioCfg.kind||!RADIO_LINKS[v])return;radioCfg.kind=v;save();boardsRadioCfg();if(typeof renderGs==='function')renderGs(true);renderComputers(true);});
     const owner=el('p',{class:'hw-owner',text:'Board: '+radio.name}),esp=!!ESP_PROFILES[radio.kind],bus=hardwareBus(C,radio),lines=el('p',{class:'hint',text:'Settings: '+[...radioSettingLines(radioCfg),...peerSettingLines(radioCfg).after].join(' ')+'. The link\'s own settings, the binding phrase and the other drones (peers: ESP-NOW, the fleet phrase) are on the Ground tab; Install sends them.'});
     if(rk==='ble'){                                                   // Bluetooth LE: the S3's or C3's own radio
       const row=radioWiringRow(radio,bus,esp,r),ok=radio.kind==='s3'||radio.kind==='c3';
@@ -132,13 +133,15 @@ function renderHardware() {
   if(radio){
     radioCard(radioCfg,false);
     if(radioTwo())radioCard(radioCfg2,true);
-    else auxiliary.append(hardwareCard('Second link','Radio','none',hardwareField('Second link',hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],'',v=>{if(!v)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderHardware();})),el('p',{class:'hint',text:'A second link at once: both carry everything; the drone takes the channels from the first while it has them, the second fills in. A laser that goes up only beside a radio, an nRF24L01 beside Bluetooth LE, ExpressLRS beside ESP-NOW.'})));
+    else auxiliary.append(hardwareCard('Second link','Radio','none',hardwareField('Second link',hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],'',v=>{if(!v)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderComputers(true);})),el('p',{class:'hint',text:'A second link at once: both carry everything; the drone takes the channels from the first while it has them, the second fills in. A laser that goes up only beside a radio, an nRF24L01 beside Bluetooth LE, ExpressLRS beside ESP-NOW.'})));
   }
+  for(const card of auxiliary.querySelectorAll('.hw-device'))if(!card.dataset.hwBoard)card.dataset.hwRole='radio';
   renderGroundHardware(group('Command-module wiring','Buttons, sticks and the transmitter on the ground-side board.'),C);
   const advanced=group('Board settings & custom code','Shared timing and source code live here. Most devices work with a built-in driver and need no code edits.');
   for(const b of C.boards){const bus=hardwareBus(C,b);if(!b.tasks.includes('core')||!ESP_PROFILES[b.kind])continue;
     advanced.append(hardwareDetails('timing'+b.id,b.name+' · ESC timing',...[['escHz','ESC PWM Hz',50,490],['escMin','ESC minimum µs',800,1700],['escMax','ESC maximum µs',1300,2200]].map(([k,l,min,max])=>hardwareNumber(l,bus[k],v=>editBoard(b,{[k]:v},k),min,max))),customDriverEditor(C,b));
   }
+  const modulePreset=sensors.querySelector('.hw-preset-btn');if(modulePreset&&core)modulePreset.dataset.hwBoard=core.id;
   const report=el('div',{class:'hw-report',role:'status',id:'hardwareReport'}),errors=new Set(),warnings=new Set();
   for(const b of C.boards){const plan=boardWiringPlan(b);plan.errors.forEach(x=>errors.add(x));plan.warnings.forEach(x=>warnings.add(x));}
   groundHardwareErrors(C).forEach(x=>errors.add(x));
@@ -159,6 +162,7 @@ function renderGroundHardware(box,C){
     if(values[i]>=0&&!pins.includes(values[i]))options.push([values[i],'GPIO '+values[i]+' · unavailable',true]);
     fields.append(hardwareField(title,hardwareSelect('Command module '+title,'hw-ground-'+key+'-'+i,options,values[i],v=>save(key,i,v))));
   }
+  box.dataset.hwRole='ground';
   box.append(hardwareDetails('ground',C.ground.name+' · buttons, sticks & transmitter',el('p',{class:'hint',text:'Buttons: GPIO to GND. Sticks: analog ADC. Buzzer/LED: digital output. Transmitter: CRSF UART. Install uses these assignments; arm/fly buttons toggle on each press.'}),fields));
 }
 function customDriverEditor(C,b){

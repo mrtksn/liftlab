@@ -996,3 +996,50 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-8);position:sticky;top:calc(-1 * var(--space-16));background:var(--panel);z-index:1;padding:var(--space-4) 0}
 .dialog-heading h2{margin:0}
 .dialog-heading .icon-btn{font-size:var(--text-lg);min-width:32px;min-height:32px}
+
+/* Computers: compact inventory and assignments; detail controls live in dialogs. */
+.computer-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr));gap:var(--space-8);margin-top:var(--space-8)}
+.computer-card{display:flex;flex-direction:column;align-items:flex-start;gap:var(--space-6);padding:var(--space-12);cursor:pointer;min-width:0}
+.computer-card:hover{border-color:var(--line-strong)}
+.computer-card:focus-visible{outline:var(--focus-width) solid var(--accent);outline-offset:var(--focus-offset)}
+.computer-card-heading{display:flex;align-items:start;justify-content:space-between;gap:var(--space-8);width:100%}
+.computer-card b,.assigned-board{overflow-wrap:anywhere}
+.computer-location{font-family:var(--f-mono);font-size:var(--text-xs);border:1px solid var(--line);padding:var(--space-2) var(--space-5);border-radius:var(--radius-control);color:var(--muted)}
+.computer-kind{font-size:var(--text-sm);color:var(--ink-2)}
+.computer-meta{font-size:var(--text-sm);color:var(--muted);margin:0;line-height:1.45}
+.assignment-card.empty{border-style:dashed;background:transparent}
+.assigned-board{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-8);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius-control);width:100%;font-size:var(--text-sm)}
+.assigned-board span{color:var(--muted)}
+.computer-dialog{width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto}
+.computer-dialog-head{position:sticky;top:calc(-1 * var(--space-16));display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);padding:var(--space-8) 0;background:var(--panel);z-index:2;border-bottom:1px solid var(--line);margin-bottom:var(--space-14)}
+.computer-dialog-head h2{margin:0;overflow-wrap:anywhere}
+.computer-detail{display:flex;flex-direction:column;gap:var(--space-12)}
+.computer-detail>h3{margin:var(--space-6) 0 0;font-family:var(--f-display);font-size:var(--text-label)}
+.computer-detail .hw-device{margin:0}
+.computer-detail>.btn{align-self:flex-start}
+.computer-detail.device-detail .hw-device>.hw-field:first-of-type{display:none}
+.board-assignment{display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);padding:var(--space-10)}
+.board-assignment>div{display:flex;flex-direction:column;gap:var(--space-3)}
+.computer-add-group{display:flex;flex-direction:column;gap:var(--space-8)}
+.computer-add-group h3{margin:0;font-family:var(--f-display);font-size:var(--text-label)}
+.board-choice{display:flex;flex-direction:column;gap:var(--space-4);text-align:left;padding:var(--space-12);border:1px solid var(--line);border-radius:var(--radius-card);background:var(--panel-2);cursor:pointer}
+.board-choice span{font-size:var(--text-sm);color:var(--muted)}
+.computer-tools,.computer-export-files{display:flex;flex-wrap:wrap;gap:var(--space-8)}
+.computer-export{margin-bottom:var(--space-14)}
+.computer-export summary{cursor:pointer;margin-bottom:var(--space-8)}
+.computer-confirm{border:1px solid var(--warn);border-radius:var(--radius-card);padding:var(--space-12)}
+.computer-confirm .btn{margin-right:var(--space-8)}
+.formula-dialog{width:min(1200px,calc(100vw - 32px));height:calc(100dvh - 40px)}
+.formula-dialog #formulaActive .law-head{display:none}
+.formula-dialog #formulaActive .code{min-height:240px;max-height:55dvh}
+.formula-dialog .sec{padding:var(--space-12) 0}
+.formula-dialog .formula-help>summary{cursor:pointer}
+.formula-dialog #formulaActive .law-body{gap:var(--space-10)}
+@media(max-width:480px){.computer-dialog{width:calc(100vw - 20px);padding:var(--space-12)}.computer-dialog-head{top:calc(-1 * var(--space-12))}.computer-grid{grid-template-columns:1fr}}
+
+.computer-dialog-actions{display:flex;gap:var(--space-6);flex-wrap:wrap;justify-content:flex-end}
+
+.formula-reference>summary,#rnBox>summary{cursor:pointer;font-weight:600;color:var(--ink-2)}
+.formula-reference .law-io{margin-top:var(--space-12)}
+
+.assignment-card.empty .computer-meta{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
