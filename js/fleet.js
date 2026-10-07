@@ -169,9 +169,11 @@ function fleetStep(steps) {
   if (!fleet.ready) { pilotStep(steps*PDT); for(let n=0;n<steps;n++)physStep(); return; }
   // Equal steps for every craft; if CPU-limited the shared clock slows together.
   for (const d of fleet.drones) withDrone(d,()=>pilotStep(steps*PDT));
+  const payloadContacts=fleet.drones.some(fleetHasPayloads);
   for (let n=0;n<steps;n++) {
-    for (const d of fleet.drones) withDrone(d,physStep);
+    for (const d of fleet.drones) withDrone(d,()=>physStep(payloadContacts));
     fleetCollisions(); fleet.time += PDT;
+    if(payloadContacts)for(const d of fleet.drones)withDrone(d,finishPhysStep);
   }
 }
 function fleetScene() {

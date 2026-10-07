@@ -192,7 +192,7 @@ function syncRuntime() {
     if (c.type === 'hang' && !here.has(c.id)) continue;
     if (c.type === 'motor' && !act.has(c.id)) act.set(c.id, { T: 0, Tcmd: 0, u: 0, v: 0, k: 1, Omega: 0, i: 0 });
     if (c.type === 'joint' && !jst.has(c.id)) { const t0 = restAngle(c), tr = t0 + (c.offset || 0) * D2R; jst.set(c.id, { th: tr, thR: tr, thCmd: t0, thHat: t0, pst: {}, rate: 0, acc: 0, dq: [] }); }
-    if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, posNow(c))); pend.set(c.id, { p: [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
+    if (c.type === 'hang' && !pend.has(c.id)) { const a = add(S.p, m3v(R, posNow(c))); pend.set(c.id, { p: typeof fleetPayloadSpawn === 'function' ? fleetPayloadSpawn(c,a) : [a[0], a[1], a[2] - c.length], v: S.v.slice(), Tn: 0 }); }
   }
   syncSensors();
 }
@@ -494,7 +494,7 @@ function dynamics(dt) {
     const wash = m3v(R, run('wakeLoad', run('wakeVelocity', m3v(RT, sub(st.p, S.p)), rotors, airDensity), Math.PI * payloadR(c) ** 2, airDensity));
     const Fp = add(add(add(scl(Fc, -1), run('gravity', c.mass, G)), run('payloadDrag', st.v, wv, airDensity)), wash);
     st.v = add(st.v, scl(Fp, dt / c.mass)); st.p = add(st.p, scl(st.v, dt));
-    if (st.p[2] < 0.03) { st.p[2] = 0.03; if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
+    if (st.p[2] < payloadR(c)) { st.p[2] = payloadR(c); if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
     if (terrain.boxes.length) for (const h of terrainContacts(st.p, payloadR(c), terrainNear(st.p, payloadR(c) + 0.05), st.prev)) {   // a payload swung into a building
       st.p = add(st.p, scl(h.n, h.depth)); const vn = dot(st.v, h.n); if (vn < 0) st.v = sub(st.v, scl(h.n, vn)); st.v = scl(st.v, 0.995);
     }
@@ -503,7 +503,7 @@ function dynamics(dt) {
   // Ground and buildings: a contact spring at every point that's inside something, along the way out
   // (groundContact, turned to face that surface). Landing on something at more than 3 m/s is a crash;
   // bumping into a wall isn't, but the props may not survive it (below).
-  const near = (terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : []).concat(cargoSolids(S.p, cReach + 0.2 + nrm(S.v) * 0.02));   // (and loose things at rest, cargo.js)
+  const near = (terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : []).concat(cargoSolids(S.p, cReach + 0.2 + nrm(S.v) * 0.02, null, typeof fleet !== 'undefined' && fleet.ready));   // cable balls use the shared dynamic collision solver
   for (const pt of cPts) {
     if (pt.b >= N) continue;
     const P = posed(pt.b, pt.rest), pw = toWorld(P);
@@ -564,7 +564,23 @@ function dynamics(dt) {
     else if (Math.abs(S.p[0]) > 40 || Math.abs(S.p[1]) > 40 || S.p[2] > 40) crash('Flew away from the target.');
   }
 }
-function physStep() { S.steps++; if (S.steps % 2 === 0) control(PDT * 2); dynamics(PDT); cargoStep(PDT); S.t += PDT; sampleSensors(PDT); healthStep(PDT); if (S.steps % 40 === 0) pushHist(); }
+function finishPhysStep() {
+  // Dynamic payload contacts can support the drone: its IMU must feel those
+  // impulses, just as it feels ground-contact forces in the dynamics solver.
+  const impact=S.contactImpulse;
+  if(impact && S.mb){
+    const RT=m3T(qmat(S.q)),vb=m3v(RT,S.v),old=S.mb.K.v[0];
+    const dw=scl(impact.dw,1/PDT);
+    // Keep ordinary acceleration unchanged when replacing the spatial velocity.
+    // Sensor impulses are averaged over each sensor's sampling interval below.
+    const a0=cat6([0,0,0],scl(sub(crs(S.w,vb),crs(top3(old),bot3(old))),-1));
+    const K=mbKinematics(cat6(S.w,vb)),extra=mbAccHeld(K,a0);
+    S.mb={K,acc:S.mb.acc.map((a,i)=>add6v(a,extra[i]))};
+    S.acc=add(S.acc || [0,0,0],scl(impact.dv,1/PDT));S.wdot=add(S.wdot || [0,0,0],dw);
+  }
+  sampleSensors(PDT);S.contactImpulse=null;healthStep(PDT);if(S.steps%40===0)pushHist();
+}
+function physStep(deferSamples=false) { S.contactImpulse=null;S.steps++;if(S.steps%2===0)control(PDT*2);dynamics(PDT);cargoStep(PDT);S.t+=PDT;if(!deferSamples)finishPhysStep(); }
 
 // Every flight starts on the ground, motors stopped, under the target (or at the start point if a building is in
 // the way); the flight computers then start as if just powered on, and the simulator arms and takes off for you.
@@ -588,7 +604,7 @@ function resetSim() {
   const throwing = launchMode === 'throw' && hasTask('learn');   // a throw start: held in the hand at hand height
   S.p = [setpoint.x, setpoint.y, throwing ? throwCfg.handH : -low + 0.001]; spawnAt = [setpoint.x, setpoint.y, -low + 0.001];
   if (throwing) startThrow();
-  S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null;
+  S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null; S.contactImpulse=null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = { soc: clamp(battCfg().startSoc ?? 1, 0.02, 1) }; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };

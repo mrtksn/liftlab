@@ -206,10 +206,10 @@ function looseBox(L) {
   for (const pt of L.pts) { const p = looseAt(L, pt.r); for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], p[i] - pt.rad); hi[i] = Math.max(hi[i], p[i] + pt.rad); } }
   return (L.box = { lo, hi, what: L.name });
 }
-function cargoSolids(p, r, except = null) {
+function cargoSolids(p, r, except = null, excludeCableBalls = false) {
   const out = [];
   for (const L of cargo.loose) {
-    if (!L.asleep || L === except) continue;
+    if (!L.asleep || L === except || (excludeCableBalls && L.kind === 'hang')) continue;
     const b = looseBox(L);
     if (p[0] > b.lo[0] - r && p[0] < b.hi[0] + r && p[1] > b.lo[1] - r && p[1] < b.hi[1] + r && p[2] > b.lo[2] - r && p[2] < b.hi[2] + r) out.push(b);
   }

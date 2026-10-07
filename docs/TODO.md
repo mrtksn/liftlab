@@ -1,5 +1,13 @@
 # Project memory
 
+## Cable payload collisions — 2026-10-07
+- FIXED: hanging masses were excluded from drone collisions and the carrier-hub broad phase missed long cables. Attached and dropped cable balls now test their actual world position against every drone, including their carrier, using sphere/oriented-box contacts and sphere/spinning-disk prop strikes.
+- Contacts apply equal/opposite impulses to the independent payload and drone with whole-craft angular response, bounded separation/friction and overlap correction. Dropped balls wake when struck; hard impacts crash the struck drone. Existing cable tension carries subsequent reactions to the carrier; payload mass is not counted twice in the airframe.
+- One deepest body contact per payload/drone bounds work; distant balls use radius bounds and geometry is built lazily. The no-payload single-drone fast path remains. Contacts are discrete at the existing 0.5 ms step; cable-line collisions, general loose rigid cargo exchange and payload/payload contacts remain follow-ups.
+- FIXED: reset previously spawned a slack mass underground, then clamped it inside the battery. It now rests beside solid airframe geometry at its rendered radius; the ground clamp uses that radius too. Contact worlds sample sensors after shared contacts; IMUs accumulate linear/angular impulses across their sampling interval to avoid aliasing support forces.
+- Regression checklist: tools/test_payload_collisions.cjs passed own/other drone, distant carrier/long cable, linear/angular momentum, oriented edges/inside overlap, spinning vs stopped props, dropped/sleeping ball, reset, IMU averaging, four-second default startup and one-second integrated impact. Existing multi-drone and flight/radio browser suites passed; performance/deployment checks pending.
+- Follow-up: autonomous navigation sometimes fails to settle in fixed-step loaded-quad/cargo runs even with payload contacts disabled. New integration checks validate contact dynamics/startup, not autonomous takeoff; the existing flight suite checks armed state rather than altitude.
+
 ## Camera pan and touch gestures — 2026-10-07
 - Added Ctrl/Command-drag camera panning; plain drag remains orbit. Touch uses one-finger orbit and simultaneous two-finger pan/pinch zoom. Screen-space pan scales with distance/viewport height in perspective and orthographic views.
 - Selected-drone follow/edit framing retains a pan offset, so the camera does not snap back after release; world view moves its free orbit centre. Show → Center view clears the offset or centres the fleet in world view. Selecting a different craft or an editor part also clears the offset. Gesture guidance appears in Show on desktop/mobile.

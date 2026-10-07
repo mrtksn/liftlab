@@ -92,7 +92,12 @@ function measure(c, rt, dt) {
   if (c.kind === 'imu') {
     const ab = S.mb.acc[b] || [0, 0, 0, 0, 0, 0];
     const acl = add(add(bot3(ab), crs(top3(ab), Pr)), crs(wb, add(bot3(vb), crs(wb, Pr))));   // ordinary acceleration of that spot
-    const fb = add(acl, m3v(m3T(Rbw), [0, 0, G]));                                // minus gravity: what an accelerometer reads
+    let fb = add(acl, m3v(m3T(Rbw), [0, 0, G]));                                // minus gravity: what an accelerometer reads
+    if(rt.contactImpulse){
+      const impulse=rt.contactImpulse;
+      const a=add(scl(impulse.dv,1/dt),crs(scl(impulse.dw,1/dt),m3v(R,P)));
+      fb=add(fb,m3v(m3T(Rbw),a));rt.contactImpulse=null;
+    }
     const vi = vibrationAt(P);
     const p = { gyroNoise: c.gyroNoise * D2R, gyroBias: c.gyroBias * D2R, gyroDrift: c.gyroDrift * D2R, gyroRange: c.gyroRange * D2R, accNoise: c.accNoise, accBias: c.accBias, accRange: c.accRange * G, scaleErr: c.scaleErr ?? 0.005, misalign: (c.misalign ?? 0.2) * D2R };
     const RbT = m3T(K.Rb[b]);   // vibration is described in frame axes
@@ -126,6 +131,13 @@ function sampleSensors(dt) {
   advanceVibration(dt);
   for (const c of allSensors()) {
     const rt = sens.get(c.id); if (!rt || !onBoard(c) || !cargo.power) continue;   // (it fell off, or nothing powers it: no readings)
+    if(c.kind==='imu' && S.contactImpulse){
+      // Integrate every 0.5 ms contact, even on ticks when this IMU does not sample.
+      // Sampling only instantaneous spikes would alias support into false free fall.
+      const impulse=rt.contactImpulse || {dv:[0,0,0],dw:[0,0,0]};
+      impulse.dv=add(impulse.dv,S.contactImpulse.dv);
+      impulse.dw=add(impulse.dw,m3v(qmat(S.q),S.contactImpulse.dw));rt.contactImpulse=impulse;
+    }
     const period = 1 / Math.max(1, c.rate);
     rt.acc += dt; if (rt.acc + 1e-9 < period) continue;
     rt.acc = rt.acc % period;
