@@ -1,5 +1,10 @@
 # Project memory
 
+## Completed-work publication audit — 2026-10-07
+- Verified every completed remote branch is an ancestor of main (1ea3eed), including Claude's peer-radio transport fa8b834 and fleet-program 555e479. No additional feature merge needed; completed peer/program live assets match the checkout.
+- Pages deployed integration a413114; its firmware/host CI and Pages workflow both passed. The later 1ea3eed commit only records deployment verification. Existing formation-clearance browser failure remains documented below.
+- Active worktree-pid-tuning and its untracked .claude workspace are intentionally untouched; do not merge unfinished PID work.
+
 ## Cable payload collisions — 2026-10-07
 - FIXED: hanging masses were excluded from drone collisions and the carrier-hub broad phase missed long cables. Attached and dropped cable balls now test their actual world position against every drone, including their carrier, using sphere/oriented-box contacts and sphere/spinning-disk prop strikes.
 - Contacts apply equal/opposite impulses to the independent payload and drone with whole-craft angular response, bounded separation/friction and overlap correction. Dropped balls wake when struck; hard impacts crash the struck drone. Existing cable tension carries subsequent reactions to the carrier; payload mass is not counted twice in the airframe.
