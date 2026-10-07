@@ -73,10 +73,14 @@ try{
  console.log(await page.evaluate(()=>{
   const finite=()=>{for(const d of fleet.drones)if(![...d.state.S.p,...d.state.S.v,...d.state.S.w,...[...d.state.pend.values()].flatMap(st=>[...st.p,...st.v])].every(Number.isFinite))throw Error('Non-finite payload dynamics');};
   // Cold-start stepping must not create the old ball trapped inside the battery.
-  // Autonomous navigation settling is a separate baseline issue; do not equate armed with airborne.
-  for(let i=0;i<400;i++)fleetStep(20);finite();
+  // The AI recorder must forward deferred sampling; every sensor advances once per physics tick.
+  const owner=fleet.drones[0],target=fleet.drones[1];
+  const imu=owner.state.cfg.comps.find(c=>c.kind==='imu'),rt=owner.state.sens.get(imu.id);rt.acc=0;rt.queue=[];
+  fleetStep(1);if(Math.abs(rt.acc-PDT)>1e-10 || rt.queue.length)throw Error('Fleet/AI wrapper sampled sensors twice per tick');
+  for(let i=0;i<700;i++)fleetStep(20);finite();
+  if(fleet.drones.some(d=>d.state.S.p[2]<.5))throw Error('Cable/quad fleet failed to take off');
   if(fleet.drones.some(d=>d.contacts||d.state.S.crashed))throw Error('Spurious reset/startup impact');
-  const owner=fleet.drones[0],target=fleet.drones[1],part=owner.state.cfg.comps.find(c=>c.type==='hang'),ball=owner.state.pend.get(part.id);
+  const part=owner.state.cfg.comps.find(c=>c.type==='hang'),ball=owner.state.pend.get(part.id);
   for(const [d,p] of [[owner,[-.4,0,3]],[target,[0,0,3]]])withDrone(d,()=>{S.p=p;S.v=[0,0,0];S.w=[0,0,0];S.q=[1,0,0,0];});
   // Near-side frame contact with a slack cable: neither distant carrier nor prop is the obstacle.
   ball.p=[-.06-payloadRad(part)+.001,0,3];ball.v=[1,0,0];target.contacts=0;
@@ -85,7 +89,7 @@ try{
   // Keep the cost fixture separated with its load below the carrier.
   for(const [d,p] of [[owner,[-1,0,3]],[target,[1,0,3]]])withDrone(d,()=>{S.p=p;S.v=[0,0,0];S.w=[0,0,0];S.q=[1,0,0,0];});
   ball.p=[-1,0,2.6];ball.v=[0,0,0];
-  return 'Four-second default startup without false impacts and one-second integrated cable/drone contact stay finite';
+  return 'Single sampling cadence, seven-second cargo/quad airborne flight without false startup impacts and one-second integrated contact passed';
  }));
  const timing=await page.evaluate(()=>{
   running=false;const enabled=fleetPayloadCollisions,results=[],summary=a=>{a.sort((a,b)=>a-b);return{median:a[Math.floor(a.length/2)],p95:a[Math.floor(a.length*.95)]};};

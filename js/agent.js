@@ -95,7 +95,7 @@ function agentRecord() {
   const s = agentSample(); agent.rec.push(s); if (agent.rec.length > 1200) agent.rec.shift();
   agentTriggers(s);
 }
-{ const step = physStep; physStep = function () { step(); if (S.steps % 10 === 0) agentRecord(); }; }   // (every 5 ms of simulated time)
+{ const step = physStep; physStep = function (...args) { step(...args); if (S.steps % 10 === 0) agentRecord(); }; }   // (every 5 ms of simulated time)
 
 // What happened lately: the boards', the supervisor's and the cargo's logs, newest first.
 function agentEvents(n = 8) {
