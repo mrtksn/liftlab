@@ -225,6 +225,7 @@ function agentTrim(th) {   // keep the conversation under AGENT_CONTEXT_MAX, dro
 }
 async function agentTurn(text, o = {}) {
   const th = o.thread || threadOf(agent.cur) || threadNew();
+  if (!threadBelongsToDrone(th)) return; // A queued turn may wake after selection changes.
   if (!agent.cfg.url || !agent.cfg.connected) { agentFeed({ who: 'note', tone: 'bad', text: 'Connect a model first.' }, th); return; }
   agent.busy = true; agent.abort = new AbortController(); agent.turn = th; agentUi();
   if (th.kind === 'chat' && th.title === 'New chat' && !o.trigger) th.title = text.replace(/\s+/g, ' ').slice(0, 60) + (text.length > 60 ? '…' : '');
