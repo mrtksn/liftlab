@@ -253,6 +253,7 @@ function boardsStart() {
   }
   groundStart();
   radioLinkSetup();                                                  // (a packet link: both ends' packet layers, with the binding phrase)
+  if (typeof peerSetup === 'function') peerSetup();                  // (the drone's own link to the others in the fleet: peer-air.js)
   brt.ready = true;
 }
 // The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
@@ -444,6 +445,7 @@ function boardsControl(dt) {
   throwHandTick(dt);
   autoPilot(dt, !!navB);
   for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && needsProgram(b)) w.host_tick(dt); }   // the loaders' steps, on every board
+  if (typeof peerStep === 'function') peerStep();                    // (the other drones: what its peer end sends, what reached it)
   deliverFrames();
   const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
   if (tw) radioTick(dt, tlmB, tw, coreB, navB);

@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 10
+#define HW_VERSION 11
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -48,6 +48,11 @@ typedef struct {
   int8_t radio2_kind;
   int8_t radio2_pad[3];
   int32_t radio2_a, radio2_b;
+  /* Appended in v11 (v10 blobs migrate with them off): the other drones (fc/peer.h over ESP-NOW): the Wi-Fi channel
+   * (0: off; an ESP-NOW link's own) and the fleet phrase (every drone of the fleet the same). */
+  int8_t peer_channel;
+  int8_t peer_pad[3];
+  char fleet[32];
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -62,6 +67,8 @@ void hw_describe(const hw_config *c, char *out, int n);
 void hw_radio(const hw_config *c, rlink_cfg *L);
 /* The second link (radio2=): 0 and L, or −1: none. */
 int hw_radio2(const hw_config *c, rlink_cfg *L);
+/* The other drones' channel (peers=), 0: off. */
+int hw_peers(const hw_config *c);
 
 /* airframe blob in flash */
 int hw_airframe_load(uint8_t *buf, uint32_t cap, uint32_t *len);

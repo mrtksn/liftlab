@@ -111,4 +111,9 @@ ctx.radioCfg={kind:'wifi',sta:0,channel:6,bind:'b'};overview=A.hardwareOverview(
 assert.match(row(1,'Wi-Fi radio').note,/access point/);
 delete ctx.radioCfg;
 console.log('Wiring overview checks passed: saved pins, shared bus, mixed motor profiles, radio, ground inputs, disconnected devices and both UART/USB link ends.');
-console.log('Radio settings checks passed: radio= and bind= lines per link, on the radio\'s board and the command module; the radio card per link.');
+{const H=A.hardwareSettings(plan1,{kind:'espnow',channel:3,lr:0,bind:'b',peers:1,peerCh:9,fleet:'our fleet'});
+ assert.ok(H.indexOf('peers=off')<H.indexOf('radio=espnow,3')&&H.indexOf('radio=espnow,3')<H.indexOf('peers=3'),'peers: cleared before the link, then on its channel');assert.ok(H.includes('fleet=our fleet'));
+ const E=A.hardwareSettings(plan1,{kind:'elrs',rate:250,ratio:4,peers:1,peerCh:9,fleet:'f'});assert.ok(E.includes('peers=9')&&E.includes('fleet=f'),'peers beside ExpressLRS: the Ground tab\'s channel');
+ assert.ok(!A.hardwareSettings(plan1,{kind:'wifi',channel:1,bind:'b',peers:1}).some(l=>/^peers=\d/.test(l)),'not beside Wi-Fi');
+ assert.ok(!A.hardwareSettings(plan1,{kind:'elrs',peers:0}).some(l=>/^peers=\d|^fleet=/.test(l)),'peers off');}
+console.log('Radio settings checks passed: radio=, bind=, peers= and fleet= lines per link, on the radio\'s board and the command module; the radio card per link.');
