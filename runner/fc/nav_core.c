@@ -112,7 +112,8 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   if ((e = call(N, N->f_pe, b, pv))) return -1;
   /* home: where it takes off from (the estimate has had the time on the ground to settle on its references) */
   if (!N->have_home && sp->fly && out->ready) { for (int i = 0; i < 3; i++) N->home[i] = pv[i]; N->have_home = 1; N->home_from_fix = have_fix; }
-  for (int i = 0; i < 3; i++) { N->p[i] = N->have_home ? pv[i] - N->home[i] : 0; N->v[i] = pv[3 + i]; }
+  for (int i = 0; i < 3; i++) { N->p[i] = N->have_home ? pv[i] - N->home[i] : 0; N->v[i] = pv[3 + i]; N->pa[i] = pv[i]; }
+  N->have_pa = 1;
   memcpy(out->p, N->p, sizeof out->p); memcpy(out->v, N->v, sizeof out->v); out->have_home = N->have_home;
   N->steps++;
 

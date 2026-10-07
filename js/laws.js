@@ -830,6 +830,58 @@ function groundAlerts(st, s, dt) {
   return { level: st.level, why: st.why };
 }
 
+// ═════════════ The fleet ═════════════
+
+function fleetProgram(st, me, others, msg, dt) {
+  // This drone's program for the fleet: it runs 10 times a second beside the navigation, on what the drone knows of
+  // itself and what it hears from the others over its peer link (runner/fc/fleet_core.c, peer.c).
+  // me: { id (its node number), p, v (where it is and how fast, from its home [m, m/s]), heading [rad], flying (1 in
+  //       the air), battery [%], shared (1: its position is in the fleet's frame: GPS), engaged (1: the pilot lets
+  //       this program fly it), t [s] }
+  // others: the drones it hears, each { id, link (3 connected, 2 stale, 1 heard, 0 lost), lq [%], age [s] (of its
+  //       values), flying, battery, p (in this drone's frame, from its home; null when either drone has no shared
+  //       frame), v, heading, engaged, vals (the numbers its program publishes) }
+  // msg: the messages that came since the last call, each { from, v (up to 8 numbers) }
+  // Returns { publish: up to 8 numbers for the others (null: the same as before), go: { p, v, heading } where to
+  // fly, from home (only while engaged; null: it holds the last place), send: [{ to (a node number; 0 every
+  // drone), v }] }.
+  //
+  // This one flies a formation behind a leader: the drone the pilot flies (connected, flying, not engaged; the
+  // lowest node number of those). Each engaged drone takes a place by its node number among the engaged ones: 2 m
+  // behind the leader and 1.5 m to one side, the next to the other side, a row further back for each pair, at the
+  // leader's height and facing its way. It keeps 1.5 m from every drone it can place. Joining, it tells the leader
+  // (a message: 1, its place), and the leader counts the joins.
+  // Published: role (0 alone, 1 leading, 2 following), place, the leader's node number (following) or the joins
+  // counted (leading).
+  if (st.joins == null) { st.joins = 0; st.told = 0; }
+  for (let k = 0; k < msg.length; k++) if (msg[k].v.length > 0 && msg[k].v[0] === 1) st.joins = st.joins + 1;
+  let lead = -1, leadId = 0, place = 0, followed = 0;
+  for (let i = 0; i < others.length; i++) {
+    const o = others[i];
+    if (o.link >= 2 && o.flying > 0.5 && o.engaged < 0.5 && o.p != null && (lead < 0 || o.id < leadId)) { lead = i; leadId = o.id; }
+    if (o.link >= 2 && o.engaged > 0.5 && o.id < me.id) place = place + 1;
+    if (o.link >= 2 && o.engaged > 0.5 && o.vals.length > 2 && o.vals[0] === 2 && o.vals[2] === me.id) followed = followed + 1;
+  }
+  const steer = me.engaged > 0.5 && lead >= 0 && me.shared > 0.5;
+  let tx = 0, ty = 0, tz = 0, h = 0, lv = [0, 0, 0], tell = 0;
+  if (steer) {
+    const L = others[lead], c = Math.cos(L.heading), s = Math.sin(L.heading);
+    const row = Math.floor(place / 2) + 1, side = place % 2 === 0 ? 1 : -1, bx = -2 * row, by = 1.5 * row * side;
+    tx = L.p[0] + c * bx - s * by; ty = L.p[1] + s * bx + c * by; tz = L.p[2]; h = L.heading; lv = L.v;
+    for (let i = 0; i < others.length; i++) {                      // keep apart: pushed off any drone near it
+      const o = others[i];
+      if (o.p != null && o.link >= 2) {
+        const dx = me.p[0] - o.p[0], dy = me.p[1] - o.p[1], d = Math.hypot(dx, dy);
+        if (d < 1.5 && d > 0.01) { tx = tx + dx / d * 2 * (1.5 - d); ty = ty + dy / d * 2 * (1.5 - d); }
+      }
+    }
+    if (st.told < 0.5) { tell = 1; st.told = 1; }
+  } else if (me.engaged < 0.5) st.told = 0;
+  const role = me.engaged > 0.5 && lead >= 0 ? 2 : followed > 0 ? 1 : 0;
+  return { publish: [role, place, role === 2 ? leadId : st.joins], go: steer ? { p: [tx, ty, tz], v: lv, heading: h } : null,
+    send: tell ? [{ to: leadId, v: [1, place] }] : null };
+}
+
 // ═════════════ Controller ═════════════
 
 function positionControl(ep, v, ip, m, g, lim) {
@@ -1312,6 +1364,14 @@ const LAW_DEFS = [
     doc: 'Runs on the command module, on the telemetry that came down the radio: what to warn the pilot about. The most serious thing wins, and a warning stays up 2 s after it clears. Reasons: 1 no telemetry, 2 weak link, 3 battery low, 4 battery very low, 5 returning home, 6 landing, 7 failsafe, 8 crashed, 9 the drone hears no radio, 10 telemetry slow (frames seldom, but the module hears the drone\'s telemetry packets well: the packet rate and ratio leave little room). A command module with a buzzer or an LED beeps or lights for it; the Ground station shows it.',
     args: [['st', 'its memory'], ['s', '{ age, lq, downLq, soc, vcell, failsafe, crashed, returning, landing, radioLost }'], ['dt', 'step [s]']], returns: '{ level: 0 fine, 1 warning, 2 alarm; why }',
     shape: 'obj', sample: () => [{}, { age: 0.1, lq: 100, downLq: 100, soc: 0.8, vcell: 3.9, failsafe: 0, crashed: 0, returning: 0, landing: 0, radioLost: 0 }, 0.1] },
+  { key: 'fleetProgram', group: 'ctrl', fn: fleetProgram, title: 'Fleet program',
+    math: ['the leader: connected, flying, not engaged (the lowest node number)', `place <i>k</i> (by node number among the engaged): behind it 2(⌊<i>k</i>/2⌋ + 1) m, to the side ±1.5(⌊<i>k</i>/2⌋ + 1) m, at its height`, 'keep apart: pushed 2(1.5 − <i>d</i>) m off any drone nearer than 1.5 m'],
+    doc: 'Each drone\'s own program for the fleet, beside the navigation, 10 times a second. It sees this drone and the others it hears over the peer link (ESP-NOW between drones: their state, where they are, what their programs publish) and their messages; it can publish numbers, send messages, and, while the pilot has engaged it (the Ground tab\'s Fleet program button, the radio\'s FLEET command), say where the drone flies. The navigation still flies it there, within the same box and limits as the pilot\'s target, and the sticks, hold, home, a go-to or the link lost take it back. Positions are shared only between drones with GPS (the fleet\'s frame); without it a drone can still talk, but not place the others. This default flies a formation behind the drone the pilot flies.',
+    args: [['st', 'its memory'], ['me', '{ id, p, v, heading, flying, battery, shared, engaged, t }'], ['others', 'up to 8: { id, link, lq, age, flying, battery, p (or null), v, heading, engaged, vals }'], ['msg', 'up to 4: { from, v }'], ['dt', 'since the last call [s]']], returns: '{ publish (up to 8 numbers), go: { p, v, heading } or null, send: [{ to, v }] or null }',
+    shape: 'obj', sample: () => [{}, { id: 3, p: [0, 0, 1.5], v: [0, 0, 0], heading: 0, flying: 1, battery: 80, shared: 1, engaged: 1, t: 10 },
+      [{ id: 2, link: 3, lq: 100, age: 0.1, flying: 1, battery: 90, p: [4, 1, 2], v: [0.5, 0, 0], heading: 0.3, engaged: 0, vals: [1, 0, 1] },
+       { id: 5, link: 3, lq: 96, age: 0.1, flying: 1, battery: 75, p: [1, 0.5, 1.5], v: [0, 0, 0], heading: 0, engaged: 1, vals: [2, 1, 2] }],
+      [{ from: 5, v: [1, 1] }], 0.1] },
   { key: 'positionControl', group: 'ctrl', fn: positionControl, title: 'Position control',
     math: [`${V('a')}<sub>d</sub> = <i>K</i><sub>d</sub>(sat(<i>K</i><sub>p</sub>/<i>K</i><sub>d</sub> ${V('e')}<sub>p</sub>) − (${V('v')} − ${V('v')}<sub>cmd</sub>)) + <i>K</i><sub>i</sub>∫${V('e')}<sub>p</sub> d<i>t</i>`, `sat: sideways ≤ the speed limit, up ≤ 3 m/s, down ≤ 1.5 m/s`, `${V('F')}<sub>d</sub> = <i>m</i>(${V('a')}<sub>d</sub> + <i>g</i>${V('ẑ')})`],
     doc: 'PID on the frame hub\'s position. On the learned model the controller doesn\'t know its mass, so m is 1 and the result is a desired specific force. When you fly with the keys or pads, the target moves at a commanded velocity and v arrives as the velocity error, so the damping term also feeds that velocity forward. The integral is kept by the simulator and clamped to ±2 m·s sideways and ±5 m·s vertically, so it can trim out an unknown hover throttle. m is the mass the controller believes in.',
@@ -1384,7 +1444,7 @@ const LAW_OVERVIEW = [
   `${V('q')} = frame position and attitude + every servo joint angle; each body obeys ${V('f')} = <i>I</i>${V('a')} + ${V('v')} ×* <i>I</i>${V('v')}`,
 ];
 const LAW_CHAIN = {
-  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
+  ctrl: ['attitudeEstimator', 'flowVelocity', 'servoPredictor', 'positionEstimator', 'identifyThrow', 'identifyMotorResponse', 'identifyServoResponse', 'identifyEffectiveness', 'fleetProgram', 'positionControl', 'thrustAxisTarget', 'attitudeError', 'attitudeControl', 'forceDemand', 'allocationPreferences', 'allocation', 'thrustLinearization', 'voltageCompensation'],
   super: ['actuatorHealth', 'faultDecision', 'flightPolicy', 'liftMargin'],
   plant: ['batteryModel', 'thermalModel', 'motorDynamics', 'servoTorque', 'jointRotation', 'wakeVelocity', 'rotorAero', 'rotorWrench', 'wakeLoad', 'gravity', 'bodyDrag', 'wingAero', 'bluffDrag', 'cableTension', 'payloadDrag', 'groundContact', 'rigidBody', 'imuModel', 'magModel', 'baroModel', 'posFixModel', 'flowModel', 'rangeModel'],
 };

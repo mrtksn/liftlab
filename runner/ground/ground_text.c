@@ -81,6 +81,9 @@ int gnd_text(gnd_state *G, gnd_text_in *I, char *s, double t, char *reply, int r
       if (r == -3) snprintf(reply, (size_t)rn, "pickup: no attitude from the drone to work out where its hook goes: not sent");
       else if (r) snprintf(reply, (size_t)rn, r == -1 ? "too many commands waiting" : "pickup: out of range: not sent");
       else snprintf(reply, (size_t)rn, "pickup at %.2f %.2f %.2f with latch %d%s", x, y, z, (int)l, gnd_link_up(G, t) ? "" : " (once the link is back)"); }
+  } else if (!strcmp(w[0], "fleet") && n >= 2 && (!strcmp(w[1], "on") || !strcmp(w[1], "off"))) {   /* let the drone's fleet program fly it (fc/fleet.h), or not */
+    float v = w[1][1] == 'n' ? 1.0f : 0.0f; int r = gnd_command(G, RC_CMD_FLEET, &v, 1);
+    snprintf(reply, (size_t)rn, r ? "too many commands waiting" : "fleet program %s%s", w[1], r || gnd_link_up(G, t) ? "" : " (once the link is back)");
   } else if (!strcmp(w[0], "calibrate")) { float c = 1; snprintf(reply, (size_t)rn, gnd_command(G, RC_CMD_LEARN, &c, 1) ? "too many commands waiting" : "asked the learning to calibrate"); }
   else if (!strcmp(w[0], "cmd") && n >= 2) {
     char *e; long id = strtol(w[1], &e, 10); float v[6]; int m = 0, bad = e == w[1] || *e || id < 1 || id > 255 || n - 2 > 6;

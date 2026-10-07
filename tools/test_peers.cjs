@@ -37,7 +37,7 @@ const server = http.createServer((req, res) => {
       check(tA.length === 2 && tA.every(p => p.state === 3), 'A sees the other two connected: ' + JSON.stringify(tA.map(p => [p.name, p.state])));
       check(st(b, a) === 'connected' && st(c, b) === 'connected', 'every drone sees the others: ' + JSON.stringify([a, b, c].map(d => [d.name, peerId(d), table(d).map(p => [p.name, p.id, p.state])])));
       const pb = tA.find(p => p.id === peerId(b));
-      check(pb.vals.length === 3 && pb.vals[0] === 1 && pb.vals[1] > 50 && pb.vals[2] > 0.5 && pb.lq > 90 && pb.heardUs > 90, 'B publishes armed, battery, height: ' + JSON.stringify(pb));
+      check(pb.vals.length >= 3 && pb.vals[0] === 1 && pb.vals[1] > 50 && pb.vals[2] > 0.5 && pb.lq > 90 && pb.heardUs > 90, 'B publishes armed, battery, height: ' + JSON.stringify(pb));
       withDrone(a, () => peerPing(peerId(c))); await fly(0.5);
       const rtt = table(a).find(p => p.id === peerId(c)).rtt;
       check(rtt > 0 && rtt < 0.05, 'a ping A → C: ' + rtt);

@@ -30,6 +30,7 @@
 #include "clink.h"
 #include "lmux.h"
 #include "peer.h"
+#include "fleet.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
 
@@ -92,11 +93,13 @@ EXPORT("fc_setup") int fc_setup(uint32_t blob_len) {
   if (fc_airframe_load(&F, blob, blob_len)) return 2;
   return 0;
 }
+static fleet_state FL;                    /* the fleet program, beside the navigation (fleet.h) */
 /* The navigation, with its config. */
 EXPORT("nav_setup") int nav_setup(uint32_t cfg_len) {
   if (!host_ok) return 3;
   if (nav_init(&N, &H)) return 1;
   if (nav_config_load(&N, ncfg, cfg_len)) return 2;
+  fleet_init(&FL, &H);                            /* (no fleet program in it: the fleet is off, the rest flies) */
   return 0;
 }
 /* A new program while flying: through the host's loading steps, as on the drone. */
@@ -293,11 +296,11 @@ EXPORT("plink_stats") int plink_stats(double t) {
 /* n bytes from the receiver, in rbuf */
 /* ── drones talking to each other (peer.h): this board's end, when it's the one with the radio (the simulator's
  * js/peer-air.js carries the packets between the fleet's drones) ── */
-static peer_net PN; static int pn_on; static uint8_t paddr[6]; static uint32_t pfrom;
+static peer_net PN; static fleet_link FK; static int pn_on; static uint8_t paddr[6]; static uint32_t pfrom;
 EXPORT("peer_addr_ptr") uint8_t *peer_addr_ptr(void) { return paddr; }
 /* id: the drone's node number; session: this start's; rbuf: the fleet phrase, a 0, the drone's name */
 EXPORT("peer_setup") void peer_setup(int on, int id, int session) {
-  pn_on = on; if (!on) return;
+  pn_on = on; fleet_link_init(&FK); if (!on) return;
   char ph[64], nm[PEER_NAME]; int k = 0, j = 0;
   while (k < 63 && rbuf[k]) { ph[k] = (char)rbuf[k]; k++; } ph[k] = 0;
   for (k++; j < PEER_NAME - 1 && rbuf[k]; k++, j++) nm[j] = (char)rbuf[k]; nm[j] = 0;
@@ -324,6 +327,24 @@ EXPORT("peer_list") int peer_list(double t) {
   }
   const peer_counts *c = &PN.N;
   o[k++] = (float)c->sent; o[k++] = (float)c->beacons; o[k++] = (float)c->got; o[k++] = (float)c->bad; o[k++] = (float)c->replays; o[k++] = (float)c->resent; o[k++] = (float)c->dropped;
+  return k;
+}
+/* The fleet program's link, on the peer end's board (fleet.h): fr[0..2] the flight core's state, battery %, height. */
+EXPORT("fleet_publish") void fleet_publish(double t) { if (pn_on) fleet_link_publish(&FK, &PN, fr, t); }
+EXPORT("fleet_pack") int fleet_pack(double t) { float h[FLEET_HEAD] = { fr[0], fr[1], fr[2] }; return pn_on ? fleet_link_pack(&PN, t, h, fr) : 0; }   /* the table, into fr */
+EXPORT("fleet_apply") int fleet_apply(int n, double t) { return pn_on ? fleet_link_apply(&FK, &PN, fr, n, t) : -1; }   /* what the program says back, in fr */
+/* … and on the navigation's board: the table in, what it says out, the pilot's switch, what it is doing */
+EXPORT("fleet_in") void fleet_in(int n) { fleet_peers(&FL, fr, n, nav_clock); }
+EXPORT("fleet_take") int fleet_take(void) { return fleet_out(&FL, fr); }
+EXPORT("fleet_cmd") int fleet_cmd(int on) { return fleet_engage(&FL, on, &N, &last_o, "the pilot"); }
+EXPORT("fleet_said") int fleet_said(void) { int s = FL.said; FL.said = 0; return s; }
+EXPORT("fleet_msg_ptr") char *fleet_msg_ptr(void) { return FL.msg; }
+/* into fr: has the program, engaged, its target (from home) x y z, heading, calls, fails, messages sent, got, what it
+ * publishes: n, then the values */
+EXPORT("fleet_view") int fleet_view(void) {
+  int k = 0; fr[k++] = (float)FL.ok; fr[k++] = (float)FL.engaged; for (int i = 0; i < 3; i++) fr[k++] = FL.go_p[i]; fr[k++] = FL.go_h;
+  fr[k++] = (float)FL.calls; fr[k++] = (float)FL.fails; fr[k++] = (float)FL.sent; fr[k++] = (float)FL.got; fr[k++] = (float)FL.npub;
+  for (int j = 0; j < FLEET_VALS; j++) fr[k++] = j < FL.npub ? FL.pub[j] : 0;
   return k;
 }
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
@@ -442,7 +463,12 @@ EXPORT("nav_tick") int nav_tick(void) { return nav_run(0); }
 EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
   nav_sp sp; float dt = nio[36];                 /* (the step size, as nav_run reads nio) */
   sp.heading = RP.heading;
+  int fleet_was = RP.mis_on = FL.engaged;                     /* the fleet program's target, flown as the pilot's (fleet.h) */
+  if (FL.engaged) { for (int i = 0; i < 3; i++) { RP.mis_t[i] = FL.go_p[i]; RP.mis_v[i] = FL.go_v[i]; } RP.mis_h = FL.go_h; }
   int arm = rc_pilot_step(&RP, &RCI, t, &N, &last_o, dt, &sp);
+  if (fleet_was && !RP.mis_on) fleet_engage(&FL, 0, &N, &last_o, RP.mis_why);
+  if (RP.fleet_req) { fleet_engage(&FL, RP.fleet_req == 1, &N, &last_o, "the pilot's radio"); RP.fleet_req = 0; }
+  if (FL.said && !RP.said) { FL.said = 0; for (int i = 0; i < 64; i++) RP.msg[i] = FL.msg[i]; RP.said = 1; }
   if (RP.said) { RP.said = 0; tlm_text(&TS, 4, RP.msg); nio[NIO_IN + 14 + 6] = 1; } else nio[NIO_IN + 14 + 6] = 0;
   int e = nav_run(&sp);
   float *p = nio + NIO_IN + 14;
@@ -466,7 +492,9 @@ static int nav_run(nav_sp *sp_radio) {
   nav_clock += dt;
   if (sp_radio) sp = *sp_radio;
   else if (pickup_active(&PK)) { if (!sp.fly) pickup_cancel(&PK, "not flying"); else pickup_step(&PK, &last_o, nav_clock, dt, &sp); }
+  else fleet_sp(&FL, &sp);                       /* (without a radio: the simulator's pilot; engaged, the program's target) */
   int e = nav_step(&N, &in, &sp, dt, &o);
+  fleet_step(&FL, &N, &o, nav_clock);
   last_o = o; last_sp = sp; have_nav_out = 1;
   float *p = nio + NIO_IN;
   for (int i = 0; i < 3; i++) *p++ = o.acc[i];

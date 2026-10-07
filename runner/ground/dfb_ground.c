@@ -47,10 +47,11 @@
  *   --status           a status line every second
  *
  * Keys (--keys): W/S climb, sink · A/D turn · arrows (or I/K/J/L) forward, back, left, right · Space hold here ·
- *   H home · 1/2/3 gentle, normal, sport · R arm/disarm · T take off/land · C calibrate · G latch 1 (drop, grab) · Q quit
+ *   H home · 1/2/3 gentle, normal, sport · R arm/disarm · T take off/land · C calibrate · G latch 1 (drop, grab) ·
+ *   F the fleet program on/off · Q quit
  *
  * Text commands (ground_text.h), one per line, from the terminal or as UDP datagrams (replies go back to the
- * sender): press/release/tap NAME, stick AXIS V, goto X Y Z [HEADING], calibrate, latch N open|close, pickup X Y Z [LATCH],
+ * sender): press/release/tap NAME, stick AXIS V, goto X Y Z [HEADING], calibrate, fleet on|off, latch N open|close, pickup X Y Z [LATCH],
  * cmd ID V…, status, messages, quit. --hook DX,DY,DZ: where the drone's hook is from its hub, for pickup (0,0,-0.06).
  * Sticks and stick buttons sent this way lapse after a second unless sent again: if a script stops, the sticks centre.
  *
@@ -149,6 +150,7 @@ static void key(int c, double t, int *esc) {
     case 't': IN.held ^= GB(GB_FLY); printf("\r%s\r\n", IN.held & GB(GB_FLY) ? "fly switch on: take off" : "fly switch off: land"); return;
     case 'c': { float v = 1; gnd_command(&G, RC_CMD_LEARN, &v, 1); printf("\rasked the learning to calibrate\r\n"); return; }
     case 'g': { float v[2] = { 0, 2 }; gnd_command(&G, RC_CMD_LATCH, v, 2); printf("\rlatch 1: toggle (drop, or grab)\r\n"); return; }
+    case 'f': { static int on; on = !on; float v = (float)on; gnd_command(&G, RC_CMD_FLEET, &v, 1); printf("\r%s\r\n", on ? "fleet program: on (the sticks, Space or H take it back)" : "fleet program: off"); return; }
     case 'q': running = 0; return;
   }
   if (b >= 0) IN.until[b] = t + HOLD;

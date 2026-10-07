@@ -30,7 +30,7 @@
 
 #define PEER_MTU 250                /* ESP-NOW's */
 #define PEER_MAX 8                  /* drones in the table */
-#define PEER_VALS 16                /* values a drone publishes */
+#define PEER_VALS 20                /* values a drone publishes (the fleet program's link: fleet.h FLEET_PUB) */
 #define PEER_MQ 8                   /* messages waiting to be taken, each way */
 #define PEER_MSG 64                 /* bytes a message */
 #define PEER_NAME 16

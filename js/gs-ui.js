@@ -52,6 +52,10 @@ function buildGs() {
     UI.field({ label: 'Wi-Fi channel', class: 'gs-sel', hint: 'On the drones: the one they meet on (an ESP-NOW link\'s own). The simulator doesn\'t model channels.' }, ch));
   GS_UI.peerBox = el('div', { class: 'gs-peers', role: 'list' }); GS_UI.peerRows = new Map();
   pe.append(GS_UI.peerBox, el('p', { class: 'hint', id: 'gsPeerNote' }));
+  // this drone's fleet program (fleet.h): the pilot lets it fly the drone, or not
+  GS_UI.fleetBtn = UI.button({ class: 'btn', type: 'button', id: 'gsFleetGo', 'aria-pressed': 'false', text: 'Let the fleet program fly it', title: 'Its fleet program (Computers tab, beside the navigation) then says where it flies. The sticks, hold, home or a go-to take it back.' });
+  GS_UI.fleetBtn.addEventListener('click', () => { const v = fleetView(), why = fleetEngage(!(v && v.engaged)); setText($('#gsFleetNote'), why || ''); renderGs(true); });
+  pe.append(el('div', { class: 'gs-fleet' }, GS_UI.fleetBtn, el('span', { class: 'gs-peer-vals', id: 'gsFleetState' })), el('p', { class: 'hint', id: 'gsFleetNote' }));
 
   // inside the link (the simulator's view: a real ground station can't see this)
   const lg = sec('Link log', 'inside the simulated radio', 'sim');
@@ -203,15 +207,24 @@ function renderPeers() {
   for (const p of list) {
     let r = GS_UI.peerRows.get(p.id);
     if (!r) {
-      r = { name: el('b'), state: el('span', { class: 'gs-peer-state' }), info: el('span', { class: 'gs-peer-info' }), vals: el('span', { class: 'gs-peer-vals' }), ping: UI.button({ class: 'btn gs-peer-ping', text: 'Ping', title: 'Send it a ping: the round trip shows here' }) };
+      r = { name: el('b'), state: el('span', { class: 'gs-peer-state' }), info: el('span', { class: 'gs-peer-info' }), vals: el('span', { class: 'gs-peer-vals' }), prog: el('span', { class: 'gs-peer-vals' }), ping: UI.button({ class: 'btn gs-peer-ping', text: 'Ping', title: 'Send it a ping: the round trip shows here' }) };
       r.ping.addEventListener('click', () => peerPing(p.id));
-      r.el = el('div', { class: 'gs-peer', role: 'listitem' }, el('div', { class: 'gs-peer-head' }, r.name, r.state, r.ping), r.info, r.vals);
+      r.el = el('div', { class: 'gs-peer', role: 'listitem' }, el('div', { class: 'gs-peer-head' }, r.name, r.state, r.ping), r.info, r.vals, r.prog);
       GS_UI.peerRows.set(p.id, r); box.append(r.el);
     }
     setText(r.name, p.name || 'drone ' + p.id.toString(16));
     setText(r.state, PEER_STATES[p.state]); r.state.dataset.tone = PEER_TONE[p.state];
     setText(r.info, `LQ ${Math.round(p.lq)}% · it hears us ${Math.round(p.heardUs)}% · heard ${p.heard < 1 ? 'now' : p.heard.toFixed(0) + ' s ago'}${p.rtt > 0 ? ` · ping ${(p.rtt * 1000).toFixed(0)} ms` : ''}`);
+    const fv = p.vals.length >= FLEET_HEAD_N ? p.vals : null, fl = fv ? fv[10] : 0;   // (with a fleet program: where it is, its flags, what it publishes)
+    setText(r.prog, !fv ? '' : `${fl & 2 ? 'its fleet program flies it' : 'its pilot flies it'}${fl & 1 ? '' : ' · no shared position (no GPS)'}${fv.length > FLEET_HEAD_N ? ' · program: ' + fv.slice(FLEET_HEAD_N).map(x => +x.toFixed(2)).join(', ') : ''}`);
     const v = p.vals; setText(r.vals, v.length >= 3 ? `${['disarmed', 'armed', 'failsafe', 'crashed'][v[0]] || 'state ' + v[0]} · battery ${v[1].toFixed(0)}% · height ${v[2].toFixed(1)} m${p.valsAge > 1 ? ` (${p.valsAge.toFixed(0)} s old)` : ''}` : 'nothing published yet');
+  }
+  const fvw = fleetView(), fbtn = GS_UI.fleetBtn;
+  if (fbtn) {
+    fbtn.disabled = !fvw || !fvw.ok; fbtn.setAttribute('aria-pressed', String(!!(fvw && fvw.engaged)));
+    setText(fbtn, fvw && fvw.engaged ? 'Take it back from the fleet program' : 'Let the fleet program fly it');
+    setText($('#gsFleetState'), !fvw ? 'The fleet program runs beside the navigation: this drone has none (Computers tab).' : !fvw.ok ? 'No fleet program in the navigation\'s program.'
+      : `Its fleet program: ${fvw.engaged ? `flying it to ${fvw.go.map(x => x.toFixed(1)).join(' ')} m from home` : 'not flying it'} · publishes ${fvw.pub.length ? fvw.pub.map(x => +x.toFixed(2)).join(', ') : 'nothing'} · messages ${fvw.sent} sent, ${fvw.got} in${fvw.fails ? ` · failed ${fvw.fails} times` : ''}`);
   }
   const others = typeof fleet !== 'undefined' ? fleet.drones.length - 1 : 0, chSel = $('#gsPeerCh');
   if (chSel) { const en = [radioCfg, radioTwo() ? radioCfg2 : null].find(l => l && l.kind === 'espnow'); chSel.disabled = !!en || !peerOn(); if (en) chSel.value = String(en.channel || 1); }

@@ -227,6 +227,13 @@ static void more_tests(void) {
     ok &= G.qn == q0 + 2 && G.q[k].v[0] == -1 && G.q[k].v[1] == 2;
     CHECK(bad2 && ok, "latch 9, wiggle, 1.5, 0: refused; latch 2 open, latch all toggle: queued as LATCH 1 0, −1 2 (%s)", r);
   }
+  {   /* the drone's fleet program: fleet on|off (rc_core.h RC_CMD_FLEET) */
+    int q0 = G.qn; text(&G, &I, "fleet on", t, r); int k = (G.qh + G.qn - 1) % GND_QN;
+    int ok = G.qn == q0 + 1 && G.q[k].cmd == RC_CMD_FLEET && G.q[k].n == 1 && G.q[k].v[0] == 1;
+    text(&G, &I, "fleet off", t, r); k = (G.qh + G.qn - 1) % GND_QN; ok &= G.qn == q0 + 2 && G.q[k].v[0] == 0;
+    text(&G, &I, "fleet maybe", t, r); ok &= G.qn == q0 + 2;
+    CHECK(ok, "fleet on, fleet off: queued as FLEET 1, FLEET 0; fleet maybe: not a command (%s)", r);
+  }
 
   printf("switches at the start\n");
   gnd_config_default(&c); c.latch = GB(GB_ARM) | GB(GB_FLY);

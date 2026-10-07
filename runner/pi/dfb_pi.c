@@ -49,6 +49,15 @@
  *   latch N open | latch N close | latch N toggle | latch all open | latches   (with --latch; N from 1)
  *   pickup X Y Z [N]: fly the hook onto a thing whose top is at X Y Z [m] from home, close latch N (1) and climb
  *     (fc/pickup_core.h; --hook DX,DY,DZ: where the hook is from the hub, body axes, 0,0,-0.06 by default)
+ *   fleet on | fleet off | fleet: let the fleet program fly it, or not, and what it is doing (fc/fleet.h)
+ *
+ * The fleet program (fc/fleet.h, in the built-in program beside the navigation): it runs here 10 times a second on
+ * the peer table the ESP32 sends (RN_LINK_PEER: the other drones it hears over ESP-NOW, peers= on the ESP32; this
+ * asks for it with RN_LINK_WANT bit 4) and sends back what it publishes and its messages (RN_LINK_PEER_OUT). The
+ * radio's FLEET command (or "fleet on") lets it fly the drone; the sticks, hold, home or a go-to take it back.
+ * Positions are shared between drones whose GPS has the same origin: --fleet-origin LAT,LON (degrees), the same on
+ * each drone of the fleet (somewhere near where they fly); without it, each GPS's first fix is its origin and the
+ * drones can talk but not place each other.
  * (throw: hold it level and arm it first; throw it upward and it flies itself from there.)
  *
  * Build:  sh runner/pi/build.sh
@@ -61,6 +70,7 @@
  */
 #define _DEFAULT_SOURCE
 #include "nav_core.h"
+#include "fleet.h"
 #include "super_core.h"
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
@@ -135,6 +145,7 @@ static void gps_line(gps_t *G, char *s) {
     if (atoi(f[6]) < 1 || !*f[2] || !*f[4]) { G->fix = 0; return; }
     double lat = nmea_deg(f[2], f[3]), lon = nmea_deg(f[4], f[5]), alt = atof(f[9]);
     if (!G->have_origin) { G->lat0 = lat; G->lon0 = lon; G->alt0 = alt; G->have_origin = 1; }
+    else if (G->have_origin == 2) { G->alt0 = alt; G->have_origin = 1; }   /* (--fleet-origin: the place given, the height of the first fix) */
     G->lat = lat; G->lon = lon; G->alt = alt; G->sats = atoi(f[7]);
     const double R = 6371000.0, k = M_PI / 180;
     G->p[0] = (float)((lat - G->lat0) * k * R); G->p[1] = (float)(-(lon - G->lon0) * k * R * cos(G->lat0 * k)); G->p[2] = (float)(alt - G->alt0);
@@ -254,6 +265,7 @@ static radio_io *open_link(const rlink_cfg *L, const char *dev, const char *nrf_
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
   rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
+  double origin[2] = { 0, 0 }; int have_origin = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -267,6 +279,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--radio2-dev")) dev2 = argv[++i];
     else if (!strcmp(argv[i], "--bind")) bind_phrase = argv[++i]; else if (!strcmp(argv[i], "--nrf-spi")) nrf_spi = argv[++i]; else if (!strcmp(argv[i], "--nrf-ce")) nrf_ce = atoi(argv[++i]); else if (!strcmp(argv[i], "--radio-port")) radio_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
+    else if (!strcmp(argv[i], "--fleet-origin")) { if (sscanf(argv[++i], "%lf,%lf", &origin[0], &origin[1]) != 2 || fabs(origin[0]) > 90 || fabs(origin[1]) > 180) { fprintf(stderr, "--fleet-origin LAT,LON: degrees\n"); return 2; } have_origin = 1; }
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
@@ -275,7 +288,7 @@ int main(int argc, char **argv) {
     "               | --radio serial,BAUD[,half] --radio-dev /dev/ttyAMA1 [--bind PHRASE]\n"
     "               | --radio nrf24,250|1000|2000 [--nrf-spi /dev/spidev0.0] [--nrf-ce 25] [--bind PHRASE]]\n"
     "              [--radio2 KIND,... [--radio2-dev DEV]] (a second link at once, as --radio: both carry; e.g. --radio2 serial,57600,up --radio2-dev /dev/ttyUSB1)\n"
-    "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000]\n"
+    "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000] [--fleet-origin LAT,LON]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"
     "radio: an ExpressLRS receiver on a serial port (--crsf), or this Pi's Wi-Fi (--radio wifi,...: UDP; the Pi makes the network\n"
     "  (wifi,ap: hostapd or NetworkManager, on that channel) or joins one (wifi,sta), as the OS is set up; --bind: the same phrase\n"
@@ -305,6 +318,9 @@ int main(int argc, char **argv) {
   if (nav_init(&N, &H)) { fprintf(stderr, "%s\n", N.why); return 1; }
   { uint32_t n; uint8_t *blob = read_file(cfg_path, &n); if (!blob) return 1;
     if (nav_config_load(&N, blob, n)) { fprintf(stderr, "%s\n", N.why); return 1; } }
+  static fleet_state FL; int have_fleet = !fleet_init(&FL, &H);   /* the fleet program (fleet.h): beside the navigation */
+  if (!have_fleet) printf("%s\n", FL.msg);
+  FL.said = 0;
   int have_learn = 0, have_super = 0;
   if (af_path && pi_path) {
     uint32_t na, np; uint8_t *af = read_file(af_path, &na), *pc = read_file(pi_path, &np); if (!af || !pc) return 1;
@@ -346,6 +362,7 @@ int main(int argc, char **argv) {
 
   static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
   gps_t G; memset(&G, 0, sizeof G);
+  if (have_origin) { G.lat0 = origin[0]; G.lon0 = origin[1]; G.have_origin = 2; }
   pilot_t P; memset(&P, 0, sizeof P);
   nav_out o; memset(&o, 0, sizeof o);
   double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0, fc_state_t = 0, t_start = now_s(); float fc_state = 0;
@@ -374,13 +391,20 @@ int main(int argc, char **argv) {
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
           char reply[600]; float px, py, pz; int pl = 1;
-          if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
+          if (!strncmp(s, "fleet", 5) && (!s[5] || s[5] == ' ')) {                   /* the fleet program: on, off, or what it does */
+            const char *a = s + 5; while (*a == ' ') a++;
+            if (!strcmp(a, "on") || !strcmp(a, "off")) {
+              if (rc_link_ok(&RCI, t)) snprintf(reply, sizeof reply, "fleet: the radio has it: its FLEET command (the ground station's)");
+              else { fleet_engage(&FL, a[1] == 'n', &N, &o, "asked"); FL.said = 0; snprintf(reply, sizeof reply, "%s", FL.msg[0] ? FL.msg : "fleet program off"); in_control = 1; }
+            } else snprintf(reply, sizeof reply, "fleet program: %s; %s; target %.1f %.1f %.1f; publishes %d values; messages %u sent, %u in; %u runs, %u failed",
+                            have_fleet ? "in the program" : "none", FL.engaged ? "flying it" : "not flying it", FL.go_p[0], FL.go_p[1], FL.go_p[2], FL.npub, (unsigned)FL.sent, (unsigned)FL.got, (unsigned)FL.calls, (unsigned)FL.fails);
+          } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
             float hd = P.sp.heading, c = cosf(hd), sn = sinf(hd), spot[3] = { px - (c * hook[0] - sn * hook[1]), py - (sn * hook[0] + c * hook[1]), pz - hook[2] + 0.03f };
             if (!P.fly) snprintf(reply, sizeof reply, "pickup: take off first");
             else if (pickup_start(&PKt, spot, hd, pl - 1, &o, t)) snprintf(reply, sizeof reply, "%s", PKt.msg);
             else { PKt.said = 0; snprintf(reply, sizeof reply, "pickup: flying over it, then down onto it; any other command stops it"); }
             in_control = 1;
-          } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; pickup_cancel(&PKt, "another command"); PKt.said = 0; }
+          } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; pickup_cancel(&PKt, "another command"); PKt.said = 0; if (strncmp(s, "status", 6)) fleet_engage(&FL, 0, &N, &o, "another command"); }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
@@ -393,6 +417,7 @@ int main(int argc, char **argv) {
       int type = rn_link_feed(&L, rx[i]);
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
+      if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */
       if (type == RN_LINK_TLM && radio_here) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
       if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
       if ((type == RN_LINK_TELEM && L.len == 144) || (type == RN_LINK_LTEL && L.len >= 8)) { memcpy(&fc_state, L.buf + 4, 4); fc_state_t = t; }   /* the flight core's state */
@@ -434,22 +459,33 @@ int main(int argc, char **argv) {
       P.sp.fly = P.fly;
       /* the radio's channels fly it while they come (the text commands are for when there is no radio) */
       int radio = rc_link_ok(&RCI, t) || RP.lost, radio_arm = 0; nav_sp rsp = P.sp;
-      if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp); if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
+      int fleet_was = RP.mis_on = FL.engaged && RCI.frames;                /* the fleet program's target, flown as the pilot's (fleet.h) */
+      if (fleet_was) { memcpy(RP.mis_t, FL.go_p, sizeof RP.mis_t); memcpy(RP.mis_v, FL.go_v, sizeof RP.mis_v); RP.mis_h = FL.go_h; }
+      if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp);
+        if (fleet_was && !RP.mis_on) fleet_engage(&FL, 0, &N, &o, RP.mis_why);
+        if (RP.fleet_req) { fleet_engage(&FL, RP.fleet_req == 1, &N, &o, "the pilot's radio"); RP.fleet_req = 0; }
+        if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
         if (RP.learn_req) { int c = RP.learn_req; RP.learn_req = 0; if (have_learn) { learn_command(&LS, c); printf("radio: learning command %d\n", c); } } }
       if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; pickup_cancel(&PKt, "the radio has it"); PKt.said = 0; }
       else if (pickup_active(&PKt)) { if (!P.fly) pickup_cancel(&PKt, "not flying"); else pickup_step(&PKt, &o, t, dt, &P.sp); }
+      else fleet_sp(&FL, &P.sp);                                        /* (the text commands' pilot: engaged, the program's target) */
       if (PKt.said) { PKt.said = 0; printf("%s\n", PKt.msg); tlm_text(&TS, 6, PKt.msg); }
       for (int w = 0; w < 2; w++) {                                    /* the pickups' requests to the cargo task */
         const pickup_state *K = w ? &PKt : &RP.pk; if (K->nreq == pk_seen[w]) continue; pk_seen[w] = K->nreq;
         if (CG.n) cargo_command(&CG, K->req_latch, K->req_act, "pickup"); else printf("pickup: no latches here (--latch): it can't close one\n");
       }
       int e = nav_step(&N, &in, &P.sp, dt, &o);
+      if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
+        static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
+        int k = fleet_out(&FL, fo); if (k) send_frame(link, RN_LINK_PEER_OUT, fo, (uint32_t)k * 4);
+        if (FL.said) { FL.said = 0; printf("%s\n", FL.msg); tlm_text(&TS, 4, FL.msg); }
+      }
       if (e < 0) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; }
       else {
         { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
         if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
         if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
-        if (!radio && !pickup_active(&PKt)) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
+        if (!radio && !pickup_active(&PKt) && !FL.engaged) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
         last_sp = P.sp;
         /* nothing to step on (no attitude in this frame): in the air no new command, the ESP32 flies on the last one */
         /* started (again) while the drone flies: our pilot knows nothing yet (disarmed), and a command from it would
@@ -474,7 +510,7 @@ int main(int argc, char **argv) {
       cg_drive = d;
       if (CG.nmsg != cg_said) { cg_said = CG.nmsg; printf("cargo: %s\n", CG.msg); }
     }
-    if ((have_learn || have_super || radio_here) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
+    if ((have_learn || have_super || radio_here || have_fleet) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0) | (have_fleet ? 4 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, the ESP32's telemetry for our radio, the peer table, please */
     /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
     if (t >= next_pub) {
       next_pub = t + 0.01;

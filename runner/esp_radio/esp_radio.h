@@ -55,6 +55,10 @@ int radio_peer_on(void);
 void radio_peer_poll(const float *vals, int n);
 /* Who's in the table, a line each, into out: how many. */
 int radio_peer_status(char *out, int n);
+/* The fleet program on the Pi (fc/fleet.h): the table for it (head: the flight core's state, battery %, height),
+ * and what it says back (RN_LINK_PEER, RN_LINK_PEER_OUT). From any task. */
+int radio_peer_pack(const float head[3], float *out);
+int radio_peer_apply(const float *in, int n);
 int radio_peer_ping(uint32_t id);                               /* (peer.h's, from any task) */
 int radio_peer_send(uint32_t to, const uint8_t *msg, int n);
 int radio_peer_recv(uint32_t *from, uint8_t *msg, int cap);

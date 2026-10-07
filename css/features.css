@@ -942,3 +942,6 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .gs-peer-state[data-tone="good"]{color:var(--good)}.gs-peer-state[data-tone="warn"]{color:var(--warn)}.gs-peer-state[data-tone="bad"]{color:var(--bad)}
 .gs-peer-ping{margin-left:auto;padding:var(--space-2) var(--space-8);font-size:var(--text-xs)}
 .gs-peer-info,.gs-peer-vals{font-family:var(--f-mono);font-size:var(--text-xs);color:var(--ink-2)}
+/* the fleet program's switch (Ground tab, Other drones) */
+.gs-fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
+.gs-fleet .btn[aria-pressed="true"] { border-color: var(--accent, currentColor); }

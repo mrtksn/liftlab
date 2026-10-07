@@ -5,6 +5,7 @@
 #include "esp_radio.h"
 #include "radio_cfg.h"
 #include "peer.h"
+#include "fleet.h"
 #include "wifi_start.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
@@ -22,6 +23,7 @@ typedef struct { uint8_t n; int8_t rssi; uint8_t src[6]; uint8_t p[PEER_MTU]; } 
 static QueueHandle_t rxq;
 static SemaphoreHandle_t lock;                          /* (the radio task polls; the link task asks for the table) */
 static peer_net *PN;                                    /* (on the heap: static DRAM is short with Wi-Fi) */
+static fleet_link FK;                                   /* the fleet program's link (fleet.h): what the Pi's program says */
 static volatile uint32_t rx_lost, send_fail, to_all;
 static esp_radio_say SAY;
 static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -88,7 +90,8 @@ void radio_peer_poll(const float *vals, int n) {
   if (!radio_peer_on()) return;
   if (xSemaphoreTake(lock, 0) != pdTRUE) return;        /* (the table being read: next time) */
   peer_net *N = PN; double t = now_s();
-  if (vals) peer_publish(N, vals, n);
+  if (vals && n >= FLEET_HEAD) fleet_link_publish(&FK, N, vals, t);   /* (the flight core's three, then the navigation's and its program's) */
+  else if (vals) peer_publish(N, vals, n);
   peer_rx r; while (xQueueReceive(rxq, &r, 0) == pdTRUE) peer_from_air(N, r.src, r.p, r.n, r.rssi, t);
   static uint8_t p[PEER_MTU]; uint8_t a[6]; int m;
   for (int k = 0; k < 8 && (m = peer_to_air(N, t, a, p, sizeof p)) > 0; k++) {
@@ -118,6 +121,14 @@ int radio_peer_status(char *out, int n) {
   #undef APP
   xSemaphoreGive(lock);
   return c;
+}
+int radio_peer_pack(const float head[3], float *out) {
+  if (!radio_peer_on()) return 0;
+  xSemaphoreTake(lock, portMAX_DELAY); int n = fleet_link_pack(PN, now_s(), head, out); xSemaphoreGive(lock); return n;
+}
+int radio_peer_apply(const float *in, int n) {
+  if (!radio_peer_on()) return -1;
+  xSemaphoreTake(lock, portMAX_DELAY); int e = fleet_link_apply(&FK, PN, in, n, now_s()); xSemaphoreGive(lock); return e;
 }
 int radio_peer_ping(uint32_t id) {
   if (!radio_peer_on()) return -1;
