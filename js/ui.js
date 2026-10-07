@@ -275,7 +275,7 @@ function compCard(c) {
   const card = UI.card( { class: 'comp' + (open ? ' open' : '') + (selected ? ' sel' : ''), 'data-id': c.id }, top, open ? compBody(c) : null);
   UI.bindDisclosure(head,card.querySelector('.comp-body'),{open,beforeToggle:()=>{
     if(typeof editMode!=='undefined' && editMode && edit.sel!==c.id){edit.refocus=true;selectComp(c.id);return false;}
-  },onToggle:next=>{next?openSet.add(c.id):openSet.delete(c.id);keepFocus(()=>card.replaceWith(compCard(c)));}});
+  },onToggle:next=>{openSet.clear();if(next)openSet.add(c.id);renderComps();}});
   // a servo or rod: a drop target, and the twisty that folds what it carries (here, so a re-rendered card keeps them)
   if (isHolder(c)) dropTarget(card, c);
   const kids = childrenOf(c);
@@ -371,7 +371,7 @@ function addComp(type, place = null) {
   }
   cfg.comps.push(c); placeNew(root || c, place);
   if (type === 'latch') latchNeedsBoard();
-  openSet.add(c.id); for (let p = parentOf(c); p; p = parentOf(p)) foldSet.delete(p.id);   // (open, and what it's on unfolded)
+  openSet.clear(); openSet.add(c.id); for (let p = parentOf(c); p; p = parentOf(p)) foldSet.delete(p.id);   // (open, and what it's on unfolded)
   structural();
   requestAnimationFrame(() => { const card = document.querySelector(`[data-id="${c.id}"]`); if (card) card.scrollIntoView({ block: 'nearest' }); });
   return c;

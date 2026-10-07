@@ -970,3 +970,29 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 /* the fleet program's switch (Ground tab, Other drones) */
 .gs-fleet { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
 .gs-fleet .btn[aria-pressed="true"] { border-color: var(--accent, currentColor); }
+
+/* Design actions stay quiet until opened; history remains within the sidebar. */
+#droneName.design-title{width:100%;font:600 var(--text-lg) var(--f-body);color:var(--ink);padding:var(--space-4) 0;border:1px solid transparent;border-radius:var(--radius-control);background:transparent;min-width:0}
+#droneName.design-title:hover,#droneName.design-title:focus{border-color:var(--line-strong);background:var(--panel-2)}
+.design-actions{display:flex;gap:var(--space-8);flex-wrap:wrap}
+.design-manage{align-self:flex-start;border:0;background:transparent;color:var(--muted);font-size:var(--text-sm);padding:var(--space-4) 0;cursor:pointer;text-align:left}
+.design-manage:hover{color:var(--accent)}
+.design-manage span{margin-left:var(--space-6);font-family:var(--f-mono)}
+.add-part{align-self:flex-start}
+.sidebar-history{position:sticky;bottom:var(--space-8);z-index:8;flex:none;align-self:center;display:flex;gap:var(--space-6);padding:var(--space-5);margin:var(--space-8) auto;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-card);box-shadow:0 2px 10px color-mix(in srgb,var(--ink) 10%,transparent)}
+#airframe > .pane{padding-bottom:var(--space-16)}
+.design-dialog,.parts-dialog{max-height:calc(100dvh - 32px);overflow:auto}
+.design-dialog .design-actions{margin-bottom:var(--space-16)}
+.design-dialog .designs{max-height:50dvh;margin-bottom:var(--space-12)}
+.parts-dialog section{margin:var(--space-14) 0}
+.parts-dialog h3{font-family:var(--f-display);font-size:var(--text-sm);color:var(--muted);margin:0 0 var(--space-6);text-transform:uppercase;letter-spacing:.06em}
+.parts-dialog .addrow{margin:0}
+.parts-dialog .addrow .btn{justify-content:flex-start;white-space:normal;text-align:left;min-height:40px}
+@media(max-width:480px){.design-dialog .design-actions .btn{flex:1}.parts-dialog .addrow{grid-template-columns:1fr}.parts-dialog{width:calc(100vw - 24px)}}
+
+#editorTabs #tabForm{flex-grow:1.45}
+#editorTabs #tabAir{flex-grow:1.25}
+#editorTabs #tabAi{flex-grow:.65}
+.dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-8);position:sticky;top:calc(-1 * var(--space-16));background:var(--panel);z-index:1;padding:var(--space-4) 0}
+.dialog-heading h2{margin:0}
+.dialog-heading .icon-btn{font-size:var(--text-lg);min-width:32px;min-height:32px}

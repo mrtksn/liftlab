@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=d85965a0f2">
+<link rel="stylesheet" href="css/style.css?v=8a003466de">
 </head>
 <body>
 <div class="app">
@@ -81,51 +81,22 @@
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
         <h2>Design <small id="designState"></small></h2>
-        <label class="field-row" for="droneName"><span class="lbl">Drone name</span><input type="text" id="droneName" aria-label="Drone name" maxlength="80" autocomplete="off"></label>
-        <div class="design-row">
-          <input type="text" id="designName" placeholder="Name this design" aria-label="Design name" maxlength="60" autocomplete="off">
-          <button class="btn primary" id="designSave" type="button">Save</button>
+        <input class="design-title" type="text" id="droneName" aria-label="Drone name" title="Rename this drone" maxlength="80" autocomplete="off">
+        <div class="design-actions">
+          <button class="btn" id="designSaveAs" type="button" aria-haspopup="dialog">Save as…</button>
+          <button class="btn" id="designFiles" type="button" aria-haspopup="dialog">Import / export…</button>
         </div>
-        <div class="design-tools" role="group" aria-label="Design">
-          <button class="btn sm" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">↶ Undo</button>
-          <button class="btn sm" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">↷ Redo</button>
-          <span class="design-gap"></span>
-          <button class="btn sm" id="designImport" type="button" title="Open a design file">Open…</button>
-          <button class="btn sm" id="designExport" type="button" title="Save this design as a file">Export</button>
-          <input type="file" id="designFile" accept=".json,application/json" hidden>
-        </div>
+        <button class="design-manage" id="designManage" type="button" aria-haspopup="dialog">Manage designs <span id="designsCount"></span></button>
         <p class="note" id="designNote" role="status" hidden></p>
-        <details class="fold" id="designsFold">
-          <summary><span>Saved designs</span><small id="designsCount"></small></summary>
-          <div class="designs" id="designList"></div>
-          <p class="hint" id="designWhere"></p>
-        </details>
       </section>
       <section class="sec" id="partsSec">
         <h2>Parts <small id="compCount"></small></h2>
-        <p class="hint">Each + asks where the part goes: on the frame, on a servo, rod or latch, or (servos, rods, latches) between a part and what it hangs on. Body axes: X forward, Y left, Z up, from the frame hub. Press Edit (E) to pick parts in the 3D view and drag them; in the list, drag a part onto a servo, rod or latch to move it there. Which boards fly it, and every formula, are in the Computers tab.</p>
-        <div class="addrow">
-          <button class="btn" type="button" data-add="motor"><b>+</b>Motor</button>
-          <button class="btn" type="button" data-add="tilt" title="A servo joint with a motor attached at the same point"><b>+</b>Motor on servo</button>
-          <button class="btn" type="button" data-add="joint" title="A hinge you can attach anything to: motors, masses, cables, sensors, other servos"><b>+</b>Servo joint</button>
-          <button class="btn" type="button" data-add="link" title="A stick or lever: attach it to a servo, then attach parts to its far end"><b>+</b>Rod / lever</button>
-          <button class="btn" type="button" data-add="mass"><b>+</b>Rigid mass</button>
-          <button class="btn" type="button" data-add="hang"><b>+</b>Mass on cable</button>
-          <button class="btn" type="button" data-add="wing" title="A wing: lift and drag in the air (the flight computers aren't told about it)"><b>+</b>Wing</button>
-          <button class="btn" type="button" data-add="latch" title="A hook or gripper: what hangs from it can be dropped in flight, and it can pick things up"><b>+</b>Latch (drop, grab)</button>
-        </div>
-        <details class="fold sub" id="sensorsFold">
-          <summary><span>+ Sensors</span><small>IMU, compass, barometer, position, flow</small></summary>
-          <div class="addrow">
-            <button class="btn" type="button" data-add="imu"><b>+</b>IMU</button>
-            <button class="btn" type="button" data-add="mag"><b>+</b>Compass</button>
-            <button class="btn" type="button" data-add="baro"><b>+</b>Barometer</button>
-            <button class="btn" type="button" data-add="fix"><b>+</b>Position fix</button>
-            <button class="btn" type="button" data-add="flow"><b>+</b>Optical flow + rangefinder</button>
-          </div>
-        </details>
+        <p class="hint">Add parts on the frame or attach them to a servo, rod or latch. In Edit mode, click a part in the view to move it. Drag parts in the list to change their attachment.</p>
+        <button class="btn add-part" id="addPart" type="button" aria-haspopup="dialog">+ Add a part</button>
         <div class="complist" id="compList"></div>
       </section>
+      </div>
+      <div class="pane" id="paneTune" role="tabpanel" aria-labelledby="tabTune" hidden>
       <section class="sec" id="bodySec">
         <h2>Body</h2>
         <details class="fold" id="frameFold">
@@ -164,6 +135,10 @@
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
       <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden></div>
       <div class="pane ai" id="paneAi" role="tabpanel" aria-labelledby="tabAi" hidden></div>
+      <div class="sidebar-history" id="sidebarHistory" role="group" aria-label="Design history">
+        <button class="btn sm" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">↶ Undo</button>
+        <button class="btn sm" id="redoBtn" type="button" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">↷ Redo</button>
+      </div>
     </aside>
 
     <section class="view" aria-label="3D view">
@@ -377,6 +352,59 @@
         <div id="installBody"></div>
         <div class="ask-btns"><button class="btn" type="button" id="installClose">Close</button></div>
       </dialog>
+      <dialog class="ask design-dialog" id="designSaveDlg" aria-labelledby="designSaveTitle">
+        <form id="designSaveForm">
+          <h2 id="designSaveTitle">Save design as</h2>
+          <p>Keep a new copy of this drone, including its parts, computers and tuning.</p>
+          <label class="ask-name"><span class="lbl">Design name</span><input type="text" id="designName" maxlength="60" required autocomplete="off"></label>
+          <p class="note" data-design-note role="status" hidden></p>
+          <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Cancel</button><button class="btn primary" id="designSave" type="submit">Save design</button></div>
+        </form>
+      </dialog>
+      <dialog class="ask design-dialog" id="designFilesDlg" aria-labelledby="designFilesTitle">
+        <h2 id="designFilesTitle">Import / export</h2>
+        <p>Open a design from a JSON file, or download a copy of the current design.</p>
+        <div class="design-actions">
+          <button class="btn" id="designImport" type="button">Import file…</button>
+          <button class="btn" id="designExport" type="button">Export design</button>
+          <input type="file" id="designFile" accept=".json,application/json" hidden>
+        </div>
+        <p class="note" data-design-note role="status" hidden></p>
+        <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Close</button></div>
+      </dialog>
+      <dialog class="ask design-dialog" id="designManageDlg" aria-labelledby="designManageTitle">
+        <h2 id="designManageTitle">Saved designs <small id="designLibraryCount"></small></h2>
+        <div class="designs" id="designList"></div>
+        <p class="hint" id="designWhere"></p>
+        <p class="note" data-design-note role="status" hidden></p>
+        <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Close</button></div>
+      </dialog>
+      <dialog class="ask parts-dialog" id="addPartDlg" aria-labelledby="addPartTitle">
+        <div class="dialog-heading"><h2 id="addPartTitle">Add a part</h2><button class="icon-btn" type="button" data-close-dialog aria-label="Close part picker">×</button></div>
+        <p>Choose a part, then choose where to attach it.</p>
+        <section><h3>Propulsion</h3><div class="addrow">
+          <button class="btn" type="button" data-add="motor">Motor</button>
+          <button class="btn" type="button" data-add="tilt">Motor on servo</button>
+        </div></section>
+        <section><h3>Structure &amp; motion</h3><div class="addrow">
+          <button class="btn" type="button" data-add="joint">Servo joint</button>
+          <button class="btn" type="button" data-add="link">Rod / lever</button>
+          <button class="btn" type="button" data-add="wing">Wing</button>
+        </div></section>
+        <section><h3>Payloads</h3><div class="addrow">
+          <button class="btn" type="button" data-add="mass">Rigid mass</button>
+          <button class="btn" type="button" data-add="hang">Mass on cable</button>
+          <button class="btn" type="button" data-add="latch">Latch / gripper</button>
+        </div></section>
+        <section><h3>Sensors</h3><div class="addrow">
+          <button class="btn" type="button" data-add="imu">IMU</button>
+          <button class="btn" type="button" data-add="mag">Compass</button>
+          <button class="btn" type="button" data-add="baro">Barometer</button>
+          <button class="btn" type="button" data-add="fix">Position fix</button>
+          <button class="btn" type="button" data-add="flow">Optical flow + rangefinder</button>
+        </div></section>
+        <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Cancel</button></div>
+      </dialog>
       <dialog class="ask" id="saveAsk" aria-labelledby="saveAskTitle">
         <form method="dialog">
           <h2 id="saveAskTitle">Save this airframe first?</h2>
@@ -485,7 +513,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/ui-components.js?v=7bee7a1164"></script>
-<script src="js/ui-shell.js?v=7070ab6f99"></script>
+<script src="js/ui-shell.js?v=7b79a0c102"></script>
 <script src="js/math.js?v=d02edf9672"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=7f3f1b0df1"></script>
@@ -513,20 +541,20 @@
 <script src="js/view3d.js?v=6b6856b603"></script>
 <script src="js/pilot.js?v=8f44f0defc"></script>
 <script src="js/computers-ui.js?v=f3fa4c9f63"></script>
-<script src="js/ui.js?v=e487976a73"></script>
-<script src="js/place-ui.js?v=245f5d12f2"></script>
+<script src="js/ui.js?v=3a7f0e9d47"></script>
+<script src="js/place-ui.js?v=b6f9c42f9e"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
-<script src="js/flight-physics-ui.js?v=4335c744e7"></script>
+<script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
 <script src="js/tuning-ui.js?v=ec3806aa4a"></script>
-<script src="js/designs.js?v=b5d1a330bf"></script>
+<script src="js/designs.js?v=2deba68cac"></script>
 <script src="js/share.js?v=026e34bc2b"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=392833d0f9"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=f500c5d066"></script>
 <script src="js/install-ui.js?v=73a5f67e8b"></script>
-<script src="js/editor.js?v=c4bfd59c41"></script>
+<script src="js/editor.js?v=0589e4ef33"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=ec761089ab"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>

@@ -82,9 +82,11 @@ function openPlace(btn, type) {
   placeMenu = { node: box, btn };
   (box.querySelector('.place-opt') || box).focus();
 }
+$('#addPart').addEventListener('click', () => { closePlace(); $('#addPartDlg').showModal(); });
 document.querySelectorAll('[data-add]').forEach(b => {
-  b.setAttribute('aria-haspopup', 'menu'); b.setAttribute('aria-expanded', 'false');
-  b.addEventListener('click', e => { e.stopPropagation(); openPlace(b, b.dataset.add); });
+  b.addEventListener('click', e => {
+    e.stopPropagation(); $('#addPartDlg').close(); openPlace($('#addPart'), b.dataset.add);
+  });
 });
 document.addEventListener('click', e => { if (placeMenu && !placeMenu.node.contains(e.target)) closePlace(); });
 document.addEventListener('keydown', e => {

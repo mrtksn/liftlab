@@ -82,9 +82,12 @@ function selectComp(id) {
   if (id != null) cam.pan.set(0,0,0);
   document.querySelectorAll('.comp.sel').forEach(n => n.classList.remove('sel'));
   if (id != null) {
-    openSet.add(id);
+    openSet.clear(); openSet.add(id);
+    for (let p = parentOf(compById(id)); p; p = parentOf(p)) foldSet.delete(p.id);
+    if (prev !== id) UI_PANELS.editor.select('air');
+    renderComps();
     const card = document.querySelector(`[data-id="${id}"]`);
-    if (card) { const fresh = compCard(compById(id)); keepFocus(() => card.replaceWith(fresh)); fresh.classList.add('sel'); fresh.scrollIntoView({ block: 'nearest' }); }
+    if (card) card.scrollIntoView({ block: 'nearest' });
   }
   if (prev !== id) updateEditMsg();
 }

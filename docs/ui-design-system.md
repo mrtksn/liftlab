@@ -80,3 +80,7 @@ The top dropdown and viewport selection bind both sidebars to one drone. Add air
 The complete pre-refactor state is commit `53cf25c`, tagged `ui-before-refactor-2026-10-06`. The refactor is on `codex/ui-components`. Compare with `git diff ui-before-refactor-2026-10-06..codex/ui-components`. With a clean checkout, switching to the tag restores the original version in detached HEAD; switching back to `codex/ui-components` restores this version. Preserve subsequent local work before switching. Avoid a hard reset as a rollback shortcut.
 
 World view (no selected drone) hides both drone sidebars and expands the canvas. Shared settings live in a collapsible right overlay; the selected readout tabs are Flight, Health and Control, with flight targets in Control. Hover shows a craft outline/name, and an empty canvas click deselects. The existing transparent HUD is retained.
+
+## Design sidebar
+
+Airframe holds the name, design actions and parts; Tune holds body, steering, battery, controller tuning and flight physics. Keep existing field IDs and controller bindings when moving controls between tabs. Native design dialogs provide Save as (new copy), file import/export and saved-library management. The Add a part dialog groups the palette; after choosing a kind it closes before the existing attachment menu opens. Component editors are an accordion; attachment-tree folding is independent. The sticky design-history toolbar belongs to the sidebar and hides on Ground/AI. The viewport HUD/edit bar is unchanged.

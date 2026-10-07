@@ -9,6 +9,11 @@ const EDITOR_TABS = [
     icon: `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="5" r="2.4"/><circle cx="15" cy="5" r="2.4"/><circle cx="5" cy="15" r="2.4"/><circle cx="15" cy="15" r="2.4"/><path d="M6.8 6.8l2 2m4.4-2-2 2m-4.4 4.4 2-2m4.4 2-2-2"/></svg>`,
   },
   {
+    key: "tune", id: "tabTune", panel: "paneTune", label: "Tune",
+    icon: `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 3v14M10 3v14M16 3v14"/><circle cx="4" cy="7" r="2" fill="var(--panel)"/><circle cx="10" cy="13" r="2" fill="var(--panel)"/><circle cx="16" cy="7" r="2" fill="var(--panel)"/></svg>`,
+    title: "Body, steering, battery and controller tuning",
+  },
+  {
     key: "form",
     id: "tabForm",
     panel: "paneForm",
@@ -68,6 +73,8 @@ const UI_PANELS = {
     items: EDITOR_TABS, initial: 'air',
     onChange(key) {
       $('.work').classList.toggle('wide', ['form', 'gs', 'ai'].includes(key));
+      document.getElementById('sidebarHistory').hidden = !['air', 'tune', 'form'].includes(key);
+      if (typeof closePlace === 'function') closePlace();
       if (key === 'gs') renderGs(true);
       try { localStorage.setItem(LS + '-tab', key); } catch (e) {}
     },

@@ -1,5 +1,11 @@
 # Project memory
 
+## Sidebar simplification — 2026-10-07
+- Airframe now shows the editable drone name, Save as / Import-export actions, a subtle saved-design manager and one Add a part picker grouped by purpose. Native dialogs keep file/library actions explicit; Save as makes a new named copy and rejects an existing name.
+- Built on Claude’s already-published d0f99db PID work; its active local worktree is untouched. Body, battery/steering, existing PID tuning and flight-physics settings move to Tune. Part editors expand one at a time, including new parts and 3D selections; attachment tree folding stays independent. Undo/redo floats at the sidebar bottom on design-editing tabs; the viewport UI is preserved.
+- FIXED: a delayed design save marked later edits as saved. The saved baseline now uses the actual submitted snapshot, with the existing fleet async ownership lock retained.
+- Regression checklist: dialogs and Escape/focus, save-copy/collision/storage failure, import/export/library, per-drone ownership, grouped placement, single editor expansion, Tune/PID/undo and persistent history on desktop/mobile. Passed tools/test_sidebar_ui.cjs (desktop/phone light/dark, native dialogs, real downloads/storage errors and delayed saves), shared UI fixtures 9/9, tuning/compiler, multi-drone, world-view, camera/touch, chat/HUD and complete flight/radio browser regressions; no page errors. Syntax, diff and asset fingerprints passed.
+
 ## Completed-work publication audit — 2026-10-07
 - Verified every completed remote branch is an ancestor of main (1ea3eed), including Claude's peer-radio transport fa8b834 and fleet-program 555e479. No additional feature merge needed; completed peer/program live assets match the checkout.
 - Pages deployed integration a413114; its firmware/host CI and Pages workflow both passed. The later 1ea3eed commit only records deployment verification. Existing formation-clearance browser failure remains documented below.

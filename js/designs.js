@@ -56,7 +56,7 @@ function renderUndo() {
   for (const id of ['redoBtn', 'redoBtn2']) { const b = document.getElementById(id); if (b) b.disabled = undo.i >= undo.stack.length - 1; }
 }
 window.addEventListener('keydown', e => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target)) return;   // text fields keep their own undo
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;   // text fields keep their own undo
   if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoStep(); }
@@ -110,17 +110,20 @@ function designLoaded(id, name) {   // after a design is opened, or a preset loa
   designs.cur = id; designs.name = name || ''; designs.preset = null; designs.pendingClean = true;
   const inp = document.getElementById('designName'); if (inp) inp.value = designs.name;
 }
-async function saveDesign() {
+async function saveDesign(asNew = false) {
+  if ($('#designSave').disabled) return false;
   const inp = $('#designName'), name = (inp.value || '').trim() || 'Untitled design';
   const same = designs.list.find(d => d.name === name);
-  const rec = { id: same ? same.id : (designs.cur && designs.list.find(d => d.id === designs.cur && d.name === name) ? designs.cur : newId()), name, savedAt: Date.now(), design: JSON.parse(designSnap()) };
-  const btn = $('#designSave'); btn.disabled = true;
+  if (asNew && same) { designNote('That name is already saved. Choose another name for this copy.'); inp.focus(); inp.select(); return false; }
+  const snapshot = designSnap();
+  const rec = { id: asNew ? newId() : same ? same.id : (designs.cur && designs.list.find(d => d.id === designs.cur && d.name === name) ? designs.cur : newId()), name, savedAt: Date.now(), design: JSON.parse(snapshot) };
+  const btn = $('#designSave'); btn.disabled = true; $('#designSaveAs').disabled = true;
   const ok = await storeDesign(rec);
-  btn.disabled = false;
-  if (!ok) return;
-  designs.cur = rec.id; designs.name = name; designs.preset = null; inp.value = name; designs.savedSnap = designs.baseSnap = designSnap();
+  btn.disabled = false; $('#designSaveAs').disabled = false;
+  if (!ok) return false;
+  designs.cur = rec.id; designs.name = name; designs.preset = null; inp.value = name; designs.savedSnap = designs.baseSnap = snapshot;
   designNote(same ? `Updated “${name}”.` : `Saved “${name}”.`);
-  renderDesigns();
+  renderDesigns(); save(); return true;
 }
 function applyDesign(d) {
   cfg.frame.mass = +d.frame || 0.45; setFrameShape(d.frameShape);
@@ -142,7 +145,7 @@ function openDesign(rec) {
 /* ───────── design files ───────── */
 const FILE_FORMAT = 'drone-force-bench-design';
 async function exportDesign(rec) {
-  const name = rec ? rec.name : (($('#designName').value || '').trim() || 'Untitled design');
+  const name = rec ? rec.name : (designs.name || $('#droneName').value || 'Untitled design');
   const body = JSON.stringify({ format: FILE_FORMAT, version: 1, name, savedAt: new Date().toISOString(), design: rec ? rec.design : JSON.parse(designSnap()) }, null, 1);
   const filename = (name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'design') + '.json';
   const dl = await claudeUse('downloads');
@@ -173,6 +176,7 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
 async function importDesign(file) {
   try {
     const got = readDesignFile(await file.text()), name = got.name || file.name.replace(/\.json$/i, '');
+    $('#designFilesDlg').close();
     if (!await askToSave(name)) return;
     applyDesign(got.design); designLoaded(null, name); afterLoad();
     designNote(`Opened ${file.name}. Save to keep it in your designs.`);
@@ -209,8 +213,9 @@ function askToSave(what, then) {
 /* ───────── panel ───────── */
 let noteTimer = 0;
 function designNote(t) {
-  const n = document.getElementById('designNote'); if (!n) return;
-  n.textContent = t; n.hidden = !t; clearTimeout(noteTimer); if (t) noteTimer = setTimeout(() => { n.hidden = true; }, 6000);
+  const notes = [...document.querySelectorAll('#designNote, [data-design-note]')];
+  for (const n of notes) { n.textContent = t; n.hidden = !t; }
+  clearTimeout(noteTimer); if (t) noteTimer = setTimeout(() => notes.forEach(n => { n.hidden = true; }), 6000);
 }
 function renderDesignState() {
   const st = document.getElementById('designState'); if (!st) return;
@@ -243,7 +248,7 @@ function renderDesigns() {
   box.textContent = '';
   for (const d of designs.list) {
     const open = UI.button( { class: 'dname', type: 'button', title: 'Open this design', text: d.name || 'Untitled design' });
-    open.addEventListener('click', () => askToSave(d.name || 'Untitled design', () => openDesign(d)));
+    open.addEventListener('click', () => { $('#designManageDlg').close(); askToSave(d.name || 'Untitled design', () => openDesign(d)); });
     const exp = UI.button( { class: 'icon-btn dexp', type: 'button', title: 'Save to file', 'aria-label': 'Save ' + d.name + ' to a file', text: '⤓' });
     exp.addEventListener('click', () => exportDesign(d));
     const del = UI.button( { class: 'icon-btn', type: 'button', title: 'Delete', 'aria-label': 'Delete ' + d.name, text: '×' });
@@ -255,6 +260,7 @@ function renderDesigns() {
     box.append(el('div', { class: 'drow' + (d.id === designs.cur ? ' cur' : '') }, el('div', { class: 'dtext' }, open, el('span', { class: 'dmeta', text: designSummary(d) })), exp, del));
   }
   if (!designs.list.length) box.append(el('p', { class: 'hint', text: 'No saved designs yet.' }));
+  for (const id of ['designsCount', 'designLibraryCount']) setText($('#' + id), String(designs.list.length));
   const where = document.getElementById('designWhere');
   if (where) where.textContent = designs.where === 'account' ? 'Saved designs are kept in your account, private to you.' : 'Saved designs are kept in this browser only. Save to file for a copy you can keep anywhere.';
   // (the Layouts menu in the top bar lists these when it opens: ui.js presetMenu)
@@ -264,8 +270,20 @@ function initDesigns(boot) {
   if (boot) { designs.cur = boot.cur; designs.name = boot.name; designs.preset = boot.name ? null : boot.preset || null; $('#designName').value = boot.name; designs.savedSnap = boot.cur && boot.clean ? designSnap() : null; }
   else designs.preset = 'quadx';   // (a first visit opens on the Quad X layout)
   if (!boot || !boot.edited) designs.baseSnap = designSnap();   // the airframe on screen is as it was loaded
-  $('#designSave').addEventListener('click', saveDesign);
-  $('#designName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveDesign(); } });
+  $('#designSaveAs').addEventListener('click', () => {
+    let name = designs.name || $('#droneName').value || 'Untitled design';
+    const base = name;
+    for (let k = 2; designs.list.some(d => d.name === name); k++) name = `${base} (${k})`;
+    $('#designName').value = name; designNote(''); $('#designSaveDlg').showModal();
+    $('#designName').focus(); $('#designName').select();
+  });
+  $('#designSaveForm').addEventListener('submit', async e => {
+    e.preventDefault(); if ($('#designSave').disabled) return;
+    if (await saveDesign(true)) $('#designSaveDlg').close();
+  });
+  $('#designFiles').addEventListener('click', () => { designNote(''); $('#designFilesDlg').showModal(); });
+  $('#designManage').addEventListener('click', () => { designNote(''); renderDesigns(); $('#designManageDlg').showModal(); });
+  document.querySelectorAll('[data-close-dialog]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
   $('#designExport').addEventListener('click', () => exportDesign(null));
   $('#designImport').addEventListener('click', () => $('#designFile').click());
   $('#designFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importDesign(f); });
