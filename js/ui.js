@@ -811,7 +811,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     if (PRESETS[key].cargoTask) C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo');
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
-  setLaws({}); cfg.tuning = tuneDefaults(); cfg.programs = [];   // (and the formulas and gains as they come, no programs)
+  setLaws({}); cfg.tuning = tuneDefaults(); cfg.programs = []; cfg.apps = [];   // (and the formulas and gains as they come, no programs or apps)
   designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
@@ -1091,7 +1091,7 @@ function load() {
     for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps']) if (s.radio2[k] != null && isFinite(s.radio2[k])) radioCfg2[k] = +s.radio2[k];
   }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
-    cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; cfg.tuning = tuneFix(s.cfg.tuning); cfg.programs = fixPrograms(s.cfg.programs); if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
+    cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; cfg.tuning = tuneFix(s.cfg.tuning); cfg.programs = fixPrograms(s.cfg.programs); cfg.apps = fixApps(s.cfg.apps); if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
     if (s.keepLearning === false) learnPrefs.keep = false;
     if (s.holdPulses === false) learnPrefs.holdPulses = false;

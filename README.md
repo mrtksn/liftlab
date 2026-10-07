@@ -902,8 +902,14 @@ to, and topics reach boards that aren't linked to their writer through the fligh
 **Programs** are your own formulas on a board of your choice (Formula editor → **+ New program**): a header (when it
 runs, the topics it reads, the `user.` topic it writes) and code, `function name(st, inp, dt) { … return { … }; }`.
 They're compiled into that board's flight program, run on the bus (`runner/fc/prog_core.c`), reload in flight when
-their code changes and are part of the design. For now they run in the simulator; real boards, native apps on the Pi
-(`liftlab_bus.h`, Python) and command arbitration are the next steps. The design, the rules (the flight loop never
+their code changes and are part of the design.
+
+**Apps** are code of your own in C or Python (Computers → **App manager…**), on a board whose settings say it runs
+apps: an ESP32 runs formulas *or* WebAssembly apps, a Pi any of formulas, WebAssembly apps and native apps together.
+C is compiled in the browser into WebAssembly (clang as WebAssembly, fetched once), with a limit on every loop, and run
+by the board's app host through the same `prog_core.c`: a crash or an endless loop stops that run, not the board. See
+[docs/apps.md](docs/apps.md). For now programs and apps run in the simulator; the boards' app hosts, the bus on real
+boards and command arbitration are the next steps. The design, the rules (the flight loop never
 waits on the bus; one writer per topic; stale is missing; a link budget) and the plan are in
 [docs/topic-bus.md](docs/topic-bus.md).
 

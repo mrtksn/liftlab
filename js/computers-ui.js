@@ -196,7 +196,7 @@ function buildComputers() {
     section('computerSensorsSec','Sensors',el('div',{class:'computer-grid',id:'computerSensors'})),
     section('computerCargoSec','Cargo outputs',el('div',{class:'computer-grid',id:'computerCargo'})),
     section('computerRadioSec','Radio',el('div',{class:'computer-grid',id:'computerRadio'})),
-    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},computerToolButton('formulasOpen','Formula editor…','<path d="M7 4L2 10l5 6m6-12 5 6-5 6M11 3l-2 14"/>',()=>openFormulaEditor()),computerToolButton('busOpen','Live data…','<path d="M2 15h3l3-9 4 12 3-7h3"/>',()=>openComputerView({kind:'bus'})),computerToolButton('wiringOpen','Wiring overview…','<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M4.5 7v8.5H13M7 4.5h8.5V13"/>',()=>openComputerView({kind:'wiring'})))));
+    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},computerToolButton('formulasOpen','Formula editor…','<path d="M7 4L2 10l5 6m6-12 5 6-5 6M11 3l-2 14"/>',()=>openFormulaEditor()),computerToolButton('appsOpen','App manager…','<rect x="2.5" y="2.5" width="6" height="6" rx="1"/><rect x="11.5" y="2.5" width="6" height="6" rx="1"/><rect x="2.5" y="11.5" width="6" height="6" rx="1"/><path d="M14.5 11.5v6M11.5 14.5h6"/>',()=>openAppManager()),computerToolButton('busOpen','Live data…','<path d="M2 15h3l3-9 4 12 3-7h3"/>',()=>openComputerView({kind:'bus'})),computerToolButton('wiringOpen','Wiring overview…','<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M4.5 7v8.5H13M7 4.5h8.5V13"/>',()=>openComputerView({kind:'wiring'})))));
   pane.prepend($('#computerToolsSec'));
   pane.append(el('div',{id:'hardwareRows',hidden:true}));
   const detail=computerDialog('computerDlg','Computer details');pane.append(detail.dialog);
@@ -212,6 +212,7 @@ function buildComputers() {
     const kind=btn.dataset.boardKind;C.boards.push({id:C.nextBoardId||Math.max(0,...C.boards.map(b=>b.id))+1,kind,name:BOARD_KINDS[kind].label,tasks:[]});
     add.dialog.close();setComputers(C,'add');
   }));pane.append(add.dialog);
+  buildAppManager(pane);
   const editor=computerDialog('formulaDlg','Formula editor'),formulaDialog=editor.body;
   editor.dialog.classList.add('formula-dialog');
   const select=UI.select({id:'formulaSelect','aria-label':'Formula'});
@@ -272,7 +273,7 @@ function nameBox(value, label, id, onName) {
 function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if(!COMP.built)return;
-  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg(),typeof programs==='function'?programs():[]]);
+  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg(),typeof programs==='function'?programs():[],typeof apps==='function'?apps().map(a=>[a.id,a.name,a.kind]):[]]);
   if(full||COMP.sig!==sig){
     COMP.sig=sig;COMP.rendering=true;
     try{
@@ -306,8 +307,9 @@ function computerBoardCard(b,ground=false){
   const key=ground?'ground':b.id,K=BOARD_KINDS[b.kind];
   return interactiveCard({'data-board':key,'aria-label':b.name+' details'},()=>openComputerView({kind:'board',id:key}),
     el('div',{class:'computer-card-heading'},el('b',{text:b.name}),el('span',{class:'computer-location',text:ground?'Ground':'Onboard'})),
-    el('span',{class:'computer-kind',text:K.label}),el('p',{class:'computer-meta',text:K.note}),
+    el('span',{class:'computer-kind',text:K.label+(ground||runsFormulas(b)&&boardRuns(b).length===1?'':' · '+boardRuns(b).map(r=>RUNTIMES[r].label).join(' + '))}),el('p',{class:'computer-meta',text:K.note}),
     ...(!ground&&typeof programs==='function'&&programs().some(p=>p.board===b.id)?[el('p',{class:'computer-meta board-programs',text:'Programs: '+programs().filter(p=>p.board===b.id).map(p=>p.name).join(', ')})]:[]),
+    ...(!ground&&typeof apps==='function'&&(b.apps||[]).length?[el('p',{class:'computer-meta board-apps',text:'Apps: '+(b.apps||[]).map(appById).filter(Boolean).map(a=>a.name).join(', ')})]:[]),
     UI.button({class:'btn sm',text:'Install / export…',id:ground?'ginst':'binst-'+b.id,onclick:e=>{e.stopPropagation();openInstall(ground?'ground':b);}}));
 }
 function assignmentCard(name,board,description,open,attrs={}){
@@ -341,7 +343,8 @@ function openComputerView(view){
   COMP.view=view;COMP.confirm=null;renderHardware();renderComputerDetail();
   if(!dlg.open)dlg.showModal();dlg.scrollTop=0;
 }
-function eligibleTaskBoards(task){const T=TASKS[task];return computers().boards.filter(b=>(!T.mcuOnly||BOARD_KINDS[b.kind].mcu)&&(!T.piOnly||!BOARD_KINDS[b.kind].mcu));}
+// (a duty needs a board that runs formulas; a device's wiring doesn't: forDevice)
+function eligibleTaskBoards(task,forDevice=false){const T=TASKS[task];return computers().boards.filter(b=>(!T.mcuOnly||BOARD_KINDS[b.kind].mcu)&&(!T.piOnly||!BOARD_KINDS[b.kind].mcu)&&(forDevice||runsFormulas(b)));}
 function assignDuty(task,id){
   const C=JSON.parse(JSON.stringify(computers()));for(const b of C.boards)b.tasks=b.tasks.filter(t=>t!==task);
   if(id!=null){const b=C.boards.find(b=>b.id===id);if(!b||!eligibleTaskBoards(task).some(x=>x.id===id))return;b.tasks.push(task);}
@@ -393,7 +396,7 @@ function renderComputerDetail(){
   if(view.kind==='device'){
     const c=compById(view.id);if(!c){$('#computerDlg').close();return;}$('#computerDlgTitle').textContent=c.name;
     box.append(el('p',{text:deviceDescription(c)}));const current=hardwareOwner(C,c),task=c.type==='latch'?'cargo':c.type==='sensor'&&['fix','flow'].includes(c.kind)?'nav':'core';
-    const boards=eligibleTaskBoards(task);assignmentChoices(box,current,boards,id=>editWiring(w=>{const same=hardwareOwner(computers(),c)?.id===id;w.parts[c.id]={...w.parts[c.id],board:id,...(c.type==='sensor'?{}:{pin:id==null?-1:same?partWiring(c).pin:-1})};},c.id));
+    const boards=eligibleTaskBoards(task,true);assignmentChoices(box,current,boards,id=>editWiring(w=>{const same=hardwareOwner(computers(),c)?.id===id;w.parts[c.id]={...w.parts[c.id],board:id,...(c.type==='sensor'?{}:{pin:id==null?-1:same?partWiring(c).pin:-1})};},c.id));
     if(Object.hasOwn(C.wiring?.parts?.[c.id]||{},'board'))box.append(UI.button({class:'btn sm',text:'Follow '+TASKS[task].label+' automatically',onclick:()=>editWiring(w=>{const p={...w.parts[c.id]};delete p.board;delete p.pin;w.parts[c.id]=p;},c.id)}));
     else box.append(el('p',{class:'hint',text:'Follows the '+TASKS[task].label+' board automatically.'}));
     if(current&&['motor','joint'].includes(c.type)&&current.id!==boardOf('core')?.id)box.append(el('p',{class:'hint',text:'Assign Flight core to this board to drive this output. Distributed flight outputs are not supported.'}));
@@ -404,9 +407,10 @@ function renderComputerDetail(){
   const K=BOARD_KINDS[b.kind],budget=ground?groundBudget():boardBudget(b);$('#computerDlgTitle').textContent=b.name;
   box.append(nameBox(b.name,'Board name',ground?'gname':'bname-'+b.id,v=>renameComputer(D=>{const x=ground?D.ground:D.boards.find(x=>x.id===b.id);if(x)x.name=(v||K.label).slice(0,24);})),
     hardwareField('Computer',hardwareSelect('Board kind',ground?'gkind':'bkind-'+b.id,Object.entries(BOARD_KINDS).filter(([,K])=>ground||!K.groundOnly).map(([id,K])=>[id,K.label]),b.kind,v=>{const D=JSON.parse(JSON.stringify(computers()));(ground?D.ground:D.boards.find(x=>x.id===b.id)).kind=v;setComputers(D,'kind');})),
-    el('p',{text:K.note}),el('p',{class:'hint',text:ground?'Command module':b.tasks.map(t=>TASKS[t].label+' · '+boardTaskHz(b,t)+' Hz').join(' / ')||'No duties assigned'}),
-    el('p',{class:budget.load>0.8?'bad':'hint',text:'Estimated load '+pct(budget.load)+' of '+(K.cores>1?'one core':'its core')+(K.mcu?' · program '+budget.memKB.toFixed(1)+' KB of '+K.ramKB+' KB':'')+(budget.load>1?' · over capacity':'')}),
+    el('p',{text:K.note}),el('p',{class:'hint',text:ground?'Command module':!runsFormulas(b)?(appsOn(b).length?'Apps: '+appsOn(b).map(a=>a.name).join(', '):'No apps on it yet'):b.tasks.map(t=>TASKS[t].label+' · '+boardTaskHz(b,t)+' Hz').join(' / ')||'No duties assigned'}),
+    ...(ground||runsFormulas(b)?[el('p',{class:budget.load>0.8?'bad':'hint',text:'Estimated load '+pct(budget.load)+' of '+(K.cores>1?'one core':'its core')+(K.mcu?' · program '+budget.memKB.toFixed(1)+' KB of '+K.ramKB+' KB':'')+(budget.load>1?' · over capacity':'')})]:[]),
     UI.button({class:'btn primary',text:'Install / export…',onclick:()=>{$('#computerDlg').close();openInstall(ground?'ground':b);}}));
+  if(!ground)box.append(boardRunsSection(b));
   const only=!ground&&K.mcu&&C.boards.filter(x=>BOARD_KINDS[x.kind].mcu).length===1;
   const blocked=ground?'The ground command module is part of the pilot link.':C.boards.length<2?'Keep at least one onboard board.':only?'Add another microcontroller before deleting the last one.':'';
   const del=UI.button({class:'btn',id:ground?'gdel':'bdel-'+b.id,text:'Delete board',disabled:blocked?'disabled':null,title:blocked,onclick:()=>{COMP.confirm=b.id;renderHardware();renderComputerDetail();}});box.append(del);
@@ -460,4 +464,43 @@ function boardsExport(what, btn) {
   a.href = URL.createObjectURL(new Blob([data], { type: 'application/octet-stream' }));
   a.download = nm + ext; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+// A board's settings: what it runs (formulas, WebAssembly apps, native apps), and its apps.
+function boardRunsSection(b){
+  const K=BOARD_KINDS[b.kind],runs=boardRuns(b),box=el('section',{class:'board-runs'},el('h3',{text:'Runs'}));
+  const msg=UI.status({class:'law-err board-runs-err',role:'status'});
+  const set=next=>{
+    const lost=runs.filter(r=>!next.includes(r));
+    if(lost.includes('formulas')&&(b.tasks.length||programs().some(p=>p.board===b.id))){msg.textContent='Move its duties'+(programs().some(p=>p.board===b.id)?' and programs':'')+' to another board first: '+[...b.tasks.map(t=>TASKS[t].label),...programs().filter(p=>p.board===b.id).map(p=>p.name)].join(', ')+'.';msg.className='ui-status law-err board-runs-err on';renderRunsChoice();return;}
+    const gone=appsOn(b).filter(a=>!next.includes(APP_KINDS[a.kind].runtime));
+    if(gone.length){msg.textContent='Take its '+gone.map(a=>a.name).join(', ')+' off first (Apps on this board, below).';msg.className='ui-status law-err board-runs-err on';renderRunsChoice();return;}
+    const D=JSON.parse(JSON.stringify(computers())),x=D.boards.find(x=>x.id===b.id);x.runs=next;setComputers(D,'runs');
+  };
+  const choice=el('div',{class:'board-runs-choice'});
+  const renderRunsChoice=()=>{
+    if(K.mcu){const sel=UI.select({'aria-label':'What the board runs',id:'bruns-'+b.id},...['formulas','wasm'].map(r=>el('option',{value:r,text:RUNTIMES[r].label})));sel.value=runs[0];sel.addEventListener('change',()=>set([sel.value]));choice.replaceChildren(sel,el('p',{class:'hint',text:RUNTIMES[runs[0]].what+'. A microcontroller runs one or the other: it decides the firmware it gets.'}));}
+    else choice.replaceChildren(...Object.entries(RUNTIMES).map(([r,R])=>el('label',{class:'check'},Object.assign(UI.input({type:'checkbox',value:r,'data-runs':r}),{checked:runs.includes(r),onchange:e=>{const next=Object.keys(RUNTIMES).filter(k=>k===r?e.target.checked:runs.includes(k));if(!next.length){e.target.checked=true;return;}set(next);}}),el('span',{text:R.label+' · '+R.what}))));
+  };
+  renderRunsChoice();box.append(choice,msg);
+  const appRt=runs.filter(r=>r!=='formulas');
+  if(appRt.length){
+    const mine=appsOn(b),list=el('div',{class:'board-app-list'});
+    for(const a of mine)list.append(UI.card({class:'board-assignment','data-board-app':a.id},el('div',{},el('b',{text:a.name}),el('span',{class:'computer-meta',text:APP_KINDS[a.kind].label+' · writes '+a.writes.topic})),
+      el('div',{class:'law-actions'},UI.button({class:'btn sm',text:'Open',onclick:()=>{$('#computerDlg').close();openAppManager(a.id);}}),UI.button({class:'btn sm',text:'Take off','data-app-off':a.id,onclick:()=>boardApp(b,a.id,false)}))));
+    if(!mine.length)list.append(el('p',{class:'hint',text:'No apps on it yet.'}));
+    const fits=apps().filter(a=>appRt.includes(APP_KINDS[a.kind].runtime)&&!mine.includes(a));
+    const pick=UI.select({'aria-label':'An app to put on this board',id:'bapp-'+b.id},el('option',{value:'',text:fits.length?'Put an app on it…':'No other apps for it'}),...fits.map(a=>{const at=appBoard(a);return el('option',{value:a.id,text:a.name+' · '+APP_KINDS[a.kind].label+(at?' (now on '+at.name+')':'')});}));
+    pick.disabled=!fits.length;pick.addEventListener('change',()=>{if(pick.value)boardApp(b,pick.value,true);});
+    const kind=appRt.includes('wasm')?'wasm':'python';
+    box.append(el('h3',{text:'Apps on this board'}),list,el('div',{class:'law-actions'},pick,UI.button({class:'btn sm',text:'+ New app here','data-new-app':b.id,onclick:()=>{$('#computerDlg').close();newApp(kind,b.id);}})));
+    if(K.mcu)box.append(el('p',{class:'hint',text:'On the drone it needs the app-board firmware (the WebAssembly runtime); see Install / export. Until then its apps run in the simulator.'}));
+  }
+  return box;
+}
+// Put an app on a board (off any other: an app runs on one board), or take it off.
+function boardApp(b,id,on){
+  const D=JSON.parse(JSON.stringify(computers()));
+  for(const x of D.boards)if(on||x.id===b.id)x.apps=(x.apps||[]).filter(k=>k!==id);
+  if(on){const x=D.boards.find(x=>x.id===b.id);x.apps=[...(x.apps||[]),id];}
+  setComputers(D,'apps');
 }

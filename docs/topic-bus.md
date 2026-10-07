@@ -150,9 +150,15 @@ That loader rule is also why programs don't run on real boards yet: a board's bu
 firmware, and a program it doesn't have can't be matched. The loader needs to accept functions the built-in program
 lacks (step 4).
 
-## Apps outside LiftLab (native C, Python)
+## Apps (C, Python)
 
-Step 3. A board running Linux (the Pi) offers its bus on a local socket (`/run/liftlab/bus.sock`), with the same
+Apps, code of your own in C or Python on the boards that run apps (a board's settings say what it runs), are in
+[docs/apps.md](apps.md): written in the app manager, C compiled here into WebAssembly and run by the board's app host
+through `prog_core.c` like a program, with the same header. They run in the simulator now.
+
+## Apps outside LiftLab (the bus socket)
+
+For code that isn't an app at all (a program you already have, a tool on your computer): a board running Linux (the Pi) offers its bus on a local socket (`/run/liftlab/bus.sock`), with the same
 frames the boards use plus *publish* and *list* (each topic's name, size and layout, so an app adapts to the design
 loaded). A one-header C client (`liftlab_bus.h`) and a Python client speak it:
 
@@ -168,10 +174,8 @@ that flies waits for it, and its topics just go stale. It may publish only under
 The socket is a file with permissions, not an open network port. A bridge on your computer offers the same socket for
 the simulator, so the same app runs against both.
 
-On an ESP32 there is no operating system to install a second program on: native C there is a **user component**
-compiled into the firmware (ESP-IDF), with the same calls in-process, in a task below the flight loop's priority. It has
-no memory protection, so keep native code off the flight controller: use programs there, and put native code on a
-separate sensor board or the Pi.
+On an ESP32 there is no operating system to install a second program on: code of your own there is a WebAssembly app
+on an app board ([docs/apps.md](apps.md)), sandboxed and sent as data, not native code in the firmware.
 
 ## Migration
 
@@ -186,7 +190,9 @@ Each step ships something useful and keeps flying as it did.
 4. **Real boards.** `dfb_pi` runs the bus, the two frames and programs; the ESP32 firmware answers the frames
    (ESP-IDF rebuild); a sensor/program-board role for a second ESP32 and its serial link to the flight controller
    (simulated only today); the loader accepts programs the built-in program doesn't have.
-5. **Apps outside LiftLab**: the socket, `liftlab_bus.h`, the Python client, the simulator bridge, user components.
+5. **Apps** ([docs/apps.md](apps.md)) — in the simulator: what each board runs, the app manager, C compiled to
+   WebAssembly in the browser with a step limit, run through `prog_core.c`. Next: the Pi's app host (WAMR, native and
+   Python apps), the ESP32 app-board firmware, and the socket for code outside LiftLab (`liftlab_bus.h`, the bridge).
 6. **Commands as topics, with arbitration**: `cmd.radio`, `cmd.nav`, `cmd.mission`; the flight core picks by priority
    and age; a mission is a program writing `cmd.mission`.
 7. **Retire the special frames** one by one (`RN_LINK_NAV` first), once the bus carries the same data at the same rate

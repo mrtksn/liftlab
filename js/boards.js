@@ -57,6 +57,16 @@ TASKS.tlm = { label: 'Telemetry & radio', hz: 200, formulas: [],
   what: 'The pilot\'s radio is on this board: an ExpressLRS receiver wired to it, or its own ESP-NOW or Wi-Fi (the Ground tab picks the link). Its channels fly the drone; the other tasks\' telemetry comes here and goes down the radio, as much as the link has room for. About 16 KB of an ESP32\'s memory.' };
 TASKS.cargo = { label: 'Cargo', hz: 50, formulas: [],
   what: 'The latches are wired to this board: it opens and closes them on the pilot\'s command (the radio, or the buttons on the view) and reports what they hold. Any board will do: the flight controller, the Pi, or an ESP32 of its own.' };
+// What a board runs (its settings; docs/apps.md): formulas (its duties and formula programs, on the step runner),
+// WebAssembly apps (apps.js, on its app host), native apps (Pi only: C built on the Pi, Python). A microcontroller runs
+// one of the first two (it decides its firmware); a Linux computer any of them together.
+const RUNTIMES = {
+  formulas: { label: 'Formulas', what: 'its duties (flight core, navigation, …) and formula programs' },
+  wasm: { label: 'WebAssembly apps', what: 'C apps compiled here, on the board\'s WebAssembly runtime' },
+  native: { label: 'Native apps', what: 'C built on the Pi, and Python', linuxOnly: true },
+};
+const boardRuns = b => b && Array.isArray(b.runs) && b.runs.length ? b.runs : ['formulas'];
+const runsFormulas = b => boardRuns(b).includes('formulas');
 // Tasks that are plain code, without formulas: a board that runs only these loads no flight program.
 const NO_PROGRAM = new Set(['tlm', 'cargo']);
 const needsProgram = b => b.tasks.some(t => !NO_PROGRAM.has(t)) || (typeof programsOn === 'function' && programsOn(b).length > 0);   // (and a board with programs: they are in its flight program)
@@ -80,8 +90,17 @@ function fixComputers(C) {
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));
+  const placed = new Set();
+  for (const b of C.boards) {                                      // what it runs, and its apps (each on one board)
+    const mcu = BOARD_KINDS[b.kind].mcu, r = Object.keys(RUNTIMES).filter(k => (b.runs || []).includes(k) && !(mcu && RUNTIMES[k].linuxOnly));
+    b.runs = mcu ? [r.includes('formulas') || !r.length ? 'formulas' : 'wasm'] : r.length ? r : ['formulas'];
+    if (!b.runs.includes('formulas')) b.tasks = [];
+    b.apps = (Array.isArray(b.apps) ? b.apps : []).filter(id => typeof id === 'string' && !placed.has(id)).slice(0, 16); for (const id of b.apps) placed.add(id);
+    if (b.runs.length === 1 && b.runs[0] === 'formulas') delete b.runs;   // (the default: designs stay as they were)
+    if (!b.apps.length) delete b.apps;
+  }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
-  if (!C.unassignedCore && !C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
+  if (!C.unassignedCore && !C.boards.some(b => b.tasks.includes('core'))) { const fc = C.boards.find(b => BOARD_KINDS[b.kind].mcu && runsFormulas(b)); if (fc) fc.tasks.unshift('core'); }
   C.radio = 1;
   return C;
 }
@@ -227,7 +246,7 @@ function boardsStart() {
   try { af = fcAirframeBlob({ imuBody: true }); } catch (x) { afErr = x.message; }
   for (const b of C.boards) {
     let w = brt.inst.get(b.id);
-    if (!w) { w = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports; brt.inst.set(b.id, w); }
+    if (!w) { const id = b.id; w = new WebAssembly.Instance(brt.module, { env: { ...RnWasm.env(), app_call: (i, inP, nIn, outP, nOut) => appCall(id, i, inP, nIn, outP, nOut) } }).exports; brt.inst.set(b.id, w); }
     w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0); w.radio_link(...radioModel().wasm(radioCfg));
     if (b.tasks.includes('cargo')) {                                // the latches, as they were set up: closed or open
       const ls = latches().slice(0, 8); frIn(w, ls.map(l => l.travel ?? 0.15));
@@ -303,10 +322,12 @@ function busSetup() {
     busTxt(w, busSensorName(c), S[1]); const id = w.bus_declare(S[0]); if (id >= 0) brt.busSensors.push({ c, w, id, S });
   }
   progRegister();                                                   // (programs.js: their topics, before anyone routes to them)
+  appRegister();                                                    // (apps.js: the apps', on the boards that run them)
   for (const [task, name, period] of BUS_READS) { const b = boardOf(task); if (b) busRead(b, name, period); }
-  for (const p of programs()) { const at = brt.progAt.get(p.id); if (at) for (const r of p.reads) { const why = busRead(at.b, r, p.every > 0 ? p.every : 0); if (why) brt.progErr.set(p.id, why); } }
-  progConnect();
-  brt.progBoards = [...new Set([...brt.progAt.values()].map(a => a.w))];
+  for (const [list, at, err] of [[programs(), brt.progAt, brt.progErr], [apps(), brt.appAt, brt.appErr]])
+    for (const p of list) { const a = at.get(p.id); if (a) for (const r of p.reads) { const why = busRead(a.b, r, p.every > 0 ? p.every : 0); if (why) err.set(p.id, why); } }
+  progConnect(programs(), brt.progAt, brt.progErr); progConnect(apps(), brt.appAt, brt.appErr);
+  brt.progBoards = [...new Set([...brt.progAt.values(), ...brt.appAt.values()].map(a => a.w))];
 }
 // Each control step: the sensors' fresh readings onto their boards' buses; renew the subscriptions twice a second; and
 // send what has fallen due, both ways on each link.

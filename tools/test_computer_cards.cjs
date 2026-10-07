@@ -29,7 +29,7 @@ try{
  assert.strictEqual(await duty('cargo').locator('button').innerText(),'Assign');assert.strictEqual(await duty('core').locator('button').count(),0);
  assert((await board(pi).innerText()).includes('Linux computer, 1 core at 1 GHz'));
  assert.strictEqual(await page.locator('#paneForm > .sec').first().getAttribute('id'),'computerToolsSec');
- assert.strictEqual(await page.locator('#computerToolsSec svg').count(),3);   // formulas, live data, wiring
+ assert.strictEqual(await page.locator('#computerToolsSec svg').count(),4);   // formulas, apps, live data, wiring
  assert.strictEqual(await page.locator('#busOpen').innerText(),'Live data…');
  await page.locator('#computerRadio').scrollIntoViewIfNeeded();await page.waitForTimeout(100);
  const pinned=await page.locator('#computerToolsSec').boundingBox(),nav=await page.locator('#airframe .section-nav').boundingBox();assert(pinned.y>=nav.y+nav.height-1&&pinned.y<nav.y+nav.height+5,'Computers tools were not pinned below section navigation');

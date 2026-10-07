@@ -72,10 +72,10 @@ try{
   const {wait,check,set,read,code,press,err}=T;
   // what's refused, with why
   $('#progNew').click();await wait(50);
-  set('Program name','altFilter');check(/Another program is called/.test(err()),'A taken name not refused: '+err());
+  set('Program name','altFilter');check(/Another program or app is called/.test(err()),'A taken name not refused: '+err());
   set('Program name','attitudeControl');check(/taken by a formula/.test(err()),'A formula\'s name not refused: '+err());
   set('Program name','bad name');check(/must be a word/.test(err()),'A bad name not refused');
-  set('Program name','p3');set('Topic it writes (after user.)','alt');check(/Another program writes user\.alt/.test(err()),'A topic another program writes not refused: '+err());
+  set('Program name','p3');set('Topic it writes (after user.)','alt');check(/Another program or app writes user\.alt/.test(err()),'A topic another program writes not refused: '+err());
   set('Topic it writes (after user.)','p3');set('Its fields','a[0]');check(/fields/.test(err()),'A bad layout not refused');
   set('Its fields','x');set('When it runs','change');check(/runs when a topic it reads changes/.test(err()),'On a change with nothing read not refused');
   read('fc.height');code('function p3(st, inp, dt) { return { y: 1 }; }');press(/Add program/);await wait(50);

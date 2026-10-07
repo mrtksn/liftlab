@@ -13,7 +13,7 @@
 
 const PROG_MAX = 16, PROG_READS = 8;
 const programs = () => cfg.programs || (cfg.programs = []);
-const programsOn = b => programs().filter(p => b && p.board === b.id && !programProblem(p));
+const programsOn = b => programs().filter(p => b && p.board === b.id && runsFormulas(b) && !programProblem(p));
 const progKey = b => programsOn(b).map(p => p.name + '\u0001' + p.src).join('\u0000');   // (what a board's program has of them)
 
 // The topics a design has, worked out from it (not from the running boards): the flight code's (as runner/fc/fc_core.c
@@ -36,6 +36,7 @@ function busCatalog(except) {
   if (nav) for (const [name, layout] of BUS_BUILTIN.nav) out.push({ name, layout, board: nav, from: 'navigation' });
   for (const c of cfg.comps.filter(c => c.type === 'sensor')) { const b = wiredTo(c), S = BUS_SENSOR[c.kind]; if (b && S) out.push({ name: busSensorName(c), layout: S[1], board: b, from: c.name }); }
   for (const p of programs()) { if (p === except || p.id === (except && except.id)) continue; const b = C.boards.find(x => x.id === p.board); if (b && p.writes && layoutFields(p.writes.layout)) out.push({ name: p.writes.topic, layout: p.writes.layout, board: b, from: 'program ' + p.name }); }
+  if (typeof apps === 'function') for (const a of apps()) { if (a === except || a.id === (except && except.id)) continue; const b = appBoard(a); if (b && a.writes && layoutFields(a.writes.layout)) out.push({ name: a.writes.topic, layout: a.writes.layout, board: b, from: 'app ' + a.name + (APP_KINDS[a.kind].runtime === 'native' ? ' (not simulated)' : '') }); }
   return out.map(t => ({ ...t, n: layoutSize(t.layout) }));
 }
 // A program's names for what it reads: each topic by the last part of its name (two alike: the whole name, . as _).
@@ -54,11 +55,12 @@ const zeroOf = t => t.k === 'num' ? 0 : t.k === 'arr' ? Array.from({ length: t.n
 function programProblem(p, list = programs()) {
   if (!p || typeof p.name !== 'string' || !/^[A-Za-z_]\w{0,30}$/.test(p.name)) return 'Its name must be a word of letters, digits and _ (31 at most), starting with a letter.';
   if (LAWS[p.name] || RN_SIGS[p.name] || RN_KERNELS[p.name] || RN_HELPERS[p.name] || ['st', 'inp', 'dt', 'Math'].includes(p.name)) return `“${p.name}” is taken by a formula or a helper.`;
-  if (list.some(q => q !== p && q.id !== p.id && q.name === p.name)) return `Another program is called “${p.name}”.`;
+  if (list.some(q => q !== p && q.id !== p.id && q.name === p.name) || (typeof apps === 'function' && apps().some(a => a.name === p.name))) return `Another program or app is called “${p.name}”.`;
   const b = computers().boards.find(x => x.id === p.board); if (!b) return 'Choose the board it runs on.';
+  if (!runsFormulas(b)) return `${b.name} runs apps, not formulas: choose a board that runs formulas (a board's settings say what it runs).`;
   if (!p.writes || !/^user\.[A-Za-z0-9_][A-Za-z0-9_.]{0,17}$/.test(p.writes.topic)) return 'It writes a topic under user. (up to 23 characters: letters, digits, _ and .).';
   if (!layoutFields(p.writes.layout)) return 'Its topic\'s fields: names separated by spaces, a count in brackets for a list (range rate ok, or v[3]); 32 numbers at most.';
-  if (list.some(q => q !== p && q.id !== p.id && q.writes && q.writes.topic === p.writes.topic)) return `Another program writes ${p.writes.topic}.`;
+  if (list.some(q => q !== p && q.id !== p.id && q.writes && q.writes.topic === p.writes.topic) || (typeof apps === 'function' && apps().some(a => a.writes.topic === p.writes.topic))) return `Another program or app writes ${p.writes.topic}.`;
   if (!Array.isArray(p.reads) || p.reads.length > PROG_READS) return 'It reads 8 topics at most.';
   const cat = busCatalog(p);
   for (const r of p.reads) { if (r === p.writes.topic) return 'It can\'t read the topic it writes.'; if (!cat.some(t => t.name === r)) return `Nothing on this drone publishes ${r}.`; }
@@ -95,10 +97,11 @@ function progRegister() {
   }
   for (const p of programs()) if (programProblem(p)) brt.progErr.set(p.id, programProblem(p));
 }
-function progConnect() {
-  for (const p of programs()) {
-    const at = brt.progAt.get(p.id); if (!at) continue;
-    const { w, i } = at, fail = () => brt.progErr.set(p.id, cstr(w, w.prog_why_ptr(), 96));
+// (and the apps': apps.js)
+function progConnect(list = programs(), atOf = brt.progAt, errOf = brt.progErr) {
+  for (const p of list) {
+    const at = atOf.get(p.id); if (!at) continue;
+    const { w, i } = at, fail = () => errOf.set(p.id, cstr(w, w.prog_why_ptr(), 96));
     let ok = true;
     for (const r of p.reads) { busTxt(w, r); if (w.prog_read(i) < 0) { fail(); ok = false; break; } }
     if (ok && !(p.every > 0)) { busTxt(w, p.on); if (w.prog_on(i) < 0) { fail(); ok = false; } }
@@ -107,9 +110,9 @@ function progConnect() {
 }
 const busTxt3 = (w, a, b, c) => { const x = new TextEncoder().encode(a + '\0' + b + '\0' + c + '\0'); new Uint8Array(w.memory.buffer, w.txt_ptr(), x.length).set(x); };
 // How each program is doing on its board: { runs, fails, waits, err, ok }.
-function progStats() {
+function progStats(atOf = brt.progAt) {
   const out = new Map(), byBoard = new Map();
-  for (const [id, at] of brt.progAt || []) {
+  for (const [id, at] of atOf || []) {
     if (!byBoard.has(at.w)) { const n = at.w.prog_list(); byBoard.set(at.w, new Float32Array(at.w.memory.buffer, at.w.fr_ptr(), n * 5).slice()); }
     const v = byBoard.get(at.w), k = at.i * 5; out.set(id, { ok: v[k] > 0.5, runs: v[k + 1], fails: v[k + 2], waits: v[k + 3], err: v[k + 4] });
   }
@@ -126,7 +129,7 @@ const PROG_TEMPLATE = name => `function ${name}(st, inp, dt) {
 function newProgram() {
   const C = computers(), taken = new Set(programs().map(p => p.name));
   let k = 1; while (taken.has('program' + k)) k++;
-  const name = 'program' + k, b = C.boards.find(x => !BOARD_KINDS[x.kind].mcu) || boardOf('core') || C.boards[0];
+  const name = 'program' + k, b = C.boards.find(x => !BOARD_KINDS[x.kind].mcu && runsFormulas(x)) || boardOf('core') || C.boards.find(runsFormulas);
   const p = { id: 'p' + Date.now().toString(36), name, board: b ? b.id : null, every: 0.05, on: '', reads: [], writes: { topic: 'user.' + name, layout: 'v' }, src: PROG_TEMPLATE(name), draft: true };
   progCards.delete(p.id); showProgram(p);
 }
@@ -157,9 +160,10 @@ function progCard(p) {
     d.reads = [...reads.querySelectorAll('input:checked')].map(x => x.value); d.src = ta.value;
   };
   c.sync = () => {   // the controls from the draft, and what its code gets and returns
-    const C = computers(); board.replaceChildren(...C.boards.map(b => el('option', { value: b.id, text: b.name + ' · ' + BOARD_KINDS[b.kind].label })));
-    if (!C.boards.some(b => b.id === d.board)) board.prepend(el('option', { value: '', text: 'not assigned' }));
-    board.value = C.boards.some(b => b.id === d.board) ? String(d.board) : '';
+    const C = computers(); board.replaceChildren(...C.boards.filter(runsFormulas).map(b => el('option', { value: b.id, text: b.name + ' · ' + BOARD_KINDS[b.kind].label })));
+    const ok = C.boards.some(b => b.id === d.board && runsFormulas(b));
+    if (!ok) board.prepend(el('option', { value: '', text: 'not assigned' }));
+    board.value = ok ? String(d.board) : '';
     mode.value = d.every > 0 ? 'every' : 'change'; every.hidden = !(d.every > 0); on.hidden = d.every > 0;
     const cat = busCatalog(d), byBoard = new Map(); for (const t of cat) { if (!byBoard.has(t.board)) byBoard.set(t.board, []); byBoard.get(t.board).push(t); }
     reads.replaceChildren(...[...byBoard].map(([b, ts]) => el('fieldset', {}, el('legend', { text: b.name }), ...ts.map(t => el('label', { class: 'check', title: t.layout + ' · from ' + t.from },

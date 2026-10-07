@@ -170,9 +170,17 @@ function openInstall(target) {
   const names={program:'Program (.rnp)',airframe:'Airframe (.dfa)',nav:'Navigation (.dnc)',pi:'Pi configuration (.dlc)'};
   for(const file of files)exports.append(UI.button({class:'btn sm','data-export-file':file,text:names[file],onclick:()=>instDownload(file,target,message)}));
   body.append(UI.details({class:'computer-export',title:'Export files',open:true},exports,message));
-  if (K.mcu) body.append(...espGuide(target));
-  else if (target === 'ground') body.append(...groundPiGuide(K));
-  else body.append(...piGuide(target, K));
+  const myApps = target !== 'ground' && typeof appsOn === 'function' ? appsOn(target) : [];
+  if (myApps.length || (target !== 'ground' && !runsFormulas(target))) body.append(UI.details({ class: 'computer-export install-apps', title: 'Apps', open: true },
+    el('p', { class: 'inst-note', text: K.mcu ? 'An ESP32 that runs apps needs the app-board firmware: the board\'s WebAssembly runtime, its data bus and its link to the flight controller. It isn\'t ready yet, so its apps run in the simulator only for now. Their files are below.'
+      : 'The Pi\'s app host (its WebAssembly runtime, and the native and Python apps beside dfb_pi) isn\'t ready yet, so these apps run in the simulator only for now (WebAssembly ones). Their files are below.' }),
+    ...(myApps.length ? myApps.map(a => el('div', { class: 'law-actions' }, el('b', { text: a.name }), el('span', { class: 'computer-meta', text: APP_KINDS[a.kind].label }), UI.button({ class: 'btn sm', 'data-app-files': a.id, text: 'Download its files', onclick: () => appDownload(a) })))
+      : [el('p', { class: 'hint', text: 'No apps on it yet: put them on it in its settings.' })])));
+  if (target === 'ground' || runsFormulas(target)) {   // (a board with apps only gets no flight firmware: its apps, above)
+    if (K.mcu) body.append(...espGuide(target));
+    else if (target === 'ground') body.append(...groundPiGuide(K));
+    else body.append(...piGuide(target, K));
+  }
   if (!dlg.open) dlg.showModal();
   dlg.scrollTop = 0; $('#installTitle').focus();   // start at the top, not at its first input
 }

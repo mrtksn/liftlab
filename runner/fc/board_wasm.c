@@ -51,6 +51,7 @@ static rn_host H; static int host_ok;
 static bus BUS;                        /* this board's data bus */
 static float busv[BUS_TOPICS * (5 + BUS_VALS)];
 static prog_state PG;                  /* this board's programs */
+static int app_host(void *ctx, int app, const float *in, int n_in, float *out, int n_out);   /* (its apps: below) */
 static fc_state F;
 static nav_state N;
 static learn_state LS;
@@ -93,7 +94,7 @@ EXPORT("host_setup") int host_setup(uint32_t img_len) {
   int32_t *codes[3] = { codes_[0], codes_[1], codes_[2] };
   int e = rn_host_init(&H, img, img_len, arenas, ARENA_CAP, codes, CODE_CAP, pools, POOL_CAP);
   if (e) { set_why(F.why, "the flight program didn't load"); set_why(N.why, F.why); return 100 + e; }
-  host_ok = 1; prog_init(&PG, &H, &BUS); return 0;
+  host_ok = 1; prog_init(&PG, &H, &BUS); prog_apps(&PG, app_host, 0); return 0;
 }
 /* The flight core, with an airframe. */
 EXPORT("fc_setup") int fc_setup(uint32_t blob_len) {
@@ -148,10 +149,16 @@ EXPORT("bus_put") int bus_put(int n) {
 EXPORT("bus_declare") int bus_declare(int n) { return starts(txt, "sensor.") ? bus_topic(&BUS, txt, n, txt_layout()) : -1; }
 EXPORT("bus_driver_put") int bus_driver_put(int id, int n) { return id >= 0 && id < BUS.nt && starts(BUS.T[id].name, "sensor.") ? bus_pub(&BUS, id, fr, n) : -1; }   /* (values in fr) */
 /* ── programs (prog_core.h) ── */
-EXPORT("prog_reset") void prog_reset(void) { prog_init(&PG, host_ok ? &H : 0, &BUS); }
+/* Apps (docs/apps.md): the page runs each WebAssembly app in an instance of its own; prog_core calls it through this
+ * (the app's index on this board, its inputs, dt last; its result), as a board's app host calls its runtime. */
+__attribute__((import_module("env"), import_name("app_call"))) int app_call(int app, const float *in, int n_in, float *out, int n_out);
+static int app_host(void *ctx, int app, const float *in, int n_in, float *out, int n_out) { (void)ctx; return app_call(app, in, n_in, out, n_out); }
+EXPORT("prog_reset") void prog_reset(void) { prog_init(&PG, host_ok ? &H : 0, &BUS); prog_apps(&PG, app_host, 0); }
 /* a program: txt = its formula's name, 0, the topic it writes, 0, that topic's layout; it writes n floats; it runs
  * every period [s], or (0) on a change of the read prog_on names. Its index, or −1 (prog_why_ptr) */
 EXPORT("prog_add") int prog_add_(int n, float period) { const char *t = txt_layout(), *l = t; while (*l) l++; return prog_add(&PG, txt, t, n, l + 1, period); }
+/* an app: txt as prog_add (its name); it takes n_in floats (its reads, then dt) */
+EXPORT("prog_add_app") int prog_add_app_(int n, float period, int n_in) { const char *t = txt_layout(), *l = t; while (*l) l++; return prog_add_app(&PG, txt, t, n, l + 1, period, n_in); }
 EXPORT("prog_read") int prog_read_(int i) { return prog_read(&PG, i, txt); }      /* a topic it reads: txt */
 EXPORT("prog_on") int prog_on(int i) { return prog_trigger(&PG, i, txt); }         /* the read whose change runs it: txt */
 EXPORT("prog_check") int prog_check_(int i) { return prog_check(&PG, i); }

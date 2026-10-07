@@ -14,6 +14,42 @@ static int fails;
 #define PCAP 1024
 static float ar[3][ACAP], pl[3][PCAP]; static int32_t cd[3][CCAP];
 
+/* Apps (prog_add_app): a stand-in for the board's app host. App 0 doubles the barometer every other run (and doesn't
+ * publish the others); app 1 traps; the host is told what it was given. */
+static int calls[2], last_n_in[2]; static float last_dt[2];
+static int host(void *ctx, int app, const float *in, int n_in, float *out, int n_out) {
+  (void)ctx; calls[app]++; last_n_in[app] = n_in; last_dt[app] = in[n_in - 1];
+  if (app == 1) return -3;
+  if (calls[app] % 2) return 0;
+  out[0] = 2 * in[0]; out[1] = (float)calls[app]; (void)n_out; return 1;
+}
+static void apps(bus *B) {
+  static prog_state A;
+  prog_init(&A, 0, B);
+  CHECK(prog_add_app(&A, "twice", "user.twice", 2, "h n", 0, 2) == -1 && strstr(A.why, "no apps"), "a board with no app host refuses apps: %s", A.why);
+  prog_apps(&A, host, 0);
+  int a = prog_add_app(&A, "twice", "user.twice", 2, "h n", 0, 2), t = prog_add_app(&A, "trap", "user.trap", 1, "x", 0.1f, 2), w = prog_add_app(&A, "wrong", "user.wrong", 1, "x", 0.1f, 3);
+  CHECK(a == 0 && t == 1 && w == 2 && A.P[a].app == 0 && A.P[t].app == 1 && A.P[w].app == 2 && A.P[a].fn == -1, "apps added: %d %d %d (%s)", a, t, w, A.why);
+  CHECK(prog_add(&A, "smooth", "user.x", 3, "h rate n", 0) == -1 && strstr(A.why, "no formula"), "formulas still need the step runner");
+  prog_read(&A, a, "sensor.baro"); prog_trigger(&A, a, "sensor.baro"); prog_read(&A, t, "sensor.baro"); prog_read(&A, w, "sensor.baro");
+  CHECK(prog_check(&A, a) == 0 && prog_check(&A, t) == 0, "apps check against the inputs they were compiled for: %s", A.why);
+  CHECK(prog_check(&A, w) == -1 && strstr(A.why, "inputs"), "an app compiled for other inputs is refused: %s", A.why);
+  int baro = bus_find(B, "sensor.baro"), out = bus_find(B, "user.twice"); uint32_t seen = 0; int pubs = 0;
+  double t0 = B->now;
+  for (int i = 1; i <= 1000; i++) {
+    bus_clock(B, t0 + i * 0.001);
+    if (i % 40 == 0) { float h = 5; bus_pub(B, baro, &h, 1); }
+    prog_step(&A);
+    if (bus_changed(B, out, &seen)) pubs++;
+  }
+  const float *v = bus_get(B, out, 0, 0);
+  /* (26: the reading already there, then 25 more) */
+  CHECK(calls[0] == 26 && A.P[a].runs == 26 && pubs == 13, "the app ran on each reading (26: %d, %u runs) and published when it said so (13: %d)", calls[0], A.P[a].runs, pubs);
+  CHECK(v && v[0] == 10 && v[1] == 26, "what it published: %g %g", v ? v[0] : -1, v ? v[1] : -1);
+  CHECK(last_n_in[0] == 2 && last_dt[0] > 0.0399f && last_dt[0] < 0.0401f && last_dt[1] > 0.0999f && last_dt[1] < 0.1001f, "its inputs: the barometer, then dt (%d floats, dt %g, %g)", last_n_in[0], last_dt[0], last_dt[1]);
+  CHECK(A.P[t].fails == 10 && A.P[t].err == -3 && A.P[t].runs == 0 && !bus_get(B, bus_find(B, "user.trap"), 0, 0), "a trapping app: %u failures, error %d, nothing published", A.P[t].fails, A.P[t].err);
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: %s prog.rnp\n", argv[0]); return 2; }
   FILE *f = fopen(argv[1], "rb"); if (!f) { perror(argv[1]); return 2; }
@@ -60,6 +96,7 @@ int main(int argc, char **argv) {
   const float *tv = bus_get(&B, tk_out, 0, 0);
   CHECK(G.P[tk].runs >= 19 && G.P[tk].runs <= 20 && tv && tv[0] > 1.8f && tv[0] < 2.05f, "ticker every 100 ms: %u runs, t %g", G.P[tk].runs, tv ? tv[0] : -1);
   CHECK(G.P[br].fails >= 35 && G.P[br].runs == 0 && !bus_get(&B, bus_find(&B, "user.broken"), 0, 0), "broken: %u failed runs, nothing published", G.P[br].fails);
+  apps(&B);
 
   printf(fails ? "%d FAILED\n" : "programs: all passed\n", fails);
   return fails != 0;

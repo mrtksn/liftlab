@@ -44,6 +44,7 @@ jobs:
       - run: node tools/test_agent_hardware.js
       - run: node tools/test_driver_presets.js
       - run: node tools/test_flight_physics.js
+      - run: node tools/test_wasm_meter.js
       - run: python3 tools/sync_driver_presets.py --check
       - name: Sensor driver register tests
         run: |

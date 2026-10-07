@@ -749,6 +749,16 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .prog-reads code{font-family:var(--f-mono);font-size:var(--text-xs)}
 .prog-shape{margin:0;padding:var(--space-8);background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-control);font:var(--text-xs) var(--f-mono);color:var(--muted);white-space:pre-wrap}
 .board-programs{font-family:var(--f-mono);font-size:var(--text-xs)}
+.board-apps{font-family:var(--f-mono);font-size:var(--text-xs)}
+.board-runs{display:grid;gap:var(--space-8);margin:var(--space-8) 0}
+.board-runs-choice{display:grid;gap:var(--space-6)}
+.board-runs-choice .check{display:flex;gap:var(--space-6);align-items:center;font-size:var(--text-sm)}
+.board-app-list{display:grid;gap:var(--space-6)}
+.board-runs .law-actions{flex-wrap:wrap;align-items:center}
+.app-header{max-height:320px;overflow:auto}
+.app-compiler,.app-log{margin:0;padding:var(--space-8);background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-control);font:var(--text-xs) var(--f-mono);white-space:pre-wrap;max-height:260px;overflow:auto}
+.app-where{margin:0}
+.install-apps .law-actions{align-items:center;flex-wrap:wrap}
 /* Live data: the boards' data buses (bus-ui.js) */
 .bus-board{margin-top:var(--space-10)}
 .bus-scroll{overflow-x:auto;margin-top:var(--space-6)}

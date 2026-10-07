@@ -13,6 +13,11 @@
  * Use: prog_init; for each program prog_add (registers its topic), then (once the topics it reads are on the bus,
  * mirrors included) prog_read for each, prog_trigger if it runs on a change, and prog_check; then prog_step at the
  * board's step, after the bus clock is set.
+ *
+ * Apps (docs/apps.md) run the same way, but outside the step runner: a WebAssembly app's step function, called
+ * through the board's app host (prog_apps sets it). prog_add_app registers one with the size of its inputs (the
+ * floats of what it reads, then dt) as its code was compiled for; it returns 1 to publish, 0 not to, or an error
+ * (below 0: a trap, too long a run). Waiting for inputs, triggers, the finite check and the counts are the same.
  */
 #ifndef PROG_CORE_H
 #define PROG_CORE_H
@@ -23,9 +28,14 @@
 #define PROG_READS 8                   /* topics a program reads */
 #define PROG_IN (PROG_READS * BUS_VALS + 1)
 
+/* An app's step, through the board's app host: app (prog_add_app's index among the apps), its inputs (n_in floats,
+ * dt last), its result (n_out floats). 1 publish, 0 don't, below 0 an error. */
+typedef int (*prog_app_fn)(void *ctx, int app, const float *in, int n_in, float *out, int n_out);
+
 typedef struct {
   char name[32];
-  int fn, out;                         /* its formula in the host; the topic it writes */
+  int fn, out;                         /* its formula in the host (an app: −1); the topic it writes */
+  int app, app_in;                     /* an app: its index for the app host, and the inputs it was compiled for (−1: a formula) */
   int reads[PROG_READS], nreads;
   int trig; float period;              /* the topic whose change runs it (−1: every period [s]) */
   uint32_t seen; double next, last;    /* the trigger's sequence seen; when it next runs (by period); when it last ran */
@@ -34,6 +44,7 @@ typedef struct {
 } prog_t;
 typedef struct {
   rn_host *H; bus *B;
+  prog_app_fn app_call; void *app_ctx; int napps;
   prog_t P[PROG_MAX]; int n;
   char why[96];                        /* why the last prog_add, prog_read or prog_check refused */
   float in[PROG_IN], out[BUS_VALS];
@@ -44,6 +55,11 @@ void prog_init(prog_state *G, rn_host *H, bus *B);
  * every period [s], or (period 0) when a topic it reads changes (prog_trigger says which). Its index, or −1 (G->why
  * says why). */
 int prog_add(prog_state *G, const char *name, const char *out, int out_n, const char *out_layout, float period);
+/* The app host: how apps are called. */
+void prog_apps(prog_state *G, prog_app_fn call, void *ctx);
+/* An app: as prog_add, with the size of the inputs its code takes (the floats of its reads, then dt). Its index, or −1.
+ * Its index among the apps (what the app host is called with) is G->P[i].app. */
+int prog_add_app(prog_state *G, const char *name, const char *out, int out_n, const char *out_layout, float period, int n_in);
 /* A topic program i reads (on this board's bus: its own, or a mirror). 0, or −1. */
 int prog_read(prog_state *G, int i, const char *topic);
 /* A program that runs on a change: the read whose change runs it. 0, or −1. */
