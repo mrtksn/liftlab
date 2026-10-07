@@ -29,6 +29,7 @@
 #include "pframe.h"
 #include "clink.h"
 #include "lmux.h"
+#include "peer.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
 
@@ -290,6 +291,41 @@ EXPORT("plink_stats") int plink_stats(double t) {
   return k;
 }
 /* n bytes from the receiver, in rbuf */
+/* ── drones talking to each other (peer.h): this board's end, when it's the one with the radio (the simulator's
+ * js/peer-air.js carries the packets between the fleet's drones) ── */
+static peer_net PN; static int pn_on; static uint8_t paddr[6]; static uint32_t pfrom;
+EXPORT("peer_addr_ptr") uint8_t *peer_addr_ptr(void) { return paddr; }
+/* id: the drone's node number; session: this start's; rbuf: the fleet phrase, a 0, the drone's name */
+EXPORT("peer_setup") void peer_setup(int on, int id, int session) {
+  pn_on = on; if (!on) return;
+  char ph[64], nm[PEER_NAME]; int k = 0, j = 0;
+  while (k < 63 && rbuf[k]) { ph[k] = (char)rbuf[k]; k++; } ph[k] = 0;
+  for (k++; j < PEER_NAME - 1 && rbuf[k]; k++, j++) nm[j] = (char)rbuf[k]; nm[j] = 0;
+  peer_init(&PN, (uint32_t)id, (uint32_t)session, nm, ph);
+}
+EXPORT("peer_publish") void peer_publish_(int n) { if (pn_on) peer_publish(&PN, fr, n); }   /* the values, in fr */
+EXPORT("peer_air_out") int peer_air_out(double t) { return pn_on ? peer_to_air(&PN, t, paddr, pbuf, (int)sizeof pbuf) : 0; }   /* a packet due: in pbuf, its address in paddr */
+EXPORT("peer_air_in") int peer_air_in(int n, int rssi, double t) { return pn_on ? peer_from_air(&PN, paddr, pbuf, n, rssi, t) : 0; }   /* one that came: in pbuf, from paddr */
+EXPORT("peer_ping") int peer_ping_(int id, double t) { return pn_on ? peer_ping(&PN, (uint32_t)id, t) : -1; }
+EXPORT("peer_send") int peer_send_(int id, int n) { return pn_on ? peer_send(&PN, (uint32_t)id, rbuf, n) : -1; }   /* a message: rbuf */
+EXPORT("peer_recv") int peer_recv_(void) { return pn_on ? peer_recv(&PN, &pfrom, rbuf, (int)sizeof rbuf) : -1; }   /* the next message, into rbuf; its sender: peer_from */
+EXPORT("peer_from") int peer_from(void) { return (int)pfrom; }
+EXPORT("peer_id") int peer_id_(int i) { return i >= 0 && i < PEER_MAX ? (int)PN.P[i].id : 0; }   /* (a float can't hold a node number) */
+EXPORT("peer_name_ptr") const char *peer_name_ptr(int i) { return i >= 0 && i < PEER_MAX ? PN.P[i].name : ""; }
+/* the table, into fr: per slot, 8 numbers then its values: state (−1 empty), node number, link quality ours, its
+ * of us, since heard [s], since its values [s], the last round trip [s] (−1 none), how many values; and the counts */
+EXPORT("peer_list") int peer_list(double t) {
+  float *o = fr; int k = 0;
+  for (int i = 0; i < PEER_MAX; i++) {
+    const peer_t *P = &PN.P[i]; int st = pn_on ? peer_state(&PN, i, t) : -1;
+    o[k++] = (float)st; o[k++] = (float)P->id; o[k++] = (float)(st >= 0 ? peer_lq(&PN, i, t) : 0); o[k++] = (float)P->heard_us;
+    o[k++] = (float)(t - P->t_heard); o[k++] = (float)(P->nvals ? t - P->t_vals : -1); o[k++] = P->rtt; o[k++] = (float)P->nvals;
+    for (int v = 0; v < PEER_VALS; v++) o[k++] = v < P->nvals ? P->vals[v] : 0;
+  }
+  const peer_counts *c = &PN.N;
+  o[k++] = (float)c->sent; o[k++] = (float)c->beacons; o[k++] = (float)c->got; o[k++] = (float)c->bad; o[k++] = (float)c->replays; o[k++] = (float)c->resent; o[k++] = (float)c->dropped;
+  return k;
+}
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
 static const rlink_cfg *budget_link(double t) {                     /* (two links: as radio_mux.c radio_mux_link) */

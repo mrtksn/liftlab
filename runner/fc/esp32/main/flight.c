@@ -46,6 +46,12 @@
  *                         a serial line; ESP-NOW or Wi-Fi, not both; Bluetooth LE not beside them). Both carry
  *                         everything (fc/lmux.h): the channels come by the first while it has them, the second fills
  *                         in; commands and messages once. radio2=none: one link
+ *   peers=6               the other drones (fc/peer.h): found by their beacons on Wi-Fi channel 6 over ESP-NOW (with
+ *                         an ESP-NOW link, its channel; not beside a Wi-Fi or Bluetooth link), a session with each,
+ *                         its state, battery and height (what each publishes), pings and messages. "peers" lists
+ *                         them, "ping NODE" pings one. peers=off (the default): none
+ *   fleet=PHRASE          the other drones': 1–31 characters, the same on each drone of the fleet (only those hear
+ *                         each other). The default (liftlab) is everyone's
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
  *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
  *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
@@ -299,6 +305,15 @@ static void setting(const char *line) {
     snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act);
     report(s); return;
   }
+  if (!strcmp(line, "peers")) {                       /* the other drones: a line each */
+    static char ps[1400]; radio_peer_status(ps, sizeof ps);
+    for (char *a = ps, *b; a && *a; a = b) { b = strchr(a, '\n'); if (b) *b++ = 0; report(a); }
+    return;
+  }
+  if (!strncmp(line, "ping ", 5)) {                   /* ping NODE (its number as "peers" shows it) */
+    uint32_t id = (uint32_t)strtoul(line + 5, 0, 16);
+    report(radio_peer_ping(id) ? "no such drone (or peers=off): see peers" : "ping sent: its round trip shows in peers"); return;
+  }
   if (F.state != FC_DISARMED) { report("disarm first"); return; }
   if (!strcmp(line, "save")) { report(hw_save(&HW_next) ? "couldn't save the settings" : "saved; reboot to use them"); return; }
   if (!strcmp(line, "reboot")) { report("rebooting"); vTaskDelay(pdMS_TO_TICKS(100)); hw_outputs_safe(); esp_restart(); }
@@ -385,6 +400,13 @@ static void link_task(void *arg) {
 }
 
 /* ── the pilot's radio and the telemetry task ── */
+/* The battery's charge as the other drones see it [%], roughly, from the pack voltage (vref: the cells' count at
+ * about 4 V each; 3.3–4.2 V a cell); −1: not wired. */
+static float batt_pct(float v) {
+  if (v <= 0.5f) return -1;
+  int cells = (int)(HW.vref / 4.0f + 0.5f); if (cells < 1) cells = 1;
+  float p = (v / cells - 3.3f) / 0.9f * 100; return p < 0 ? 0 : p > 100 ? 100 : (float)(int)(p + 0.5f);
+}
 static void radio_task(void *arg) {
   radio_io *R = RADIO_IO; int radio = R != 0;
   rlink_cfg RL; hw_radio(&HW, &RL);
@@ -392,7 +414,7 @@ static void radio_task(void *arg) {
   fc_state *Fs = calloc(1, sizeof *Fs);               /* (the telemetry's copy of the flight state, on the heap: static DRAM is short with Wi-Fi) */
   if (!Fs) { post("no memory for the telemetry: no radio"); vTaskDelete(NULL); }
   tlm_init(&TS); tlm_watch_init(&TW);
-  int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0;
+  int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0, next_peer = 0;
   for (;;) {
     int n = radio ? R->read(R, rx, sizeof rx, 2) : (vTaskDelay(pdMS_TO_TICKS(5)), 0); if (n < 0) n = 0;
     int64_t now = esp_timer_get_time(); double t = now * 1e-6;
@@ -404,6 +426,10 @@ static void radio_task(void *arg) {
     if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
     if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (now >= next_peer) {                                  /* the other drones: what we publish, 10 times a second */
+      float pv[3] = { (float)Fs->state, batt_pct(Fs->vbatt), Fs->have_alt ? Fs->alt_e : 0 };
+      next_peer = now + 100000; radio_peer_poll(pv, 3);
+    } else radio_peer_poll(0, 0);
     if (radio) {
       const rlink_cfg *Lnow = radio_mux_is(R) ? radio_mux_link(R) : &RL;   /* (two links: the room of the one it goes by now) */
       int m = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(Lnow, &RCI, t), out, sizeof out); if (m) R->write(R, out, m);
@@ -461,6 +487,7 @@ void app_main(void) {
   /* The pilot's radio before the program slots: Wi-Fi takes its memory first (the slots fit in what's left; one
    * slot fewer for programs from the Pi, maybe, but the drone can still be flown). Its news comes after the link starts. */
   RADIO_IO = radio_start();
+  if (hw_peers(&HW)) radio_peer_start(hw_peers(&HW), HW.fleet, post);   /* (the other drones: ESP-NOW beside it) */
 
   /* The program slots: the built-in program's steps in IRAM, one slot for programs from the Pi (two if there's room). */
   int32_t asz; memcpy(&asz, rn_builtin_img + 8, 4); uint32_t acap = (uint32_t)asz + 512;

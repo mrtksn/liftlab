@@ -22,6 +22,7 @@ static int have_peer;
 
 /* (the Wi-Fi task: only into the queue; the radio task takes it from there) */
 static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int n) {
+  if (n >= 1 && data[0] == PEER_MARK) { if (info && info->src_addr) radio_peer_rx(info->src_addr, data, n, info->rx_ctrl ? info->rx_ctrl->rssi : 0); return; }   /* (another drone's: radio_peer.c) */
   if (n < 1 || n > PLINK_MTU) return;
   rx_pkt r; r.n = (uint8_t)n; r.rssi = (int8_t)(info && info->rx_ctrl ? info->rx_ctrl->rssi : 0);
   if (info && info->src_addr) memcpy(r.src, info->src_addr, sizeof r.src); else memset(r.src, 0, sizeof r.src);
@@ -46,6 +47,8 @@ static void en_taken(pk_link *K) {                      /* (the radio task, as p
   pk_say(K, "ESP-NOW: talking to %02x:%02x:%02x:%02x:%02x:%02x", peer[0], peer[1], peer[2], peer[3], peer[4], peer[5]);
 }
 
+static int on_channel;                  /* (ESP-NOW up, on this channel: the peers share it) */
+int radio_espnow_channel(void) { return on_channel; }
 static pk_link *KP;                     /* (on the heap: static DRAM is short on the ESP32) */
 radio_io *radio_espnow_start(const rlink_cfg *L, int role, const char *bind, esp_radio_say say) {
   if (!KP && !(KP = calloc(1, sizeof *KP))) { if (say) say("ESP-NOW: no memory"); return 0; }
@@ -62,6 +65,7 @@ radio_io *radio_espnow_start(const rlink_cfg *L, int role, const char *bind, esp
     e = esp_now_add_peer(&peer);
   }
   if (e != ESP_OK) { pk_say(KP, "ESP-NOW didn't start: %s", esp_err_to_name(e)); return 0; }
+  on_channel = L->channel;
   KP->recv = en_recv; KP->send = en_send; KP->taken = en_taken; have_peer = 0;
   uint8_t mac[6] = { 0 }; esp_wifi_get_mac(WIFI_IF_STA, mac);
   pk_say(KP, "radio: ESP-NOW on Wi-Fi channel %d%s, as %02x:%02x:%02x:%02x:%02x:%02x", L->channel,

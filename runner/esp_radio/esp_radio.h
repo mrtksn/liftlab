@@ -45,6 +45,22 @@ radio_io *radio_ble_start(const rlink_cfg *L, int role, const char *bind, esp_ra
 void radio_ble_release(void);
 /* uart: the UART to use; tx_pin to the line's input, rx_pin from its output. */
 radio_io *radio_uart_start(const rlink_cfg *L, int role, const char *bind, int uart, int tx_pin, int rx_pin, esp_radio_say say);
+/* Drones talking to each other (peers=CHANNEL, fleet=PHRASE; fc/peer.h), over ESP-NOW beside the pilot's link: with
+ * an ESP-NOW link on the same channel, sharing it (its packets and the peers' told apart by their first byte);
+ * otherwise ESP-NOW started for them alone (not beside a Wi-Fi or Bluetooth link). Started after the pilot's link: 0,
+ * or −1 (said why). The node number is from the MAC address, the name "drone XXXX" from its last two bytes. */
+int radio_peer_start(int channel, const char *fleet, esp_radio_say say);
+int radio_peer_on(void);
+/* From the radio task, every few ms: the values to publish (0: as they were), the packets out and in. */
+void radio_peer_poll(const float *vals, int n);
+/* Who's in the table, a line each, into out: how many. */
+int radio_peer_status(char *out, int n);
+int radio_peer_ping(uint32_t id);                               /* (peer.h's, from any task) */
+int radio_peer_send(uint32_t to, const uint8_t *msg, int n);
+int radio_peer_recv(uint32_t *from, uint8_t *msg, int cap);
+#define PEER_MARK 0x50                                          /* (peer.c's packets' first byte; plink's is 0x4C) */
+void radio_peer_rx(const uint8_t src[6], const uint8_t *p, int n, int rssi);   /* (radio_espnow.c's receive hands them over) */
+int radio_espnow_channel(void);                                 /* the ESP-NOW link's channel, 0: none */
 /* The link's counts (plink_counts) and what it hears, for status: a line into out. */
 void esp_radio_status(radio_io *R, char *out, int n);
 #endif

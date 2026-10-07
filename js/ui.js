@@ -1081,7 +1081,8 @@ function load() {
   if (s.terrain && TERRAINS[s.terrain.kind]) setTerrain(s.terrain.kind, s.terrain.seed);
   if (s.radio) {
     if (RADIO_LINKS[s.radio.kind]) radioCfg.kind = s.radio.kind;
-    for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps']) if (s.radio[k] != null && isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
+    for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps', 'peers', 'peerCh']) if (s.radio[k] != null && isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
+    { const f = radioPhraseOk(s.radio.fleet); if (f) radioCfg.fleet = f; }
     const ph = radioPhraseOk(s.radio.bind); if (ph) radioCfg.bind = ph;
   }
   if (s.radio2) {                                                    // the second link (none: kind '')

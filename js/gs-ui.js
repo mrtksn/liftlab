@@ -39,6 +39,20 @@ function buildGs() {
   W.chans = GSW.columns('Channels the command module sends (1–9)'); W.chans.el.firstChild.prepend(srcDot('gnd'));
   r.append(W.chans.el, el('p', { class: 'hint', id: 'gsRadioNote' }));
 
+  // the other drones (the drone's own peer link, runner/fc/peer.h: on board, not sent down the link)
+  const pe = sec('Other drones', 'the drone\'s own link to them', 'board you');
+  const on = UI.input({ type: 'checkbox', id: 'gsPeers' }); on.checked = !!radioCfg.peers;
+  on.addEventListener('change', () => { radioCfg.peers = on.checked ? 1 : 0; save(); peerSetup(); renderGs(true); });
+  const fl = UI.input({ type: 'text', id: 'gsFleet', value: radioCfg.fleet || 'liftlab', maxlength: '31', spellcheck: 'false', autocomplete: 'off', title: 'Every drone of the fleet the same: it signs their packets. Enter or leaving the box applies it.' });
+  const takeFleet = () => { const f = radioPhraseOk(fl.value); if (!f) { fl.setAttribute('aria-invalid', 'true'); return; } fl.removeAttribute('aria-invalid'); if (f !== radioCfg.fleet) { radioCfg.fleet = f; save(); peerSetup(); } };
+  fl.addEventListener('change', takeFleet); fl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); takeFleet(); } });
+  const ch = UI.select({ id: 'gsPeerCh', title: 'The Wi-Fi channel the drones meet on (the same on each). With an ESP-NOW link to the drone, that link\'s channel.' }, ...Array.from({ length: 13 }, (_, i) => el('option', { value: String(i + 1), text: 'Channel ' + (i + 1) })));
+  ch.value = String(radioCfg.peerCh || 1); ch.addEventListener('change', () => { radioCfg.peerCh = +ch.value; save(); renderGs(true); });
+  pe.append(el('label', { class: 'gs-peer-on' }, on, ' Talk to other drones (ESP-NOW, beside the pilot\'s link)'), UI.field({ label: 'Fleet phrase', class: 'gs-sel gs-bind', hint: 'The same on every drone of the fleet: only those hear each other.' }, fl),
+    UI.field({ label: 'Wi-Fi channel', class: 'gs-sel', hint: 'On the drones: the one they meet on (an ESP-NOW link\'s own). The simulator doesn\'t model channels.' }, ch));
+  GS_UI.peerBox = el('div', { class: 'gs-peers', role: 'list' }); GS_UI.peerRows = new Map();
+  pe.append(GS_UI.peerBox, el('p', { class: 'hint', id: 'gsPeerNote' }));
+
   // inside the link (the simulator's view: a real ground station can't see this)
   const lg = sec('Link log', 'inside the simulated radio', 'sim');
   GS_UI.stats = el('table', { class: 'gs-stats', title: 'Channels: the command module makes a frame every 4 ms; each uplink packet carries the newest, so the rest are superseded, not lost. Latency: from when it was made to when the other end got it. Lost: packets that didn\'t get through (sent again for commands and telemetry). Superseded: a newer frame of the same kind replaced one still waiting in the drone\'s receiver (it keeps only the newest of each). Dropped: frames the receiver threw away, its queue full, and status texts replaced by newer ones; commands the transmitter module threw away while its link was down.' });
@@ -179,9 +193,35 @@ function buildGsRadio() {
   });
   if (GS_UI.radioSmall) GS_UI.radioSmall.textContent = radioModel().label + (radioTwo() ? ' + ' + RADIO_LINKS[radioCfg2.kind].label : '');
 }
+// The other drones, as this drone's peer end has them (peer-air.js peerTable): a row each, kept while it's in the
+// table (so a press on its Ping button isn't lost to a row built again under it).
+const PEER_TONE = ['bad', 'warn', 'warn', 'good'];
+function renderPeers() {
+  const box = GS_UI.peerBox; if (!box) return;
+  const b = peerBoard(), w = b && brt.inst.get(b.id), list = peerOn() && w ? peerTable(w, brt.t) : [], ids = new Set(list.map(p => p.id));
+  for (const [id, r] of GS_UI.peerRows) if (!ids.has(id)) { r.el.remove(); GS_UI.peerRows.delete(id); }
+  for (const p of list) {
+    let r = GS_UI.peerRows.get(p.id);
+    if (!r) {
+      r = { name: el('b'), state: el('span', { class: 'gs-peer-state' }), info: el('span', { class: 'gs-peer-info' }), vals: el('span', { class: 'gs-peer-vals' }), ping: UI.button({ class: 'btn gs-peer-ping', text: 'Ping', title: 'Send it a ping: the round trip shows here' }) };
+      r.ping.addEventListener('click', () => peerPing(p.id));
+      r.el = el('div', { class: 'gs-peer', role: 'listitem' }, el('div', { class: 'gs-peer-head' }, r.name, r.state, r.ping), r.info, r.vals);
+      GS_UI.peerRows.set(p.id, r); box.append(r.el);
+    }
+    setText(r.name, p.name || 'drone ' + p.id.toString(16));
+    setText(r.state, PEER_STATES[p.state]); r.state.dataset.tone = PEER_TONE[p.state];
+    setText(r.info, `LQ ${Math.round(p.lq)}% · it hears us ${Math.round(p.heardUs)}% · heard ${p.heard < 1 ? 'now' : p.heard.toFixed(0) + ' s ago'}${p.rtt > 0 ? ` · ping ${(p.rtt * 1000).toFixed(0)} ms` : ''}`);
+    const v = p.vals; setText(r.vals, v.length >= 3 ? `${['disarmed', 'armed', 'failsafe', 'crashed'][v[0]] || 'state ' + v[0]} · battery ${v[1].toFixed(0)}% · height ${v[2].toFixed(1)} m${p.valsAge > 1 ? ` (${p.valsAge.toFixed(0)} s old)` : ''}` : 'nothing published yet');
+  }
+  const others = typeof fleet !== 'undefined' ? fleet.drones.length - 1 : 0, chSel = $('#gsPeerCh');
+  if (chSel) { const en = [radioCfg, radioTwo() ? radioCfg2 : null].find(l => l && l.kind === 'espnow'); chSel.disabled = !!en || !peerOn(); if (en) chSel.value = String(en.channel || 1); }
+  const hwNote = peerOn() && [radioCfg.kind, radioTwo() ? radioCfg2.kind : ''].some(k => k === 'wifi' || k === 'ble') ? ' On a drone not beside a Wi-Fi or Bluetooth link yet: Install sends peers=off.' : '';
+  setText($('#gsPeerNote'), (!peerOn() ? 'Off: this drone neither sends beacons nor listens for other drones.' : list.length ? 'The drone\'s own table: who its beacons found, each one\'s link quality (ours of it, and its of us, as it says), and what it publishes (its state, battery and height). A drone out of range turns stale after a second and lost after three, and comes back by itself.'
+    : others > 0 ? 'Listening: no other drone of this fleet heard yet (the others need the same fleet phrase and their peer link on).' : 'Listening. Add another airframe to the world (Add airframe) to have a drone to find.') + hwNote);
+}
 // What the link log shows: by the filters, after the last Clear.
-const LOG_GROUP = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
-const LOG_TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM' };
+const LOG_GROUP = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link', peer: 'link' };
+const LOG_TAG = { stick: 'STICK', switch: 'SW', cmd: 'CMD', msg: 'MSG', mode: 'MODE', link: 'LINK', drop: 'DROP', frame: 'TLM', peer: 'PEER' };
 function logWant() { const show = GS_UI.logShow, c = GS_UI.clearId; return e => e.id > c && (e.kind === 'frame' ? radioLogAll : show[LOG_GROUP[e.kind]] !== false); }
 // One line: its summary row (a button when it has bytes: Enter, Space or a click open them below it), the bytes once opened.
 function logLine(e) {
@@ -233,6 +273,7 @@ function renderGs(force) {
     else if (!brt.gndOk) W.alert.set('Not checked: groundAlerts isn\'t running', t, 'warn');   // (its program didn't load: no alerts can come)
     else W.alert.set('All fine', t, 'good');
   }
+  renderPeers();
   const LM = radioModel(), roomNote = LM.roomNote(radioCfg);         // what the link's model says of its room and its signal
   if (GS_UI.kindShown !== radioCfg.kind) { GS_UI.kindShown = radioCfg.kind; buildGsRadio(); setText($('#gsLinkWho'), LM.packets ? 'Link quality and RSSI as the command module\'s packet layer reports them (a packet link has no SNR); the rest decoded by it from the frames that came down.' : 'Link quality, RSSI and SNR as the transmitter module reports them to the command module; the rest decoded by it from the frames that came down.'); }   // (another link, set elsewhere: the agent, a loaded design)
   setText($('#gsRoom'), roomNote);

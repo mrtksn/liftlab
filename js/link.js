@@ -42,7 +42,7 @@ const RADIO_LINKS = {};
 // fibre or a wire, tether [m] long; 1 a laser; 2 infrared LEDs; 3 a radio modem); nRF24L01: kbps (250, 1000, 2000);
 // the packet links: bind (the binding
 // phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
-let radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
+let radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab', peers: 1, peerCh: 1, fleet: 'liftlab' };   // (peers, peerCh, fleet: the drone's link to the others, peer-air.js)
 const RADIO_KINDS = ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'];
 // A second link at once (runner/fc/lmux.h: both carry; the channels by the first while it has them, the second fills in;
 // commands and messages once): its settings as radioCfg's, kind '' for none; the binding phrase is radioCfg's. Its

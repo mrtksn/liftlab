@@ -7,5 +7,5 @@ set -e
 cd "$(dirname "$0")"
 clang --target=wasm32 -O2 -ffreestanding -nostdlib -fno-builtin-memcpy -Wall -Wextra -Wno-unused-parameter -I.. -I. \
   -Wl,--no-entry -Wl,--strip-all -Wl,--initial-memory=8388608 -Wl,-z,stack-size=262144 \
-  -o board.wasm fc_core.c nav_core.c learn_core.c super_core.c tlm_core.c tlm_crsf.c radio_link.c plink.c pframe.c clink.c lmux.c tlm_sources.c crsf.c rc_core.c cargo_core.c pickup_core.c ../ground/ground_core.c board_wasm.c ../rn_host.c ../rn.c
+  -o board.wasm fc_core.c nav_core.c learn_core.c super_core.c tlm_core.c tlm_crsf.c radio_link.c plink.c pframe.c clink.c lmux.c peer.c tlm_sources.c crsf.c rc_core.c cargo_core.c pickup_core.c ../ground/ground_core.c board_wasm.c ../rn_host.c ../rn.c
 node -e "const b=require('fs').readFileSync('board.wasm');require('fs').writeFileSync('../../js/board-wasm.js','\'use strict\';\n// A flight computer (runner/fc: fc_core.c, nav_core.c, learn_core.c, super_core.c, the step runner) built to WebAssembly by runner/fc/build_wasm.sh.\nconst BOARD_WASM_B64 = \''+b.toString('base64')+'\';\n');console.log('board.wasm',b.length,'bytes')"

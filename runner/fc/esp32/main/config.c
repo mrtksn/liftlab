@@ -27,7 +27,9 @@ void hw_defaults(hw_config *c) {
   for (int i = 0; i < 5; i++) c->nrf_pin[i] = -1;
   c->radio_kbps = 1000;
   c->radio2_kind = -1; c->radio2_a = c->radio2_b = 0;
+  c->peer_channel = 0; strcpy(c->fleet, RCFG_BIND_DEFAULT);
 }
+int hw_peers(const hw_config *c) { return c->peer_channel; }
 int hw_radio2(const hw_config *c, rlink_cfg *L) { return c->radio2_kind < 0 ? -1 : rlink_make(L, c->radio2_kind, (int)c->radio2_a, (int)c->radio2_b); }
 void hw_radio(const hw_config *c, rlink_cfg *L) {
   int e = c->radio_kind == RLINK_ESPNOW ? rlink_make(L, RLINK_ESPNOW, c->radio_channel, c->radio_opt)
@@ -87,6 +89,15 @@ int hw_check(const hw_config *c, char *err, int errn) {
       if (L2.kind == RLINK_ELRS && c->crsf_rx < 0) { snprintf(err, errn, "radio2=elrs: set crsf=RX,TX first: the receiver's pins"); return -1; }
     } else if (!rlink_up(&L)) { snprintf(err, errn, "radio=%s carries nothing up: the drone would get no channels (as a second link, radio2=, it can)", "serial,...,down"); return -1; }
   }
+  if (c->peer_channel) {                                            /* the other drones: on ESP-NOW, beside the links */
+    rlink_cfg L[2]; int nl = 0; hw_radio(c, &L[nl++]); if (!hw_radio2(c, &L[nl])) nl++;
+    if (c->peer_channel < 1 || c->peer_channel > 13) { snprintf(err, errn, "peers: a Wi-Fi channel, 1 to 13, or peers=off"); return -1; }
+    for (int i = 0; i < nl; i++) {
+      if (L[i].kind == RLINK_ESPNOW && L[i].channel != c->peer_channel) { snprintf(err, errn, "peers=%d: the ESP-NOW link is on channel %d: the same, please (they share the radio)", c->peer_channel, L[i].channel); return -1; }
+      if (L[i].kind == RLINK_WIFI || L[i].kind == RLINK_BLE) { snprintf(err, errn, "peers: not beside a %s link (yet): ESP-NOW, ExpressLRS, nRF24 or a serial line", L[i].kind == RLINK_WIFI ? "Wi-Fi" : "Bluetooth"); return -1; }
+    }
+  }
+  { char t[RCFG_BIND_N]; if (!rcfg_terminated(c->fleet, sizeof c->fleet) || (c->fleet[0] && rcfg_bind_parse(t, c->fleet, err, errn))) { snprintf(err, errn, "invalid fleet phrase"); return -1; } }
   if(c->esc_hz<50 || c->esc_hz>490 || c->esc_min_us<800 || c->esc_max_us>2200 || c->esc_max_us-c->esc_min_us<500) {snprintf(err,errn,"invalid ESC pulse timing");return -1;}
   if(c->brushed_hz<1000 || c->brushed_hz>30000) {snprintf(err,errn,"brushed_hz: 1000 to 30000 Hz");return -1;}
   for(int i=0;i<FC_MAX_MOTORS;i++)if(c->motor_driver[i]>1 || c->motor_max_pct[i]<1 || c->motor_max_pct[i]>100) {snprintf(err,errn,"invalid motor driver/duty ceiling");return -1;}
@@ -125,6 +136,16 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     int a, b; rlink_args(&L, &a, &b); c->radio2_kind = (int8_t)L.kind; c->radio2_a = a; c->radio2_b = b; return 0;
   }
   if (!strcmp(key, "bind")) return rcfg_bind_parse(c->bind, eq + 1, err, errn);   /* the binding phrase */
+  if (!strcmp(key, "fleet")) {                                       /* the fleet phrase: the other drones' */
+    if (rcfg_bind_parse(c->fleet, eq + 1, err, errn)) { snprintf(err, errn, "fleet=PHRASE: 1 to 31 characters, the same on each drone of the fleet"); return -1; }
+    return 0;
+  }
+  if (!strcmp(key, "peers")) {                                       /* the other drones: peers=CHANNEL, or peers=off */
+    if (!strcmp(eq + 1, "off") || !strcmp(eq + 1, "0") || !eq[1]) { c->peer_channel = 0; return 0; }
+    char *end; long ch = strtol(eq + 1, &end, 10);
+    if (*end || ch < 1 || ch > 13) { snprintf(err, errn, "peers=CHANNEL (1 to 13: an ESP-NOW link's own), or peers=off"); return -1; }
+    c->peer_channel = (int8_t)ch; return 0;
+  }
   if (!strcmp(key, "wifi")) return rcfg_wifi_parse(c->wifi_ssid, c->wifi_pass, eq + 1, err, errn);   /* wifi=SSID,PASSWORD */
   n = parse_list(eq + 1, v, FC_MAX_MOTORS);
   for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
@@ -207,6 +228,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
   if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");
   /* the packet links' settings: the binding phrase and the password masked (show goes wherever the link goes) */
   if (rcfg_bind_default(c->bind)) APP(" bind=%s(the default: set your own)",RCFG_BIND_DEFAULT); else APP(" bind=(set, %d characters)",(int)strlen(c->bind));
+  if (c->peer_channel) APP(" peers=%d",c->peer_channel); else APP(" peers=off");
+  if (rcfg_bind_default(c->fleet)) APP(" fleet=%s(the default)",RCFG_BIND_DEFAULT); else APP(" fleet=(set, %d characters)",(int)strlen(c->fleet));
   if (c->wifi_ssid[0]) APP(" wifi=%s,%s",c->wifi_ssid,c->wifi_pass[0]?"********":"(default password)"); else APP(" wifi=(default)");
   APP(" servo_center=");
   for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_center_us[i]);

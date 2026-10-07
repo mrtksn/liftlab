@@ -47,6 +47,7 @@ int main(void){
   old.version=3;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,crsf_rx)));
   old.version=2;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,link_baud)));assert(restored.link_baud==115200);
   old.version=9;old.radio_kind=RLINK_NRF24;old.radio_kbps=250;restored=config();restored.radio2_kind=-1;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio2_kind))&&restored.radio_kbps==250&&restored.radio2_kind==-1&&restored.version==HW_VERSION);old.radio_kind=0;
+  old.version=10;old.radio2_kind=RLINK_NRF24;restored=config();restored.peer_channel=0;strcpy(restored.fleet,"liftlab");assert(lb_hw_restore(&restored,&old,offsetof(hw_config,peer_channel))&&restored.radio2_kind==RLINK_NRF24&&restored.peer_channel==0&&!strcmp(restored.fleet,"liftlab")&&restored.version==HW_VERSION);old.radio2_kind=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -59,7 +60,14 @@ int main(void){
   {hw_config before=settings;assert(hw_set(&settings,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"ESP-NOW and Wi-Fi"));assert(!memcmp(&settings,&before,sizeof settings));}
   {char d[900];hw_describe(&settings,d,sizeof d);assert(strstr(d,"radio2=espnow,6"));}
   assert(!hw_set(&settings,"radio2=none",log,sizeof log)&&settings.radio2_kind==-1);
+  assert(settings.peer_channel==0&&!hw_peers(&settings)&&!strcmp(settings.fleet,"liftlab"));
+  assert(!hw_set(&settings,"peers=6",log,sizeof log)&&hw_peers(&settings)==6&&!hw_set(&settings,"fleet=our fleet",log,sizeof log)&&!strcmp(settings.fleet,"our fleet"));
+  assert(!hw_set(&settings,"radio2=espnow,6",log,sizeof log));
+  {const char *nop[]={"radio2=espnow,7","peers=14","peers=x","fleet=","fleet=12345678901234567890123456789012","radio2=ble"};for(unsigned i=0;i<6;i++){hw_config before=settings;assert(hw_set(&settings,nop[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}}
+  {hw_config before=settings;assert(hw_set(&settings,"radio2=none",log,sizeof log)==0);assert(hw_set(&settings,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"Wi-Fi"));settings=before;}
+  {char d[1000];hw_describe(&settings,d,sizeof d);assert(strstr(d,"peers=6")&&strstr(d,"fleet=(set, 9 characters)")&&!strstr(d,"our fleet"));}
+  assert(!hw_set(&settings,"peers=off",log,sizeof log)&&!hw_peers(&settings)&&!hw_set(&settings,"radio2=none",log,sizeof log));
   char text[800];hw_describe(&settings,text,sizeof text);assert(strstr(text,"motor_driver=") && strstr(text,"motor_max=") && strstr(text,"brushed_hz=30000"));
   struct {char text[8];char canary[8];} small;memset(&small,42,sizeof small);hw_describe(&settings,small.text,sizeof small.text);assert(small.text[7]==0);for(int i=0;i<8;i++)assert(small.canary[i]==42);
-  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v9 migration, a second radio link.");
+  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v10 migration, a second radio link, the other drones' settings.");
 }

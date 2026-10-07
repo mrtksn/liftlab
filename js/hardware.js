@@ -144,6 +144,15 @@ function radioSettingLines(r, r2 = r === hardwareRadio() ? hardwareRadio2() : nu
   if (r.kind !== 'elrs' || (two && r2.kind !== 'elrs')) lines.push('bind='+(r.bind||'liftlab'));
   return lines;
 }
+// The other drones (runner/fc/peer.h over ESP-NOW, on the flight ESP32): peers=CHANNEL (an ESP-NOW link's own, else
+// the one set on the Ground tab) and fleet=PHRASE, or peers=off (also beside a Wi-Fi or Bluetooth link: not yet).
+// The first line clears what was set before, so a new link's channel isn't refused against the old peers'.
+function peerSettingLines(r, r2 = r === hardwareRadio() ? hardwareRadio2() : null) {
+  if (!r) return { before: [], after: [] };
+  const links = [r, r2 && r2.kind && r2.kind !== r.kind ? r2 : null].filter(Boolean), en = links.find(l => l.kind === 'espnow');
+  const on = !!r.peers && !links.some(l => l.kind === 'wifi' || l.kind === 'ble');
+  return { before: ['peers=off'], after: on ? ['peers=' + (en ? en.channel || 1 : r.peerCh || 1), 'fleet=' + (r.fleet || 'liftlab')] : [] };
+}
 // What each link needs wired to the radio's board: an ExpressLRS receiver on a UART; nothing for ESP-NOW (built into
 // the ESP32) or Wi-Fi (the ESP32's or the Pi's own); a serial line on the receiver's UART pins (or a Pi's port).
 function radioWiringRow(b,bus,esp,r) {
@@ -166,7 +175,7 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
-  if(plan.radioBoard) lines.push(...radioSettingLines(radio));
+  if(plan.radioBoard) { const P=peerSettingLines(radio); lines.push(...P.before, ...radioSettingLines(radio), ...P.after); }
   return lines;
 }
 // The same duty ceiling applies to simulated physical actuation and the native MOSFET adapter.
