@@ -1,5 +1,11 @@
 # Project memory
 
+## Quiet selection and fleet reset — 2026-10-07
+- Selection retains matching motor voices, fades departing voices and initializes new oscillators silently at their actual frequency. Event history is reseeded without an immediate low-battery reminder; simulation alerts remain active. FIXED: default full hum gain/frequency caused a chirp when voices restarted on selection.
+- Header World group now has Settings and an icon to reset all drones. Tap R resets the selected drone on release; hold R for 650 ms resets the fleet once. Blur, hidden page and selection changes cancel an unfinished key gesture; typing/dialogs/live hardware retain their key protections.
+- Fleet reset restores all simulated flights/health/batteries/boards in a synchronous pass and resets the shared clock, preserving selection, designs, targets, environment, pause and Edit state. Existing locks for real devices/AI/design operations apply.
+- Passed: zero startup hum gain, retained voices/silent selection/low-battery baseline and normal crash/prop alerts; tap/hold/repeat/cancel/typing R; world icon reset and shared clock; preserved designs/targets/environment/selection/pause/Edit and real-device/AI/design locks; responsive themes and existing fleet/BLE/world/audio checks. Synchronized flight after reset also passed.
+
 ## World view and fleet audio — 2026-10-07
 - Added persistent no-selection world view: both drone sidebars hide, the shared canvas expands, and collapsible world settings appear at the right. Drone flight targets stay in Control; World is removed from drone readout tabs. Empty viewport clicks/dropdown/header switch to world view; orbit, pinch and editor handles keep their gestures.
 - Added hovered craft outline/name and scoped audio: selected craft only, or all craft in world view, with drone-qualified voice/event ownership and shared distance/pan mixing. Existing per-airframe voice caps remain.

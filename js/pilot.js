@@ -112,6 +112,24 @@ function ownsKey(t, e) {
   if (t.hasAttribute('tabindex') && t.tabIndex >= 0 && t.tagName !== 'CANVAS') return act || nav;
   return false;
 }
+const RESET_HOLD_MS=650;
+let resetHold=null;
+function cancelResetHold() { if(resetHold)clearTimeout(resetHold.timer);resetHold=null; }
+window.addEventListener('keydown',e=>{
+  if(e.code!=='KeyR' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || ownsKey(e.target,e) || document.querySelector('dialog[open]'))return;
+  if(typeof fleet==='undefined' || !fleet.ready || liveOn())return;
+  e.preventDefault();if(e.repeat || resetHold)return;
+  const hold=resetHold={owner:fleet.selected,fired:false,timer:null};
+  hold.timer=setTimeout(()=>{if(resetHold!==hold)return;hold.fired=true;fleetResetAll();},RESET_HOLD_MS);
+});
+window.addEventListener('keyup',e=>{
+  if(e.code!=='KeyR' || !resetHold)return;
+  e.preventDefault();const hold=resetHold;cancelResetHold();
+  if(!hold.fired && hold.owner && hold.owner===fleet.selected)$('#resetBtn').click();
+});
+window.addEventListener('blur',cancelResetHold);
+document.addEventListener('focusin',e=>{if(typingIn(e.target))cancelResetHold();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)cancelResetHold();});
 let spaceHold = false;   // Space went to Hold, not to a control: its keyup mustn't click anything
 window.addEventListener('keydown', e => {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || ownsKey(e.target, e) || document.querySelector('dialog[open]')) return;
@@ -126,7 +144,6 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
   else if (e.code === 'KeyT' && typeof setLaunch === 'function' && hasTask('learn')) setLaunch('throw');   // the throw start needs the learning task
   else if (e.code === 'KeyK') document.getElementById('runBtn').click();
-  else if (e.code === 'KeyR') document.getElementById('resetBtn').click();
   else if (e.code === 'Digit1') setPilotLevel('gentle');
   else if (e.code === 'Digit2') setPilotLevel('normal');
   else if (e.code === 'Digit3') setPilotLevel('sport');

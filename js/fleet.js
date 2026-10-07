@@ -69,8 +69,8 @@ function fleetRefresh() {
   agent.cur = fleet.selected.chat; aiUi.draft = null; agentRender(); updateLive(); drawChart(); renderHealth(); cargoBarSync(); cargoSecSync();
   $('#crash').hidden = !S.crashed; if (S.crashed) $('#crashWhy').textContent = S.crashed;
   Object.assign(edit,{sel:null,hover:null,drag:null,down:null,focusId:null,refocus:false}); updateEditMsg();
-  // Rebuild the audible scope; identical part IDs on different craft remain separate.
-  sndResetScope();
+  // Switch the audible scope without replaying alerts or restarting matching voices.
+  sndSelectScope();
   fleetRenderSelector();
 }
 function fleetSelect(id) {
@@ -81,7 +81,7 @@ function fleetSelect(id) {
   fleetRememberUi(); fleetReleaseControls();
   if (!d) {
     if (editMode) setEditMode(false);
-    fleet.selected = null; fleetClearHover(); sndResetScope();
+    fleet.selected = null; fleetClearHover(); sndSelectScope();
     fleetRenderSelector(); updateLive(); fleetSave(); return true;
   }
   const library = {list:designs.list,col:designs.col,where:designs.where};
@@ -93,7 +93,7 @@ function fleetRememberUi() {
   d.formulaDrafts.clear(); for (const [k,c] of lawCards) if (c.ta.value !== LAWS[k].src) d.formulaDrafts.set(k,c.ta.value);
   d.chat = agent.cur; Object.assign(d.agentMemory,{rec:agent.rec,recNext:agent.recNext,recLast:agent.recLast});
 }
-function fleetReleaseControls() { releaseAll(); if (poke.src) pokeEnd(poke.src,false); }
+function fleetReleaseControls() { cancelResetHold(); releaseAll(); if (poke.src) pokeEnd(poke.src,false); }
 function fleetName(d) { return d.name || d.state.designs.name || 'Drone'; }
 function fleetRenderSelector() {
   const select = $('#droneSelect'); if (!select || !fleet.ready) return;
@@ -155,6 +155,16 @@ function fleetRemove(id = fleet.selected?.id) {
   for (const material of Object.values(d.graphics.mats)) material.dispose?.();
   fleet.drones = fleet.drones.filter(x=>x!==d); fleetRenderSelector(); fleetSave(); return true;
 }
+function fleetResetAll() {
+  if (!fleet.ready || !fleetCanSelect()) return false;
+  fleetReleaseControls();
+  for (const d of fleet.drones) withDrone(d,()=>{releaseAll();pilot.vref=[0,0,0];resetSim();d.contacts=0;});
+  fleet.time=0; sndSelectScope(); GS_UI.next=0; launchUi.key='';
+  $('#crash').hidden=true;$('#liftoff').hidden=true;updateLive();
+  if (fleet.selected) {drawChart();renderHealth();cargoBarSync();cargoSecSync();}
+  fleetSave(); return true;
+}
+$('#fleetReset').addEventListener('click',fleetResetAll);
 function fleetStep(steps) {
   if (!fleet.ready) { pilotStep(steps*PDT); for(let n=0;n<steps;n++)physStep(); return; }
   // Equal steps for every craft; if CPU-limited the shared clock slows together.

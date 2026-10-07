@@ -34,7 +34,10 @@
     <div class="hgroup" role="group" aria-labelledby="grpWorld">
       <span class="lbl" id="grpWorld">World</span>
       <div class="hrow">
-        <button class="btn" id="worldView" type="button" title="Deselect the drone and open world settings">World settings</button>
+        <button class="btn" id="worldView" type="button" title="Deselect the drone and open world settings">Settings</button>
+        <button class="btn icon" id="fleetReset" type="button" aria-label="Reset all drones" title="Reset all drones (hold R)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
     </div>
     <div class="hgroup" role="group" aria-labelledby="grpSim">
@@ -44,7 +47,7 @@
           <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>
           <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.3-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5z"/></svg>
         </button>
-        <button class="btn icon" id="resetBtn" type="button" aria-label="Reset selected drone" title="Reset the selected drone's flight (R)">
+        <button class="btn icon" id="resetBtn" type="button" aria-label="Reset selected drone" title="Reset the selected drone (R); hold R to reset all drones">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div class="launch" role="group" aria-labelledby="launchLbl" id="launchSeg">
@@ -229,7 +232,7 @@
             </dl></div>
             <div class="show-grp"><span class="lbl">Simulation</span><dl>
               <dt><kbd>K</kbd></dt><dd>pause, run</dd>
-              <dt><kbd>R</kbd></dt><dd>reset</dd>
+              <dt><kbd>R</kbd></dt><dd>tap to reset the selected drone; hold to reset all drones</dd>
               <dt><kbd>T</kbd></dt><dd>reset into a throw (when a board runs the learning)</dd>
             </dl></div>
             <div class="show-grp"><span class="lbl">View</span><dl>
@@ -496,7 +499,7 @@
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=a736a09f3a"></script>
 <script src="js/view3d.js?v=d9cb24f547"></script>
-<script src="js/pilot.js?v=af81383dba"></script>
+<script src="js/pilot.js?v=8f44f0defc"></script>
 <script src="js/computers-ui.js?v=f3fa4c9f63"></script>
 <script src="js/ui.js?v=b08c5cce1e"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
@@ -531,9 +534,9 @@
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
-<script src="js/audio.js?v=18855a0738"></script>
+<script src="js/audio.js?v=78cc33a74f"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=d7b4358cc8"></script>
+<script src="js/fleet.js?v=1c86ae5ff6"></script>
 <script src="js/fleet-collisions.js?v=c7d66b4f9f"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=55293d65c7"></script>

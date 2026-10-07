@@ -44,6 +44,29 @@ try{
   d.graphics.drone.traverse(o=>{if(solidVisible(o)){const p=new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()).project(camera);candidates.push({x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2});}});
   return candidates.find(p=>p.x>r.left&&p.x<r.right&&p.y>r.top&&p.y<r.bottom&&fleetHit({clientX:p.x,clientY:p.y})===d);
  },id);
+ // Tap R is selected-only; a hold or the World icon resets the fleet once.
+ await page.evaluate(()=>{running=false;fleetSelect(fleet.drones[0].id);fleet.time=12;for(const d of fleet.drones)withDrone(d,()=>{S.t=9;S.crashed='test';S.batt.soc=.1;});});
+ await page.locator('#worldView').focus();await page.keyboard.press('r');
+ assert.deepStrictEqual(await page.evaluate(()=>fleet.drones.map(d=>d.state.S.t)),[0,9],'Tap R reset wrong drone');
+ assert(await page.evaluate(()=>fleet.time===12),'Tap R reset world clock');
+ await page.evaluate(()=>{for(const d of fleet.drones)withDrone(d,()=>{S.t=7;});});
+ const resetDesigns=await page.evaluate(()=>({selected:fleet.selected.id,configs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint})),environment:{...envr},running,editMode}));
+ await page.keyboard.down('r');await page.waitForTimeout(250);assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===7)),'Hold reset prematurely');
+ await page.waitForTimeout(500);assert(await page.evaluate(()=>fleet.time===0&&fleet.drones.every(d=>d.state.S.t===0&&!d.state.S.crashed&&d.state.S.batt.soc>.9)),'Hold R did not reset entire fleet');
+ assert.deepStrictEqual(await page.evaluate(()=>({selected:fleet.selected.id,configs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint})),environment:{...envr},running,editMode})),resetDesigns,'Fleet reset changed design/selection/environment/pause');
+ await page.evaluate(()=>{for(const d of fleet.drones)withDrone(d,()=>{S.t=3;});});await page.waitForTimeout(700);await page.keyboard.up('r');
+ assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===3)),'Hold R repeated or reset selected on release');
+ await page.keyboard.down('r');await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.waitForTimeout(700);await page.keyboard.up('r');assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===3)),'Blur did not cancel R');
+ await page.keyboard.down('r');await page.evaluate(()=>fleetSelect(fleet.drones[1].id));await page.waitForTimeout(700);await page.keyboard.up('r');assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===3)),'Selection did not cancel R');
+ await page.keyboard.down('r');await page.locator('#droneName').focus();await page.waitForTimeout(700);await page.keyboard.up('r');assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===3)),'Typing focus did not cancel R');
+ await page.locator('#droneName').focus();await page.keyboard.down('r');await page.waitForTimeout(700);await page.keyboard.up('r');assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===3)),'Typing triggered fleet reset');
+ await page.evaluate(()=>{agent.busy=true;if(fleetResetAll())throw Error('Fleet reset bypassed AI lock');agent.busy=false;fleet.pendingEdits=1;if(fleetResetAll())throw Error('Fleet reset bypassed design lock');fleet.pendingEdits=0;live.state='connected';if(fleetResetAll())throw Error('Fleet reset reached real-drone connection');live.state='off';});
+ await page.locator('#worldView').click();await page.locator('#fleetReset').click();assert(await page.evaluate(()=>!fleet.selected&&fleet.drones.every(d=>d.state.S.t===0)),'World icon reset selected a drone or missed one');
+ await page.evaluate(()=>{for(const d of fleet.drones)withDrone(d,()=>{S.t=4;});});await page.keyboard.down('r');await page.waitForTimeout(750);await page.keyboard.up('r');assert(await page.evaluate(()=>!fleet.selected&&fleet.drones.every(d=>d.state.S.t===0)),'Hold R in world view failed');
+ assert(await page.evaluate(()=>$('#worldView').textContent==='Settings'&&$('#fleetReset svg')),'Settings/reset UI wrong');
+ await page.waitForFunction(()=>fleet.drones.every(d=>d.state.brt.ready));await page.evaluate(async()=>{for(let n=0;n<10;n++){fleetStep(400);await new Promise(r=>setTimeout(r,0));}if(fleet.drones.some(d=>d.state.S.crashed||d.state.brt.fcState!==1||Math.abs(d.state.S.t-fleet.time)>1e-6))throw Error('Fleet did not resume synchronized flight after reset');});
+ await page.evaluate(()=>{withDrone(fleet.drones[0],()=>{S.p=[-1,0,2];});withDrone(fleet.drones[1],()=>{S.p=[1,0,2];});cam.target.set(0,0,2);cam.dist=4;cam.az=.7;cam.el=1.3;fleetScene();renderer.render(scene,camera);});
+ console.log('Tap/hold/repeat/cancel/typing R, simultaneous fleet reset, shared clock and World reset icon');
  let point=await dronePoint(ids[0]);assert(point,'No visible clickable craft');await page.mouse.move(point.x,point.y);
  await page.waitForFunction(()=>!$('#droneHover').hidden&&$('#droneHover').textContent.includes('First craft'));
  assert(await page.evaluate(()=>fleetHoverOutline.visible&&vpEl.classList.contains('selectable')),'Hover outline/cursor missing');
@@ -79,6 +102,7 @@ try{
  blank=await empty();await page.mouse.click(blank.x,blank.y);await page.waitForTimeout(200);assert(await page.evaluate(()=>!fleet.selected&&!editMode),'Empty Edit click did not enter world');
  await page.selectOption('#droneSelect',ids[1]);await page.locator('#tEdit').click();await page.locator('#worldView').click();await page.waitForTimeout(200);
  assert(await page.evaluate(()=>!fleet.selected&&!editMode&&!edit.drag),'Edit-to-world transition failed');
+ await page.evaluate(()=>{fleetSelect(fleet.drones[0].id);setEditMode(true);const selected=fleet.selected,paused=running;fleetResetAll();if(fleet.selected!==selected||!editMode||running!==paused)throw Error('Fleet reset changed Edit state');setEditMode(false);running=false;fleetSelect(null);});
  const shared=await page.evaluate(async()=>{fleetSelect(fleet.drones[0].id);const code=await designCode('Shared craft');fleetSelect(null);return code;});const unchanged=await page.evaluate(()=>fleet.drones.map(d=>JSON.stringify(d.state.cfg)));
  await page.locator('#presetSlot .mb-btn').click();await page.getByRole('menuitem',{name:/Open a shared design/}).click();await page.locator('#shareIn').fill(shared);await page.locator('#shareOpen').click();await page.waitForFunction(()=>fleet.drones.length===3&&fleet.selected?.name==='Shared craft');assert.deepStrictEqual(await page.evaluate(()=>fleet.drones.slice(0,2).map(d=>JSON.stringify(d.state.cfg))),unchanged,'Shared design replaced a retained drone');await page.evaluate(()=>{fleetRemove();fleetSelect(null);});
  console.log('World/dropdown/empty clicks, hover/cursor, orbit/pinch/cancel, camera, hidden controls and environment ownership');
@@ -86,12 +110,16 @@ try{
  await page.locator('#tSound').click();
  console.log(await page.evaluate(()=>{
   const check=(v,m)=>{if(!v)throw Error(m);};running=false;for(const [i,d] of fleet.drones.entries())withDrone(d,()=>{S.p=[i*2,0,2];S.crashed=null;for(const c of actuators())hs.set(c.id,{...hs.get(c.id),prop:false});});running=true;sndResetScope();sndTick();
+  const probe=motorVoice();check(probe.hg.gain.value===0&&probe.g.gain.value===0,'Motor startup has a selection chirp');probe.stop();
   const counts=()=>fleet.drones.map(d=>[...snd.motors.keys()].filter(k=>k.startsWith(d.id+':')).length);
   check(counts().every(n=>n===4)&&snd.motors.size===8,'World audio missed a craft or collided on part IDs');
   check(snd.events.size===2&&snd.events.get(fleet.drones[0].id)!==snd.events.get(fleet.drones[1].id),'Audio events shared');
-  const previous=fleet.active;check(fleetSelect(fleet.drones[0].id),'Audio selection failed');sndTick();check(snd.motors.size===4&&counts()[1]===0,'Selected audio includes others');
+  const tones=sndTone;let selectedTones=0;sndTone=()=>selectedTones++;for(const d of fleet.drones)withDrone(d,()=>{S.batt.soc=.1;});
+  const initialVoices=new Map(snd.motors);
+  const previous=fleet.active;check(fleetSelect(fleet.drones[0].id),'Audio selection failed');sndTick();check(snd.motors.size===4&&counts()[1]===0,'Selected audio includes others');check([...snd.motors].every(([k,v])=>initialVoices.get(k)===v),'Selection restarted matching voices');
   fleetSelect(fleet.drones[1].id);sndTick();check(snd.motors.size===4&&counts()[0]===0,'Audio did not switch craft');
   fleetSelect(null);sndTick();check(snd.motors.size===8&&fleet.active===fleet.drones[1],'Audio altered active context');
+  check(selectedTones===0,'Selection emitted an alert tone');sndTone=tones;for(const d of fleet.drones)withDrone(d,()=>{S.batt.soc=1;});
   const voices=[...snd.motors.values()];check(new Set(voices).size===8,'Voice objects shared');
   const burst=sndBurst,tone=sndTone;let crashes=0,strikes=0;sndBurst=o=>{if(o.dur===.5)crashes++;if(o.dur===.035)strikes++;};sndTone=()=>{};
   try{for(const d of fleet.drones)withDrone(d,()=>{S.crashed='test 2 m/s';hs.set(actuators()[0].id,{...hs.get(actuators()[0].id),prop:true});});sndTick();sndTick();check(crashes===2&&strikes===14,'Per-craft one-shot event detection wrong');}finally{sndBurst=burst;sndTone=tone;}

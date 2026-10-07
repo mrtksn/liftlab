@@ -32,7 +32,7 @@ function sndNoiseSrc() { const s = snd.ctx.createBufferSource(); s.buffer = snd.
 /* ───────── voices that last: one per motor, one per servo ───────── */
 function motorVoice() {
   const ctx = snd.ctx, out = ctx.createStereoPanner(), g = ctx.createGain(); g.gain.value = 0; g.connect(out); out.connect(snd.master);
-  const hum = ctx.createOscillator(); hum.setPeriodicWave(snd.wave); const hg = ctx.createGain(); hum.connect(hg); hg.connect(g); hum.start();
+  const hum = ctx.createOscillator(); hum.setPeriodicWave(snd.wave); const hg = ctx.createGain(); hg.gain.value = 0; hum.connect(hg); hg.connect(g); hum.start();
   const whine = ctx.createOscillator(); whine.type = 'triangle'; const wg = ctx.createGain(); wg.gain.value = 0; whine.connect(wg); wg.connect(g); whine.start();
   const ns = sndNoiseSrc(), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.7; const ng = ctx.createGain(); ng.gain.value = 0; ns.connect(bp); bp.connect(ng); ng.connect(g);
   return { out, g, hum, hg, whine, wg, bp, ng, stop: () => { for (const o of [hum, whine, ns]) try { o.stop(); } catch (e) {} out.disconnect(); } };
@@ -74,6 +74,13 @@ function sndResetScope() {
   for (const v of [...snd.motors.values(),...snd.servos.values()]) v.stop();
   snd.motors.clear();snd.servos.clear();snd.events.clear();
 }
+// Changing selection is silent: preserve matching voices and seed event history anew.
+function sndSelectScope() { snd.events.clear(); }
+function sndRetireVoice(v) {
+  v.g.gain.cancelScheduledValues(snd.ctx.currentTime);
+  v.g.gain.setTargetAtTime(0,snd.ctx.currentTime,.02);
+  setTimeout(v.stop,100);
+}
 function sndTick() {
   if (!snd.on || !snd.ctx) return;
   const live = running && !editMode && !document.hidden;
@@ -84,14 +91,14 @@ function sndTick() {
     for(const d of drones)withDrone(d,()=>sndDroneTick(d.id,live,seen,sj));
     for(const id of snd.events.keys())if(!fleet.drones.some(d=>d.id===id))snd.events.delete(id);
   } else sndDroneTick('boot',live,seen,sj);
-  for(const [id,v] of snd.motors)if(!seen.has(id)){v.stop();snd.motors.delete(id);}
-  for(const [id,v] of snd.servos)if(!sj.has(id)){v.stop();snd.servos.delete(id);}
+  for(const [id,v] of snd.motors)if(!seen.has(id)){sndRetireVoice(v);snd.motors.delete(id);}
+  for(const [id,v] of snd.servos)if(!sj.has(id)){sndRetireVoice(v);snd.servos.delete(id);}
 }
 function sndDroneTick(owner,live,seen,sj) {
   const ctx=snd.ctx,t=ctx.currentTime,k=.04;
   let last=snd.events.get(owner);
   if(!last){
-    last={fc:brt.fcState,crash:!!S.crashed,lowT:0};
+    last={fc:brt.fcState,crash:!!S.crashed,lowT:performance.now()};
     for(const c of actuators())last['p'+c.id]=!!hs.get(c.id)?.prop;
     snd.events.set(owner,last);
   }
@@ -100,11 +107,15 @@ function sndDroneTick(owner,live,seen,sj) {
   const ms = actuators().slice(0, SND_MAX_MOTORS);
   for (const c of ms) {
     const key=owner+':'+c.id;seen.add(key);
-    let v = snd.motors.get(key); if (!v) { v = motorVoice(); snd.motors.set(key, v); }
+    let v = snd.motors.get(key); const fresh = !v; if (fresh) { v = motorVoice(); snd.motors.set(key, v); }
     const st = act.get(c.id) || {}, rps = Math.max(0, (st.Omega || 0) / (2 * Math.PI)), hsc = hs.get(c.id) || {};
     const full = propOmega(c) / (2 * Math.PI), frac = clamp(rps / Math.max(1, full), 0, 1.3), on = cargo.power && !cargo.off.has(c.id);
     const { pan, d } = sndPan(at(c.pos)), near = 1 / (1 + Math.max(0, d - 1) * 0.35);
     const loud = on ? Math.pow(frac, 1.6) * near * (hsc.prop ? 0.25 : 1) : 0;
+    if (fresh) { // Begin at the actual rotor frequency, without a 440 Hz oscillator startup sweep.
+      v.hum.frequency.value=Math.max(1,rps*SND_BLADES); v.whine.frequency.value=Math.max(1,rps*SND_POLES);
+      v.bp.frequency.value=Math.max(80,rps*SND_BLADES*5);
+    }
     v.hum.frequency.setTargetAtTime(Math.max(1, rps * SND_BLADES), t, k);
     v.whine.frequency.setTargetAtTime(Math.max(1, rps * SND_POLES), t, k);
     v.bp.frequency.setTargetAtTime(Math.max(80, rps * SND_BLADES * 5), t, k);
