@@ -45,7 +45,7 @@ let grid = null; let drone = new THREE.Group(); scene.add(drone);
 let worldFx = new THREE.Group(); scene.add(worldFx);
 let headArrow = null, mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 let tqNetGlyph = null, tqWantArrow = null, tqRotor = [];   // torque: net about the centre of mass, the controller's wish, per rotor
-const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), anim: null };
+const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), pan: new THREE.Vector3(), anim: null };
 const EL_MAX = Math.PI / 2 - 0.002;
 // How far away something looks, for sizing handles to the screen (the orbit distance, in orthographic).
 const viewDist = p => camera.isOrthographicCamera ? cam.dist : camera.position.distanceTo(p);
@@ -605,7 +605,7 @@ function updateScene(selected = true) {
     }
     tgt = drone.localToWorld(new THREE.Vector3(...edit.focusLocal)).add(edit.focusShift);
   } else if (editMode) edit.focusId = null;
-  cam.target.lerp(tgt, view.follow ? 0.12 : 0.06);
+  cam.target.lerp(tgt.add(cam.pan), view.follow ? 0.12 : 0.06);
   if (view.chase && live) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.az += d * 0.06;
@@ -625,19 +625,67 @@ function updateCamera() {
   updateEditView(); drawTriad();
 }
 
-// Orbit and zoom: drag to rotate, wheel or pinch to zoom.
+// Screen-space pan has the same scale in perspective and the matching orthographic view.
+const panDelta = new THREE.Vector3(), panRight = new THREE.Vector3(), panUp = new THREE.Vector3();
+function panCamera(dx,dy) {
+  const scale=2*cam.dist*Math.tan(perspCam.fov*D2R/2)/(Math.max(1,vpEl.clientHeight)*camera.zoom);
+  camera.updateMatrixWorld();
+  panRight.setFromMatrixColumn(camera.matrixWorld,0);panUp.setFromMatrixColumn(camera.matrixWorld,1);
+  panDelta.copy(panRight).multiplyScalar(-dx*scale).addScaledVector(panUp,dy*scale);
+  cam.target.add(panDelta);
+  if(typeof fleet==='undefined' || !fleet.ready || fleet.selected)cam.pan.add(panDelta);
+  cam.anim=null;
+}
+function centerCamera() {
+  cam.target.sub(cam.pan);cam.pan.set(0,0,0);
+  if(typeof fleet!=='undefined' && fleet.ready && !fleet.selected && fleet.drones.length) {
+    const box=new THREE.Box3();for(const d of fleet.drones)box.expandByPoint(new THREE.Vector3(...d.state.S.p));
+    box.getCenter(cam.target);
+  }
+  updateCamera();
+}
+// One finger or plain drag rotates; Ctrl/Command drag pans; two fingers pan and pinch to zoom.
 const ptrs = new Map(); let pinch0 = 0;
-vpEl.addEventListener('pointerdown', e => { if (editPointerDown(e)) return; vpEl.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); } });
-vpEl.addEventListener('pointermove', e => {
-  if (editPointerMove(e, ptrs.size > 0 && edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) >= 5)) return;
-  if (!ptrs.has(e.pointerId)) return; const p = ptrs.get(e.pointerId);
-  if (ptrs.size === 1) { cam.anim = null; cam.az -= (e.clientX - p.x) * 0.008; cam.el = clamp(cam.el + (e.clientY - p.y) * 0.006, -EL_MAX, EL_MAX); }
-  p.x = e.clientX; p.y = e.clientY;
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0 > 0) cam.dist = clamp(cam.dist * pinch0 / d, 0.6, maxDist()); pinch0 = d; }
+vpEl.addEventListener('pointerdown', e => {
+  if(e.button!==0 && !(e.button===2 && e.ctrlKey))return;
+  const cameraOnly=e.ctrlKey||e.metaKey||ptrs.size>0;
+  if(edit.drag || (!cameraOnly && editPointerDown(e)))return;
+  vpEl.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY,cameraOnly,multi:false});
+  if(cameraOnly)edit.down=null;
+  if(ptrs.size>=2){
+    for(const p of ptrs.values()){p.cameraOnly=true;p.multi=true;}
+    edit.down=null;const [a,b]=[...ptrs.values()];pinch0=Math.hypot(a.x-b.x,a.y-b.y);
+  }
 });
-const endPtr = e => { const handled = e.type === 'pointerup' && editPointerUp(e); ptrs.delete(e.pointerId); pinch0 = 0; return handled; };
+vpEl.addEventListener('pointermove', e => {
+  const p=ptrs.get(e.pointerId),pan=p && (p.cameraOnly || e.ctrlKey || e.metaKey);
+  if(pan){p.cameraOnly=true;edit.down=null;setHover(null);}
+  else if (editPointerMove(e, ptrs.size > 0 && edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) >= 5)) return;
+  if(!p)return;
+  const [a,b]=[...ptrs.values()],mx=b?(a.x+b.x)/2:0,my=b?(a.y+b.y)/2:0;
+  if (ptrs.size === 1 && !p.multi) {
+    if(pan)panCamera(e.clientX-p.x,e.clientY-p.y);
+    else {cam.anim=null;cam.az-=(e.clientX-p.x)*.008;cam.el=clamp(cam.el+(e.clientY-p.y)*.006,-EL_MAX,EL_MAX);}
+  }
+  p.x = e.clientX; p.y = e.clientY;
+  if(ptrs.size===2){
+    const d=Math.hypot(a.x-b.x,a.y-b.y);
+    if(pinch0>0 && d>0)cam.dist=clamp(cam.dist*pinch0/d,.6,maxDist());
+    pinch0=d;panCamera((a.x+b.x)/2-mx,(a.y+b.y)/2-my);
+  }
+});
+const endPtr = e => {
+  const p=ptrs.get(e.pointerId);
+  if(p?.cameraOnly || e.type!=='pointerup')edit.down=null;
+  const handled=e.type==='pointerup' && !p?.cameraOnly && editPointerUp(e);
+  if(e.type!=='pointerup' && edit.drag?.pointerId===e.pointerId)endDrag();
+  ptrs.delete(e.pointerId);pinch0=0;return handled;
+};
 vpEl.addEventListener('pointerleave', () => { if (!edit.drag) setHover(null); });
 vpEl.addEventListener('pointerup', endPtr); vpEl.addEventListener('pointercancel', endPtr);
+vpEl.addEventListener('lostpointercapture',endPtr);
+vpEl.addEventListener('contextmenu',e=>{if(e.ctrlKey||e.metaKey)e.preventDefault();});
 vpEl.addEventListener('wheel', e => { e.preventDefault(); cam.anim = null; cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.001), 0.6, maxDist()); }, { passive: false });
 new ResizeObserver(() => { const w = vpEl.clientWidth, h = vpEl.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); perspCam.aspect = w / h; perspCam.updateProjectionMatrix(); orthoCam.top = NaN; }).observe(vpEl);
 

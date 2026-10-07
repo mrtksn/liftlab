@@ -981,7 +981,7 @@ function toggleTorque() {   // Q: rotor and net torque together
 (function buildShowMenu() {
   const menu = $('#showMenu'), btn = $('#tShow');
   const groups = [...new Set(LAYERS.map(L => L.group))];
-  menu.innerHTML = `<div class="show-grp"><span class="lbl">Layout</span><div class="show-layout"><div class="seg seg-sm" role="group" aria-label="Layout">${[['auto', 'Auto'], ['phone', 'Phone'], ['full', 'Full']].map(([k, l]) => `<button type="button" data-uimode="${k}" aria-pressed="false" title="${{ auto: 'Phone when the page opens taller than it is wide, Full otherwise', phone: 'A one-line header, the flight pads with Home and Poke, a lean view', full: 'Everything' }[k]}">${l}</button>`).join('')}</div><span class="hint" id="uiNow"></span></div></div>` + groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
+  menu.innerHTML = `<div class="show-grp"><span class="lbl">Camera</span><p class="hint">Drag to rotate. Ctrl/Command-drag to pan. Wheel to zoom. Touch: one finger rotates, two fingers pan or pinch to zoom.</p><button type="button" class="btn" id="centerView">Center view</button></div><div class="show-grp"><span class="lbl">Layout</span><div class="show-layout"><div class="seg seg-sm" role="group" aria-label="Layout">${[['auto', 'Auto'], ['phone', 'Phone'], ['full', 'Full']].map(([k, l]) => `<button type="button" data-uimode="${k}" aria-pressed="false" title="${{ auto: 'Phone when the page opens taller than it is wide, Full otherwise', phone: 'A one-line header, the flight pads with Home and Poke, a lean view', full: 'Everything' }[k]}">${l}</button>`).join('')}</div><span class="hint" id="uiNow"></span></div></div>` + groups.map(g => `<div class="show-grp"><span class="lbl">${g}</span><div class="show-btns">${
     LAYERS.filter(L => L.group === g).map(L => `<button type="button" class="btn tog" data-key="${L.key}" aria-pressed="false" title="${L.tip.replace(/"/g, '&quot;')}">${L.label}</button>`).join('')}</div></div>`).join('')
     + `<div class="show-grp show-presets"><span class="lbl">Presets</span><div class="show-btns">${Object.keys(SHOW_PRESETS).map(p => `<button type="button" class="btn" data-preset="${p}">${p}</button>`).join('')}</div></div>`;
   UI.hydrate(menu);
@@ -990,6 +990,7 @@ function toggleTorque() {   // Q: rotor and net torque together
     if (b.dataset.key) setLayers({ [b.dataset.key]: !view[b.dataset.key] });
     else if (b.dataset.preset) setLayers(SHOW_PRESETS[b.dataset.preset]());
     else if (b.dataset.uimode) setUiMode(b.dataset.uimode);
+    else if (b.id === 'centerView') centerCamera();
   });
   popover(btn, menu);
   applyUiMode();

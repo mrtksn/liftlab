@@ -79,6 +79,7 @@ function setEditMode(on) {
 
 function selectComp(id) {
   const prev = edit.sel; edit.sel = id;
+  if (id != null) cam.pan.set(0,0,0);
   document.querySelectorAll('.comp.sel').forEach(n => n.classList.remove('sel'));
   if (id != null) {
     openSet.add(id);
@@ -210,7 +211,7 @@ const snapTo = (v, s) => Math.round(v / s) * s;
 function startDrag(h, e) {
   const c = compById(edit.sel); if (!c) return false;
   const P0 = gizmo.position.clone(), ray = rayFrom(e), a = h.axis >= 0 ? new THREE.Vector3(...AXES[h.axis]) : null;
-  const d = { h, c, P0, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null,
+  const d = { h, c, P0, pointerId:e.pointerId, pos0: c.pos.slice(), tilt0: c.tilt, az0: c.az, hinge0: c.hingeAz, mount0: c.mount ? c.mount.slice() : null,
     axis0: c.type === 'joint' ? jointAxis(c) : null, dir0: c.type === 'link' ? linkDir(c) : null };
   if (h.kind === 'travel') { const sw = servoSweep(c); d.n = new THREE.Vector3(...sw.a); d.rest = sw.rest; d.v = crs(sw.a, sw.rest); swingPrev.play = false; }
   else if (h.kind === 'move') { d.t0 = closestOnAxis(ray, P0, a); if (d.t0 == null) return false; }
@@ -277,7 +278,7 @@ function editPointerDown(e) {
 }
 function editPointerMove(e, orbiting) {
   if (!editMode) return false;
-  if (edit.drag) { dragTo(e); return true; }
+  if (edit.drag) { if(e.pointerId===edit.drag.pointerId)dragTo(e); return true; }
   if (orbiting) { setHover(null); return false; }
   const h = pickHandle(e);
   if (h) { vpEl.style.cursor = 'grab'; setHover(null); return false; }
@@ -292,7 +293,7 @@ function editPointerMove(e, orbiting) {
 }
 function editPointerUp(e) {
   if (!editMode) return false;
-  if (edit.drag) { endDrag(); return true; }
+  if (edit.drag) { if(e.pointerId===edit.drag.pointerId)endDrag(); return true; }
   if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) { edit.refocus = true; selectComp(pickComp(e)); }   // a click (not a drag) centres the view on what it picks
   edit.down = null; return false;
 }

@@ -85,7 +85,7 @@ function fleetSelect(id) {
     fleetRenderSelector(); updateLive(); fleetSave(); return true;
   }
   const library = {list:designs.list,col:designs.col,where:designs.where};
-  droneSwitch(d); droneGraphicsSwitch(d); fleet.selected = d; Object.assign(designs,library);
+  droneSwitch(d); droneGraphicsSwitch(d); fleet.selected = d; cam.pan.set(0,0,0); Object.assign(designs,library);
   fleetRefresh(); fleetSave(); return true;
 }
 function fleetRememberUi() {
@@ -274,7 +274,7 @@ function fleetClearHover() {
   vpEl.classList.remove('selectable');
 }
 function fleetHoverScene() {
-  if (!fleetHoverPoint || fleetPointer || edit.drag) {fleetClearHover();return;}
+  if (!fleetHoverPoint || fleetPointer || ptrs.size || edit.drag) {fleetClearHover();return;}
   if (performance.now()>=fleetHoverNext) {
     fleetHoverNext=performance.now()+50;
     fleetHovered=fleetHit(fleetHoverPoint);
@@ -290,16 +290,17 @@ function fleetHoverScene() {
   vpEl.classList.add('selectable');
 }
 vpEl.addEventListener('pointerdown',e=>{
-  if (e.button!==0) {fleetPointer=null;return;}
+  if (e.button!==0 || e.ctrlKey || e.metaKey) {fleetPointer=null;return;}
   if(fleetPointer){fleetPointer.dragged=true;return;}
   fleetPointer={id:e.pointerId,x:e.clientX,y:e.clientY,dragged:false};fleetClearHover();
 },true);
 vpEl.addEventListener('pointermove',e=>{
-  if(fleetPointer && Math.hypot(e.clientX-fleetPointer.x,e.clientY-fleetPointer.y)>=5)fleetPointer.dragged=true;
+  if(fleetPointer && (e.ctrlKey || e.metaKey || Math.hypot(e.clientX-fleetPointer.x,e.clientY-fleetPointer.y)>=5))fleetPointer.dragged=true;
   fleetHoverPoint=e.pointerType==='touch' ? null : {clientX:e.clientX,clientY:e.clientY};
 },true);
 vpEl.addEventListener('pointerleave',()=>{fleetHoverPoint=null;fleetClearHover();});
 vpEl.addEventListener('pointercancel',()=>{fleetPointer=null;fleetClearHover();},true);
+vpEl.addEventListener('lostpointercapture',e=>{if(fleetPointer?.id===e.pointerId)fleetPointer=null;fleetClearHover();},true);
 vpEl.addEventListener('pointerup',e=>{
   const p=fleetPointer; fleetPointer=null;
   if(!p || p.id!==e.pointerId || p.dragged || Math.hypot(e.clientX-p.x,e.clientY-p.y)>=5 || edit.drag || ptrs.size>1)return;
