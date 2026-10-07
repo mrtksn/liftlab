@@ -19,6 +19,9 @@ cc -O2 -Wall -Wextra -o "$T/test_link" rn.c rn_link.c test_link.c -lm
 fc/build_wasm.sh
 cc -O2 -Wall -Wextra -I. -o "$T/test_bus" fc/test_bus.c fc/bus.c
 "$T/test_bus"
+node ../tools/prog_test_data.js "$T"
+cc -O2 -Wall -Wextra -I. -o "$T/test_prog" fc/test_prog.c fc/prog_core.c fc/bus.c rn_host.c rn.c -lm
+"$T/test_prog" "$T/prog.rnp"
 cc -O2 -Wall -Wextra -I. -o "$T/test_fc" fc/test_fc.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_fc" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm

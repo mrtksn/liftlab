@@ -896,9 +896,16 @@ Each board also keeps a **data bus** (`runner/fc/bus.h`): named topics its progr
 `fc.state`, `cmd.pilot`, `nav.estimate`, …), each with one writer, a sequence number and an age. Boards copy the topics
 they ask each other for over their link (`RN_LINK_BUS_SUB`, `RN_LINK_BUS`), at a rate or on change. In the simulator
 the flight core and the navigation publish on it and the Pi follows the flight core's topics; **Computers → Live
-data…** shows every board's topics live. It's the groundwork for programs of your own talking to the flight code and to
-each other: the design, the rules (the flight loop never waits on it; one writer per topic; stale is missing; a link
-budget) and the steps still to come are in [docs/topic-bus.md](docs/topic-bus.md).
+data…** shows every board's topics live. Sensors publish their readings (`sensor.baro`, …) on the board they're wired
+to, and topics reach boards that aren't linked to their writer through the flight controller.
+
+**Programs** are your own formulas on a board of your choice (Formula editor → **+ New program**): a header (when it
+runs, the topics it reads, the `user.` topic it writes) and code, `function name(st, inp, dt) { … return { … }; }`.
+They're compiled into that board's flight program, run on the bus (`runner/fc/prog_core.c`), reload in flight when
+their code changes and are part of the design. For now they run in the simulator; real boards, native apps on the Pi
+(`liftlab_bus.h`, Python) and command arbitration are the next steps. The design, the rules (the flight loop never
+waits on the bus; one writer per topic; stale is missing; a link budget) and the plan are in
+[docs/topic-bus.md](docs/topic-bus.md).
 
 ### Cost
 

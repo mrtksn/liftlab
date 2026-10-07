@@ -36,9 +36,10 @@ const LINK_CARRIES = { nav: 'navigation: attitude and sensors up 100 times a sec
   learn: 'learning: flight data up (up to 200 times a second), test moves and the learned model down',
   super: 'health supervisor: flight data up, flight limits and motor and servo states down',
   tlm: 'radio: the receiver\'s channels and the telemetry', cargo: 'cargo: latch commands and what they hold' };
-function boardLinks(C) {
+function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
   const core = C.boards.find(b => b.tasks.includes('core')); if (!core) return [];
-  return C.boards.filter(b => b !== core && b.tasks.length).map(b => {
+  const wired = b => comps.some(c => ['motor', 'joint', 'sensor', 'latch'].includes(c.type) && hardwareOwner(C, c) === b);   // (a board with only devices on it: a sensor board)
+  return C.boards.filter(b => b !== core && (b.tasks.length || wired(b))).map(b => {
     const coreEsp = ESP_PROFILES[core.kind], link = coreEsp && coreEsp.link, bus = hardwareBus(C, b), pi = b.kind.startsWith('pi');
     const port = bus.linkPort || '/dev/serial0', gpio = port === '/dev/serial0';
     const ends = !pi ? null : [
@@ -46,7 +47,7 @@ function boardLinks(C) {
       { board: b, text: gpio ? port + ' · GPIO 14 (TX), GPIO 15 (RX)' : port + ' · USB serial adapter (no Pi GPIO)' }];
     const wires = !pi || !link ? [] : gpio ? [core.name + ' GPIO ' + link[0] + ' (TX) → ' + b.name + ' GPIO 15 (RX)', b.name + ' GPIO 14 (TX) → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'GND ↔ GND']
       : [core.name + ' GPIO ' + link[0] + ' (TX) → adapter RX', 'adapter TX → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'adapter GND ↔ ' + core.name + ' GND', 'adapter USB → ' + b.name + ' (' + port + ')'];
-    return { a: core, b, pi, port, ends, wires, baud: 921600, carries: b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean),
+    return { a: core, b, pi, port, ends, wires, baud: 921600, carries: [...b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean), ...(wired(b) && comps.some(c => c.type === 'sensor' && hardwareOwner(C, c) === b) ? ['sensor readings: the topics of the sensors wired to it, as the other board asks for them'] : [])],
       supported: pi && !!link, note: !pi ? 'A link between two microcontrollers is simulated; there is no wiring recipe for it yet.' : !link ? core.name + ' has no UART pins for the link.' : '' };
   });
 }

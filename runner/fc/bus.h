@@ -2,8 +2,9 @@
  * The data bus (docs/topic-bus.md): each board's table of named topics that its programs publish and read, and that
  * other boards copy over the board link when they subscribe.
  *
- * A topic: a name (dotted: "fc.attitude", "user.camera.photo"), up to BUS_VALS floats, one writer, a sequence number
- * that goes up at each publish, and the time it was published. A mirror is another board's topic, copied here
+ * A topic: a name (dotted: "fc.attitude", "user.camera.photo"), up to BUS_VALS floats laid out as named fields (its
+ * layout: "q[4] w[3]", a field's count in brackets when more than 1), one writer, a sequence number that goes up at each
+ * publish, and the time it was published. A mirror is another board's topic, copied here
  * (read-only here). Everything is fixed size: nothing allocates, nothing blocks, a publish is a copy.
  *
  * The store itself is here, inline, so the flight code needs nothing else to link; copying between boards
@@ -21,6 +22,7 @@
 #define BUS_VALS 32                    /* floats in a topic */
 #define BUS_POOL 1024                  /* floats for all of them */
 #define BUS_NAME 24                    /* a name's characters, with its 0 */
+#define BUS_LAYOUT 64                  /* a layout's characters, with its 0 */
 #define BUS_SUBS 32                    /* subscriptions a board serves (from all the boards that ask) */
 #define BUS_WANTS 32                   /* subscriptions a board asks for */
 #define BUS_LAPSE 2.0                  /* a subscription not renewed for this long lapses [s] */
@@ -31,6 +33,7 @@
 enum { BUS_LOCAL = 0, BUS_MIRROR = 1 };
 typedef struct {
   char name[BUS_NAME];
+  char layout[BUS_LAYOUT];             /* its fields: "q[4] w[3]" (names, counts), adding up to n */
   uint32_t hash;                       /* FNV-1a of the name: how it travels */
   uint16_t n, off;                     /* its floats, and where they are in the pool */
   uint8_t kind, has;                   /* BUS_LOCAL or BUS_MIRROR; published at least once */
@@ -57,20 +60,44 @@ static inline void bus_clock(bus *B, double t) { B->now = t; }
 
 /* A topic by name, or −1. */
 static inline int bus_find(const bus *B, const char *name) { for (int i = 0; i < B->nt; i++) if (bus_name_eq(B->T[i].name, name)) return i; return -1; }
-/* Register a topic (or find it, if it is there with the same size and kind): its index, or −1 (no room, a bad name or
- * size, or there already with another size or kind). */
-static inline int bus_topic_kind(bus *B, const char *name, int n, int kind) {
+/* How many floats a layout describes ("q[4] w[3]": 7), or −1 if it isn't one: fields are identifiers (a letter or _,
+ * then letters, digits, _), each with an optional count 1–BUS_VALS in brackets, separated by single spaces. */
+static inline int bus_layout_count(const char *L) {
+  int total = 0, i = 0;
+  if (!L || !L[0]) return -1;
+  for (;;) {
+    char c = L[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_')) return -1;
+    while ((c = L[++i]) && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {}
+    int k = 1;
+    if (L[i] == '[') { k = 0; i++; while (L[i] >= '0' && L[i] <= '9' && k <= BUS_VALS) k = 10 * k + (L[i++] - '0'); if (L[i++] != ']' || k < 1 || k > BUS_VALS) return -1; }
+    total += k; if (total > BUS_VALS) return -1;
+    if (!L[i]) return total;
+    if (L[i] != ' ' || !L[i + 1]) return -1;
+    i++;
+  }
+}
+static inline int bus_str_eq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
+/* Register a topic (or find it, if it is there with the same size, layout and kind): its index, or −1 (no room, a bad
+ * name, size or layout, or there already with another). The layout may be NULL or "": then one field, "v[n]". */
+static inline int bus_topic_kind(bus *B, const char *name, int n, const char *layout, int kind) {
   int len = 0; while (name[len] && len < BUS_NAME) len++;
   if (!len || len >= BUS_NAME || n < 1 || n > BUS_VALS) return -1;
+  char lay[BUS_LAYOUT]; int ll = 0;
+  if (layout && layout[0]) { while (layout[ll] && ll < BUS_LAYOUT) { lay[ll] = layout[ll]; ll++; } if (ll >= BUS_LAYOUT) return -1; lay[ll] = 0; }
+  else if (n == 1) { lay[0] = 'v'; lay[1] = 0; }
+  else { lay[0] = 'v'; lay[1] = '['; ll = 2; if (n >= 10) lay[ll++] = (char)('0' + n / 10); lay[ll++] = (char)('0' + n % 10); lay[ll++] = ']'; lay[ll] = 0; }
+  if (bus_layout_count(lay) != n) return -1;
   int i = bus_find(B, name);
-  if (i >= 0) return B->T[i].n == n && B->T[i].kind == kind ? i : -1;
+  if (i >= 0) return B->T[i].n == n && B->T[i].kind == kind && bus_str_eq(B->T[i].layout, lay) ? i : -1;
   if (B->nt >= BUS_TOPICS || B->used + n > BUS_POOL) return -1;
   bus_entry *T = &B->T[i = B->nt++];
   for (int k = 0; k <= len; k++) T->name[k] = name[k];
+  for (int k = 0; k < BUS_LAYOUT; k++) { T->layout[k] = lay[k]; if (!lay[k]) break; }
   T->hash = bus_hash(name); T->n = (uint16_t)n; T->off = (uint16_t)B->used; T->kind = (uint8_t)kind; B->used += n;
   return i;
 }
-static inline int bus_topic(bus *B, const char *name, int n) { return bus_topic_kind(B, name, n, BUS_LOCAL); }
+static inline int bus_topic(bus *B, const char *name, int n, const char *layout) { return bus_topic_kind(B, name, n, layout, BUS_LOCAL); }
 /* Publish this board's topic: n values (fewer: the rest 0). 0, or −1 (not a topic of this board's, or too many). */
 static inline int bus_pub(bus *B, int id, const float *v, int n) {
   if (!B || id < 0 || id >= B->nt || B->T[id].kind != BUS_LOCAL || n > B->T[id].n) return -1;
@@ -95,9 +122,11 @@ static inline int bus_changed(const bus *B, int id, uint32_t *seen) {
 }
 
 /* ── copying between boards (bus.c) ── */
-/* Ask for another board's topic: register its mirror here (its name and size as the writer has it) and want it every
- * period [s], or (0) whenever its values change and at least every BUS_BEAT. Its index, or −1. */
-int bus_want_topic(bus *B, const char *name, int n, float period);
+/* Ask for another board's topic: register its mirror here (its name, size and layout as the writer has them) and want
+ * it every period [s], or (0) whenever its values change and at least every BUS_BEAT. Its index, or −1. A board may
+ * pass on a mirror it holds to a board that asks it (relaying, as the flight controller does between the boards linked
+ * to it): the copy keeps its age. */
+int bus_want_topic(bus *B, const char *name, int n, const char *layout, float period);
 /* The subscription frame (RN_LINK_BUS_SUB) for what this board wants, into out: floats written (0: wants nothing). */
 int bus_sub_pack(const bus *B, float *out, int cap);
 /* A subscription frame from peer (any number the caller gives the board it came from), at this board's now. Topics

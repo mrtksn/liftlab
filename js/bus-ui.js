@@ -2,19 +2,12 @@
 // Computers → Live data: every board's data bus (runner/fc/bus.h, docs/topic-bus.md), live. Each topic: this board's
 // own or a copy from another board, how old it is, how often it comes, its values (hover a row for what they are).
 
-// What the flight code's topics hold, value by value (as runner/fc/fc_core.c and nav_core.c publish them).
-const BUS_FIELDS = {
-  'fc.state': ['state', 'attitude settled', 'has height', 'guided', 'supervisor mode', 'learned model', 'formula error'],
-  'fc.attitude': ['qw', 'qx', 'qy', 'qz', 'roll rate', 'pitch rate', 'yaw rate'],
-  'fc.imu': ['fx', 'fy', 'fz', 'gx', 'gy', 'gz'],
-  'fc.height': ['height', 'vertical speed', 'has height'],
-  'fc.output': [...Array.from({ length: 12 }, (_, i) => 'motor ' + (i + 1)), ...Array.from({ length: 8 }, (_, j) => 'servo ' + (j + 1))],
-  'fc.torque': ['τx', 'τy', 'τz'],
-  'cmd.pilot': ['arm', 'roll', 'pitch', 'yaw', 'throttle', 'guided', 'ax', 'ay', 'az', 'heading'],
-  'nav.estimate': ['x', 'y', 'z', 'vx', 'vy', 'vz', 'has home', 'ready', 'landed'],
-  'nav.setpoint': ['target x', 'target y', 'target z', 'vx', 'vy', 'vz', 'heading', 'fly'],
-  'nav.command': ['ax', 'ay', 'az', 'heading', 'fly'],
-};
+// A topic's values, named from its layout ("q[4] w[3]" → q[0] … q[3], w[0] … w[2]).
+function busLabels(layout) {
+  const out = [];
+  for (const f of (layout || '').split(' ')) { const m = /^(\w+)(?:\[(\d+)\])?$/.exec(f); if (!m) continue; const k = +(m[2] || 1); for (let i = 0; i < k; i++) out.push(m[2] ? `${m[1]}[${i}]` : m[1]); }
+  return out;
+}
 const busUi = { rows: new Map(), prev: new Map(), sig: '' };
 const busFmt = v => !isFinite(v) ? '—' : Math.abs(v) >= 1000 ? v.toExponential(1) : Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2);
 const busAge = a => a < 0 ? 'never' : a < 1 ? Math.round(a * 1000) + ' ms' : a.toFixed(1) + ' s';
@@ -61,9 +54,9 @@ function updateBusView() {
     if (p && now > p.t + 0.2) { const d = (t.got - p.got + 16777216) % 16777216; rate = p.rate ? 0.5 * p.rate + 0.5 * d / (now - p.t) : d / (now - p.t); busUi.prev.set(key, { got: t.got, t: now, rate }); }
     else if (!p) busUi.prev.set(key, { got: t.got, t: now, rate: 0 });
     setText(cells.age, busAge(t.age)); setText(cells.rate, rate >= 0.5 ? (rate >= 100 ? Math.round(rate) : rate.toFixed(1)) + '/s' : '—');
-    const labels = BUS_FIELDS[t.name], shown = t.vals.slice(0, 6).map(busFmt).join('  ') + (t.vals.length > 6 ? `  … +${t.vals.length - 6}` : '');
+    const labels = busLabels(t.layout), shown = t.vals.slice(0, 6).map(busFmt).join('  ') + (t.vals.length > 6 ? `  … +${t.vals.length - 6}` : '');
     setText(cells.vals, shown + (t.bad ? `  (${t.bad} refused)` : ''));
-    cells.vals.title = t.vals.map((v, i) => (labels && labels[i] ? labels[i] : '#' + i) + ': ' + busFmt(v)).join('\n');
+    cells.vals.title = t.layout + '\n' + t.vals.map((v, i) => (labels[i] || '#' + i) + ': ' + busFmt(v)).join('\n');
   }
 }
 setInterval(() => { const d = document.getElementById('computerDlg'); if (d && d.open && COMP.view && COMP.view.kind === 'bus' && (typeof fleet === 'undefined' || fleet.selected)) updateBusView(); }, 250);

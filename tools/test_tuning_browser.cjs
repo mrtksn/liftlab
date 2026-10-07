@@ -33,7 +33,7 @@ try{
   for(let i=0;i<120&&RN.log.filter(e=>/flies the new program now/.test(e.msg)).length<swapsBefore+2;i++)await wait(50);
   const swapped=RN.log.filter(e=>/flies the new program now/.test(e.msg)).length-swapsBefore;
   check(swapped>=2,'Boards did not swap in the new program: '+RN.log.slice(0,6).map(e=>e.msg).join(' | '));
-  for(const b of computers().boards.filter(b=>b.tasks.includes('core')||b.tasks.includes('nav')))check(brt.srcs.get(b.id)===boardSrcKey(b.tasks,rnSources())&&brt.srcs.get(b.id).includes(JSON.stringify(cfg.tuning)),b.name+' is not on the new tuning');
+  for(const b of computers().boards.filter(b=>b.tasks.includes('core')||b.tasks.includes('nav')))check(brt.srcs.get(b.id)===boardSrcKey(b.tasks,rnSources())+'\u0002'+progKey(b)&&brt.srcs.get(b.id).includes(JSON.stringify(cfg.tuning)),b.name+' is not on the new tuning');
   check(!S.crashed&&FC_STATES[brt.fcState]==='armed','A stable retune upset the flight: '+(S.crashed||FC_STATES[brt.fcState]));
   check(editedFor(boardOf('core').tasks).some(x=>/tuning/.test(x)),'A real board would not be sent the tuning');
   return 'In flight: the new gains staged, checked and swapped on every board ('+swapped+' swaps); still flying';

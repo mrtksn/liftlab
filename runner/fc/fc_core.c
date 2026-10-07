@@ -214,11 +214,14 @@ static int batt_ok(const fc_state *F) { return F->vbatt > 0.6f * F->vref && F->v
 
 /* ── the data bus (docs/topic-bus.md) ── */
 enum { BT_STATE, BT_ATT, BT_IMU, BT_HEIGHT, BT_OUT, BT_TORQUE, BT_CMD };
+_Static_assert(FC_MAX_MOTORS == 12 && FC_MAX_JOINTS == 8, "fc.output's layout below spells out motor[12] servo[8]");
 int fc_bus_attach(fc_state *F, bus *B) {
   static const char *names[] = { "fc.state", "fc.attitude", "fc.imu", "fc.height", "fc.output", "fc.torque", "cmd.pilot" };   /* (BT_ order) */
   static const int sizes[] = { 7, 7, 6, 3, FC_MAX_MOTORS + FC_MAX_JOINTS, 3, 10 };
+  static const char *layouts[] = { "state settled hasHeight guided supMode learned formulaError", "q[4] w[3]", "f[3] g[3]", "height vz hasHeight",
+    "motor[12] servo[8]", "tau[3]", "arm roll pitch yaw throttle guided acc[3] heading" };
   F->bus = 0; if (!B) return 0;
-  for (int i = 0; i < 7; i++) if ((F->bt[i] = bus_topic(B, names[i], sizes[i])) < 0) return -1;
+  for (int i = 0; i < 7; i++) if ((F->bt[i] = bus_topic(B, names[i], sizes[i], layouts[i])) < 0) return -1;
   F->bus = B; return 0;
 }
 static void bus_after_step(fc_state *F, const fc_out *o) {

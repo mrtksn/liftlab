@@ -16,8 +16,8 @@ static uint32_t join(float hi, float lo) { return ((uint32_t)hi << 16) | (uint32
 static uint32_t sum(const float *v, int n) { uint32_t h = 2166136261u; const uint8_t *b = (const uint8_t *)v; for (int i = 0; i < 4 * n; i++) { h ^= b[i]; h *= 16777619u; } return h; }
 static int by_hash(const bus *B, uint32_t h, int kind) { for (int i = 0; i < B->nt; i++) if (B->T[i].hash == h && B->T[i].kind == kind) return i; return -1; }
 
-int bus_want_topic(bus *B, const char *name, int n, float period) {
-  int id = bus_topic_kind(B, name, n, BUS_MIRROR);
+int bus_want_topic(bus *B, const char *name, int n, const char *layout, float period) {
+  int id = bus_topic_kind(B, name, n, layout, BUS_MIRROR);
   if (id < 0) return -1;
   if (!(period >= 0)) period = 0;
   for (int k = 0; k < B->nw; k++) if (B->W[k].topic == id) { B->W[k].period = period; return id; }
@@ -42,7 +42,8 @@ int bus_sub_take(bus *B, int peer, const float *in, int n) {
   for (int e = 0; e < (int)in[1]; e++) {
     const float *q = in + 2 + 4 * e;
     if (!whole(q[0], 0, 65535) || !whole(q[1], 0, 65535) || !whole(q[2], 0, 3600000) || !whole(q[3], 1, BUS_VALS)) return -1;
-    int id = by_hash(B, join(q[0], q[1]), BUS_LOCAL);
+    uint32_t h = join(q[0], q[1]); int id = by_hash(B, h, BUS_LOCAL);
+    if (id < 0) id = by_hash(B, h, BUS_MIRROR);                      /* (a copy this board holds: passed on, relayed) */
     if (id < 0 || B->T[id].n != (int)q[3]) { B->n_unknown++; continue; }
     int s = 0; while (s < B->ns && !(B->S[s].peer == peer && B->S[s].topic == id)) s++;
     if (s == B->ns) { if (B->ns >= BUS_SUBS) { B->n_unknown++; continue; } B->ns++; B->S[s].t_sent = -1e9; B->S[s].seq_sent = 0; }

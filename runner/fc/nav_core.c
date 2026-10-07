@@ -195,7 +195,8 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
 }
 int nav_bus_attach(nav_state *N, bus *B) {
   N->bus = 0; if (!B) return 0;
-  if ((N->bt[0] = bus_topic(B, "nav.estimate", 9)) < 0 || (N->bt[1] = bus_topic(B, "nav.setpoint", 8)) < 0 || (N->bt[2] = bus_topic(B, "nav.command", 5)) < 0) return -1;
+  if ((N->bt[0] = bus_topic(B, "nav.estimate", 9, "p[3] v[3] hasHome ready landed")) < 0 || (N->bt[1] = bus_topic(B, "nav.setpoint", 8, "target[3] vref[3] heading fly")) < 0
+      || (N->bt[2] = bus_topic(B, "nav.command", 5, "acc[3] heading fly")) < 0) return -1;
   N->bus = B; return 0;
 }
 

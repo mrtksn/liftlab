@@ -46,9 +46,9 @@ try{
   check(p1['↓fc.attitude'].age>=0&&p1['↓fc.attitude'].age<0.03,'A copy is as old as when it was sent plus since it came (under its 20 ms period and the link): '+p1['↓fc.attitude'].age);
   check(p1['↓fc.state'].vals.every((v,i)=>v===c1['fc.state'].vals[i]),'fc.state copy differs from the flight core\'s');
   // a program's own topic: published on the Pi, asked for by the flight controller's board, copied over
-  const put=(w,name,vals)=>{const b=new TextEncoder().encode(name+'\0');new Uint8Array(w.memory.buffer,w.txt_ptr(),b.length).set(b);new Float32Array(w.memory.buffer,w.fr_ptr(),vals.length).set(vals);return w.bus_put(vals.length);};
+  const put=(w,name,vals)=>{const b=new TextEncoder().encode(name+'\0\0');new Uint8Array(w.memory.buffer,w.txt_ptr(),b.length).set(b);new Float32Array(w.memory.buffer,w.fr_ptr(),vals.length).set(vals);return w.bus_put(vals.length);};
   check(put(pw,'user.camera.photo',[7,1.5,2])===0,'Could not publish a program\'s topic');
-  check(busWant(cw,'user.camera.photo',3,0)>=0,'Could not ask for it');
+  check(busWant(cw,'user.camera.photo',3,0,'')>=0,'Could not ask for it');
   await wait(800);
   const ph=topics(cw)['↓user.camera.photo'];check(ph&&ph.vals.join()==='7,1.5,2','The program\'s topic did not reach the other board: '+JSON.stringify(ph));
   check(put(cw,'fc.attitude',[1,2,3,4,5,6,7])===-1&&put(cw,'fc.attitude',[1,2,3])===-1,'A program could overwrite the flight core\'s topic');
@@ -56,16 +56,36 @@ try{
  }));
  console.log(await page.evaluate(async()=>{
   const check=(v,m)=>{if(!v)throw Error(m);},wait=ms=>new Promise(r=>setTimeout(r,ms));
+  // layouts: the flight code's topics name their fields
+  const core=boardOf('core'),cw=brt.inst.get(core.id),lay=n=>busTopics(cw).find(t=>t.name===n).layout;
+  check(lay('fc.attitude')==='q[4] w[3]'&&lay('cmd.pilot')==='arm roll pitch yaw throttle guided acc[3] heading','Layouts: '+lay('fc.attitude'));
+  check(lay('sensor.imu')==='gyro[3] accel[3]','The IMU wired to the flight controller does not publish sensor.imu');
+  // a sensor board: a second ESP32 with no duties, the barometer wired to it; the Pi reads it through the flight controller
+  const D=JSON.parse(JSON.stringify(computers()));D.boards.push({id:9,kind:'esp32',name:'Sensor board',tasks:[]});setComputers(D,'test');await wait(300);
+  const baro=sensorsOf('baro')[0],sb=computers().boards.find(b=>b.name==='Sensor board'),pi=boardOf('nav');
+  editWiring(w=>{w.parts[baro.id]={...w.parts[baro.id],board:sb.id};},baro.id);running=true;await wait(800);
+  const sbNow=()=>computers().boards.find(b=>b.id===sb.id);   // (a wiring edit replaces the computers with a fresh copy)
+  check(boardLinks(computers()).some(L=>L.b.id===sb.id),'The sensor board has no link card');
+  check(busRead(boardOf('nav'),'sensor.baro',0.05)==='','The Pi could not read the sensor board\'s barometer');
+  check(busRead(boardOf('nav'),'sensor.nothing',0)==='no board publishes sensor.nothing','Reading a topic nobody publishes should say so');
+  await wait(1500);
+  const t=n=>(b=>busTopics(brt.inst.get(b.id)).find(x=>x.name===n))
+  const onS=t('sensor.baro')(sbNow()),onC=t('sensor.baro')(boardOf('core')),onP=t('sensor.baro')(boardOf('nav'));
+  check(onS&&!onS.mirror&&onS.got>20,'The sensor board does not publish sensor.baro');
+  check(onC&&onC.mirror&&onP&&onP.mirror,'The flight controller does not relay it to the Pi');
+  check(onP.got>15&&Math.abs(onP.vals[0]-onS.vals[0])<0.5&&onP.age<0.12,'The Pi\'s relayed copy is not current: '+JSON.stringify(onP));
+  check(!busTopics(brt.inst.get(boardOf('nav').id)).some(x=>x.name==='sensor.baro'&&!x.mirror),'The Pi should not publish the barometer itself');
   UI_PANELS.editor.select('form');renderComputers(true);$('#busOpen').click();await wait(700);
-  const cards=[...document.querySelectorAll('[data-bus-board]')];check(cards.length===2,'Live data: expected two board cards, got '+cards.length);
+  const cards=[...document.querySelectorAll('[data-bus-board]')];check(cards.length===3,'Live data: expected three board cards, got '+cards.length);
   const row=(b,name,mirror)=>[...document.querySelectorAll(`[data-bus-board="${b}"] tr[data-topic="${name}"]`)].find(r=>r.textContent.includes(mirror?'↓':'●'));
-  const core=boardOf('core'),pi=boardOf('nav'),r=row(pi.id,'fc.attitude',true);
+  const r=row(pi.id,'fc.attitude',true);
   check(r&&r.children[1].textContent===core.name,'The Pi\'s copy does not say where it is from');
   const before=r.children[4].textContent;await wait(800);check(r.children[4].textContent!==before,'Live data does not refresh');
   check(/\/s$/.test(r.children[3].textContent),'No rate shown: '+r.children[3].textContent);
-  check(r.children[4].title.includes('qw:'),'Values have no labels on hover');
+  check(r.children[4].title.includes('q[0]:')&&r.children[4].title.startsWith('q[4] w[3]'),'Values have no labels on hover');
+  const rb=row(pi.id,'sensor.baro',true);check(rb&&rb.children[1].textContent==='Sensor board','The relayed copy should say it comes from the sensor board: '+(rb&&rb.children[1].textContent));
   $('#computerDlg').close();
-  return 'Live data: a card per board, copies say where they come from, refreshes, rates and labelled values';
+  return 'Layouts and sensor topics; a sensor board\'s barometer reaches the Pi through the flight controller; Live data: a card per board, copies say where they come from, refreshes, rates and labelled values';
  }));
  assert.deepStrictEqual(errors,[]);console.log('No page errors');
 }finally{if(browser)await browser.close();server.close();}

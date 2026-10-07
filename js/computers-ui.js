@@ -175,9 +175,12 @@ function renderFormulaChoices(){
     }
     results=[{label:'Title matches',keys:title},{label:'Content matches',keys:content}];
   }
-  const keys=results.flatMap(g=>g.keys),current=COMP.formula||select.value||keys[0];select.replaceChildren();
+  const progs=typeof programs==='function'?programs().filter(p=>!tokens.length||matches(p.name+' '+p.writes.topic+' '+p.src)):[];   // your programs (programs.js), after the formulas
+  const draft=String(COMP.formula||'').startsWith('prog:')&&!progs.some(p=>'prog:'+p.id===COMP.formula)&&progCards.get(COMP.formula.slice(5));
+  const keys=[...results.flatMap(g=>g.keys),...progs.map(p=>'prog:'+p.id),...(draft?[COMP.formula]:[])],current=COMP.formula||select.value||keys[0];select.replaceChildren();
   if(!keys.includes(current))select.append(el('option',{value:'',text:keys.length?'Choose a matching formula…':'No matching formulas',disabled:'disabled'}));
   for(const group of results)if(group.keys.length)select.append(el('optgroup',{label:group.label},...group.keys.map(key=>el('option',{value:key,text:LAWS[key].def.title}))));
+  if(progs.length||draft)select.append(el('optgroup',{label:'Your programs'},...progs.map(p=>el('option',{value:'prog:'+p.id,text:p.name+' · '+((computers().boards.find(b=>b.id===p.board)||{}).name||'not assigned')})),...(draft?[el('option',{value:COMP.formula,text:draft.d.name+' (not added yet)'})]:[])));
   select.value=keys.includes(current)?current:'';select.disabled=!keys.length;
   setText($('#formulaSearchStatus'),tokens.length?`${keys.length} ${keys.length===1?'match':'matches'} · titles first`:'Search titles, code and documentation.');
 }
@@ -216,7 +219,7 @@ function buildComputers() {
   search.addEventListener('input',()=>renderFormulaChoices());
   search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const first=select.querySelector('option:not([disabled])');if(first){showFormula(first.value);select.focus();}}});
   select.addEventListener('change',()=>{if(select.value)showFormula(select.value);});
-  formulaDialog.append(el('div',{class:'formula-finder'},hardwareField('Search formulas',search),hardwareField('Formula',select)),UI.status({class:'hint formula-search-status',id:'formulaSearchStatus',role:'status'}),el('h3',{id:'formulaTitle'}),el('p',{class:'hint',id:'formulaOwner'}),el('div',{id:'formulaActive'}));
+  formulaDialog.append(el('div',{class:'formula-finder'},hardwareField('Search formulas',search),hardwareField('Formula',select),UI.button({class:'btn',id:'progNew',text:'+ New program',title:'A program of your own: a formula on a board you choose, reading and writing topics on the data bus',onclick:()=>newProgram()})),UI.status({class:'hint formula-search-status',id:'formulaSearchStatus',role:'status'}),el('h3',{id:'formulaTitle'}),el('p',{class:'hint',id:'formulaOwner'}),el('div',{id:'formulaActive'}));
   renderFormulaChoices();
   const store=el('div',{id:'formulaStore',hidden:true},el('div',{id:'taskLaws'}));
   store.append(lawSection('worldLaws','The world','Physics and sensor models used by the simulator.',LAW_DEFS.filter(d=>['plant','sensor'].includes(d.group)).map(d=>d.key),'simulator only'));pane.append(store);
@@ -269,7 +272,7 @@ function nameBox(value, label, id, onName) {
 function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if(!COMP.built)return;
-  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg()]);
+  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg(),typeof programs==='function'?programs():[]]);
   if(full||COMP.sig!==sig){
     COMP.sig=sig;COMP.rendering=true;
     try{
@@ -304,6 +307,7 @@ function computerBoardCard(b,ground=false){
   return interactiveCard({'data-board':key,'aria-label':b.name+' details'},()=>openComputerView({kind:'board',id:key}),
     el('div',{class:'computer-card-heading'},el('b',{text:b.name}),el('span',{class:'computer-location',text:ground?'Ground':'Onboard'})),
     el('span',{class:'computer-kind',text:K.label}),el('p',{class:'computer-meta',text:K.note}),
+    ...(!ground&&typeof programs==='function'&&programs().some(p=>p.board===b.id)?[el('p',{class:'computer-meta board-programs',text:'Programs: '+programs().filter(p=>p.board===b.id).map(p=>p.name).join(', ')})]:[]),
     UI.button({class:'btn sm',text:'Install / export…',id:ground?'ginst':'binst-'+b.id,onclick:e=>{e.stopPropagation();openInstall(ground?'ground':b);}}));
 }
 function assignmentCard(name,board,description,open,attrs={}){
@@ -425,6 +429,7 @@ function renderComputerDetail(){
 }
 function openFormulaEditor(key){const dlg=$('#formulaDlg');if(key)$('#formulaSearch').value='';renderUndo();if(!dlg.open)dlg.showModal();showFormula(key||COMP.formula||formulaGroups()[0].keys[0]);}
 function showFormula(key){
+  if(String(key).startsWith('prog:')){showProgram(key.slice(5));return;}
   const c=lawCards.get(key);if(!c)return;COMP.formula=key;renderFormulaChoices();setText($('#formulaTitle'),LAWS[key].def.title);
   for(const old of [...$('#formulaActive').children])$('#formulaStore').append(old);$('#formulaActive').append(c.card);
   const task=taskOfLaw(key),board=task&&boardOf(task);$('#formulaOwner').textContent=task?(TASKS[task].label+' · '+(board?board.name:'not assigned')):GROUND.formulas.includes(key)?'Command module · '+computers().ground.name:'Simulator world model';
