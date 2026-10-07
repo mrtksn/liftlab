@@ -9,6 +9,7 @@
 - FIXED: sensor-effects and rotor-sampling controls now refresh with other environment fields, including nondefault world settings restored with no selection. Regression: reload a world at 90000 Pa with sensor effects on and one-point wake sampling; all controls match.
 - FIXED: shared-code import from world view adds/selects a new drone instead of silently replacing the retained internal drone. Regression: add a shared code with no selection and compare both existing designs unchanged.
 - M1 world-view audio check: 1/4/8 quads held ~60 FPS / 0.99× with sound off/on; audio callback p95 was 0.2/0.2/0.3 ms with 4/16/32 motor voices. Raw trace and limits in docs/simulation-performance.md. Mobile audio performance and larger-fleet costs remain unmeasured.
+- Published implementation 124a9a0 and final UI correction a3eafbc on main and codex/world-view. All eight board/host CI jobs passed at 124a9a0; Pages deployed a3eafbc, 15 live UI assets matched, and world/audio/persistence plus Markdown/HUD regressions passed directly on the site. Checkout was clean after publication; documentation records this verification.
 
 ## Shared-world multi-drone implementation — 2026-10-07
 - Integrated Claude's already-pushed 81bf2ff (browser BLE control, two links and one-way links); implementation is isolated on codex/multi-drone.
