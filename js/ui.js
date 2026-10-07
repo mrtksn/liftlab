@@ -915,6 +915,13 @@ function applyTerrain(kind, seed) {
   syncSp();save();
 }
 function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
+$('#worldDefaults').addEventListener('click', () => {
+  if (liveOn()) return;
+  Object.assign(envr, DEFAULT_ENVIRONMENT);
+  // Terrain changes use the normal fleet respawn; environment-only resets keep flights in place.
+  if (terrain.kind !== 'parkour' || terrain.seed !== 1) applyTerrain('parkour', 1);
+  syncTerrainUi(); syncSp(); refreshEnvelope(); renderMass(); save();
+});
 commitSelect($('#terrainSel'), v => { if (v !== terrain.kind) applyTerrain(v, terrain.seed); }, 'Press Enter to switch: it starts the flight again');
 $('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + Math.floor(Math.random() * 1e9)));
 function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }

@@ -1,5 +1,10 @@
 # Project memory
 
+## World settings defaults — 2026-10-07
+- Added Reset to defaults at the top of the expanded world settings panel. Restores the initial Parkour city/seed and all shared environment settings, including air pressure, sensor effects and wake sampling; fields refresh and the world is saved. Environment defaults now share one immutable source with startup.
+- Preserves drone designs, targets, selection, pause state and panel collapse preference. A changed terrain uses the existing fleet respawn behavior; environment-only resets keep flights in place. Real-device mode is guarded.
+- Regression checklist: change terrain/environment, reset, inspect every field and reload; reset already-default terrain without moving drones; preserve designs/targets/world selection and phone layout. Passed the expanded world-view browser suite, including all default field values and saved state, environment-only flight preservation, fleet reset/audio/gestures/reload and responsive themes; no page errors. Syntax, fingerprint and diff checks passed.
+
 ## Playback-speed audio — 2026-10-07
 - FIXED: audio ignored simulation speed. Motor/servo pitch and wash playback now track the speed setting; crash/strike/latch/arming/battery effects scale pitch, duration, attack/tail and sequence spacing at their trigger. Real-device telemetry remains at 1x. Volume/pan and existing voice ownership/caps are preserved.
 - Battery reminders use each flight clock, so slow motion, pause and resets retain a three-simulation-second interval. Continuous voices retarget smoothly without restarting; already-triggered one-offs finish at their trigger speed. No new nodes or per-physics-step audio work.

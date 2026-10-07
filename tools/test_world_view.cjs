@@ -32,6 +32,18 @@ try{
  await page.keyboard.press('Meta+z');await page.keyboard.press('Control+z');
  assert.deepStrictEqual(await page.evaluate(()=>({targets:fleet.drones.map(d=>({...d.state.setpoint})),undo:undo.i})),before,'World keyboard controlled retained drone');
  assert(await page.evaluate(()=>!editMode&&!poke.src&&fleet.drones.every(d=>!d.state.pilot.held.size)),'World controls left held state');
+ // Restore shared settings without replacing craft designs or their targets.
+ const defaultsBefore=await page.evaluate(()=>({designs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint})),selected:fleet.selected,running}));
+ await page.evaluate(()=>{applyTerrain('open',42);Object.assign(envr,{wind:8,windDir:90,turb:1,spread:3,texture:0,light:0,ambient:-10,pressure:90000,sensorEffects:true,rotorSamples:1});syncSp();for(const d of fleet.drones)withDrone(d,()=>{S.t=9;});});
+ await page.locator('#worldDefaults').click();
+ assert.deepStrictEqual(await page.evaluate(()=>({...envr})),await page.evaluate(()=>({...DEFAULT_ENVIRONMENT})),'World defaults missed an environment setting');
+ assert(await page.evaluate(()=>terrain.kind==='parkour'&&terrain.seed===1&&$('#terrainSel').value==='parkour'&&fleet.drones.every(d=>d.state.S.t===0)),'Default terrain/respawn wrong');
+ assert(await page.evaluate(()=>+$('#sp-wind-n').value===0&&+$('#sp-ambient-n').value===25&&+$('#air-pressure-n').value===101325&&!$('#flight-sensor-effects').checked&&$('#flight-rotor-samples').value==='5'),'Default fields stale');
+ assert.deepStrictEqual(await page.evaluate(()=>({designs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint})),selected:fleet.selected,running})),defaultsBefore,'World defaults replaced drone settings or selection');
+ await page.evaluate(()=>{for(const d of fleet.drones)withDrone(d,()=>{S.t=7;});envr.wind=3;syncSp();});
+ await page.locator('#worldDefaults').click();assert(await page.evaluate(()=>fleet.drones.every(d=>d.state.S.t===7)),'Environment defaults reset unchanged-terrain flights');
+ assert(await page.evaluate(()=>{const saved=JSON.parse(localStorage.getItem('liftlab-world-v1'));return saved.terrain.kind==='parkour'&&saved.terrain.seed===1&&JSON.stringify(saved.environment)===JSON.stringify(DEFAULT_ENVIRONMENT)&&saved.selected===null;}),'World defaults not persisted');
+ console.log('World defaults: all environment controls, initial terrain, preserved designs/targets/selection and environment-only flights');
  await page.locator('#sp-wind-n').fill('2');await page.locator('#sp-wind-n').dispatchEvent('input');
  assert(await page.evaluate(()=>envr.wind===2&&JSON.parse(localStorage.getItem('liftlab-world-v1')).environment.wind===2),'World setting did not save');
  assert.deepStrictEqual(await page.evaluate(()=>fleet.drones.map(d=>({...d.state.setpoint}))),before.targets,'World settings changed drone targets');

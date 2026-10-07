@@ -74,7 +74,8 @@ let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
 const flyMode = () => learn.view && learn.view.holdServos ? 'tilt' : mode;
 let setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
-const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25, pressure: 101325, sensorEffects: false, rotorSamples: 5 };   // texture and light matter to optical flow
+const DEFAULT_ENVIRONMENT = Object.freeze({ wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25, pressure: 101325, sensorEffects: false, rotorSamples: 5 });
+const envr = { ...DEFAULT_ENVIRONMENT };   // texture and light matter to optical flow
 // No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
 // (a few percent, its own every time, fixed by its id). The controller and supervisor aren't told.
 let spreadCache = new Map();
