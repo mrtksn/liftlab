@@ -98,12 +98,13 @@ try{
   return 'Actual Web Audio graphs: all/selected scope, independent voices and crash/strike events; pause and mute';
  }));
  await page.waitForTimeout(300);assert(await page.evaluate(()=>snd.master.gain.value<.01),'Paused output is audible');await page.locator('#tSound').click();await page.waitForTimeout(300);assert(await page.evaluate(()=>!snd.on&&snd.ctx.state==='suspended'),'Mute did not suspend audio');
- await page.evaluate(()=>{fleetSelect(fleet.drones[0].id);doReset();fleetSelect(fleet.drones[1].id);doReset();running=false;fleetSelect(null);fleetStep(20);fleetScene();fleetSave();});
+ await page.evaluate(()=>{fleetSelect(fleet.drones[0].id);doReset();fleetSelect(fleet.drones[1].id);doReset();running=false;fleetSelect(null);fleetStep(20);fleetScene();envr.pressure=90000;envr.sensorEffects=true;envr.rotorSamples=1;syncSp();fleetSave();});
  const expected=await page.evaluate(()=>({ids:fleet.drones.map(d=>d.id),selected:fleet.selected,wind:envr.wind}));
  await page.locator('#worldSettingsToggle').click();
  await page.reload({waitUntil:'networkidle'});await page.waitForFunction(()=>fleet.ready&&fleet.drones.every(d=>d.state.brt.ready));
  await page.evaluate(()=>running=false);
  assert.deepStrictEqual(await page.evaluate(()=>({ids:fleet.drones.map(d=>d.id),selected:fleet.selected,wind:envr.wind})),expected,'Null selection did not persist');
+ assert(await page.evaluate(()=>$('#flight-sensor-effects').checked&&$('#flight-rotor-samples').value==='1'&&+$('#air-pressure-n').value===90000),'Restored world options do not match environment');
  assert(await page.locator('#worldSettingsBody').isHidden(),'Collapsed world settings did not persist');
  await page.locator('#worldSettingsToggle').click();
  for(const theme of ['light','dark']){

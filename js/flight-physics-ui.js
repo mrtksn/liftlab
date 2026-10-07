@@ -86,7 +86,8 @@ function flightPhysicsFields(c) {
   } else if (c.type === 'mass') {
     if (c.battery) {
       const check = UI.input({type: 'checkbox', id: `${prefix}-auto`}); check.checked = c.batteryAutoMass !== false;
-      check.addEventListener('change', () => { c.batteryAutoMass = check.checked; delete c.batterySizing; changed(); });
+      spRefs.push(() => { check.checked = !!envr.sensorEffects; });
+  check.addEventListener('change', () => { c.batteryAutoMass = check.checked; delete c.batterySizing; changed(); });
       box.append(el('label', {class: 'check', for: check.id}, check, 'Scale battery mass with capacity and cell count'),
         el('p', {class: 'hint', text: 'Scaling starts from this pack’s saved mass, capacity and cell count. Editing mass switches to a manual weight.'}));
     }
@@ -122,10 +123,12 @@ function buildFlightPhysicsUI() {
 function buildFlightEnvironmentFields() {
   $('#spFields').append(flightNumber(envr, 'pressure', 'Air pressure', 20000, 120000, 100, 'Pa', 101325, () => { refreshEnvelope(); renderMass(); save(); }, 'air'));
   const check = UI.input({type: 'checkbox', id: 'flight-sensor-effects'}); check.checked = envr.sensorEffects;
+  spRefs.push(() => { check.checked = !!envr.sensorEffects; });
   check.addEventListener('change', () => { envr.sensorEffects = check.checked; save(); });
   $('#spFields').append(el('label', {class: 'check', for: check.id}, check, 'Estimated GPS sky blockage and barometer downwash bias'));
   const sample = UI.choice({label: 'Overlapping rotor wake sampling', options: [[1, 'One disk point'], [5, 'Five points where wakes overlap']], value: envr.rotorSamples,
     onChange: value => { envr.rotorSamples = Number(value); save(); }});
+  spRefs.push(() => { sample.value = String(envr.rotorSamples); });
   sample.id = 'flight-rotor-samples'; $('#spFields').append(el('div', {class: 'field'}, el('label', {for: sample.id, text: 'Overlapping rotor wakes'}), sample));
 }
 function renderFlightPhysics() {
