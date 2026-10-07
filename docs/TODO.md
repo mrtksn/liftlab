@@ -5,6 +5,7 @@
 - Header World group now has Settings and an icon to reset all drones. Tap R resets the selected drone on release; hold R for 650 ms resets the fleet once. Blur, hidden page and selection changes cancel an unfinished key gesture; typing/dialogs/live hardware retain their key protections.
 - Fleet reset restores all simulated flights/health/batteries/boards in a synchronous pass and resets the shared clock, preserving selection, designs, targets, environment, pause and Edit state. Existing locks for real devices/AI/design operations apply.
 - Passed: zero startup hum gain, retained voices/silent selection/low-battery baseline and normal crash/prop alerts; tap/hold/repeat/cancel/typing R; world icon reset and shared clock; preserved designs/targets/environment/selection/pause/Edit and real-device/AI/design locks; responsive themes and existing fleet/BLE/world/audio checks. Synchronized flight after reset also passed.
+- Published implementation 83262ef on main and codex/fleet-reset. Pages deployed it; four changed live assets matched and the complete world/audio/reset/persistence regression passed on the deployed site. No native firmware changes.
 
 ## World view and fleet audio — 2026-10-07
 - Added persistent no-selection world view: both drone sidebars hide, the shared canvas expands, and collapsible world settings appear at the right. Drone flight targets stay in Control; World is removed from drone readout tabs. Empty viewport clicks/dropdown/header switch to world view; orbit, pinch and editor handles keep their gestures.
