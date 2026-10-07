@@ -438,8 +438,8 @@ function boardsControl(dt) {
   const idle = () => { for (const c of acts) { const st = act.get(c.id); if (st) setThrottle(c, st, 0, 0); } };
   if (!brt.ready || !coreB) { idle(); return; }
   brt.t += dt;
-  if (!cargo.power) {                                               // no battery on board: every board is dark (cargo.js)
-    idle(); brt.fcState = 0; brt.fcWhy = 'no power: the battery fell off'; brt.navOut = null;
+  if (!cargo.power) {                                               // no battery connected on board: every board is dark (cargo.js)
+    idle(); brt.fcState = 0; brt.fcWhy = 'no power: ' + powerWhy(); brt.navOut = null;
     const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
     if (tw) radioTick(dt, tlmB, tw, coreB, navB, true);             // (the command module on the ground runs on, and hears nothing)
     return;

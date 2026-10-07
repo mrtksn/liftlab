@@ -86,7 +86,7 @@ function cargoBarSync() {
     b.disabled = !v.on || !cargo.power;
   });
   const say = $('#cargoSay');
-  if (say) setText(say, !cargo.power ? 'no power: the battery is off the drone' : !hasTask('cargo') && ls.length ? 'no board drives the latches: press to put the Cargo task on the flight controller' : performance.now() - cargoUi.sayT < 4000 ? cargoUi.say : '');
+  if (say) setText(say, !cargo.power ? 'no power: ' + powerWhy() : !hasTask('cargo') && ls.length ? 'no board drives the latches: press to put the Cargo task on the flight controller' : performance.now() - cargoUi.sayT < 4000 ? cargoUi.say : '');
 }
 
 /* ───────── the Cargo section (right panel) ───────── */
@@ -126,7 +126,7 @@ function cargoSecSync() {
     const v = latchView(l), held = v.under.filter(c => parentOf(c) === l).map(c => c.name);
     return [l.name, !v.on ? 'fell off' : `${v.moving ? (v.closed ? 'opening' : 'closing') : v.closed ? 'closed' : 'open'}${held.length ? ' · holds ' + held.join(', ') + ` (${(v.mass * 1000).toFixed(0)} g)` : v.closed ? ' · empty' : ''}${v.near && !v.closed ? ` · nearest ${v.near.L.name} ${(v.near.d * 100).toFixed(0)} cm` : ''}`];
   });
-  rows.push(['Power', cargo.power ? 'on' : `off since ${(cargo.powerT ?? 0).toFixed(1)} s: no battery on board`]);
+  rows.push(['Power', cargo.power ? 'on' : cargo.powerT != null ? `off since ${cargo.powerT.toFixed(1)} s: ${powerWhy()}` : `off: ${powerWhy()}`]);
   rows.push(['Loose', cargo.loose.length ? cargo.loose.map(L => `${L.name} (${(L.m * 1000).toFixed(0)} g${L.asleep ? '' : ', moving'})`).join(', ') : 'nothing']);
   syncKv(box, rows);
   const log = $('#cargoLog'); if (!log) return;

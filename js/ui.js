@@ -229,7 +229,7 @@ function compBody(c) {
       else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
     }
     b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
-      el('p', { class: 'hint', text: 'With no battery left on board (hung on a latch and dropped), the motors stop and the boards go dark until the next reset. A design with no mass marked as a battery is always powered.' }));
+      el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }));
   } else if (c.type === 'latch') {
     const held = descendants(c);
     b.append(el('p', { class: 'hint', text: held.length ? 'Holds: ' + held.map(x => x.name).join(', ') + '. Opened in flight, all of it falls away together.' : 'Nothing hangs from it yet: drag a part onto it (a mass, a cable payload, an arm, even a motor or the battery), or pick something up in flight.' }),
@@ -361,6 +361,7 @@ function addComp(type, place = null) {
   else if (type === 'joint') c = mkJoint('Servo ' + (joints().length + 1), -0.3, 0, 0.02, { hingeAz: 90 });
   else if (type === 'tilt') { const k = joints().length + 1, pr = mkServoMotor('Rotor ' + k, -0.3, 0, 0.02, { hingeAz: 90 }); cfg.comps.push(pr[0]); c = pr[1]; root = pr[0]; }
   else if (type === 'mass') c = mkMass('Mass ' + n, 0.1, 0, -0.04, { mass: 0.15 });
+  else if (type === 'battery') { const k = cfg.comps.filter(x => x.type === 'mass' && x.battery).length; c = mkMass(k ? 'Battery ' + (k + 1) : 'Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] }); }
   else if (type === 'hang') c = mkHang('Cable ' + n, 0, 0, -0.03);
   else if (type === 'latch') c = mkLatch('Latch ' + n, 0, 0, -0.04);
   else if (type === 'wing') c = mkMass('Wing ' + (cfg.comps.filter(x => isWing(x)).length + 1), 0, 0, 0.06, { shape: 'box', size: [0.1, 0.7, 0.01], mass: 0.06, aero: 'wing', inc: 6 });
@@ -498,7 +499,7 @@ function renderLaunch() {
   if (P.phase !== 'flying') launchUi.flyT = null;
   const starting = !brt.err || /^starting/.test(brt.err);
   if (editMode || S.crashed || liveOn()) title = '';
-  else if (!cargo.power) { title = 'No power'; sub = 'The battery is off the drone. Reset (R) to start again.'; tone = 'bad'; }
+  else if (!cargo.power) { const why = powerWhy(); title = 'No power'; sub = why === 'the battery is off the drone' ? 'The battery is off the drone. Reset (R) to start again.' : why === 'no battery on the drone' ? 'No battery on the drone: add one (Airframe → Add a part → Battery).' : 'The battery isn\'t connected: connect it in Computers → Power.'; tone = 'bad'; }
   else if (!brt.ready) { k = 0; title = starting ? 'Starting up' : 'Can\'t start'; sub = starting ? 'Loading the flight program onto each board' : brt.err; tone = starting ? '' : 'bad'; }
   else if (P.phase === 'ground') { k = 1; title = 'Levelling'; sub = 'The flight core\'s attitude settles while it stands still'; }
   else if (P.phase === 'arming') {
@@ -552,7 +553,7 @@ function updateLive() {
   }
   {   // battery
     const soc = Math.max(0, S.batt.soc ?? 1), b = battCfg();
-    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S`, !cargo.power ? 'bad' : soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : 'good', !cargo.power ? 'No battery on the drone' : null);
+    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S`, !cargo.power ? 'bad' : soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : 'good', !cargo.power ? 'No power: ' + powerWhy() : null);
     const f = $('#battFill'); if (f) f.setAttribute('width', (10.8 * clamp(cargo.power ? soc : 0, 0, 1)).toFixed(2));
   }
   {   // formulas

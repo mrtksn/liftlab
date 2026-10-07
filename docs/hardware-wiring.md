@@ -4,6 +4,12 @@ Computers shows compact cards for boards, duty assignments, motors/servos, senso
 
 Wiring and custom C source are stored inside `computers.wiring` in the design. Browser storage, named designs, exported/shared design JSON, undo and redo include them. Older designs retain inferred defaults: actuators/IMU/compass/barometer follow the flight core; GPS/flow follow navigation; latches follow cargo. Explicit board IDs survive board deletion; a connection to a deleted board stays disconnected rather than moving to another board.
 
+## Power and board links
+
+**Power** cards (Computers) show each battery on the airframe: connected to the power distribution (the ESCs or MOSFET stages, and each board through its regulator) or not. A battery is connected unless you disconnect it (`wiring.parts[id].power = false`, saved with the design). With no battery connected, or no battery at all, the drone doesn't turn on: the boards stay dark and the motors stop. The battery's detail also holds the optional voltage-sense input (ADC GPIO and divider on the flight-core board). Add a battery with **Add a part → Battery**.
+
+**Board links** cards show how each board with duties talks to the flight-core board: a serial link at 921600 baud. For a Pi it lists both ends (ESP UART0 pins fixed by chip; the Pi's `/dev/serial0` on GPIO 14/15, or a USB serial adapter), the wires (TX → RX both ways, shared GND) and what the link carries for that board's tasks; the Pi's serial port is edited there. A link between two microcontrollers is simulated and has no wiring recipe yet. The Wiring overview lists the power first.
+
 ## Connections and profiles
 
 Select **Use 10DOF module: MPU6050 + BMP180 + HMC5883L** to configure the three existing sensor parts (or add missing parts) on the flight board. They are placed together at the frame origin with one shared I²C bus, at addresses 0x68, 0x77 and 0x1e. Adjust mounting in Airframe to match the physical module. This names the actual chips rather than assuming every module sold as “10DOF” has the same silicon.

@@ -1,5 +1,9 @@
 # Project memory
 
+## Battery power and board links — 2026-10-07
+- Integrated Claude’s completed battery-wiring work: Computers shows battery connection and board-link cards, wiring details, and Add a part includes Battery. No connected onboard battery leaves boards and motors unpowered; the saved connection survives undo, files and reload.
+- Regression checklist: disconnect/reconnect, no battery, add battery, board-link UART/USB details, undo/file/reload. Passed tools/test_power_links.cjs and hardware/installer/agent checks; no firmware source changes or physical hardware validation.
+
 ## Computers tools and search refinements — 2026-10-07
 - Formula editor and Wiring overview now live in a pinned icon toolbar at the top of Computers. Command-module wiring comes first in the overview.
 - Formula search ranks title matches before code/documentation matches, includes unapplied drafts, and keeps the active editor unchanged while filtering. Program status becomes concise compilation/size readouts with folded activity/update help and preserved exports/errors.

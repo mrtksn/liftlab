@@ -6,7 +6,7 @@
 //   Nothing moves: the new part takes the place where the joint is, and the part keeps its place.
 
 const INSERTABLE = new Set(['latch', 'joint', 'link']);
-const KIND_WORD = { motor: 'motor', tilt: 'motor on a servo', joint: 'servo', link: 'rod', mass: 'mass', hang: 'cable mass', wing: 'wing', latch: 'latch',
+const KIND_WORD = { battery: 'battery', motor: 'motor', tilt: 'motor on a servo', joint: 'servo', link: 'rod', mass: 'mass', hang: 'cable mass', wing: 'wing', latch: 'latch',
   imu: 'IMU', mag: 'compass', baro: 'barometer', fix: 'position fix', flow: 'flow sensor' };
 
 // Put a just-made part (c, already in cfg.comps; with its own parts, a motor on a servo) where place says.

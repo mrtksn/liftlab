@@ -88,11 +88,12 @@ function renderHardware() {
   const auxiliary=group('Power & radio','These connections belong to the board running the corresponding task. Settings are included when installing the design.');
   if(core&&ESP_PROFILES[core.kind]){
     const bus=hardwareBus(C,core),battery=cfg.comps.find(c=>c.battery);
-    auxiliary.append(hardwareBoardCard(core,battery?.name||'Battery voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
+    auxiliary.append(hardwareBoardCard(core,battery?.name?battery.name+' voltage':'Battery voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
       pinPicker(core,'Battery ADC GPIO','hw-battery-'+core.id,bus.batteryPin,'battery',ESP_PROFILES[core.kind].adc,v=>editBoard(core,{batteryPin:Number(v)},'battery')),
       hardwareDetails('battery'+core.id,'Voltage divider',hardwareNumber('Battery divider ratio',bus.batteryDivider,v=>editBoard(core,{batteryDivider:v},'divider'),1,30),el('p',{class:'hint',text:'Ratio = battery voltage / voltage at the ADC pin. Connect the pack through a suitable resistor divider, never directly to a GPIO.'}))));
+    auxiliary.lastChild.dataset.hwRole='battery';
   }
-  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareBoardCard(b,'Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));}
+  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareBoardCard(b,'Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));auxiliary.lastChild.dataset.hwRole='link-'+b.id;}
   const radio=C.boards.find(b=>b.tasks.includes('tlm'));
   // the link's card (r: radioCfg, or the second link's, radioCfg2): what it needs wired, its picker
   const radioCard=(r,second)=>{

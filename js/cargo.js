@@ -11,9 +11,9 @@
 // design parts that fell off (cargo.off) and copies of the parts picked up (cargo.extra, each with its own id).
 // The physics flies liveComps(); the editor, the boards' wiring and the exports keep the design.
 //
-// Power: a rigid mass marked as a battery powers the drone. Drop the last one and the motors stop, the boards go
-// dark (their latches stay where they are) and the radio goes quiet, until the next reset. A design with no mass
-// marked as a battery is always powered (designs from before this existed).
+// Power: a rigid mass marked as a battery and wired to the power distribution (Computers → Power) powers the
+// drone. With none (no battery, none wired, or the last one dropped) the motors stop, the boards go dark (their
+// latches stay where they are) and the radio goes quiet, until the next reset.
 
 function mkLatch(name, x, y, z, o = {}) {
   return base(Object.assign({ type: 'latch', name, pos: [x, y, z], mass: 0.02, closed: true, reach: 0.08, travel: 0.15, sense: true, known: true }, o));
@@ -46,7 +46,15 @@ const liveMotors = () => liveComps().filter(c => c.type === 'motor' && !c.cargo)
 const liveJoints = () => liveComps().filter(c => c.type === 'joint');
 const liveUnder = a => liveComps().filter(c => c !== a && isUnder(c, a));
 const isBattery = c => c.type === 'mass' && !!c.battery;
-const designPowered = () => !cfg.comps.some(isBattery) || liveComps().some(isBattery);
+const designPowered = () => cfg.comps.some(c => isBattery(c) && onBoard(c) && batteryWired(computers(), c));
+// Why there's no power, in a few words (null when there is).
+function powerWhy() {
+  if (cargo.power) return null;
+  const bats = cfg.comps.filter(isBattery);
+  if (!bats.length) return 'no battery on the drone';
+  if (!bats.some(c => batteryWired(computers(), c))) return 'the battery isn\'t connected';
+  return 'the battery is off the drone';
+}
 function cargoLog(msg, tone = 'info') { cargo.log.unshift({ t: S.t, msg, tone }); if (cargo.log.length > 10) cargo.log.pop(); }
 
 /* ───────── things in the world to pick up ───────── */

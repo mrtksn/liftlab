@@ -186,6 +186,8 @@ function buildComputers() {
   for(const d of LAW_DEFS)if(!lawCards.has(d.key))lawCard(d.key);
   const section=(id,title,content)=>UI.section({class:'sec',id},el('h2',{text:title}),content);
   pane.append(section('computerBoardsSec','Boards',el('div',{},UI.button({class:'btn',id:'boardAdd',text:'+ Add a board',onclick:()=>$('#boardAddDlg').showModal()}),el('div',{class:'computer-grid',id:'boardList'}))),
+    section('computerPowerSec','Power',el('div',{class:'computer-grid',id:'computerPower'})),
+    section('computerLinksSec','Board links',el('div',{class:'computer-grid',id:'computerLinks'})),
     section('computerAssignmentsSec','Assignments',el('div',{class:'computer-grid',id:'taskRows'})),
     section('computerOutputsSec','Motors & servos',el('div',{class:'computer-grid',id:'computerOutputs'})),
     section('computerSensorsSec','Sensors',el('div',{class:'computer-grid',id:'computerSensors'})),
@@ -267,12 +269,14 @@ function nameBox(value, label, id, onName) {
 function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if(!COMP.built)return;
-  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2]);
+  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg()]);
   if(full||COMP.sig!==sig){
     COMP.sig=sig;COMP.rendering=true;
     try{
       $('#boardList').replaceChildren(...C.boards.map(b=>computerBoardCard(b)),computerBoardCard(C.ground,true));
       $('#boardAdd').disabled=C.boards.length>=BOARD_MAX;
+      $('#computerPower').replaceChildren(...powerCards(C));
+      const links=boardLinks(C);$('#computerLinks').replaceChildren(...links.map(linkCard));$('#computerLinks').closest('.sec').hidden=!links.length;
       $('#taskRows').replaceChildren(...Object.entries(TASKS).map(([id,T])=>assignmentCard(T.label,boardOf(id),T.what,()=>openComputerView({kind:'task',id}),{'data-task':id})));
       for(const [id,filter]of [['computerOutputs',c=>['motor','joint'].includes(c.type)],['computerSensors',c=>c.type==='sensor'],['computerCargo',c=>c.type==='latch']]){
         const parts=cfg.comps.filter(filter);$('#'+id).replaceChildren(...parts.map(c=>assignmentCard(c.name,hardwareOwner(C,c),deviceDescription(c),()=>openComputerView({kind:'device',id:c.id}),{'data-device':c.id})));
@@ -307,12 +311,27 @@ function assignmentCard(name,board,description,open,attrs={}){
     el('b',{text:name}),board?el('div',{class:'assigned-board'},el('b',{text:board.name}),el('span',{text:BOARD_KINDS[board.kind].label})):el('p',{class:'computer-meta',text:description}),
     ...(!board?[UI.button({class:'btn sm',text:'Assign',onclick:e=>{e.stopPropagation();open();}})]:[]));
 }
+// Power: a card per battery (connected to the power distribution, or not), or one saying there's none.
+function setBatteryWired(c,on){editWiring(w=>{w.parts[c.id]={...w.parts[c.id],power:!!on};},'power'+c.id);}
+function powerCards(C){
+  const bats=batteryParts(cfg.comps),b=battCfg(),pack=b.cells+'S · '+b.capacity+' Ah';
+  if(!bats.length)return [UI.card({class:'computer-card assignment-card empty','data-power':'none'},el('b',{text:'No battery'}),el('p',{class:'computer-meta',text:'Nothing powers the drone, so it doesn\'t turn on. Add a battery to the airframe.'}),
+    UI.button({class:'btn sm',text:'Add a battery',onclick:()=>{addComp('battery');renderComputers(true);}}))];
+  return bats.map(c=>{const on=batteryWired(C,c);return interactiveCard({'data-power':c.id,class:'computer-card assignment-card'+(on?'':' empty'),'aria-label':c.name+' power'},()=>openComputerView({kind:'power',id:c.id}),
+    el('b',{text:c.name}),on?el('div',{class:'assigned-board'},el('b',{text:'Connected'}),el('span',{text:pack+' → motors and boards'})):el('p',{class:'computer-meta',text:'Not connected: '+(bats.some(x=>batteryWired(C,x))?'it powers nothing.':'the drone doesn\'t turn on.')}),
+    ...(on?[]:[UI.button({class:'btn sm',text:'Connect',onclick:e=>{e.stopPropagation();setBatteryWired(c,true);}})]));});
+}
+// A link between two boards: which ends, how it's wired.
+function linkCard(L){
+  return interactiveCard({'data-link':L.b.id,class:'computer-card assignment-card'+(L.supported?'':' empty'),'aria-label':L.a.name+' to '+L.b.name+' link'},()=>openComputerView({kind:'link',id:L.b.id}),
+    el('b',{text:L.a.name+' ↔ '+L.b.name}),el('div',{class:'assigned-board'},el('b',{text:!L.pi?'Simulated link':L.port==='/dev/serial0'?'Serial · UART wires':'Serial · USB adapter'}),el('span',{text:L.pi?L.baud+' baud · '+L.port:'no wiring recipe yet'})));
+}
 function deviceDescription(c){return c.type==='sensor'?(SENSOR_KINDS[c.kind]+' sensor: choose the board that receives its measurements.'):c.type==='joint'?'Servo: choose the board that controls its position.':c.type==='latch'?'Cargo latch: choose the board that opens and closes it.':'Motor: choose the board that sends its throttle signal.';}
 function openComputerView(view){
   const dlg=$('#computerDlg');
   if(!dlg.open){
-    const active=document.activeElement,card=active.closest('[data-board],[data-task],[data-device],[data-radio]');
-    const key=card&&['board','task','device','radio'].find(k=>Object.hasOwn(card.dataset,k));
+    const active=document.activeElement,card=active.closest('[data-board],[data-task],[data-device],[data-radio],[data-power],[data-link]');
+    const key=card&&['board','task','device','radio','power','link'].find(k=>Object.hasOwn(card.dataset,k));
     COMP.returnFocus=key?'#paneForm [data-'+key+'="'+CSS.escape(card.dataset[key])+'"]':active.id?'#'+CSS.escape(active.id):null;
   }
   COMP.view=view;COMP.confirm=null;renderHardware();renderComputerDetail();
@@ -346,6 +365,25 @@ function renderComputerDetail(){
     if(view.kind==='radio'){mountHardware(box,'[data-hw-role="radio"]');computerWiringIssues(box,boardOf(t));}
     else if(T.formulas.length)box.append(UI.button({class:'btn',text:'Open formulas…',onclick:()=>{$('#computerDlg').close();openFormulaEditor(T.formulas[0]);}}));
     return;
+  }
+  if(view.kind==='power'){
+    const c=compById(view.id);if(!c||!c.battery){$('#computerDlg').close();return;}const on=batteryWired(C,c),b=battCfg();$('#computerDlgTitle').textContent=c.name;
+    box.append(el('p',{text:'The battery feeds the motors through their ESCs (or MOSFET stages) and every board through its regulator. Unplugged, it powers nothing: with no battery connected the drone doesn\'t turn on.'}),
+      el('h3',{text:'Power distribution'}),
+      UI.card({class:'board-assignment'},el('div',{},el('b',{text:on?'Connected':'Not connected'}),el('span',{class:'computer-meta',text:b.cells+'S · '+b.capacity+' Ah · its cells, capacity and limits are in Tune → Battery'})),
+        UI.button({class:'btn sm','data-power-toggle':'',text:on?'Disconnect':'Connect',onclick:()=>setBatteryWired(c,!on)})));
+    if(!cargo.power)box.append(el('p',{class:'bad',text:'No power now: '+powerWhy()+'.'}));
+    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the pack voltage (low-battery warnings, thrust that stays true as it drains).'}));
+    mountHardware(box,'[data-hw-role="battery"]');computerWiringIssues(box,boardOf('core'));return;
+  }
+  if(view.kind==='link'){
+    const L=boardLinks(C).find(L=>L.b.id===view.id);if(!L){$('#computerDlg').close();return;}$('#computerDlgTitle').textContent=L.a.name+' ↔ '+L.b.name;
+    box.append(el('p',{text:L.b.name+' talks to '+L.a.name+', which runs the flight core, over a serial link at '+L.baud+' baud. Each frame is checked; if the flight core hears nothing for half a second it levels and lands by itself.'}));
+    if(L.note)box.append(el('p',{class:'hint',text:L.note}));
+    if(L.ends){const dl=el('dl',{class:'hw-wire-list'});for(const e of L.ends)dl.append(el('dt',{text:e.board.name}),el('dd',{},el('span',{text:e.text}),el('small',{text:BOARD_KINDS[e.board.kind].label})));box.append(el('h3',{text:'Ends'}),dl);}
+    if(L.wires.length)box.append(el('h3',{text:'Wires'}),el('ul',{class:'link-wires'},...L.wires.map(w=>el('li',{text:w}))),el('p',{class:'hint',text:'TX goes to RX both ways. 3.3 V logic on both ends: no level shifter needed.'}));
+    if(L.carries.length)box.append(el('h3',{text:'What it carries'}),el('ul',{class:'link-wires'},...L.carries.map(t=>el('li',{text:t}))));
+    mountHardware(box,'[data-hw-role="link-'+L.b.id+'"]');computerWiringIssues(box,L.b);return;
   }
   if(view.kind==='device'){
     const c=compById(view.id);if(!c){$('#computerDlg').close();return;}$('#computerDlgTitle').textContent=c.name;

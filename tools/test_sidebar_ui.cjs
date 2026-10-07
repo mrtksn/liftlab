@@ -62,7 +62,7 @@ try{
   await page.locator('#designFiles').click();await page.locator('#designFile').setInputFiles({name:'Copy.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(exported))});
   await page.locator('#saveAsk button[value="save"]').click();await page.waitForFunction(()=>designs.name==='Copy'&&!$('#saveAsk').open&&brt.ready);assert.deepStrictEqual(comparable(await page.evaluate(()=>JSON.parse(designSnap()))),comparable(expected));
   // Grouped palette retains placement and exactly one expanded editor.
-  const count=await page.evaluate(()=>cfg.comps.length);await page.locator('#addPart').click();assert.strictEqual(await page.locator('#addPartDlg h3').count(),4);
+  const count=await page.evaluate(()=>cfg.comps.length);await page.locator('#addPart').click();assert.strictEqual(await page.locator('#addPartDlg h3').count(),5);   // power, propulsion, structure & motion, payloads, sensors
   await page.locator('[data-add="joint"]').click();assert(!await page.locator('#addPartDlg').isVisible());await page.locator('.place-opt').first().click();assert.strictEqual(await page.evaluate(()=>cfg.comps.length),count+1);
   assert.strictEqual(await page.locator('#compList .comp.open').count(),1);
   for(const n of [0,1,0]){await page.locator('#compList .comp-head').nth(n).click();assert.strictEqual(await page.locator('#compList .comp.open').count(),1);}

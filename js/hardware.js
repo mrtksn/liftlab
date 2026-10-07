@@ -25,6 +25,31 @@ function hardwarePart(C, c, comps) {
   return { ...saved, board: owner ? owner.id : null, pin: Number.isInteger(saved.pin) ? saved.pin : c.type==='latch' ? [18,19,17,27,22,23,24,25][index]??-1 : p ? (c.type === 'motor' ? p.motors : p.servos)[index] ?? -1 : -1,
     driver, address: Number.isInteger(saved.address) ? saved.address : choices ? choices[driver].addresses[0] || 0 : 0 };
 }
+// Power: a rigid mass marked as a battery feeds the motors (through their ESCs or MOSFET stages) and the boards
+// (through their regulators) when it's wired to the power distribution, which it is unless the design says
+// otherwise (wiring.parts[id].power === false). With no wired battery on board the drone doesn't turn on.
+const batteryParts = comps => comps.filter(c => c.type === 'mass' && c.battery);
+const batteryWired = (C, c) => { const p = C.wiring && C.wiring.parts && C.wiring.parts[c.id]; return !(p && p.power === false); };
+// The links between onboard boards: every other board with duties talks to the flight core's board over a serial
+// link (921600 baud). On a Pi: its UART on GPIO 14/15 (/dev/serial0) or a USB serial adapter, to the ESP's UART0.
+const LINK_CARRIES = { nav: 'navigation: attitude and sensors up 100 times a second, the acceleration and heading wanted down',
+  learn: 'learning: flight data up (up to 200 times a second), test moves and the learned model down',
+  super: 'health supervisor: flight data up, flight limits and motor and servo states down',
+  tlm: 'radio: the receiver\'s channels and the telemetry', cargo: 'cargo: latch commands and what they hold' };
+function boardLinks(C) {
+  const core = C.boards.find(b => b.tasks.includes('core')); if (!core) return [];
+  return C.boards.filter(b => b !== core && b.tasks.length).map(b => {
+    const coreEsp = ESP_PROFILES[core.kind], link = coreEsp && coreEsp.link, bus = hardwareBus(C, b), pi = b.kind.startsWith('pi');
+    const port = bus.linkPort || '/dev/serial0', gpio = port === '/dev/serial0';
+    const ends = !pi ? null : [
+      { board: core, text: link ? 'UART0 · GPIO ' + link[0] + ' (TX), GPIO ' + link[1] + ' (RX)' : 'no UART pins for this chip' },
+      { board: b, text: gpio ? port + ' · GPIO 14 (TX), GPIO 15 (RX)' : port + ' · USB serial adapter (no Pi GPIO)' }];
+    const wires = !pi || !link ? [] : gpio ? [core.name + ' GPIO ' + link[0] + ' (TX) → ' + b.name + ' GPIO 15 (RX)', b.name + ' GPIO 14 (TX) → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'GND ↔ GND']
+      : [core.name + ' GPIO ' + link[0] + ' (TX) → adapter RX', 'adapter TX → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'adapter GND ↔ ' + core.name + ' GND', 'adapter USB → ' + b.name + ' (' + port + ')'];
+    return { a: core, b, pi, port, ends, wires, baud: 921600, carries: b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean),
+      supported: pi && !!link, note: !pi ? 'A link between two microcontrollers is simulated; there is no wiring recipe for it yet.' : !link ? core.name + ' has no UART pins for the link.' : '' };
+  });
+}
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
   return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, nrfPins:[-1,-1,-1,-1,-1], ...s };
@@ -199,12 +224,19 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines};
+if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
   const core=C.boards.find(b=>b.tasks.includes('core')),radio=C.boards.find(b=>b.tasks.includes('tlm'));
   const groups=C.boards.map(b=>({id:b.id,name:b.name,kind:b.kind,rows:[]})),unassigned=[];
+  {   // power first: what feeds everything else
+    const bats=batteryParts(comps),g={id:'power',name:'Power',kind:'',rows:[]};
+    for(const c of bats)g.rows.push(batteryWired(C,c)?{device:c.name,connection:'+ / − → power distribution: ESCs (or MOSFET stages), and each board through its regulator',note:'Share GND with every board'}:{device:c.name,connection:'Not connected',note:'Unplugged: it powers nothing'});
+    if(!bats.length)g.rows.push({device:'Battery',connection:'None on the drone',note:'Nothing powers it: add a battery in Airframe'});
+    else if(!bats.some(c=>batteryWired(C,c)))g.rows.push({device:'Power',connection:'No battery connected',note:'The drone doesn\'t turn on'});
+    groups.unshift(g);
+  }
   const pin=n=>Number.isInteger(n)&&n>=0?'GPIO '+n:'Not connected';
   for(const c of comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type))){
     const p=hardwarePart(C,c,comps),b=hardwareOwner(C,c),row={device:c.name,connection:'',note:''};
