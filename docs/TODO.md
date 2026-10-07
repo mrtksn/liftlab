@@ -3,7 +3,9 @@
 ## Playback-speed audio — 2026-10-07
 - FIXED: audio ignored simulation speed. Motor/servo pitch and wash playback now track the speed setting; crash/strike/latch/arming/battery effects scale pitch, duration, attack/tail and sequence spacing at their trigger. Real-device telemetry remains at 1x. Volume/pan and existing voice ownership/caps are preserved.
 - Battery reminders use each flight clock, so slow motion, pause and resets retain a three-simulation-second interval. Continuous voices retarget smoothly without restarting; already-triggered one-offs finish at their trigger speed. No new nodes or per-physics-step audio work.
-- Regression checklist: 0.25/0.5/1/2/4x motor/servo/noise ratios, unchanged volume/pan/voice identity, one-shot pitch/timing, per-craft battery cadence after speed/pause/reset/selection, real-device 1x, silent selection and mute/edit behavior. Passed in actual Chrome Web Audio graphs via tools/test_audio_speed.cjs; existing world/audio/reset and mock Bluetooth regressions also passed. Asset fingerprints, syntax and diff checks passed. Publication pending.
+- Regression checklist: 0.25/0.5/1/2/4x motor/servo/noise ratios, unchanged volume/pan/voice identity, one-shot pitch/timing, per-craft battery cadence after speed/pause/reset/selection, real-device 1x, silent selection and mute/edit behavior. Passed in actual Chrome Web Audio graphs via tools/test_audio_speed.cjs; existing world/audio/reset and mock Bluetooth regressions also passed. Asset fingerprints, syntax and diff checks passed.
+
+- Published implementation 0dc837d on main and codex/audio-speed. Pages deployed it; live HTML/audio bytes matched and the full audio-speed suite passed on the site with no page errors. No firmware changes.
 
 ## Quiet selection and fleet reset — 2026-10-07
 - Selection retains matching motor voices, fades departing voices and initializes new oscillators silently at their actual frequency. Event history is reseeded without an immediate low-battery reminder; simulation alerts remain active. FIXED: default full hum gain/frequency caused a chirp when voices restarted on selection.
