@@ -1011,8 +1011,8 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .assigned-board{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-8);background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius-control);width:100%;font-size:var(--text-sm)}
 .assigned-board span{color:var(--muted)}
 .computer-dialog{width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto}
-.computer-dialog-head{position:sticky;top:calc(-1 * var(--space-16));display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);padding:var(--space-8) 0;background:var(--panel);z-index:2;border-bottom:1px solid var(--line);margin-bottom:var(--space-14)}
-.computer-dialog-head h2{margin:0;overflow-wrap:anywhere}
+.dialog-toolbar{position:sticky;top:calc(-1 * var(--space-16));display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);padding:var(--space-8) 0;background:var(--panel);z-index:2;border-bottom:1px solid var(--line);margin-bottom:var(--space-14)}
+.dialog-toolbar h2{margin:0;overflow-wrap:anywhere}
 .computer-detail{display:flex;flex-direction:column;gap:var(--space-12)}
 .computer-detail>h3{margin:var(--space-6) 0 0;font-family:var(--f-display);font-size:var(--text-label)}
 .computer-detail .hw-device{margin:0}
@@ -1035,11 +1035,33 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .formula-dialog .sec{padding:var(--space-12) 0}
 .formula-dialog .formula-help>summary{cursor:pointer}
 .formula-dialog #formulaActive .law-body{gap:var(--space-10)}
-@media(max-width:480px){.computer-dialog{width:calc(100vw - 20px);padding:var(--space-12)}.computer-dialog-head{top:calc(-1 * var(--space-12))}.computer-grid{grid-template-columns:1fr}}
+@media(max-width:480px){.computer-dialog{width:calc(100vw - 20px);padding:var(--space-12)}.dialog-toolbar{top:calc(-1 * var(--space-12))}.computer-grid{grid-template-columns:1fr}}
 
-.computer-dialog-actions{display:flex;gap:var(--space-6);flex-wrap:wrap;justify-content:flex-end}
+.dialog-actions{display:flex;gap:var(--space-6);flex-wrap:wrap;justify-content:flex-end}
 
 .formula-reference>summary,#rnBox>summary{cursor:pointer;font-weight:600;color:var(--ink-2)}
 .formula-reference .law-io{margin-top:var(--space-12)}
 
 .assignment-card.empty .computer-meta{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* Persistent Computers tools and searchable formulas. */
+#computerToolsSec{position:sticky;top:calc(var(--section-tabs-height,48px) + var(--section-nav-height,32px));z-index:5;background:var(--panel);padding:var(--space-10) var(--space-14)}
+#computerToolsSec>h2{display:none}
+.computer-tool{display:inline-flex;align-items:center;gap:var(--space-6)}
+.computer-tool svg{display:block;width:17px;height:17px;flex:none}
+.formula-finder{display:grid;grid-template-columns:1fr 1.4fr;gap:var(--space-12)}
+.formula-finder .hw-field{min-width:0}
+.formula-finder input,.formula-finder select{width:100%;min-width:0}
+.formula-search-status{margin:0}
+#formulaTitle{margin:0}
+.program-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4) var(--space-12);margin:var(--space-10) 0}
+.program-metrics dt{font-size:var(--text-sm);color:var(--muted);grid-row:1}
+.program-metrics dd{font-family:var(--f-mono);margin:0;grid-row:2}
+#rnBox>summary{margin-bottom:var(--space-10)}
+#rnBox .rn-status{font-weight:600}
+.program-help,.program-activity{margin-top:var(--space-10)}
+.program-help>summary,.program-activity>summary{cursor:pointer;color:var(--muted);font-size:var(--text-sm)}
+.program-help p{margin-bottom:0}
+.dialog-toolbar{flex-wrap:wrap}
+.design-dialog .dialog-toolbar h2{font-size:var(--text-lg)}
+@media(max-width:480px){.formula-finder{grid-template-columns:1fr}.program-metrics{column-gap:var(--space-6)}.dialog-toolbar{top:calc(-1 * var(--space-16))}.computer-dialog .dialog-toolbar{top:calc(-1 * var(--space-12))}.dialog-actions{margin-left:auto}.computer-tools{gap:var(--space-6)}.computer-tool{font-size:var(--text-sm)}}

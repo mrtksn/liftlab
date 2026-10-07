@@ -1,5 +1,14 @@
 # Project memory
 
+## Computers tools and search refinements — 2026-10-07
+- Formula editor and Wiring overview now live in a pinned icon toolbar at the top of Computers. Command-module wiring comes first in the overview.
+- Formula search ranks title matches before code/documentation matches, includes unapplied drafts, and keeps the active editor unchanged while filtering. Program status becomes concise compilation/size readouts with folded activity/update help and preserved exports/errors.
+- Added matching Undo/Redo/Close headers to board picker, design dialogs and install/export. Installer history refreshes the selected board guide/files and is disabled during connection/firmware preparation, an active connection or a write.
+- FIXED: section navigation accounts for the pinned tool row so a jump keeps its heading visible.
+- Regression checklist: toolbar visibility while scrolling, wiring order, search ranking/drafts/no matches/keyboard, concise status/errors/downloads, dialog history and connected/busy installer guards, phone themes and per-drone ownership. Passed the expanded tools/test_computer_cards.cjs on desktop/phone light/dark: pinned tools and section jumps, command-first wiring, title/content/draft search and no-match/Enter behavior, compiler failure diagnostics, actual .rnp/.dnc bytes, installer undo/redo ownership and async preparation/connection/write guards. Existing sidebar/shared UI fixtures 9/9, multi-drone, hardware and installer regressions passed; no page errors. Syntax, diff and asset fingerprints passed. Publication checks pending.
+
+- Previous Computers implementation c48d08c finished all eight firmware/host CI jobs successfully.
+
 ## Computers cards and detail views — 2026-10-07
 - Replaced the long Computers form with board inventory cards (Onboard/Ground, model/core details, Install/export), compact duty/device/radio assignments and an Add board picker. Wiring controls retain existing driver/pin validation and open within board/device details; a separate overview includes the command module.
 - Formulas move into a dedicated editor dialog showing one selected formula, preserving Apply/Revert, compiler status, exports and per-drone drafts. Board deletion requires explicit confirmation; the last onboard board/microcontroller and fixed command-module slot remain required by the existing model.

@@ -52,8 +52,8 @@ function restoreSnap(s) {
 function undoStep() { if (undo.i > 0) { undo.i--; restoreSnap(undo.stack[undo.i]); } }
 function redoStep() { if (undo.i < undo.stack.length - 1) { undo.i++; restoreSnap(undo.stack[undo.i]); } }
 function renderUndo() {
-  for (const id of ['undoBtn', 'undoBtn2', 'computerDlgUndo', 'formulaDlgUndo']) { const b = document.getElementById(id); if (b) b.disabled = undo.i <= 0; }
-  for (const id of ['redoBtn', 'redoBtn2', 'computerDlgRedo', 'formulaDlgRedo']) { const b = document.getElementById(id); if (b) b.disabled = undo.i >= undo.stack.length - 1; }
+  for (const b of document.querySelectorAll('#undoBtn,#undoBtn2,[data-design-history=undo]')) b.disabled = undo.i <= 0 || (b.closest('#installDlg') && typeof installHistoryLocked==='function' && installHistoryLocked());
+  for (const b of document.querySelectorAll('#redoBtn,#redoBtn2,[data-design-history=redo]')) b.disabled = undo.i >= undo.stack.length - 1 || (b.closest('#installDlg') && typeof installHistoryLocked==='function' && installHistoryLocked());
 }
 window.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;   // text fields keep their own undo
@@ -283,6 +283,7 @@ function initDesigns(boot) {
   });
   $('#designFiles').addEventListener('click', () => { designNote(''); $('#designFilesDlg').showModal(); });
   $('#designManage').addEventListener('click', () => { designNote(''); renderDesigns(); $('#designManageDlg').showModal(); });
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-design-history]');if(!b||b.disabled)return;if(b.closest('#installDlg'))installHistory(b.dataset.designHistory);else (b.dataset.designHistory==='undo'?undoStep:redoStep)();});
   document.querySelectorAll('[data-close-dialog]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
   $('#designExport').addEventListener('click', () => exportDesign(null));
   $('#designImport').addEventListener('click', () => $('#designFile').click());

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=1276186ff3">
+<link rel="stylesheet" href="css/style.css?v=7c6f5b0de8">
 </head>
 <body>
 <div class="app">
@@ -347,14 +347,13 @@
         <div class="ask-btns"><button class="btn" type="button" id="shareClose">Close</button><button class="btn primary" type="button" id="shareOpen">Open it</button></div>
       </dialog>
       <dialog class="ask install-dlg" id="installDlg" aria-labelledby="installTitle">
-        <h2 id="installTitle" tabindex="-1">Install</h2>
+        <div class="dialog-toolbar"><h2 id="installTitle" tabindex="-1">Install / export</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" id="installClose">Close</button></div></div>
         <p class="hint" id="installSub"></p>
         <div id="installBody"></div>
-        <div class="ask-btns"><button class="btn" type="button" id="installClose">Close</button></div>
       </dialog>
       <dialog class="ask design-dialog" id="designSaveDlg" aria-labelledby="designSaveTitle">
         <form id="designSaveForm">
-          <h2 id="designSaveTitle">Save design as</h2>
+          <div class="dialog-toolbar"><h2 id="designSaveTitle">Save design as</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
           <p>Keep a new copy of this drone, including its parts, computers and tuning.</p>
           <label class="ask-name"><span class="lbl">Design name</span><input type="text" id="designName" maxlength="60" required autocomplete="off"></label>
           <p class="note" data-design-note role="status" hidden></p>
@@ -362,7 +361,7 @@
         </form>
       </dialog>
       <dialog class="ask design-dialog" id="designFilesDlg" aria-labelledby="designFilesTitle">
-        <h2 id="designFilesTitle">Import / export</h2>
+        <div class="dialog-toolbar"><h2 id="designFilesTitle">Import / export</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
         <p>Open a design from a JSON file, or download a copy of the current design.</p>
         <div class="design-actions">
           <button class="btn" id="designImport" type="button">Import file…</button>
@@ -370,17 +369,15 @@
           <input type="file" id="designFile" accept=".json,application/json" hidden>
         </div>
         <p class="note" data-design-note role="status" hidden></p>
-        <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Close</button></div>
       </dialog>
       <dialog class="ask design-dialog" id="designManageDlg" aria-labelledby="designManageTitle">
-        <h2 id="designManageTitle">Saved designs <small id="designLibraryCount"></small></h2>
+        <div class="dialog-toolbar"><h2 id="designManageTitle">Saved designs <small id="designLibraryCount"></small></h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
         <div class="designs" id="designList"></div>
         <p class="hint" id="designWhere"></p>
         <p class="note" data-design-note role="status" hidden></p>
-        <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Close</button></div>
       </dialog>
       <dialog class="ask parts-dialog" id="addPartDlg" aria-labelledby="addPartTitle">
-        <div class="dialog-heading"><h2 id="addPartTitle">Add a part</h2><button class="icon-btn" type="button" data-close-dialog aria-label="Close part picker">×</button></div>
+        <div class="dialog-toolbar"><h2 id="addPartTitle">Add a part</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
         <p>Choose a part, then choose where to attach it.</p>
         <section><h3>Propulsion</h3><div class="addrow">
           <button class="btn" type="button" data-add="motor">Motor</button>
@@ -540,20 +537,20 @@
 <script src="js/learn.js?v=a736a09f3a"></script>
 <script src="js/view3d.js?v=6b6856b603"></script>
 <script src="js/pilot.js?v=8f44f0defc"></script>
-<script src="js/computers-ui.js?v=ff80e3d9da"></script>
+<script src="js/computers-ui.js?v=9bae11765f"></script>
 <script src="js/ui.js?v=3a7f0e9d47"></script>
 <script src="js/place-ui.js?v=b6f9c42f9e"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
 <script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
 <script src="js/tuning-ui.js?v=ec3806aa4a"></script>
-<script src="js/designs.js?v=2719c1b067"></script>
+<script src="js/designs.js?v=56b0a1ba57"></script>
 <script src="js/share.js?v=026e34bc2b"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=392833d0f9"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
-<script src="js/hardware-ui.js?v=30e934091e"></script>
-<script src="js/install-ui.js?v=1acfbe7e1f"></script>
+<script src="js/hardware-ui.js?v=badc46bb03"></script>
+<script src="js/install-ui.js?v=609c41dd96"></script>
 <script src="js/editor.js?v=0589e4ef33"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=ec761089ab"></script>
@@ -581,7 +578,7 @@
 <script src="js/fleet.js?v=1ae3f5a20e"></script>
 <script src="js/fleet-collisions.js?v=bc231a68ff"></script>
 <script>boot();</script>
-<script src="js/section-nav.js?v=55293d65c7"></script>
+<script src="js/section-nav.js?v=b558eb4ab7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
 </body>

@@ -11,7 +11,7 @@ function initSectionNavigation(rootId){
   const pageScrolling=()=>getComputedStyle(root).overflowY==='visible';
   const jump=s=>{
     if(!s)return;menu.open=false;
-    const page=pageScrolling(),top=(page?0:root.getBoundingClientRect().top+root.clientTop)+tabs.offsetHeight+nav.offsetHeight;
+    const page=pageScrolling(),top=(page?0:root.getBoundingClientRect().top+root.clientTop)+tabs.offsetHeight+nav.offsetHeight+(activePane?.querySelector('#computerToolsSec')?.offsetHeight||0);
     (page?window:root).scrollTo({top:(page?window.scrollY:root.scrollTop)+s.heading.getBoundingClientRect().top-top-10,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
     s.heading.tabIndex=-1;s.heading.focus({preventScroll:true});schedule();
   };
@@ -31,8 +31,8 @@ function initSectionNavigation(rootId){
       }
     }
     nav.hidden=sections.length<2;if(nav.hidden)return;
-    root.style.setProperty('--section-tabs-height',tabs.offsetHeight+'px');
-    const top=nav.getBoundingClientRect().bottom+16;let index=0;
+    root.style.setProperty('--section-tabs-height',tabs.offsetHeight+'px');root.style.setProperty('--section-nav-height',nav.offsetHeight+'px');
+    const top=nav.getBoundingClientRect().bottom+(pane.querySelector('#computerToolsSec')?.offsetHeight||0)+16;let index=0;
     sections.forEach((s,i)=>{if(s.heading.getBoundingClientRect().top<=top)index=i;});
     if(pageScrolling()?root.getBoundingClientRect().top<0&&root.getBoundingClientRect().bottom<=window.innerHeight+3:root.scrollTop>0&&root.scrollHeight-root.scrollTop-root.clientHeight<3)index=sections.length-1;
     activeIndex=index;current.textContent=sections[index].name;

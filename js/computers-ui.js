@@ -81,11 +81,12 @@ function refreshLawRunner(key) {
 // The step runner's panel at the top of the tab.
 function renderRunner() {
   const box = $('#rnBox'); if (!box) return;
-  const P = RN.P, st = $('#rnStatus');
-  if (!P) st.textContent = 'The flight formulas didn\'t compile: ' + RN.buildErr;
+  const P = RN.P, st = $('#rnStatus'), metrics = $('#rnMetrics');
+  if (!P) { setText(st, 'Compilation failed: ' + RN.buildErr); metrics.hidden = true; }
   else {
-    const n = Object.keys(P.fns).length, kb = x => (x * 4 / 1024).toFixed(0) + ' KB';
-    st.textContent = `${n} formulas compile (${kb(P.code.length + P.constEnd)} of steps and constants, ${kb(P.arenaSize)} of working memory, all together). Each board loads a program with the formulas of its tasks, and the command module one with its own.`;
+    const n = Object.keys(P.fns).length, errors = Object.keys(P.errors).length, kb = x => (x * 4 / 1024).toFixed(0) + ' KB';
+    setText(st, `${n} formulas compiled` + (errors ? ` · ${errors} failed` : ''));
+    metrics.hidden = false; syncKv(metrics, [['Program', kb(P.code.length + P.constEnd)], ['Working memory', kb(P.arenaSize)], ['Edited formulas', String(editedLaws().length)]]);
   }
   const log = $('#rnLog'); log.textContent = '';
   for (const l of RN.log.slice(0, 5)) log.append(el('li', { class: l.tone }, el('b', { text: `${l.t.toFixed(1)} s` }), ' ' + l.msg));
@@ -151,8 +152,34 @@ function lawSection(id, title, blurb, keys, small) {
 }
 function computerDialog(id, title) {
   const body=el('div',{class:'computer-detail',id:id+'Body'}),close=UI.button({class:'btn',text:'Close',onclick:()=>$('#'+id).close()});
-  const dialog=el('dialog',{class:'ask computer-dialog',id,'aria-labelledby':id+'Title'},el('div',{class:'computer-dialog-head'},el('h2',{id:id+'Title',text:title}),el('div',{class:'computer-dialog-actions'},...(id==='boardAddDlg'?[]:[UI.button({class:'btn sm',id:id+'Undo',text:'↶ Undo',onclick:()=>undoStep()}),UI.button({class:'btn sm',id:id+'Redo',text:'↷ Redo',onclick:()=>redoStep()})]),close)),body);
+  const dialog=el('dialog',{class:'ask computer-dialog',id,'aria-labelledby':id+'Title'},el('div',{class:'dialog-toolbar'},el('h2',{id:id+'Title',text:title}),el('div',{class:'dialog-actions'},UI.button({class:'btn sm',id:id+'Undo',text:'↶ Undo','data-design-history':'undo'}),UI.button({class:'btn sm',id:id+'Redo',text:'↷ Redo','data-design-history':'redo'}),close)),body);
   return {dialog,body};
+}
+function computerToolButton(id,text,svg,onclick){
+  return UI.button({class:'btn computer-tool',id,onclick,'aria-haspopup':'dialog'},el('span',{'aria-hidden':'true',html:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+svg+'</svg>'}),el('span',{text}));
+}
+function formulaGroups(){
+  return [...Object.entries(TASKS).map(([,T])=>({label:T.label,keys:T.formulas})),{label:GROUND.label,keys:GROUND.formulas},{label:'World & sensor models',keys:LAW_DEFS.filter(d=>['plant','sensor'].includes(d.group)).map(d=>d.key)}];
+}
+function renderFormulaChoices(){
+  const select=$('#formulaSelect');if(!select)return;
+  const tokens=$('#formulaSearch').value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean),groups=formulaGroups();
+  const matches=text=>tokens.every(t=>text.toLocaleLowerCase().includes(t));
+  let results=groups;
+  if(tokens.length){
+    const title=[],content=[];
+    for(const key of groups.flatMap(g=>g.keys)){
+      const L=LAWS[key],d=L.def;
+      if(matches(d.title))title.push(key);
+      else if(matches([d.title,key,lawCards.get(key)?.ta.value||L.src,d.doc,d.used,d.returns,...d.args.flat()].join(' ')))content.push(key);
+    }
+    results=[{label:'Title matches',keys:title},{label:'Content matches',keys:content}];
+  }
+  const keys=results.flatMap(g=>g.keys),current=COMP.formula||select.value||keys[0];select.replaceChildren();
+  if(!keys.includes(current))select.append(el('option',{value:'',text:keys.length?'Choose a matching formula…':'No matching formulas',disabled:'disabled'}));
+  for(const group of results)if(group.keys.length)select.append(el('optgroup',{label:group.label},...group.keys.map(key=>el('option',{value:key,text:LAWS[key].def.title}))));
+  select.value=keys.includes(current)?current:'';select.disabled=!keys.length;
+  setText($('#formulaSearchStatus'),tokens.length?`${keys.length} ${keys.length===1?'match':'matches'} · titles first`:'Search titles, code and documentation.');
 }
 function buildComputers() {
   const pane=$('#paneForm');pane.textContent='';COMP.view=null;COMP.confirm=null;
@@ -164,7 +191,8 @@ function buildComputers() {
     section('computerSensorsSec','Sensors',el('div',{class:'computer-grid',id:'computerSensors'})),
     section('computerCargoSec','Cargo outputs',el('div',{class:'computer-grid',id:'computerCargo'})),
     section('computerRadioSec','Radio',el('div',{class:'computer-grid',id:'computerRadio'})),
-    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},UI.button({class:'btn',id:'wiringOpen',text:'Wiring overview…',onclick:()=>openComputerView({kind:'wiring'})}),UI.button({class:'btn',id:'formulasOpen',text:'Formula editor…',onclick:()=>openFormulaEditor()}))));
+    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},computerToolButton('formulasOpen','Formula editor…','<path d="M7 4L2 10l5 6m6-12 5 6-5 6M11 3l-2 14"/>',()=>openFormulaEditor()),computerToolButton('wiringOpen','Wiring overview…','<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M4.5 7v8.5H13M7 4.5h8.5V13"/>',()=>openComputerView({kind:'wiring'})))));
+  pane.prepend($('#computerToolsSec'));
   pane.append(el('div',{id:'hardwareRows',hidden:true}));
   const detail=computerDialog('computerDlg','Computer details');pane.append(detail.dialog);
   detail.dialog.addEventListener('close',()=>{COMP.view=null;COMP.confirm=null;if(COMP.returnFocus)document.querySelector(COMP.returnFocus)?.focus({preventScroll:true});});
@@ -182,20 +210,20 @@ function buildComputers() {
   const editor=computerDialog('formulaDlg','Formula editor'),formulaDialog=editor.body;
   editor.dialog.classList.add('formula-dialog');
   const select=UI.select({id:'formulaSelect','aria-label':'Formula'});
-  for(const [t,T]of [...Object.entries(TASKS),['ground',GROUND]]){
-    const group=el('optgroup',{label:T.label});for(const key of T.formulas)group.append(el('option',{value:key,text:LAWS[key].def.title}));if(group.children.length)select.append(group);
-  }
-  const world=el('optgroup',{label:'World & sensor models'});for(const d of LAW_DEFS.filter(d=>['plant','sensor'].includes(d.group)))world.append(el('option',{value:d.key,text:d.title}));select.append(world);
-  select.addEventListener('change',()=>showFormula(select.value));
-  formulaDialog.append(hardwareField('Formula',select),el('p',{class:'hint',id:'formulaOwner'}),el('div',{id:'formulaActive'}));
+  const search=UI.input({type:'search',id:'formulaSearch',placeholder:'Title or code…',autocomplete:'off','aria-label':'Search formulas','aria-controls':'formulaSelect','aria-describedby':'formulaSearchStatus'});
+  search.addEventListener('input',()=>renderFormulaChoices());
+  search.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const first=select.querySelector('option:not([disabled])');if(first){showFormula(first.value);select.focus();}}});
+  select.addEventListener('change',()=>{if(select.value)showFormula(select.value);});
+  formulaDialog.append(el('div',{class:'formula-finder'},hardwareField('Search formulas',search),hardwareField('Formula',select)),UI.status({class:'hint formula-search-status',id:'formulaSearchStatus',role:'status'}),el('h3',{id:'formulaTitle'}),el('p',{class:'hint',id:'formulaOwner'}),el('div',{id:'formulaActive'}));
+  renderFormulaChoices();
   const store=el('div',{id:'formulaStore',hidden:true},el('div',{id:'taskLaws'}));
   store.append(lawSection('worldLaws','The world','Physics and sensor models used by the simulator.',LAW_DEFS.filter(d=>['plant','sensor'].includes(d.group)).map(d=>d.key),'simulator only'));pane.append(store);
   formulaDialog.append(UI.details({class:'sec',id:'rnBox',title:'Program status & exports'},
-      el('p', { class: 'hint', text: 'The flight formulas are compiled into steps for a small runner: the heavy math (matrices, quaternions, the least-squares allocation) is built into the runner in C, and the formulas are the steps between. Every board has the same runner and loads a program with the formulas of its tasks, so a formula edited here flies unchanged on the drone. An edit applied in flight reaches each board the way it would on the drone: the loader\'s checks, self-tests, a second of flying in the background beside the current version, then a short blend; if the new version stops in flight, the one before takes over again.' }),
       UI.status( { class: 'rn-status', id: 'rnStatus', role: 'status' }),
-      el('ol', { class: 'rn-log', id: 'rnLog', hidden: true }),
+      el('dl',{class:'program-metrics',id:'rnMetrics'}),
+      UI.details({title:'Recent activity',class:'program-activity'},el('ol', { class: 'rn-log', id: 'rnLog', hidden: true })),
       el('ul', { class: 'rn-problems', id: 'rnProblems' }),
-      el('div', { class: 'law-actions' }, UI.button( { class: 'btn', type: 'button', id: 'rnDownload', text: 'Download the program (.rnp)', onclick: rnDownload }))));
+      el('div', { class: 'law-actions' }, UI.button( { class: 'btn', type: 'button', id: 'rnDownload', text: 'Full program (.rnp)', onclick: rnDownload })),el('p',{class:'hint',text:'Totals include all duties. Per-board files are in Install / export.'}),UI.details({class:'program-help',title:'How flight updates work'},el('p',{class:'hint',text:'Applied edits are compiled and checked before activation. During flight, the new program is tested beside the current one, then blended in. If it fails, the previous version resumes.'}))));
   const copyBtn = UI.button( { class: 'btn', type: 'button', id: 'copyEdited', text: 'Copy edited formulas' });
   const revertAll = UI.button( { class: 'btn', type: 'button', id: 'revertAll', text: 'Revert all' });
   const copyOut = UI.textarea( { class: 'code', id: 'copyOut', readonly: 'readonly', 'aria-label': 'Edited formulas' }); copyOut.hidden = true;
@@ -311,7 +339,7 @@ function computerWiringIssues(box,b){
 function renderComputerDetail(){
   const view=COMP.view,box=$('#computerDlgBody');if(!view||!box)return;box.textContent='';box.classList.toggle('device-detail',view.kind==='device');const C=computers();
   renderUndo();
-  if(view.kind==='wiring'){$('#computerDlgTitle').textContent='Wiring overview';box.append(renderWiringOverview(C));mountHardware(box,'[data-hw-role="ground"],#hardwareReport');return;}
+  if(view.kind==='wiring'){$('#computerDlgTitle').textContent='Wiring overview';mountHardware(box,'[data-hw-role="ground"]');box.append(renderWiringOverview(C));mountHardware(box,'#hardwareReport');return;}
   if(view.kind==='task'||view.kind==='radio'){
     const t=view.kind==='radio'?'tlm':view.id,T=TASKS[t];$('#computerDlgTitle').textContent=view.kind==='radio'?'Radio assignment & wiring':T.label;
     box.append(el('p',{text:T.what}));assignmentChoices(box,boardOf(t),eligibleTaskBoards(t),id=>assignDuty(t,id));
@@ -356,9 +384,9 @@ function renderComputerDetail(){
     computerWiringIssues(box,b);
   }
 }
-function openFormulaEditor(key){const dlg=$('#formulaDlg');if(!dlg.open)dlg.showModal();showFormula(key||COMP.formula||$('#formulaSelect').value);}
+function openFormulaEditor(key){const dlg=$('#formulaDlg');if(key)$('#formulaSearch').value='';renderUndo();if(!dlg.open)dlg.showModal();showFormula(key||COMP.formula||formulaGroups()[0].keys[0]);}
 function showFormula(key){
-  const c=lawCards.get(key);if(!c)return;COMP.formula=key;$('#formulaSelect').value=key;
+  const c=lawCards.get(key);if(!c)return;COMP.formula=key;renderFormulaChoices();setText($('#formulaTitle'),LAWS[key].def.title);
   for(const old of [...$('#formulaActive').children])$('#formulaStore').append(old);$('#formulaActive').append(c.card);
   const task=taskOfLaw(key),board=task&&boardOf(task);$('#formulaOwner').textContent=task?(TASKS[task].label+' · '+(board?board.name:'not assigned')):GROUND.formulas.includes(key)?'Command module · '+computers().ground.name:'Simulator world model';
   c.card.querySelector('.law-body').hidden=false;c.card.querySelector('.law-head').setAttribute('aria-expanded','true');lawOpen.add(key);fitTa(c.ta);refreshLaw(key);

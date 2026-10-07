@@ -8,7 +8,7 @@
 const FW_DIR = 'firmware/';
 const LK = { PROGRAM: 1, STATUS: 2, AIRFRAME: 4, SETTING: 5, EVENT: 0x81, REPORT: 0x82, TELEM: 0x83 };
 const INST_STATES = ['disarmed', 'ARMED', 'FAILSAFE', 'CRASHED', 'motor test'];
-const INST = { target: null, conn: null, busy: false, fw: null, files: null, log: [] };
+const INST = { target: null, conn: null, busy: false, preparing: false, fw: null, files: null, log: [] };
 const instPref = (k, d) => { try { return localStorage.getItem('dfb.install.' + k) ?? d; } catch (e) { return d; } };
 const instSave = (k, v) => { try { localStorage.setItem('dfb.install.' + k, v); } catch (e) {} };
 
@@ -147,8 +147,20 @@ function cmdBox(text, label) {
 const instStep = (n, title, ...kids) => UI.section( { class: 'inst-step' }, el('h3', {}, el('span', { class: 'inst-n', text: String(n) }), title), ...kids);
 const instPara = (html, cls) => el('p', { class: cls || '', html });
 
+function installHistoryLocked(){return !!(INST.busy||INST.preparing||INST.conn);}
+async function installPreparation(run){
+  INST.preparing=true;renderUndo();
+  try{return await run();}finally{INST.preparing=false;renderUndo();}
+}
+function installHistory(action){
+  if(installHistoryLocked())return;
+  const id=INST.target==='ground'?'ground':INST.target?.id;
+  (action==='undo'?undoStep:redoStep)();
+  const target=id==='ground'?'ground':computers().boards.find(b=>b.id===id);
+  if(target)openInstall(target);else closeInstall();
+}
 function openInstall(target) {
-  INST.target = target;
+  INST.target = target; renderUndo();
   const dlg = $('#installDlg'), kind = instKind(target), K = BOARD_KINDS[kind];
   setText($('#installTitle'), `Install / export: ${instName(target)}`);
   setText($('#installSub'), `${K.label} · runs ${instTasks(target).map(t => t === 'ground' ? 'the command module' : TASKS[t].label).join(', ') || 'nothing yet'}`);
@@ -165,7 +177,7 @@ function openInstall(target) {
   dlg.scrollTop = 0; $('#installTitle').focus();   // start at the top, not at its first input
 }
 function closeInstall() {
-  if (INST.busy) { instMsg($('#installBusy'), 'Wait until it finishes: unplugging or closing now leaves the board half written (it can be flashed again).', 'bad'); return; }
+  if (INST.busy||INST.preparing) { instMsg($('#installBusy')||$('#installSub'), 'Wait until the current board operation finishes.', 'bad'); return; }
   if (INST.conn) { INST.conn.close(); INST.conn = null; }
   $('#installDlg').close();
 }
@@ -303,6 +315,7 @@ function instLog(s, cls) {
   if (near) con.scrollTop = con.scrollHeight;
 }
 function instConnUi() {
+  renderUndo();
   const c = $('#instConn'); if (!c) return;
   c.textContent = INST.conn ? 'Disconnect' : 'Connect'; const b = $('#instBaud'); if (b) b.disabled = !!INST.conn;
   if (!INST.conn) setText($('#instLive'), '');
@@ -315,7 +328,11 @@ function instTelem(f) {
   setText($('#instLive'), bits.join(' · '));
 }
 // Opens the board's port for the link (asking which one, the first time). Returns false if it couldn't.
-async function espConnect() {
+async function espConnect(){
+  if(INST.conn)return true;if(INST.busy||INST.preparing)return false;
+  return installPreparation(()=>espConnectPrepared());
+}
+async function espConnectPrepared() {
   if (INST.conn) return true;
   if (!('serial' in navigator)) return false;
   let port = INST.port;
@@ -329,10 +346,10 @@ async function espConnect() {
 async function espSend(bytes, until, ms, msg, what) {
   if (INST.busy) return null;
   if (!await espConnect()) { instMsg(msg, 'Not connected: plug the board in and pick its port.', 'bad'); return null; }
-  INST.busy = true; instMsg(msg, what + '…');
+  INST.busy = true; renderUndo(); instMsg(msg, what + '…');
   try { const w = INST.conn.waitFor(until, ms); await INST.conn.write(bytes); return await w; }
   catch (e) { instMsg(msg, 'Couldn\'t send it: ' + e.message, 'bad'); return null; }
-  finally { INST.busy = false; }
+  finally { INST.busy = false; renderUndo(); }
 }
 async function espSendAirframe(msg) {
   let blob; try { blob = fcAirframeBlob(); } catch (e) { instMsg(msg, 'This design can\'t be flown by the firmware: ' + e.message, 'bad'); return; }
@@ -399,7 +416,11 @@ async function firmwareParts(name, profile) {
   }
   return { parts, about: `built ${man.built} from ${man.commit}` };
 }
-async function espFlash(name, profile, prog, msg) {
+async function espFlash(...args){
+  if(INST.busy||INST.preparing)return;
+  return installPreparation(()=>espFlashPrepared(...args));
+}
+async function espFlashPrepared(name, profile, prog, msg) {
   if (INST.busy) return;
   const erase = $('#instErase') && $('#instErase').checked;
   let fw; try { instMsg(msg, 'Loading the firmware…'); fw = await firmwareParts(name, profile); } catch (e) { instMsg(msg, 'Can\'t install: ' + e.message + '.', 'bad'); return; }
@@ -407,7 +428,7 @@ async function espFlash(name, profile, prog, msg) {
   if (INST.conn) { await INST.conn.close(); INST.conn = null; instConnUi(); }
   let port = INST.port;
   try { if (!port) port = await navigator.serial.requestPort(); } catch (e) { instMsg(msg, 'No port picked.', ''); return; }
-  INST.port = port; INST.busy = true; prog.hidden = false; prog.value = 0; $('#instFlash').disabled = true;
+  INST.port = port; INST.busy = true; renderUndo(); prog.hidden = false; prog.value = 0; $('#instFlash').disabled = true;
   const say = s => { instMsg(msg, s); instLog(s, 'me'); };
   const term = { clean() {}, writeLine: s => instLog(s), write: s => instLog(s) };
   let transport = null;
@@ -436,7 +457,7 @@ async function espFlash(name, profile, prog, msg) {
     instLog('error: ' + m, 'bad');
   } finally {
     try { if (transport) await transport.disconnect(); } catch (e) {}
-    INST.busy = false; $('#instFlash').disabled = false;
+    INST.busy = false; renderUndo(); $('#instFlash').disabled = false;
   }
 }
 
