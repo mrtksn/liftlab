@@ -93,22 +93,24 @@ function renderHardware() {
   }
   for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareCard('Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));}
   const radio=C.boards.find(b=>b.tasks.includes('tlm'));
-  const rk=radioCfg.kind;
-  if(radio){
+  // the link's card (r: radioCfg, or the second link's, radioCfg2): what it needs wired, its picker
+  const radioCard=(r,second)=>{
+    const rk=r.kind;
     // the link itself is picked here as on the Ground tab (both ends switch at once); the card shows what it needs wired
-    const pick=hardwareSelect('Link','hw-link-'+radio.id,RADIO_KINDS.filter(k=>RADIO_LINKS[k]).map(k=>[k,RADIO_LINKS[k].label]),rk,v=>{if(v===radioCfg.kind||!RADIO_LINKS[v])return;radioCfg.kind=v;save();boardsRadioCfg();if(typeof renderGs==='function')renderGs(true);renderHardware();});
+    const pick=second?hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],radioTwo()?radioCfg2.kind:'',v=>{if(v===radioCfg2.kind)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderHardware();})
+      :hardwareSelect('Link','hw-link-'+radio.id,RADIO_KINDS.filter(k=>RADIO_LINKS[k]).map(k=>[k,RADIO_LINKS[k].label]),rk,v=>{if(v===radioCfg.kind||!RADIO_LINKS[v])return;radioCfg.kind=v;save();boardsRadioCfg();if(typeof renderGs==='function')renderGs(true);renderHardware();});
     const owner=el('p',{class:'hw-owner',text:'Board: '+radio.name}),esp=!!ESP_PROFILES[radio.kind],bus=hardwareBus(C,radio),lines=el('p',{class:'hint',text:'Settings: '+radioSettingLines(radioCfg).join(' ')+'. The link\'s own settings and the binding phrase are on the Ground tab; Install sends them.'});
     if(rk==='ble'){                                                   // Bluetooth LE: the S3's or C3's own radio
-      const row=radioWiringRow(radio,bus,esp,radioCfg),ok=radio.kind==='s3'||radio.kind==='c3';
-      auxiliary.append(hardwareCard(row.device,'Radio','Bluetooth LE · GATT',owner,hardwareField('Link',pick),
+      const row=radioWiringRow(radio,bus,esp,r),ok=radio.kind==='s3'||radio.kind==='c3';
+      auxiliary.append(hardwareCard(row.device,(second?'Second link':'Radio'),'Bluetooth LE · GATT',owner,hardwareField('Link',pick),
         el('p',{class:ok?'hint':'bad',text:ok?'Built into the ESP32-S3/C3: no wiring. The drone advertises LiftLab\'s service with the binding phrase\'s mark; the command module (an ESP32-S3 or C3, or one on a laptop\'s USB) finds it and connects. Range: tens of metres.':'Bluetooth LE needs an ESP32-S3 or C3: '+radio.name+' can\'t (the ESP32\'s Bluetooth takes memory the flight code needs). Put the Telemetry & radio task on an S3 or C3, or use ESP-NOW.'}),lines));
     }else if(rk==='espnow'||rk==='wifi'){                                   // ESP-NOW, Wi-Fi: the board's own radio, nothing to wire
-      const row=radioWiringRow(radio,bus,esp,radioCfg);
-      auxiliary.append(hardwareCard(row.device,'Radio',rk==='wifi'?'Wi-Fi · UDP':'ESP-NOW · 802.11',owner,hardwareField('Link',pick),
+      const row=radioWiringRow(radio,bus,esp,r);
+      auxiliary.append(hardwareCard(row.device,(second?'Second link':'Radio'),rk==='wifi'?'Wi-Fi · UDP':'ESP-NOW · 802.11',owner,hardwareField('Link',pick),
         el('p',{class:rk==='espnow'&&!esp?'bad':'hint',text:rk==='espnow'?(esp?'Built into the ESP32: no wiring. The command module needs an ESP32 too (or an ESP32 on USB as its bridge). Both ends need the same binding phrase.':'ESP-NOW needs an ESP32: '+radio.name+' can\'t do it. Put the Telemetry & radio task on an ESP32, or use Wi-Fi.')
-          :'The board\'s own Wi-Fi: no wiring. '+(radioCfg.sta?'It joins your network; the command module joins the same one.':'It makes the network (access point, channel '+radioCfg.channel+'); the command module joins it.')+' Both ends need the same binding phrase.'}),lines));
+          :'The board\'s own Wi-Fi: no wiring. '+(r.sta?'It joins your network; the command module joins the same one.':'It makes the network (access point, channel '+r.channel+'); the command module joins it.')+' Both ends need the same binding phrase.'}),lines));
     }else if(rk==='nrf24'){                                           // an nRF24L01 module on SPI
-      const card=hardwareCard('nRF24L01 module','Radio','SPI · '+(radioCfg.kbps||1000)+' kbit/s',owner,hardwareField('Link',pick));
+      const card=hardwareCard('nRF24L01 module',(second?'Second link':'Radio'),'SPI · '+(r.kbps||1000)+' kbit/s',owner,hardwareField('Link',pick));
       if(esp){const pins=Array.isArray(bus.nrfPins)?bus.nrfPins.slice():[-1,-1,-1,-1,-1];
         ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>card.append(pinPicker(radio,'Module '+n+' GPIO','hw-nrf'+i+'-'+radio.id,pins[i],'nrf'+i,i===2?hardwareInputPins(radio.kind):pinsFor(radio),v=>{const p2=(Array.isArray(hardwareBus(computers(),radio).nrfPins)?hardwareBus(computers(),radio).nrfPins:[-1,-1,-1,-1,-1]).slice();p2[i]=Number(v);editBoard(radio,{nrfPins:p2},'nrf'+i);})));
         if(pins.some(p=>p<0))card.append(el('p',{class:'bad',text:'Pick all five pins: the board needs them before it takes radio=nrf24.'}));}
@@ -116,7 +118,7 @@ function renderHardware() {
       card.append(el('p',{class:'hint',text:'VCC to 3.3 V, never 5 V, with a 10 µF capacitor (or more) across VCC and GND right at the module: its current comes in bursts, and without one most of these modules drop packets. IRQ isn\'t used. The command module needs one too, on the same data rate and binding phrase; the address and the 8 channels it hops over come from the phrase.'+(esp?'':' On a Pi: SCK pin 23, MOSI 19, MISO 21, CSN pin 24 (CE0, /dev/spidev0.0); SPI on in raspi-config.')}),lines);
       auxiliary.append(card);
     }else{                                                            // ExpressLRS's receiver, or a serial line, on a UART
-      const ser=rk==='serial',card=hardwareCard(ser?'Serial line':'ExpressLRS receiver','Radio',ser?'UART · '+(radioCfg.baud||115200)+' baud'+(radioCfg.half?', one way at a time':''):'UART · CRSF',owner,hardwareField('Link',pick));
+      const ser=rk==='serial',card=hardwareCard(ser?'Serial line':'ExpressLRS receiver',(second?'Second link':'Radio'),ser?'UART · '+(r.baud||115200)+' baud'+(['',', one way at a time',', up only',', down only'][+r.half]||''):'UART · CRSF',owner,hardwareField('Link',pick));
       if(esp)card.append(pinPicker(radio,ser?'Line output → board RX GPIO':'Receiver TX → board RX GPIO','hw-rx-'+radio.id,bus.crsfRx,'rx',hardwareInputPins(radio.kind),v=>editBoard(radio,{crsfRx:Number(v)},'rx')),
         pinPicker(radio,ser?'Line input ← board TX GPIO':'Receiver RX ← board TX GPIO','hw-tx-'+radio.id,bus.crsfTx,'tx',pinsFor(radio),v=>editBoard(radio,{crsfTx:Number(v)},'tx')));
       else card.append(hardwareText(ser?'Serial line port':'Receiver serial port',bus.receiverPort||'/dev/ttyUSB1',v=>editBoard(radio,{receiverPort:v},'port')));
@@ -126,6 +128,11 @@ function renderHardware() {
       }else card.append(lines);
       auxiliary.append(card);
     }
+  };
+  if(radio){
+    radioCard(radioCfg,false);
+    if(radioTwo())radioCard(radioCfg2,true);
+    else auxiliary.append(hardwareCard('Second link','Radio','none',hardwareField('Second link',hardwareSelect('Second link','hw-link2-'+radio.id,[['','None'],...RADIO_KINDS.filter(k=>RADIO_LINKS[k]&&k!==radioCfg.kind).map(k=>[k,RADIO_LINKS[k].label])],'',v=>{if(!v)return;radioCfg2.kind=v;save();boardsRadioCfg2();if(typeof renderGs==='function'){GS_UI.kindShown=null;renderGs(true);}renderHardware();})),el('p',{class:'hint',text:'A second link at once: both carry everything; the drone takes the channels from the first while it has them, the second fills in. A laser that goes up only beside a radio, an nRF24L01 beside Bluetooth LE, ExpressLRS beside ESP-NOW.'})));
   }
   renderGroundHardware(group('Command-module wiring','Buttons, sticks and the transmitter on the ground-side board.'),C);
   const advanced=group('Board settings & custom code','Shared timing and source code live here. Most devices work with a built-in driver and need no code edits.');

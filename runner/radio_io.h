@@ -19,5 +19,11 @@ typedef struct radio_io {
   int (*write)(struct radio_io *R, const uint8_t *b, int n);
   int fd;                      /* on Linux: a descriptor to poll() for input, −1 if none */
   void *ctx;                   /* the link's own state */
+  /* (optional: packet links, for two links at once, fc/radio_mux.h) The other end's session as this link knows it
+   * (0: none yet); a one-way link beside a two-way one: listen only to that sender (fc/plink.h plink_tie); and what
+   * this end hears of the other over both links, to say in its packets (plink_hear). */
+  uint32_t (*peer)(struct radio_io *R);
+  void (*tie)(struct radio_io *R, uint32_t peer);
+  void (*hear)(struct radio_io *R, int lq, int rssi);
 } radio_io;
 #endif

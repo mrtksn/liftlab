@@ -48,6 +48,8 @@ static int nrf_write(radio_io *R, const uint8_t *b, int n) {
   return n;
 }
 
+static uint32_t nrf_peer(radio_io *R) { return ((nrf_t *)R->ctx)->N.L.known; }
+static void nrf_hear(radio_io *R, int lq, int rssi) { (void)rssi; clink_hear(&((nrf_t *)R->ctx)->N.L, lq); }
 radio_io *radio_nrf24_start(const rlink_cfg *L, int role, const char *bind, const int8_t pins[5], esp_radio_say say) {
   char s[160];
   if (L->kind != RLINK_NRF24) return 0;
@@ -62,11 +64,12 @@ radio_io *radio_nrf24_start(const rlink_cfg *L, int role, const char *bind, cons
   gpio_reset_pin(K->ce_pin); gpio_set_direction(K->ce_pin, GPIO_MODE_OUTPUT); gpio_set_level(K->ce_pin, 0);
   nrf24_hal H = { hal_xfer, hal_ce, hal_delay, K };
   clink_cfg C; clink_cfg_default(&C, role); clink_cfg_link(&C, L); plink_key(rcfg_bind(bind), &C.k0, &C.k1);
-  uint32_t ses = 0; while (!ses) ses = esp_random();
+  uint32_t ses = esp_radio_session();
   char err[120];
   if (nrf24_start(&K->N, &H, &C, ses, role, L->kbps, err, sizeof err)) { snprintf(s, sizeof s, "nRF24L01: %s", err); if (say) say(s); return 0; }
   snprintf(K->name, sizeof K->name, "nRF24L01 at %d kbit/s", L->kbps);
   K->io.name = K->name; K->io.read = nrf_read; K->io.write = nrf_write; K->io.fd = -1; K->io.ctx = K;
+  K->io.peer = nrf_peer; K->io.hear = nrf_hear;
   snprintf(s, sizeof s, "radio: nRF24L01 at %d kbit/s, %.0f packets a second, hopping over channels %d %d %d %d %d %d %d %d (from the binding phrase)",
            L->kbps, (double)C.up_hz, K->N.L.hop[0], K->N.L.hop[1], K->N.L.hop[2], K->N.L.hop[3], K->N.L.hop[4], K->N.L.hop[5], K->N.L.hop[6], K->N.L.hop[7]);
   if (say) say(s);

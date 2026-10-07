@@ -549,11 +549,12 @@ function boardsControl(dt) {
 // receiver's board makes the flight core's stick command.
 function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
   radio.t = brt.t;
-  if (radio.setup && radio.setup.kind !== radioCfg.kind) boardsRadioCfg();   // (the link changed without saying so: a saved one loaded after the start)
-  const g = brt.gnd;
-  const pk = !!radioModel().packets;                                  // a packet link: each end's packet layer (plink.h) in its instance, no modules
+  if (radio.setup && (radio.setup.kind !== radioCfg.kind || (radio.setup.kind2 || '') !== (radioTwo() ? radioCfg2.kind : ''))) boardsRadioCfg();   // (the link changed without saying so: a saved one loaded after the start)
+  const g = brt.gnd, two = radioTwo();
+  const pk = two || !!radioModel().packets;                           // a packet link (or two links): each end's packet layer (plink.h) in its instance, no modules
   if (g) {                                                           // the command module: its step, every 4 ms
     g.host_tick(dt);
+    if (two) radioModuleIn(g, 'gnd');                                // (two links: a module link's frames into the merger)
     if (pk) radioStackOut(g, 'gnd', brt.t);                          // what its packet layer has for it
     else if (radio.toGround.length) {                                // what the transmitter module handed it
       const rb = new Uint8Array(g.memory.buffer, g.rbuf_ptr(), 2048); let n = 0;
@@ -568,7 +569,8 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     if (brt.t >= brt.nextGsRead - 1e-9) { brt.nextGsRead += 0.1; gsRead(); }
   }
   radioStep(dt, brt.t, { gnd: g, drone: droneOff ? null : tw });
-  if (droneOff) { radio.toBoard = []; return; }                    // (nothing powers the receiver)
+  if (droneOff) { radio.toBoard = []; if (radio2.parts.toBoard) radio2.parts.toBoard = []; return; }   // (nothing powers the receiver)
+  if (two) radioModuleIn(tw, 'drone');
   if (pk) radioStackOut(tw, 'drone', brt.t);
   else if (radio.toBoard.length) {
     const rb = new Uint8Array(tw.memory.buffer, tw.rbuf_ptr(), 2048); let n = 0;

@@ -75,6 +75,7 @@
 #include "radio_serial.h"
 #include "radio_udp.h"
 #include "radio_pserial.h"
+#include "radio_mux.h"
 #include "radio_nrf24.h"
 #include "radio_link.h"
 #include <arpa/inet.h>
@@ -105,7 +106,7 @@ static gnd_state G; static gnd_text_in IN; static int running = 1, status_line =
 /* what goes to the module: a frame the port didn't take whole waits here, so none is cut (cut, it would fail its CRC,
  * and the frame after it too); while it waits, the next beat waits too (no frames pile up to go late, back to back) */
 static uint8_t txq[CRSF_MAX_FRAME]; static int txn;
-static void radio_close(radio_io *R) { if (radio_udp_is(R)) radio_udp_close(R); else if (radio_pserial_is(R)) radio_pserial_close(R); else if (radio_nrf24_is(R)) radio_nrf24_close(R); else radio_serial_close(R); }
+static void radio_close(radio_io *R) { if (radio_mux_is(R)) { radio_io *a = radio_mux_part(R, 0), *b = radio_mux_part(R, 1); radio_mux_free(R); radio_close(a); radio_close(b); } else if (radio_udp_is(R)) radio_udp_close(R); else if (radio_pserial_is(R)) radio_pserial_close(R); else if (radio_nrf24_is(R)) radio_nrf24_close(R); else radio_serial_close(R); }
 static int tx_flush(radio_io *R) {
   while (txn > 0) {
     int w = R->write(R, txq, txn);
@@ -153,12 +154,24 @@ static void key(int c, double t, int *esc) {
   if (b >= 0) IN.until[b] = t + HOLD;
 }
 
+/* One link's end here (radio_io.h): a module or a bridge on a serial port (dev), a serial line (dev), Wi-Fi to the
+ * drone (host:port), an nRF24L01 on SPI. 0: none set (said in said), or it didn't open (said why). */
+static radio_io *open_link(const rlink_cfg *L, int kind, const char *dev, int baud, const char *host, int port, const char *nrf_spi, int nrf_ce, const char *phrase, char *said, int sn) {
+  char d[32]; rlink_describe(L, d, sizeof d);
+  if (kind == RLINK_NRF24) { snprintf(said, (size_t)sn, "an nRF24L01 (%s) on %s, CE GPIO %d", d, nrf_spi, nrf_ce); return radio_nrf24_open(PLINK_GROUND, L, nrf_spi, nrf_ce, phrase, "nRF24L01"); }
+  if (kind == RLINK_WIFI && host && host[0]) { snprintf(said, (size_t)sn, "Wi-Fi to the drone at %s:%d", host, port); return radio_udp_open(PLINK_GROUND, host, port, phrase, "Wi-Fi radio"); }
+  if (!dev) return 0;
+  if (kind == RLINK_SERIAL) { snprintf(said, (size_t)sn, "a serial line (%s) on %s", d, dev); return radio_pserial_open(PLINK_GROUND, dev, L, phrase, "serial line"); }
+  snprintf(said, (size_t)sn, "%s on %s", kind == RLINK_ESPNOW ? "ESP-NOW bridge (an ESP32)" : kind == RLINK_BLE ? "Bluetooth LE bridge (an ESP32)" : "transmitter module", dev);
+  return radio_serial_open(dev, baud, kind == RLINK_ESPNOW ? "ESP-NOW bridge (serial)" : kind == RLINK_BLE ? "Bluetooth LE bridge (serial)" : "ExpressLRS transmitter module (serial)");
+}
+
 int main(int argc, char **argv) {
   const char *tx_dev = 0, *js_dev = 0, *prog = 0, *drone = 0, *bind_phrase = 0; int baud = 0, port = 14561, keys = 0, test = 0, listen_all = 0, kind = RLINK_ELRS;
   int axmap[4] = { 3, 4, 1, 0 }, axinv[4] = { 0, 1, 1, 0 }, bmap[GB_N]; for (int i = 0; i < GB_N; i++) bmap[i] = -1;
   bmap[GB_ARM] = 4; bmap[GB_FLY] = 5; bmap[GB_HOLD] = 0; bmap[GB_HOME] = 3; bmap[GB_CAL] = 2;
   gnd_config cfg; gnd_config_default(&cfg); uint32_t latch = 0; int latch_set = 0;
-  rlink_cfg RL; rlink_default(&RL); int radio_given = 0; const char *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25;
+  rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int radio_given = 0, two = 0; const char *tx2 = 0; const char *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--tx") && i + 1 < argc) tx_dev = argv[++i];
     else if (!strcmp(argv[i], "--baud") && i + 1 < argc) baud = atoi(argv[++i]);
@@ -175,6 +188,8 @@ int main(int argc, char **argv) {
       if (r[k] && rlink_parse(&L, r, err, sizeof err)) { fprintf(stderr, "--radio %s: %s\n", r, err); return 2; }
       RL = L; radio_given = 1;
     }
+    else if (!strcmp(argv[i], "--radio2") && i + 1 < argc) { char err[160]; if (rlink_parse(&RL2, argv[++i], err, sizeof err)) { fprintf(stderr, "--radio2: %s\n", err); return 2; } two = 1; }
+    else if (!strcmp(argv[i], "--tx2") && i + 1 < argc) tx2 = argv[++i];
     else if (!strcmp(argv[i], "--joystick") && i + 1 < argc) js_dev = argv[++i];
     else if (!strcmp(argv[i], "--axes") && i + 1 < argc) {
       char buf[64]; snprintf(buf, sizeof buf, "%s", argv[++i]); int a = 0;
@@ -195,6 +210,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--listen-all")) listen_all = 1;
     else { fprintf(stderr, "usage: %s [--radio elrs] --tx DEV [--baud 400000] | --radio espnow --tx DEV [--baud 115200] | --radio wifi --drone HOST[:14570] [--bind PHRASE]\n"
                            "          | --radio serial,BAUD[,half] --tx DEV [--bind PHRASE] | --radio nrf24,KBPS [--nrf-spi DEV] [--nrf-ce N] [--bind PHRASE]\n"
+                           "          [--radio2 KIND,... [--tx2 DEV]] (a second link at once, as --radio: both carry)\n"
                            "          [--keys] [--joystick /dev/input/js0 [--axes 3,4i,1i,0] [--buttons arm=4,fly=5,…]]\n"
                            "          [--port 14561 [--listen-all]] [--program FILE.rnp] [--latch arm,fly] [--status] | --test\n"
                            "  elrs: an ExpressLRS transmitter module on the serial port DEV\n"
@@ -232,6 +248,14 @@ int main(int argc, char **argv) {
     }
   }
   if (!baud) baud = kind == RLINK_ESPNOW || kind == RLINK_BLE ? 115200 : 400000;
+  if (two) {
+    char err[160];
+    if (rlink_pair_ok(&RL, &RL2, 0, err, sizeof err)) { fprintf(stderr, "--radio2: %s\n", err); return 2; }
+    if (RL2.kind == RLINK_WIFI && !drone) { fprintf(stderr, "--radio2 wifi: say where the drone is (--drone HOST)\n"); return 2; }
+    if (RL2.kind != RLINK_WIFI && RL2.kind != RLINK_NRF24 && !tx2 && !test) { fprintf(stderr, "--radio2 %s: say which port it is on (--tx2 DEV)\n", rlink_names[RL2.kind]); return 2; }
+    if (RL2.kind != RLINK_ELRS && !bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\"\n"); }
+    if (tx2 && tx_dev && !strcmp(tx2, tx_dev)) { fprintf(stderr, "--tx2: the same port as --tx\n"); return 2; }
+  } else if (!rlink_up(&RL)) { fprintf(stderr, "--radio serial,...,down carries nothing up: the drone would get no channels (as a second link, --radio2, it can)\n"); return 2; }
   if (js_dev && !latch_set) latch = GB(GB_ARM) | GB(GB_FLY);          /* a gamepad's buttons are push buttons */
   cfg.latch = latch; cfg.seq0 = (uint8_t)(time(0) ^ getpid());   /* (see gnd_config.seq0) */
 
@@ -250,15 +274,17 @@ int main(int argc, char **argv) {
 
   /* the pilot's radio link (radio_io.h): a module on a serial port, or the Wi-Fi link's end here */
   radio_io *R = 0; char radio_said[300] = "no transmitter module (test)";
-  if (kind == RLINK_NRF24 && !test) { R = radio_nrf24_open(PLINK_GROUND, &RL, nrf_spi, nrf_ce, bind_phrase, "nRF24L01"); if (!R) return 1;
-    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "an nRF24L01 (%s) on %s, CE GPIO %d", d, nrf_spi, nrf_ce); }
-  else if (tx_dev && kind == RLINK_SERIAL) { R = radio_pserial_open(PLINK_GROUND, tx_dev, &RL, bind_phrase, "serial line"); if (!R) return 1;
-    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "a serial line (%s) on %s", d, tx_dev); }
-  else if (tx_dev) { R = radio_serial_open(tx_dev, baud, kind == RLINK_ESPNOW ? "ESP-NOW bridge (serial)" : kind == RLINK_BLE ? "Bluetooth LE bridge (serial)" : "ExpressLRS transmitter module (serial)"); if (!R) return 1;
-    snprintf(radio_said, sizeof radio_said, "%s on %s", kind == RLINK_ESPNOW ? "ESP-NOW bridge (an ESP32)" : kind == RLINK_BLE ? "Bluetooth LE bridge (an ESP32)" : "transmitter module", tx_dev); }
-  else if (kind == RLINK_WIFI && drone) { R = radio_udp_open(PLINK_GROUND, drone_host, drone_port, bind_phrase, "Wi-Fi radio"); if (!R) return 1;
-    snprintf(radio_said, sizeof radio_said, "Wi-Fi to the drone at %s:%d", drone_host, drone_port); }
-  int packets = R && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R));               /* a packet link: R does the module's part, read() every pass drives it */
+  if (!test) {
+    R = open_link(&RL, kind, tx_dev, baud, drone_host, drone_port, nrf_spi, nrf_ce, bind_phrase, radio_said, sizeof radio_said);
+    if (!R && (tx_dev || kind == RLINK_NRF24 || (kind == RLINK_WIFI && drone))) return 1;
+  }
+  if (two && R) {                                                    /* a second link at once (fc/radio_mux.h): both as one */
+    char said2[200]; int b2 = RL2.kind == RLINK_ESPNOW || RL2.kind == RLINK_BLE ? 115200 : RL2.kind == RLINK_ELRS ? 400000 : 0;
+    radio_io *R2 = open_link(&RL2, RL2.kind, tx2, b2, drone_host, drone_port, nrf_spi, nrf_ce, bind_phrase, said2, sizeof said2); if (!R2) return 1;
+    radio_io *M = radio_mux_open(R, &RL, R2, &RL2, LMUX_GROUND, now_s); if (!M) { fprintf(stderr, "no memory for two links\n"); return 1; }
+    R = M; size_t k = strlen(radio_said); snprintf(radio_said + k, sizeof radio_said - k, " + %s", said2);
+  }
+  int packets = R && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R) || radio_mux_is(R));               /* a packet link: R does the module's part, read() every pass drives it */
   int udp = -1;
   if (port > 0) {
     udp = socket(AF_INET, SOCK_DGRAM, 0); struct sockaddr_in a = { 0 }; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(listen_all ? INADDR_ANY : INADDR_LOOPBACK);
@@ -343,7 +369,7 @@ int main(int argc, char **argv) {
     if (lvl != alert_was || why != why_was) { if (alert_was >= 0 || lvl) printf("\r%s%s\r\n", lvl == 2 ? "ALARM: " : lvl ? "warning: " : "", lvl ? gnd_why_text[why] : "all fine again"); alert_was = lvl; why_was = why; if (lvl == 2) { putchar('\a'); fflush(stdout); } }
     if (status_line && t >= next_status) {
       next_status = t + 1; char s[600]; gnd_status(&G, t - t0, s, sizeof s);
-      if (packets && R) { size_t k = strlen(s); if (k + 4 < sizeof s) { memcpy(s + k, " | ", 3); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, s + k + 3, (int)(sizeof s - k - 3)); } }
+      if (packets && R) { size_t k = strlen(s); if (k + 4 < sizeof s) { memcpy(s + k, " | ", 3); if (radio_mux_is(R)) radio_mux_counts(R, s + k + 3, (int)(sizeof s - k - 3)); else (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, s + k + 3, (int)(sizeof s - k - 3)); } }
       printf("\r%s\r\n", s);
     }
     fflush(stdout);

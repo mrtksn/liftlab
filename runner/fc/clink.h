@@ -70,6 +70,8 @@ typedef struct {
   clink_cfg C;
   uint32_t session, peer;        /* ours; theirs (0: not yet) */
   int knows_me;                  /* they have shown they know our session */
+  uint32_t known;                /* their session as last confirmed (a packet only they could make for this start of ours): two links at once */
+  int said_lq;                   /* what this end's program hears of the other over both links (clink_hear) */
   double t_peer, t_stats, t_up, t_rc, t_sent;
   uint32_t seq;                  /* our next packet number */
   uint32_t rx_top; int rx_any; uint16_t rx_first; uint64_t rx_bits[2];
@@ -97,6 +99,9 @@ int clink_to_stack(clink *L, double t, uint8_t *b, int cap);
 int clink_channel(const clink *L, double t);
 /* The radio address (5 bytes) for this binding phrase's key: both ends the same, other pairs (mostly) not. */
 void clink_address(const clink_cfg *C, uint8_t addr[5]);
+/* Two links at once (radio_mux.h): what this end's program hears of the other over both [%]: the packets say the
+ * better of it and this link's own. */
+static inline void clink_hear(clink *L, int lq) { L->said_lq = lq < 0 ? 0 : lq > 100 ? 100 : lq; }
 static inline int clink_connected(const clink *L, double t) { return L->peer && L->knows_me && t - L->t_peer < 1.0; }
 int clink_lq(const clink *L, double t);
 #endif

@@ -11,6 +11,7 @@
  * packet numbers. The port is never given more than the line can carry: a packet that finds the last one still
  * waiting to go out is dropped (counted: "line busy"). */
 #include "radio_pserial.h"
+#include "radio_session.h"
 #include "radio_serial.h"
 #include "pframe.h"
 #include <errno.h>
@@ -32,13 +33,6 @@ typedef struct {
 } ps_ctx;
 
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
-static uint32_t random_session(void) {
-  uint32_t s = 0;
-  int fd = open("/dev/urandom", O_RDONLY);
-  if (fd >= 0) { if (read(fd, &s, sizeof s) != (ssize_t)sizeof s) s = 0; close(fd); }
-  if (!s) { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); s = (uint32_t)t.tv_nsec ^ (uint32_t)t.tv_sec * 2654435761u ^ (uint32_t)getpid() << 16; }
-  return s ? s : 1;
-}
 
 static void flush_out(ps_ctx *C) {
   if (!C->out_n) return;
@@ -83,15 +77,19 @@ static int ps_write(radio_io *R, const uint8_t *b, int n) {
   return n;
 }
 
+static uint32_t ps_peer(radio_io *R) { return ((ps_ctx *)R->ctx)->P.known; }
+static void ps_tie(radio_io *R, uint32_t peer) { plink_tie(&((ps_ctx *)R->ctx)->P, peer); }
+static void ps_hear(radio_io *R, int lq, int rssi) { plink_hear(&((ps_ctx *)R->ctx)->P, lq, rssi); }
 radio_io *radio_pserial_open(int role, const char *dev, const rlink_cfg *L, const char *phrase, const char *name) {
   if (L->kind != RLINK_SERIAL) return 0;
   radio_io *port = radio_serial_open(dev, L->baud, name); if (!port) return 0;
   radio_io *R = calloc(1, sizeof *R); ps_ctx *C = calloc(1, sizeof *C);
   if (!R || !C) { free(R); free(C); radio_serial_close(port); return 0; }
   plink_cfg cfg; plink_cfg_default(&cfg, role); plink_cfg_link(&cfg, L); plink_key(phrase ? phrase : "liftlab", &cfg.k0, &cfg.k1);
-  plink_init(&C->P, &cfg, random_session()); pframe_rx_init(&C->F);
+  plink_init(&C->P, &cfg, radio_session()); pframe_rx_init(&C->F);
   C->port = port; C->L = *L; C->name = name; C->t_good = now_s(); C->t_bad_warned = -1e9;
   R->name = name; R->read = ps_read; R->write = ps_write; R->fd = port->fd; R->ctx = C;
+  R->peer = ps_peer; R->tie = ps_tie; R->hear = ps_hear;
   return R;
 }
 void radio_pserial_close(radio_io *R) { if (!R) return; ps_ctx *C = R->ctx; radio_serial_close(C->port); free(C); free(R); }

@@ -38,7 +38,7 @@ function hardwarePinClaims(C,comps,b) {
     for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port==='/dev/serial0')claims.push({pin:14,name:c.name+' UART TX',key:'gpsTx'+c.id},{pin:15,name:c.name+' UART RX',key:'gpsRx'+c.id});}
     if(bus.receiverPort==='/dev/serial0')claims.push({pin:14,name:'Receiver UART TX',key:'rxTx'},{pin:15,name:'Receiver UART RX',key:'rxRx'});
   }
-  if(ESP_PROFILES[b.kind] && b.tasks.includes('tlm') && hardwareRadio()?.kind==='nrf24' && Array.isArray(bus.nrfPins)) ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>claims.push({pin:bus.nrfPins[i],name:'nRF24L01 '+n,key:'nrf'+i}));
+  if(ESP_PROFILES[b.kind] && b.tasks.includes('tlm') && radioHas('nrf24') && Array.isArray(bus.nrfPins)) ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>claims.push({pin:bus.nrfPins[i],name:'nRF24L01 '+n,key:'nrf'+i}));
   for(const c of comps) if(['motor','joint','latch'].includes(c.type)) { const p=hardwarePart(C,c,comps);if(p.board===b.id)claims.push({pin:p.pin,name:c.name,key:'part'+c.id}); }
   return claims.filter(x=>x.pin>=0);
 }
@@ -48,7 +48,7 @@ function piLatchSettings(C,comps,b) {
 function groundHardware(C) {
   const p=ESP_PROFILES[C.ground.kind];if(!p)return null;
   const defaults=Object.fromEntries(p.ground.split('\n').map(line=>{const [,key,value]=/^set (\w+)=(.*)$/.exec(line);return [key,value.split(',').map(Number)];}));
-  const nrf=hardwareRadio()?.kind==='nrf24', g={...defaults,...(nrf?{nrf24:[-1,-1,-1,-1,-1]}:{}),...C.ground.wiring};   // (an nRF24L01's pins: SCK, MOSI, MISO, CSN, CE, while it's the link)
+  const nrf=radioHas('nrf24'), g={...defaults,...(nrf?{nrf24:[-1,-1,-1,-1,-1]}:{}),...C.ground.wiring};   // (an nRF24L01's pins: SCK, MOSI, MISO, CSN, CE, while it's the link)
   if(!nrf)delete g.nrf24;
   return g;
 }
@@ -125,14 +125,24 @@ function hardwarePlan(C, comps, b) {
 // for a packet link. (A serial line is on the receiver's pins: crsf= comes first in the settings, as the board wants.)
 // r: radioCfg (link.js) or one like it; none (a test without the page): no lines.
 const hardwareRadio = () => typeof radioCfg !== 'undefined' ? radioCfg : null;
-function radioSettingLines(r) {
+// r2: the second link (radioCfg2; kind '' none): radio2=… (or radio2=none, to clear one set before).
+const hardwareRadio2 = () => typeof radioCfg2 !== 'undefined' ? radioCfg2 : null;
+// Is this kind one of the links (the first, or a second of another kind)?
+const radioHas = k => hardwareRadio()?.kind===k || (hardwareRadio2()?.kind===k && hardwareRadio2().kind!==hardwareRadio()?.kind);
+function radioSpec(r) {
+  if (r.kind === 'espnow') return 'espnow,'+(r.channel||1)+(r.lr?',lr':'');
+  if (r.kind === 'wifi') return r.sta?'wifi,sta':'wifi,ap,'+(r.channel||1);
+  if (r.kind === 'serial') return 'serial,'+(r.baud||115200)+(['',',half',',up',',down'][+r.half]||'');
+  if (r.kind === 'ble') return 'ble';
+  if (r.kind === 'nrf24') return 'nrf24,'+(r.kbps||1000);
+  return 'elrs,'+(r.rate||250)+','+(r.ratio||4);
+}
+function radioSettingLines(r, r2 = r === hardwareRadio() ? hardwareRadio2() : null) {
   if (!r) return [];
-  if (r.kind === 'espnow') return ['radio=espnow,'+(r.channel||1)+(r.lr?',lr':''),'bind='+(r.bind||'liftlab')];
-  if (r.kind === 'wifi') return [r.sta?'radio=wifi,sta':'radio=wifi,ap,'+(r.channel||1),'bind='+(r.bind||'liftlab')];
-  if (r.kind === 'serial') return ['radio=serial,'+(r.baud||115200)+(r.half?',half':''),'bind='+(r.bind||'liftlab')];
-  if (r.kind === 'ble') return ['radio=ble','bind='+(r.bind||'liftlab')];
-  if (r.kind === 'nrf24') return ['radio=nrf24,'+(r.kbps||1000),'bind='+(r.bind||'liftlab')];
-  return ['radio=elrs,'+(r.rate||250)+','+(r.ratio||4)];
+  const two = r2 && r2.kind && r2.kind !== r.kind, lines = ['radio='+radioSpec(r)];
+  if (r2) lines.push('radio2='+(two ? radioSpec(r2) : 'none'));
+  if (r.kind !== 'elrs' || (two && r2.kind !== 'elrs')) lines.push('bind='+(r.bind||'liftlab'));
+  return lines;
 }
 // What each link needs wired to the radio's board: an ExpressLRS receiver on a UART; nothing for ESP-NOW (built into
 // the ESP32) or Wi-Fi (the ESP32's or the Pi's own); a serial line on the receiver's UART pins (or a Pi's port).
@@ -142,7 +152,7 @@ function radioWiringRow(b,bus,esp,r) {
   if(kind==='wifi')return {device:'Wi-Fi radio',connection:'Built into the board · no wiring',note:(r.sta?'Joins a network':'Makes the network (access point), channel '+(r.channel||1))+' · UDP port 14570'};
   if(kind==='ble')return {device:'Bluetooth LE radio',connection:b.kind==='s3'||b.kind==='c3'?'Built into the ESP32-S3/C3 · no wiring':'Not available on '+b.kind+' · needs an ESP32-S3 or C3',note:'the drone advertises; the command module (an ESP32-S3 or C3) connects'};
   if(kind==='nrf24')return {device:'nRF24L01 module',connection:esp?(bus.nrfPins&&bus.nrfPins.every(p=>p>=0)?'SPI · SCK '+bus.nrfPins[0]+', MOSI '+bus.nrfPins[1]+', MISO '+bus.nrfPins[2]+', CSN '+bus.nrfPins[3]+', CE '+bus.nrfPins[4]:'SPI · not connected'):(bus.nrfSpi||'/dev/spidev0.0')+' · CE GPIO '+(bus.nrfCe??25),note:(r.kbps||1000)+' kbit/s · 3.3 V with a 10 µF capacitor at the module'};
-  if(kind==='serial')return {device:'Serial line',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← the line\'s output; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → its input':(bus.receiverPort||'/dev/ttyUSB1')+' · a serial port',note:(r.baud||115200)+' baud'+(r.half?', one way at a time':'')+' · laser, fibre, infrared, a radio modem or a wire · share GND'};
+  if(kind==='serial')return {device:'Serial line',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← the line\'s output; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → its input':(bus.receiverPort||'/dev/ttyUSB1')+' · a serial port',note:(r.baud||115200)+' baud'+(['',', one way at a time',', up only',', down only'][+r.half]||'')+' · laser, fibre, infrared, a radio modem or a wire · share GND'};
   return {device:'ExpressLRS receiver',connection:esp?(bus.crsfRx>=0?'GPIO '+bus.crsfRx:'Not connected')+' (RX) ← receiver TX; '+(bus.crsfTx>=0?'GPIO '+bus.crsfTx:'Not connected')+' (TX) → receiver RX':(bus.receiverPort||'/dev/ttyUSB1')+' · USB serial adapter',note:'CRSF UART · share GND'};
 }
 function hardwareSettings(plan, radio=hardwareRadio()) {
@@ -214,7 +224,7 @@ function hardwareOverview(C, comps) {
       g.rows.push({device:'Link to '+(core?.name||'flight controller'),connection:port==='/dev/serial0'&&link?'GPIO 14 (TX) → '+core.name+' GPIO '+link[1]+' (RX); GPIO 15 (RX) ← '+core.name+' GPIO '+link[0]+' (TX)':port+' · serial link',note:!core?'No flight-core board':port==='/dev/serial0'&&!link?'Target UART pins unavailable':port==='/dev/serial0'?'Share board GND':'USB serial adapter; no Pi GPIO'});
       if(core&&link)groups.find(x=>x.id===core.id).rows.push({device:'Link to '+b.name,connection:port==='/dev/serial0'?'GPIO '+link[1]+' (RX) ← '+b.name+' GPIO 14 (TX); GPIO '+link[0]+' (TX) → '+b.name+' GPIO 15 (RX)':'GPIO '+link[1]+' (RX) ← USB adapter TX; GPIO '+link[0]+' (TX) → USB adapter RX',note:port==='/dev/serial0'?'UART0 · share board GND':'Pi '+port+' · USB-to-UART adapter · share GND'});
     }else if(esp&&b.id!==core?.id&&b.tasks.length)g.rows.push({device:'Flight-controller link',connection:'Hardware routing not implemented',note:'Inter-board link is simulated; no supported wiring recipe'});
-    if(b.id===radio?.id)g.rows.push(radioWiringRow(b,bus,esp,hardwareRadio()));
+    if(b.id===radio?.id){g.rows.push(radioWiringRow(b,bus,esp,hardwareRadio()));const r2=hardwareRadio2();if(r2&&r2.kind&&r2.kind!==hardwareRadio()?.kind){const row=radioWiringRow(b,bus,esp,r2);g.rows.push({...row,device:'Second link: '+row.device});}}
   }
   const ground=groundHardware(C);
   if(ground){const g={id:'ground',name:C.ground.name,kind:C.ground.kind,rows:[]};groups.push(g);

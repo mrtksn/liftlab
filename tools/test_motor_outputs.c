@@ -46,6 +46,7 @@ int main(void){
   old.version=8;old.radio_kind=RLINK_SERIAL;old.radio_baud=57600;restored=config();memset(restored.nrf_pin,-1,5);restored.radio_kbps=1000;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,nrf_pin))&&restored.radio_baud==57600&&restored.nrf_pin[0]==-1&&restored.radio_kbps==1000&&restored.version==HW_VERSION);old.radio_kind=0;
   old.version=3;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,crsf_rx)));
   old.version=2;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,link_baud)));assert(restored.link_baud==115200);
+  old.version=9;old.radio_kind=RLINK_NRF24;old.radio_kbps=250;restored=config();restored.radio2_kind=-1;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio2_kind))&&restored.radio_kbps==250&&restored.radio2_kind==-1&&restored.version==HW_VERSION);old.radio_kind=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -53,7 +54,12 @@ int main(void){
   const char *bad[]={"motor_driver=2","motor_driver=0.5","motor_driver=NaN","motor_max=0","motor_max=101","motor_max=10.5","brushed_hz=999","brushed_hz=30001","brushed_hz=20000.5","motor_driver=1,0,1,0,1,0,1,0,1,0,1,0,1","brushed_hz=20000junk"};
   for(unsigned i=0;i<sizeof bad/sizeof *bad;i++){hw_config before=settings;assert(hw_set(&settings,bad[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}
   assert(!hw_set(&settings,"motor_driver=",log,sizeof log));assert(settings.motor_driver[0]==0 && settings.motor_driver[11]==0);assert(!hw_set(&settings,"motor_max=",log,sizeof log));assert(settings.motor_max_pct[0]==100);
+  assert(!hw_set(&settings,"radio2=espnow,6",log,sizeof log));{rlink_cfg L2;assert(!hw_radio2(&settings,&L2)&&L2.kind==RLINK_ESPNOW&&L2.channel==6);}
+  {const char *no2[]={"radio2=elrs,250,4","radio2=serial,115200,up","radio2=bogus"};for(unsigned i=0;i<3;i++){hw_config before=settings;assert(hw_set(&settings,no2[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}}
+  {hw_config before=settings;assert(hw_set(&settings,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"ESP-NOW and Wi-Fi"));assert(!memcmp(&settings,&before,sizeof settings));}
+  {char d[900];hw_describe(&settings,d,sizeof d);assert(strstr(d,"radio2=espnow,6"));}
+  assert(!hw_set(&settings,"radio2=none",log,sizeof log)&&settings.radio2_kind==-1);
   char text[800];hw_describe(&settings,text,sizeof text);assert(strstr(text,"motor_driver=") && strstr(text,"motor_max=") && strstr(text,"brushed_hz=30000"));
   struct {char text[8];char canary[8];} small;memset(&small,42,sizeof small);hw_describe(&settings,small.text,sizeof small.text);assert(small.text[7]==0);for(int i=0;i<8;i++)assert(small.canary[i]==42);
-  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v8 migration.");
+  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v9 migration, a second radio link.");
 }

@@ -25,6 +25,10 @@
 #include "radio_io.h"
 #include "radio_link.h"
 #include "plink.h"
+#include "radio_mux.h"
+
+/* This start's session number, one for all its links (radio_packet.c). */
+uint32_t esp_radio_session(void);
 
 typedef void (*esp_radio_say)(const char *text);
 /* Started, or 0 (said why). role: PLINK_GROUND or PLINK_DRONE; bind: the binding phrase. */

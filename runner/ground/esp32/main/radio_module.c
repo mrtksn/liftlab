@@ -33,7 +33,7 @@ static int module_write(radio_io *R, const uint8_t *b, int n) {
   uart_wait_tx_done(TXU, pdMS_TO_TICKS(10)); wire_listen();     /* the last bit out: let go at once, the module answers now */
   return k < 0 ? -1 : k;
 }
-static radio_io io = { "ExpressLRS transmitter module (UART)", module_read, module_write, -1, 0 };
+static radio_io io = { .name = "ExpressLRS transmitter module (UART)", .read = module_read, .write = module_write, .fd = -1 };
 
 radio_io *radio_module_start(int tx, int rx, int baud) {
   uart_config_t uc = { .baud_rate = baud, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };

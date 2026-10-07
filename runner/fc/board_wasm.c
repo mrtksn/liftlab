@@ -28,6 +28,7 @@
 #include "plink.h"
 #include "pframe.h"
 #include "clink.h"
+#include "lmux.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
 
@@ -184,9 +185,29 @@ EXPORT("radio_link") int radio_link(int kind, int a, int b) { return rlink_make(
 /* ── a packet link's end (plink.h): the drone's on the receiver's board, the ground's on the command module's ──
  * The board's stack writes and reads CRSF as with a module (radio_out/radio_in, gnd_tick/gnd_from_radio); these take
  * what it wrote, give what it should read, and make and take the packets the simulated air carries. */
-static plink PL; static int pl_on; static uint8_t pbuf[PLINK_MTU]; static pframe_rx PF;
+/* Two links at once (lmux.h): two of each, plink_sel picks the one the calls below work on (the link models step
+ * each in turn); the stack's side (plink_stack_in, plink_stack_out) then goes through the merger, both links. */
+static plink PLs[2]; static int pl_ons[2]; static uint8_t pbuf[PLINK_MTU]; static pframe_rx PFs[2];
 /* a compact packet link (the nRF24L01: clink.h) in the same calls, when the link is one */
-static clink CL; static int cl_on;
+static clink CLs[2]; static int cl_ons[2]; static int SEL;
+#define PL PLs[SEL]
+#define pl_on pl_ons[SEL]
+#define PF PFs[SEL]
+#define CL CLs[SEL]
+#define cl_on cl_ons[SEL]
+static lmux MX; static int mx_on, mx_role; static rlink_cfg RL2;
+EXPORT("plink_sel") void plink_sel(int i) { SEL = i == 1; }
+EXPORT("plink_off") void plink_off(void) { pl_on = cl_on = 0; }   /* (the selected one isn't a packet link: ExpressLRS's modules) */
+/* Two links (n 2) or one (n 1): which ways each carries, this board's role (0 the ground, 1 the drone), and the
+ * second's settings (kind, a, b: the telemetry's room follows the link that carries it). A link that isn't a packet
+ * link here (ExpressLRS: the model's modules) hands its frames in with link_in. */
+EXPORT("link_mux") void link_mux(int n, int up0, int down0, int up1, int down1, int role, int kind2, int a2, int b2) {
+  mx_on = n == 2; mx_role = role ? LMUX_DRONE : LMUX_GROUND;
+  int up[2] = { up0, up1 }, down[2] = { down0, down1 };
+  lmux_init(&MX, mx_role, 2, up, down); rlink_default(&RL2); rlink_make(&RL2, kind2, a2, b2);
+  if (!mx_on) { pl_ons[1] = cl_ons[1] = 0; SEL = 0; }
+}
+EXPORT("link_in") void link_in(int i, int n, double t) { if (mx_on) lmux_from_link(&MX, i, rbuf, n, t); }
 EXPORT("pbuf_ptr") uint8_t *pbuf_ptr(void) { return pbuf; }
 /* role 0 the ground, 1 the drone; the binding phrase: n bytes in rbuf; session: this start's own number (not 0);
  * kind, a, b: the link (radio_link.h rlink_make) */
@@ -199,10 +220,40 @@ EXPORT("plink_setup") int plink_setup(int role, int n, int session, int kind, in
   if (cl_on) { clink_cfg K; clink_cfg_default(&K, C.role); clink_cfg_link(&K, &L); K.k0 = C.k0; K.k1 = C.k1; clink_init(&CL, &K, (uint32_t)session); }
   return 0;
 }
-EXPORT("plink_stack_in") void plink_stack_in(int n, double t) { if (cl_on) clink_from_stack(&CL, rbuf, n, t); else if (pl_on) plink_from_stack(&PL, rbuf, n, t); }   /* what the stack wrote, in rbuf */
-EXPORT("plink_stack_out") int plink_stack_out(double t) { return cl_on ? clink_to_stack(&CL, t, rbuf, (int)sizeof rbuf) : pl_on ? plink_to_stack(&PL, t, rbuf, (int)sizeof rbuf) : 0; }   /* for the stack, into rbuf */
+static void stack_in1(int s, int n, double t) { if (cl_ons[s]) clink_from_stack(&CLs[s], rbuf, n, t); else if (pl_ons[s]) plink_from_stack(&PLs[s], rbuf, n, t); }
+static int stack_out1(int s, double t, uint8_t *b, int cap) { return cl_ons[s] ? clink_to_stack(&CLs[s], t, b, cap) : pl_ons[s] ? plink_to_stack(&PLs[s], t, b, cap) : 0; }
+static uint32_t known1(int s) { return cl_ons[s] ? CLs[s].known : pl_ons[s] ? PLs[s].known : 0; }
+/* what the stack wrote, in rbuf (two links: on each that carries this way) */
+EXPORT("plink_stack_in") void plink_stack_in(int n, double t) {
+  if (!mx_on) { stack_in1(SEL, n, t); return; }
+  for (int s = 0; s < 2; s++) if (mx_role == LMUX_GROUND ? MX.k[s].up : MX.k[s].down) stack_in1(s, n, t);
+}
+/* for the stack, into rbuf (two links: merged; each told what this end hears over both, a one-way one tied to the other: radio_mux.c) */
+EXPORT("plink_stack_out") int plink_stack_out(double t) {
+  if (!mx_on) return stack_out1(SEL, t, rbuf, (int)sizeof rbuf);
+  int up, down, rssi; lmux_lq(&MX, t, &up, &down, &rssi);
+  for (int s = 0; s < 2; s++) {
+    int lq = mx_role == LMUX_DRONE ? up : down;
+    if (cl_ons[s]) clink_hear(&CLs[s], lq); else if (pl_ons[s]) plink_hear(&PLs[s], lq, rssi);
+    int two_way = MX.k[s].up && MX.k[s].down, other = MX.k[1 - s].up && MX.k[1 - s].down;
+    if (!two_way && other && pl_ons[s]) plink_tie(&PLs[s], known1(1 - s));
+    uint8_t b[PLINK_OUT]; int m = stack_out1(s, t, b, (int)sizeof b); if (m) lmux_from_link(&MX, s, b, m, t);
+  }
+  return lmux_to_stack(&MX, t, rbuf, (int)sizeof rbuf);
+}
+EXPORT("link_followed") int link_followed(double t) { return mx_on ? lmux_followed(&MX, t) : 0; }
 EXPORT("plink_air_out") int plink_air_out(double t) { return cl_on ? clink_to_air(&CL, t, pbuf, (int)sizeof pbuf) : pl_on ? plink_to_air(&PL, t, pbuf, (int)sizeof pbuf) : 0; }   /* a packet due, into pbuf */
 EXPORT("plink_air_in") int plink_air_in(int n, int rssi, double t) { return cl_on ? clink_from_air(&CL, pbuf, n, rssi, t) : pl_on ? plink_from_air(&PL, pbuf, n, rssi, t) : 0; }   /* a packet that came, in pbuf */
+/* Bluetooth LE from a browser (js/live.js): this end's biggest packet once the connection's MTU is known (the
+ * packet layer's own, plink_cfg.mtu: 64 at least, PLINK_MTU at most), and the binding phrase's mark in the drone's
+ * advertising (in rbuf, n bytes: the same as radio_ble.c's, the SipHash of "adv" under the phrase's key; its first
+ * byte lowest). */
+EXPORT("plink_mtu") int plink_mtu(int m) { if (!pl_on) return 0; if (m > PLINK_MTU) m = PLINK_MTU; if (m < 64) m = 64; PL.C.mtu = m; return m; }
+EXPORT("ble_mark") uint32_t ble_mark(int n) {
+  char ph[64]; int k = 0; for (; k < n && k < 63; k++) ph[k] = (char)rbuf[k]; ph[k] = 0;
+  uint64_t k0, k1; plink_key(ph, &k0, &k1); const uint8_t m[3] = { 'a', 'd', 'v' };
+  return (uint32_t)plink_siphash(k0, k1, m, 3);
+}
 EXPORT("plink_channel") int plink_channel(double t) { return cl_on ? clink_channel(&CL, t) : -1; }   /* the compact link's radio channel now */
 /* A serial line (pframe.h): the packet due as the line's bytes (into sbuf; the packet itself stays in pbuf, its
  * length from plink_pkt_n), and the bytes that came off the line (in sbuf) through the deframer to the packet layer:
@@ -241,7 +292,14 @@ EXPORT("plink_stats") int plink_stats(double t) {
 /* n bytes from the receiver, in rbuf */
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
-EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), rbuf, (int)sizeof rbuf); }
+static const rlink_cfg *budget_link(double t) {                     /* (two links: as radio_mux.c radio_mux_link) */
+  if (!mx_on) return &RL;
+  const rlink_cfg *L[2] = { &RL, &RL2 };
+  for (int i = 0; i < 2; i++) if (MX.k[i].down && t - MX.k[i].t_stats < 0.5) return L[i];
+  for (int i = 0; i < 2; i++) if (MX.k[i].down) return L[i];
+  return &RL;
+}
+EXPORT("radio_out") int radio_out(double t) { return tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(budget_link(t), &RCI, t), rbuf, (int)sizeof rbuf); }
 static cargo_state CG;
 /* the board's tasks put their items: tasks bits 1 flight core, 2 navigation, 4 learning, 8 supervisor, 16 cargo */
 EXPORT("tlm_publish") void tlm_publish(int tasks, double t) {

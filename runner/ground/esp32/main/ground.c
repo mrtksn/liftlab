@@ -37,6 +37,9 @@
  *   set radio=serial,115200  a serial line on tx= (two pins: to the line's input, from its output) at that speed, the
  *                         drone's the same: a laser or LED and a photodiode, fibre transceivers, an infrared pair, a
  *                         radio modem in transparent mode, a wire. serial,57600,half: one way at a time (radio modems)
+ *                         serial,BAUD,up or ,down: a line that goes one way only (beside a two-way link)
+ *   set radio2=ble        a second link at once, as the drone's radio2= (a different kind: one UART link; ESP-NOW or
+ *                         Wi-Fi, not both; Bluetooth not beside them): both carry; radio2=none for one link
  *   radio                 the link now: connected, link quality, signal, packets (for ExpressLRS: just its name)
  * ESP-NOW with two ESP32s: the drone radio=espnow,6 and bind=YOUR PHRASE, this one the same; save, reboot both.
  *
@@ -103,7 +106,7 @@ static int log_out(const char *fmt, va_list a) { return quiet ? 0 : vprintf(fmt,
 static void radio_say(const char *s) { con("%s\n", s); }
 
 /* ── the wiring ── */
-#define CFG_VERSION 4
+#define CFG_VERSION 5
 typedef struct {
   uint32_t version;
   int8_t tx, rx; int32_t baud;
@@ -118,6 +121,8 @@ typedef struct {
   int32_t radio_baud;
   /* v4 (a v3 blob is the part above): an nRF24L01's pins (nrf24=SCK,MOSI,MISO,CSN,CE) and its rate (radio=nrf24,KBPS) */
   int8_t nrf_pin[5], nrf_pad; int16_t radio_kbps;
+  /* v5 (a v4 blob is the part above): a second link at once (radio2=; fc/lmux.h): its kind (−1 none), its settings */
+  int8_t radio2_kind, radio2_pad[3]; int32_t radio2_a, radio2_b;
 } gcfg;
 static gcfg C, N;                  /* C: the wiring running now; N: as set since (saved, it runs after a reboot) */
 static void defaults(gcfg *c) {
@@ -127,9 +132,10 @@ static void defaults(gcfg *c) {
   c->span = 1800; c->buzzer = -1; c->led = LB_LED; c->latch = GB(GB_ARM) | GB(GB_FLY);
   c->radio_kind = RLINK_ELRS; c->radio_channel = 1; c->elrs_rate = 250; c->elrs_ratio = 4; c->radio_baud = 115200;
   for (int i = 0; i < 5; i++) c->nrf_pin[i] = -1;
-  c->radio_kbps = 1000;
+  c->radio_kbps = 1000; c->radio2_kind = -1;
   strcpy(c->bind, RCFG_BIND_DEFAULT); strcpy(c->drone, RCFG_DRONE_DEFAULT);
 }
+static int cfg_radio2(const gcfg *c, rlink_cfg *L) { return c->radio2_kind < 0 ? -1 : rlink_make(L, c->radio2_kind, (int)c->radio2_a, (int)c->radio2_b); }
 static int cfg_radio(const gcfg *c, rlink_cfg *L) {   /* the link as set: 0, or −1 (L: the default) */
   int e = c->radio_kind == RLINK_ESPNOW ? rlink_make(L, RLINK_ESPNOW, c->radio_channel, c->radio_opt)
         : c->radio_kind == RLINK_WIFI ? rlink_make(L, RLINK_WIFI, c->radio_opt, c->radio_channel)
@@ -147,6 +153,7 @@ static void cfg_load(void) {
     gcfg t; size_t n = sizeof t;
     if (nvs_get_blob(h, "cfg", &t, &n) == ESP_OK) {
       if (n == sizeof t && t.version == CFG_VERSION) C = t;
+      else if (t.version == 4 && n == offsetof(gcfg, radio2_kind)) { memcpy(&C, &t, n); C.version = CFG_VERSION; }   /* (v4: one link) */
       else if (t.version == 3 && n == offsetof(gcfg, nrf_pin)) { memcpy(&C, &t, n); C.version = CFG_VERSION; }   /* (v3: no nRF24L01) */
       else if (t.version == 2 && n == offsetof(gcfg, radio_baud)) { memcpy(&C, &t, n); C.version = CFG_VERSION; }   /* (v2: a serial line's speed takes its default) */
       else if (t.version == 1 && n == offsetof(gcfg, radio_kind)) { memcpy(&C, &t, n); C.version = CFG_VERSION; }   /* (v1: the radio's settings take their defaults) */
@@ -196,6 +203,10 @@ static void cfg_fix(gcfg *c) {
   if (L.kind == RLINK_SERIAL && c->tx == c->rx) { c->radio_kind = d.radio_kind; bad = 1; }   /* (a serial line needs two pins) */
   for (int i = 0; i < 5; i++) if (c->nrf_pin[i] >= 0 && !(i == 2 ? pin_in(c->nrf_pin[i]) : pin_out(c->nrf_pin[i]))) { for (int k = 0; k < 5; k++) c->nrf_pin[k] = -1; bad = 1; break; }
   if (L.kind == RLINK_NRF24 && c->nrf_pin[0] < 0) { c->radio_kind = d.radio_kind; bad = 1; }
+  if (c->radio2_kind >= 0) {                           /* the second link: valid, possible beside the first, wired */
+    rlink_cfg L1, L2; cfg_radio(c, &L1);
+    if (cfg_radio2(c, &L2) || rlink_pair_ok(&L1, &L2, 1, 0, 0) || (L2.kind == RLINK_SERIAL && c->tx == c->rx) || (L2.kind == RLINK_NRF24 && c->nrf_pin[0] < 0)) { c->radio2_kind = -1; bad = 1; }
+  }
   if (!rcfg_terminated(c->bind, sizeof c->bind) || rcfg_bind_parse(t, c->bind, 0, 0)) { strcpy(c->bind, d.bind); bad = 1; }
   if (!rcfg_terminated(c->wifi_ssid, sizeof c->wifi_ssid) || !rcfg_terminated(c->wifi_pass, sizeof c->wifi_pass)) { c->wifi_ssid[0] = c->wifi_pass[0] = 0; bad = 1; }
   if (!rcfg_terminated(c->drone, sizeof c->drone) || rcfg_ip_parse(0, 0, c->drone, 0, 0)) { strcpy(c->drone, d.drone); bad = 1; }
@@ -211,6 +222,7 @@ static void show(char *o, int n) {
   for (int a = 0; a < GND_AXES && k < n - 20; a++) if (N.ax[a] >= 0) k += snprintf(o + k, (size_t)(n - k), " %s=%d%s", ax[a], N.ax[a], N.ax_inv[a] ? "i" : "");
   rlink_cfg L; cfg_radio(&N, &L); char rl[32]; rlink_describe(&L, rl, sizeof rl);   /* the radio; the secrets masked */
   if (k < n - 1) k += snprintf(o + k, (size_t)(n - k), " radio=%s", rl);
+  { rlink_cfg L2; if (k < n - 1) { if (!cfg_radio2(&N, &L2)) { rlink_describe(&L2, rl, sizeof rl); k += snprintf(o + k, (size_t)(n - k), " radio2=%s", rl); } else k += snprintf(o + k, (size_t)(n - k), " radio2=none"); } }
   if (k < n - 1) k += rcfg_bind_default(N.bind) ? snprintf(o + k, (size_t)(n - k), " bind=%s(the default: set your own)", RCFG_BIND_DEFAULT)
                                                 : snprintf(o + k, (size_t)(n - k), " bind=(set, %d characters)", (int)strlen(N.bind));
   if (k < n - 1) k += N.wifi_ssid[0] ? snprintf(o + k, (size_t)(n - k), " wifi=%s,%s", N.wifi_ssid, N.wifi_pass[0] ? "********" : "(default password)")
@@ -236,10 +248,21 @@ static int setting(char *kv, char *err, int en) {
     N.radio_kind = (int8_t)L.kind;
     if (L.kind == RLINK_ELRS) { N.elrs_rate = (int16_t)L.rate_hz; N.elrs_ratio = (int16_t)L.ratio; }
     else if (L.kind == RLINK_ESPNOW) { N.radio_channel = (int8_t)L.channel; N.radio_opt = (int8_t)L.lr; }
-    else if (L.kind == RLINK_SERIAL) { N.radio_baud = L.baud; N.radio_opt = (int8_t)L.half; }
+    else if (L.kind == RLINK_SERIAL) { int a, b; rlink_args(&L, &a, &b); N.radio_baud = L.baud; N.radio_opt = (int8_t)b; }   /* (b: half, up or down) */
     else if (L.kind == RLINK_NRF24) { if (N.nrf_pin[0] < 0) { snprintf(err, (size_t)en, "radio=nrf24: set nrf24=SCK,MOSI,MISO,CSN,CE first: the module's pins"); N.radio_kind = C.radio_kind; return -1; } N.radio_kbps = (int16_t)L.kbps; }
     else if (L.kind == RLINK_BLE) {}
     else { N.radio_opt = (int8_t)L.sta; if (!L.sta) N.radio_channel = (int8_t)L.channel; if (!N.wifi_ssid[0]) snprintf(err, (size_t)en, "set wifi=SSID[,PASSWORD] too: the network to join (the drone's: LiftLab-XXXX)"); }
+    return 0;
+  }
+  else if (!strcmp(k, "radio2")) {                    /* a second link at once: as radio=, or none */
+    if (!strcmp(v, "none") || !strcmp(v, "-1") || !*v) { N.radio2_kind = -1; return 0; }
+    rlink_cfg L1, L2; if (rlink_parse(&L2, v, err, en)) return -1;
+    cfg_radio(&N, &L1); char why[120];
+    if (rlink_pair_ok(&L1, &L2, 1, why, sizeof why)) { snprintf(err, (size_t)en, "radio2: %s", why); return -1; }
+    if (L2.kind == RLINK_SERIAL && N.tx == N.rx) { snprintf(err, (size_t)en, "radio2=serial: a serial line needs two pins: set tx=OUT,IN first"); return -1; }
+    if (L2.kind == RLINK_NRF24 && N.nrf_pin[0] < 0) { snprintf(err, (size_t)en, "radio2=nrf24: set nrf24=SCK,MOSI,MISO,CSN,CE first"); return -1; }
+    int a, b; rlink_args(&L2, &a, &b); N.radio2_kind = (int8_t)L2.kind; N.radio2_a = a; N.radio2_b = b;
+    if (L2.kind == RLINK_WIFI && !N.wifi_ssid[0]) snprintf(err, (size_t)en, "set wifi=SSID[,PASSWORD] too: the network to join");
     return 0;
   }
   else if (!strcmp(k, "nrf24")) {                     /* an nRF24L01's pins: nrf24=SCK,MOSI,MISO,CSN,CE, or -1 */
@@ -272,7 +295,16 @@ static radio_io *RADIO;
 /* no radio (one that didn't start): nothing comes, what's written goes nowhere; the console still works */
 static int none_read(radio_io *R, uint8_t *b, int n, int w) { (void)R; (void)b; (void)n; (void)w; return 0; }
 static int none_write(radio_io *R, const uint8_t *b, int n) { (void)R; (void)b; return n; }
-static radio_io no_radio = { "no radio (it didn't start: see above)", none_read, none_write, -1, 0 };
+static radio_io no_radio = { .name = "no radio (it didn't start: see above)", .read = none_read, .write = none_write, .fd = -1 };
+static radio_io *radio_start1(const rlink_cfg *L) {   /* one link as set, started; 0: it didn't (said why) */
+  if (L->kind == RLINK_ELRS) return radio_module_start(C.tx, C.rx, (int)C.baud);
+  return L->kind == RLINK_ESPNOW ? radio_espnow_start(L, PLINK_GROUND, C.bind, radio_say)
+       : L->kind == RLINK_SERIAL ? radio_uart_start(L, PLINK_GROUND, C.bind, LB_RADIO_UART, C.tx, C.rx, radio_say)   /* (the module's pins: the line's) */
+       : L->kind == RLINK_NRF24 ? radio_nrf24_start(L, PLINK_GROUND, C.bind, C.nrf_pin, radio_say)
+       : L->kind == RLINK_BLE ? radio_ble_start(L, PLINK_GROUND, C.bind, radio_say)
+       : radio_wifi_start(L, PLINK_GROUND, C.bind, C.wifi_ssid, C.wifi_pass, C.drone, radio_say);
+}
+static double radio_now(void) { return esp_timer_get_time() * 1e-6; }
 static adc_oneshot_unit_handle_t adc; static adc_channel_t ax_ch[GND_AXES]; static int ax_ok[GND_AXES]; static float ax_mid[GND_AXES];
 static void hw_init(void) {
   for (int b = 0; b < GB_N; b++) if (C.btn[b] >= 0) {
@@ -290,18 +322,14 @@ static void hw_init(void) {
       ax_mid[a] = sum / 16.0f; ax_ok[a] = 1;   /* centred where it rests at power-on */
     }
   }
-  rlink_cfg L; cfg_radio(&C, &L);                       /* the pilot's radio link (radio_io.h) */
-  if (L.kind != RLINK_BLE) radio_ble_release();            /* (Bluetooth's memory back to the heap: not this time) */
-  if (L.kind == RLINK_ELRS) RADIO = radio_module_start(C.tx, C.rx, (int)C.baud);
-  else {
-    if (rcfg_bind_default(C.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly your drone. set bind=YOUR PHRASE (the same on the drone)\n");
-    RADIO = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_GROUND, C.bind, radio_say)
-          : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_GROUND, C.bind, LB_RADIO_UART, C.tx, C.rx, radio_say)   /* (the module's pins: the line's) */
-          : L.kind == RLINK_NRF24 ? radio_nrf24_start(&L, PLINK_GROUND, C.bind, C.nrf_pin, radio_say)
-          : L.kind == RLINK_BLE ? radio_ble_start(&L, PLINK_GROUND, C.bind, radio_say)
-          : radio_wifi_start(&L, PLINK_GROUND, C.bind, C.wifi_ssid, C.wifi_pass, C.drone, radio_say);
-  }
-  if (!RADIO) RADIO = &no_radio;
+  rlink_cfg L, L2; cfg_radio(&C, &L); int two = !cfg_radio2(&C, &L2);   /* the pilot's radio link (radio_io.h); two at once with radio2= */
+  if (L.kind != RLINK_BLE && !(two && L2.kind == RLINK_BLE)) radio_ble_release();   /* (Bluetooth's memory back to the heap: not this time) */
+  if ((L.kind != RLINK_ELRS || (two && L2.kind != RLINK_ELRS)) && rcfg_bind_default(C.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly your drone. set bind=YOUR PHRASE (the same on the drone)\n");
+  radio_io *R = radio_start1(&L), *R2 = two ? radio_start1(&L2) : 0;
+  if (two && R && R2) { radio_io *M = radio_mux_open(R, &L, R2, &L2, LMUX_GROUND, radio_now); if (M) R = M; else printf("radio: no memory for two links: the first only\n"); }
+  else if (two && !R && R2) { printf("radio: the first link didn't start: the second alone\n"); R = R2; }
+  else if (two && !R2) printf("radio: the second link didn't start: the first alone\n");
+  RADIO = R ? R : &no_radio;
 }
 /* buttons, debounced: one changes once it has read the other way DEBOUNCE steps running; the first read is taken as
  * it is (held at power-on: held, not pressed) */

@@ -24,14 +24,15 @@ const SL_MEDIA = [[0, 'Fibre or wire (tethered)'], [1, 'Laser and photodiode'], 
 // radio_link.c serial_sizing, the same numbers (the telemetry's room on a good line, the packets' rates)
 function slSizing(c) {
   const B = c.baud / 10, cl = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
-  if (!c.half) {
+  if (+c.half !== 1) {                                               // (both ways at once, or one way only: the same pace)
     const up = cl(0.5 * B / 56, 1, 100), dmax = cl(0.15 * B / 30, 1, 50), room = 0.75 * B - dmax * 30;
-    return { up, dmax, room: cl(room * 0.85, 0, 6000) };
+    return { up, dmax, room: +c.half === 2 ? 0 : cl(room * 0.85, 0, 6000) };
   }
   const mtu = Math.floor(cl(B * 0.012, 64, 200)), up = cl(0.75 * B / (56 + mtu + 3), 1, 50);
   return { up, dmax: up, room: cl(up * (mtu - 30) * 0.85, 0, 6000) };
 }
-const slOk = c => SL_BAUDS.includes(+c.baud) && !(c.half && c.baud < 38400);
+const slOk = c => SL_BAUDS.includes(+c.baud) && !(+c.half === 1 && c.baud < 38400);
+const SL_DIR = ['', ', one way at a time', ', up only', ', down only'];
 const slCfg = c => slOk(c) ? c : { ...c, baud: 115200 };   // (a stored speed the boards wouldn't take: the default)
 function slRf() {
   const P = linkPath(), m = radioCfg.medium | 0;
@@ -82,7 +83,7 @@ function slSend(from, raw, wire, t) {
   const bytes = Uint8Array.from(wire);
   if (modem && radioRand() >= 1 / (1 + Math.exp(-(rf.margin - 2) / 2))) { pkLost(a, t); return; }   // (the modem's packet lost whole)
   if (!modem) for (let i = 0; i < bytes.length; i++) if (radioRand() < rf.pb) bytes[i] ^= 1 << Math.floor(radioRand() * 8);
-  if (c.half || modem) {                                              // one medium both ways (a modem's air): both talking at once, both garbled
+  if (+c.half === 1 || modem) {                                              // one medium both ways (a modem's air): both talking at once, both garbled
     for (const b of pk.air) if (b.from === other && b.end > start && b.start < end) { slGarble(b.wire); slGarble(bytes); pk.collisions = (pk.collisions || 0) + 1; }
   }
   let at = end + delay; at = Math.max(at, pk.last[from]); pk.last[from] = at;
@@ -95,15 +96,17 @@ RADIO_LINKS.serial = Object.assign(packetModel('espnow', []), {
   label: 'Serial line (laser, fibre, radio modem)', receiver: 'Serial line',
   settings: [
     { key: 'baud', label: 'Line speed', options: SL_BAUDS.map(b => [b, b + ' baud']) },
-    { key: 'half', label: 'Direction', options: [[0, 'Both ways at once'], [1, 'One way at a time']] },
+    { key: 'half', label: 'Direction', options: [[0, 'Both ways at once'], [1, 'One way at a time'], [2, 'Up only (channels and commands)'], [3, 'Down only (telemetry)']] },
     { key: 'medium', label: 'Medium (simulated)', options: SL_MEDIA },
     { key: 'tether', label: 'Tether length', options: [[10, '10 m'], [25, '25 m'], [50, '50 m'], [100, '100 m'], [300, '300 m']], show: c => (c.medium | 0) === 0 },
   ],
-  wasm: c => { c = slCfg(c); return [3, c.baud, c.half ? 1 : 0]; },  // radio_link.h RLINK_SERIAL
+  wasm: c => { c = slCfg(c); return [3, c.baud, [0, 1, 2, 3].includes(+c.half) ? +c.half : 0]; },  // radio_link.h RLINK_SERIAL (b: both, half, up only, down only)
   room: c => slSizing(slCfg(c)).room,
   roomNote(c) {
     if (!slOk(c)) return `One way at a time needs 38400 baud or more (the channels, the answers and the turnarounds): the boards fly ${slCfg(c).baud} baud.`;
-    if ((c.medium | 0) === 3 && !c.half) return 'Most radio modems (HC-12, LoRa serial modules) go one way at a time: set Direction to one way at a time, or the two ends\' packets collide on the air.';
+    if (+c.half === 3 && !(typeof radioTwo === 'function' && radioTwo())) return 'Down only: no channels go up, so the drone has nothing to fly by. A line that goes one way only is for beside another link (the second link, below).';
+    if (+c.half === 2 && !(typeof radioTwo === 'function' && radioTwo())) return 'Up only: the channels and commands go up, nothing comes down (no telemetry, no link statistics at the command module).';
+    if ((c.medium | 0) === 3 && +c.half !== 1 && +c.half < 2) return 'Most radio modems (HC-12, LoRa serial modules) go one way at a time: set Direction to one way at a time, or the two ends\' packets collide on the air.';
     return '';
   },
   signalNote(c) {
@@ -119,8 +122,8 @@ RADIO_LINKS.serial = Object.assign(packetModel('espnow', []), {
   changed() {                                                         // the speed or the direction: both ends' packets sized again
     if (pk.sized === slKey(radioCfg)) return;
     pk.sized = slKey(radioCfg); this.rebind(); radioLinkSetup();
-    linkLog('↕', 'link', `the line now ${slCfg(radioCfg).baud} baud${radioCfg.half ? ', one way at a time' : ''}`, 'both ends set up again', 'warn');
+    linkLog('↕', 'link', `the line now ${slCfg(radioCfg).baud} baud${SL_DIR[+radioCfg.half] || ''}`, 'both ends set up again', 'warn');
   },
   step: slStep,
 });
-const slKey = c => slCfg(c).baud + '/' + (c.half ? 1 : 0);
+const slKey = c => slCfg(c).baud + '/' + (+c.half || 0);

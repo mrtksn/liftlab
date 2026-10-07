@@ -59,6 +59,8 @@ jobs:
           /tmp/test-clink
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_nrf24.c runner/fc/nrf24.c runner/fc/clink.c runner/fc/plink.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-nrf24
           /tmp/test-nrf24
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_lmux.c runner/fc/lmux.c runner/fc/plink.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-lmux
+          /tmp/test-lmux
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
           /tmp/test-esp-radio
       - name: Motor output and legacy wiring tests

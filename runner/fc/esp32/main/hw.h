@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 9
+#define HW_VERSION 10
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -43,6 +43,11 @@ typedef struct {
   int8_t nrf_pin[5];
   int8_t nrf_pad;
   int16_t radio_kbps;
+  /* Appended in v10 (v9 blobs migrate with none): a second radio link at once (radio2=; fc/lmux.h merges the two):
+   * its kind (−1: none) and its settings as rlink_make takes them. */
+  int8_t radio2_kind;
+  int8_t radio2_pad[3];
+  int32_t radio2_a, radio2_b;
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -55,6 +60,8 @@ int hw_set(hw_config *c, const char *line, char *err, int errn);
 void hw_describe(const hw_config *c, char *out, int n);
 /* The pilot's radio link as set (radio_link.h). */
 void hw_radio(const hw_config *c, rlink_cfg *L);
+/* The second link (radio2=): 0 and L, or −1: none. */
+int hw_radio2(const hw_config *c, rlink_cfg *L);
 
 /* airframe blob in flash */
 int hw_airframe_load(uint8_t *buf, uint32_t cap, uint32_t *len);

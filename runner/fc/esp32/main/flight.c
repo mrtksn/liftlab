@@ -40,6 +40,12 @@
  *                         It hops over 8 channels from the binding phrase; the drone answers in the acknowledgements
  *   radio=ble             Bluetooth LE: the drone advertises LiftLab's service with the binding phrase's mark; a
  *                         command module ESP32 set radio=ble (or one on a laptop's USB) connects to it
+ *   serial,BAUD,up / ,down  a line that goes one way only (a laser with no beam back, a 433 MHz transmitter and
+ *                         receiver): the channels and commands up, or the telemetry down. Beside a two-way link
+ *   radio2=nrf24,1000     a second link at once (any kind as radio=, but a different one: one UART link, ExpressLRS or
+ *                         a serial line; ESP-NOW or Wi-Fi, not both; Bluetooth LE not beside them). Both carry
+ *                         everything (fc/lmux.h): the channels come by the first while it has them, the second fills
+ *                         in; commands and messages once. radio2=none: one link
  *   bind=PHRASE           1–31 characters, the same at both ends: it signs the packets, so nothing else flies the
  *                         drone. The default (liftlab) is everyone's: a warning says so at power-on. Set your own
  *   wifi=SSID,PASSWORD    the network: to join (sta), or the one it makes (ap; optional: LiftLab-XXXX by default,
@@ -399,7 +405,8 @@ static void radio_task(void *arg) {
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
     if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
     if (radio) {
-      int m = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), out, sizeof out); if (m) R->write(R, out, m);
+      const rlink_cfg *Lnow = radio_mux_is(R) ? radio_mux_link(R) : &RL;   /* (two links: the room of the one it goes by now) */
+      int m = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(Lnow, &RCI, t), out, sizeof out); if (m) R->write(R, out, m);
       if (now >= next_want) { next_want = now + 500000; float w = 2; link_send2(RN_LINK_WANT, &w, 4); }   /* the Pi's items, please */
     } else if (now - tlm_want_us < 1000000 && now >= next_pack) {   /* the Pi runs the telemetry: our items go there */
       next_pack = now + 50000; int k = tlm_pack(&TS, pk, TLM_PACK_MAX); if (k) link_send2(RN_LINK_TLM, pk, (uint32_t)k * 4);
@@ -407,18 +414,30 @@ static void radio_task(void *arg) {
   }
 }
 
-/* The radio the settings ask for (radio_io.h), started; 0: none. */
+/* One radio link as set (radio_io.h), started; 0: it didn't (said why). */
+static radio_io *radio_start1(const rlink_cfg *L) {
+  if (L->kind == RLINK_ELRS) return radio_elrs_start(&HW);
+  return L->kind == RLINK_ESPNOW ? radio_espnow_start(L, PLINK_DRONE, HW.bind, post)
+       : L->kind == RLINK_SERIAL ? radio_uart_start(L, PLINK_DRONE, HW.bind, LB_RADIO_UART, HW.crsf_tx, HW.crsf_rx, post)   /* (the receiver's pins: the line's) */
+       : L->kind == RLINK_NRF24 ? radio_nrf24_start(L, PLINK_DRONE, HW.bind, HW.nrf_pin, post)
+       : L->kind == RLINK_BLE ? radio_ble_start(L, PLINK_DRONE, HW.bind, post)
+       : radio_wifi_start(L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
+}
+static double radio_now(void) { return esp_timer_get_time() * 1e-6; }
+/* The radio the settings ask for, started (with radio2=, both, as one: fc/radio_mux.h); 0: none. */
 static radio_io *radio_start(void) {
-  rlink_cfg L; hw_radio(&HW, &L);
-  if (L.kind != RLINK_BLE) radio_ble_release();                  /* (Bluetooth's memory back to the heap: not this time) */
-  if (L.kind == RLINK_ELRS) return radio_elrs_start(&HW);
-  if (rcfg_bind_default(HW.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly this drone. set bind=YOUR PHRASE (the same on the command module)\n");
-  if (HW.crsf_rx >= 0 && L.kind != RLINK_SERIAL) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
-  radio_io *R = L.kind == RLINK_ESPNOW ? radio_espnow_start(&L, PLINK_DRONE, HW.bind, post)
-              : L.kind == RLINK_SERIAL ? radio_uart_start(&L, PLINK_DRONE, HW.bind, LB_RADIO_UART, HW.crsf_tx, HW.crsf_rx, post)   /* (the receiver's pins: the line's) */
-              : L.kind == RLINK_NRF24 ? radio_nrf24_start(&L, PLINK_DRONE, HW.bind, HW.nrf_pin, post)
-              : L.kind == RLINK_BLE ? radio_ble_start(&L, PLINK_DRONE, HW.bind, post)
-              : radio_wifi_start(&L, PLINK_DRONE, HW.bind, HW.wifi_ssid, HW.wifi_pass, 0, post);
+  rlink_cfg L, L2; hw_radio(&HW, &L); int two = !hw_radio2(&HW, &L2);
+  if (L.kind != RLINK_BLE && !(two && L2.kind == RLINK_BLE)) radio_ble_release();   /* (Bluetooth's memory back to the heap: not this time) */
+  int packets = L.kind != RLINK_ELRS || (two && L2.kind != RLINK_ELRS);
+  if (packets && rcfg_bind_default(HW.bind)) printf("WARNING: the binding phrase is the default (liftlab): anyone who knows it can fly this drone. set bind=YOUR PHRASE (the same on the command module)\n");
+  int uart = L.kind == RLINK_ELRS || L.kind == RLINK_SERIAL || (two && (L2.kind == RLINK_ELRS || L2.kind == RLINK_SERIAL));
+  if (HW.crsf_rx >= 0 && !uart) printf("(crsf=%d,%d is set, but this radio is the ESP32's own: those pins stay free)\n", HW.crsf_rx, HW.crsf_tx);
+  radio_io *R = radio_start1(&L), *R2 = two ? radio_start1(&L2) : 0;
+  if (two && R && R2) {
+    radio_io *M = radio_mux_open(R, &L, R2, &L2, LMUX_DRONE, radio_now);
+    if (M) R = M; else printf("radio: no memory for two links: the first only\n");
+  } else if (two && !R && R2) { printf("radio: the first link didn't start: the second alone\n"); R = R2; }
+  else if (two && !R2) printf("radio: the second link didn't start: the first alone\n");
   printf("radio: %s; free heap %u bytes\n", R ? R->name : "DIDN'T START (see the next messages): no pilot's radio", (unsigned)esp_get_free_heap_size());
   return R;
 }

@@ -52,16 +52,31 @@ static int pk_write(radio_io *R, const uint8_t *b, int n) {
   return n;
 }
 
+/* This start's session: one for all its links (two links at once: a one-way link listens to the sender its two-way
+ * partner knows, by its session: fc/radio_mux.h). */
+uint32_t esp_radio_session(void) {
+  static uint32_t ses;
+  while (!ses) ses = esp_random();                     /* (a new one each start: the other end tells restarts by it) */
+  return ses;
+}
+static uint32_t pk_peer(radio_io *R) { return ((pk_link *)R)->L.known; }
+static void pk_tie(radio_io *R, uint32_t peer) { plink_tie(&((pk_link *)R)->L, peer); }
+static void pk_hear(radio_io *R, int lq, int rssi) { plink_hear(&((pk_link *)R)->L, lq, rssi); }
 void pk_init(pk_link *K, const char *name, int role, const char *bind, esp_radio_say say) {
   plink_cfg C; plink_cfg_default(&C, role);
   plink_key(rcfg_bind(bind), &C.k0, &C.k1);
-  uint32_t ses = 0; while (!ses) ses = esp_random();   /* (a new one each start: the other end tells restarts by it) */
-  plink_init(&K->L, &C, ses);
+  plink_init(&K->L, &C, esp_radio_session());
   K->io.name = name; K->io.read = pk_read; K->io.write = pk_write; K->io.fd = -1; K->io.ctx = K;
+  K->io.peer = pk_peer; K->io.tie = pk_tie; K->io.hear = pk_hear;
   K->say = say;
 }
 
 void esp_radio_status(radio_io *R, char *out, int n) {
+  if (radio_mux_is(R)) {                                               /* two links: each, then how they're merged */
+    int k = 0;
+    for (int i = 0; i < 2 && k < n - 2; i++) { esp_radio_status(radio_mux_part(R, i), out + k, n - k); k += (int)strlen(out + k); if (k < n - 2) { out[k++] = '\n'; out[k] = 0; } }
+    radio_mux_counts(R, out + k, n - k); return;
+  }
   if (radio_nrf24_status(R, out, n)) return;
   pk_link *K = R ? (pk_link *)R->ctx : 0;
   if (!K || K->io.read != pk_read) { snprintf(out, (size_t)n, "%s", R ? R->name : "no radio"); return; }

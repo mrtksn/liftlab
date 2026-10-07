@@ -21,6 +21,15 @@
  * taken only from packets that name this end's own session (the header's "session it talks to"): the first packets
  * of a new pair only introduce the ends, and a recording of an older session played back gets nowhere.
  *
+ * One way only (a link that carries one direction: radio_link.h RLINK_UP, RLINK_DOWN): one end only sends, the other
+ * only listens. Nothing comes back, so nothing is acknowledged: a reliable frame goes in `repeats` packets in a row
+ * and is then done (the receiver takes it once, by its number, and goes on past any it missed), and the receiver
+ * can't be named in the packets, as it never introduced itself. Who it listens to: as one of two links (lmux.h), the
+ * same sender its two-way partner link knows (plink_tie: the program's links share one session number at each end),
+ * so a recording played back gets nowhere there either; alone, any new sender once the last has been quiet for half
+ * a second (then a recording of your own packets, played back to a restarted drone, would be taken: a one-way link
+ * alone can't tell, so use it beside a two-way link, or where no one can get at its beam or wire).
+ *
  * Link statistics: each end counts the other's packets by their numbers (link quality, % of the last 100, falling
  * while nothing comes) and reads the signal from the radio if it can; each tells the other its counts in its packets.
  * Ten times a second each end hands its stack a CRSF link statistics frame, as a receiver (to the drone: while the
@@ -54,7 +63,10 @@ typedef struct {
                                 * answer came (or once it's clearly lost: awaiting), so the two never talk at once; the
                                 * ground's beat leaves room for the answer (radio_link.c rlink_sizing) */
   uint64_t k0, k1;             /* the key (plink_key from the binding phrase) */
+  int oneway;                  /* PLINK_DUPLEX, or this end only sends (PLINK_SEND_ONLY) or only listens (PLINK_RECV_ONLY) */
+  int repeats;                 /* one way: the packets each reliable frame goes in (3) */
 } plink_cfg;
+enum { PLINK_DUPLEX = 0, PLINK_SEND_ONLY = 1, PLINK_RECV_ONLY = 2 };
 
 typedef struct {
   uint32_t sent, got, bad, replays, stale_sessions, uq_dropped, resent, skipped;   /* skipped: reliable frames the other end dropped */
@@ -85,6 +97,9 @@ typedef struct {
   uint8_t out[PLINK_OUT]; int out_n;                    /* for the stack */
   crsf_parser P;               /* the stack's bytes, split into frames */
   plink_counts N;
+  int tied; uint32_t allow;    /* one way, as one of two links: the sender it listens to (plink_tie) */
+  uint32_t known;              /* the other end's session as last confirmed (a packet from it naming ours): 0 none */
+  int said_lq, said_rssi;      /* what its program hears of the other end over all its links (plink_hear) */
 } plink;
 
 /* SipHash-2-4 of n bytes under the key (k0, k1): the packets' tags. */
@@ -96,6 +111,7 @@ void plink_cfg_default(plink_cfg *C, int role);        /* ESP-NOW's numbers: up 
 static inline void plink_cfg_link(plink_cfg *C, const rlink_cfg *L) {
   int up_mtu, down_mtu; rlink_sizing(L, &down_mtu, &up_mtu, &C->up_hz, &C->down_hz_min, &C->down_hz_max, &C->half);
   C->mtu = C->role == PLINK_GROUND ? up_mtu : down_mtu;
+  C->oneway = L->dir == RLINK_BOTH ? PLINK_DUPLEX : (L->dir == RLINK_UP) == (C->role == PLINK_GROUND) ? PLINK_SEND_ONLY : PLINK_RECV_ONLY;
 }
 /* session: a number of this start's own (a random one: the other end tells restarts by it), not 0 */
 void plink_init(plink *L, const plink_cfg *C, uint32_t session);
@@ -107,6 +123,13 @@ int plink_from_air(plink *L, const uint8_t *pkt, int n, int rssi, double t);
 int plink_to_air(plink *L, double t, uint8_t *pkt, int cap);
 /* What the stack should read now (frames that came, and the link statistics this end makes): bytes, ≤ cap. */
 int plink_to_stack(plink *L, double t, uint8_t *b, int cap);
+/* One way, beside a two-way link: listen only to the sender with this session (the one the two-way link knows; 0:
+ * none yet, so nothing); a sender names it in its packets. */
+void plink_tie(plink *L, uint32_t peer);
+/* One of two links: what this end's program hears of the other end over both (lmux_lq) [%, dBm]. A packet says the
+ * better of it and this link's own (a one-way sender hears nothing itself), so the far end's link statistics show
+ * the link as a whole: the drone hearing the channels by a laser while the radio's uplink is out still counts. */
+void plink_hear(plink *L, int lq, int rssi);
 /* Heard the other end, naming our session, within a second. */
 static inline int plink_connected(const plink *L, double t) { return L->peer && t - L->t_fresh < 1.0; }
 /* The link quality we hear now [%]: the last 100 packets by number, the ones not come yet missing. */

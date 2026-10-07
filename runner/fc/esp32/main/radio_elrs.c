@@ -11,7 +11,7 @@
 #define RADIO LB_RADIO_UART
 static int elrs_read(radio_io *R, uint8_t *b, int n, int wait_ms) { (void)R; int k = uart_read_bytes(RADIO, b, (uint32_t)n, pdMS_TO_TICKS(wait_ms)); return k < 0 ? -1 : k; }
 static int elrs_write(radio_io *R, const uint8_t *b, int n) { (void)R; int k = uart_write_bytes(RADIO, b, (size_t)n); return k < 0 ? -1 : k; }
-static radio_io io = { "ExpressLRS receiver (UART)", elrs_read, elrs_write, -1, 0 };
+static radio_io io = { .name = "ExpressLRS receiver (UART)", .read = elrs_read, .write = elrs_write, .fd = -1 };
 
 radio_io *radio_elrs_start(const hw_config *c) {
   if (c->crsf_rx < 0) return 0;

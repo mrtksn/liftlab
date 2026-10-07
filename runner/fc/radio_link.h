@@ -19,7 +19,9 @@
  *     serial modules), a wire. The packets are marked out in the byte stream (pframe.h). Settings: serial,BAUD[,half]
  *     (the line's speed, 19200 to 4000000 baud, the same at both ends; half: one way at a time, as most radio
  *     modems are: the drone then answers each packet from the ground). The packets' sizes and rates follow from the
- *     speed (rlink_sizing).
+ *     speed (rlink_sizing). A line that goes one way only (a laser and no beam back, a 433 MHz transmitter and
+ *     receiver pair): serial,BAUD,up (the channels and commands up, nothing down) or serial,BAUD,down (the telemetry
+ *     down, nothing up): see the direction below.
  *   - nRF24L01: a 2.4 GHz module on SPI at each end, Nordic's Enhanced ShockBurst: the ground sends, the radio
  *     acknowledges and retries, and the drone's answer rides in the acknowledgement. Its packets hold 32 bytes, too
  *     few for plink: clink.h is the compact packet layer for it. Settings: nrf24,RATE (250, 1000 or 2000 kbit/s:
@@ -43,7 +45,13 @@ typedef struct {
   int sta;                     /* Wi-Fi: join a network (1) or make one (0) */
   int baud, half;              /* a serial line: its speed [baud], and one way at a time (1) or both at once (0) */
   int kbps;                    /* nRF24L01: its air data rate [kbit/s]: 250, 1000 or 2000 */
+  int dir;                     /* which way it carries: RLINK_BOTH, or one way only (a serial line): RLINK_UP, the
+                                * command module's channels and commands to the drone; RLINK_DOWN, the drone's telemetry
+                                * to the command module. A one-way link has no answers: what must arrive is sent a few
+                                * times and nothing says it came (plink.h); as one of two links (lmux.h) it adds a path
+                                * one way, the other link the rest. */
 } rlink_cfg;
+enum { RLINK_BOTH = 0, RLINK_UP = 1, RLINK_DOWN = 2 };
 #define RLINK_BAUD_MIN 19200
 #define RLINK_BAUD_HALF_MIN 38400
 #define RLINK_BAUD_MAX 4000000
@@ -58,6 +66,16 @@ int rlink_describe(const rlink_cfg *L, char *out, int n);    /* back as rlink_pa
 /* The same from numbers: kind, then its settings in order (ExpressLRS: rate, ratio; ESP-NOW: channel, long range;
  * Wi-Fi: joins a network, channel; serial: baud, half duplex; nRF24L01: kbit/s, 0). 0, or −1 (L unchanged). */
 int rlink_make(rlink_cfg *L, int kind, int a, int b);
+/* (a serial line's b: 0 both ways at once, 1 one way at a time (half), 2 up only, 3 down only) */
+/* The numbers rlink_make takes for L: its a, b (the kind is L->kind). */
+void rlink_args(const rlink_cfg *L, int *a, int *b);
+/* Two links at once (lmux.h): can these two go together? esp32: on one ESP32 (one UART for a radio, one 2.4 GHz
+ * radio for ESP-NOW or Wi-Fi, Bluetooth not beside them); else on a Pi or a computer (two serial lines on two ports
+ * are fine). 0, or −1 with why in err. */
+int rlink_pair_ok(const rlink_cfg *a, const rlink_cfg *b, int esp32, char *err, int en);
+/* Does it carry the channels and commands (up), the telemetry (down)? */
+static inline int rlink_up(const rlink_cfg *L) { return L->dir != RLINK_DOWN; }
+static inline int rlink_down(const rlink_cfg *L) { return L->dir != RLINK_UP; }
 /* The telemetry's room [bytes/s]: on a good link, and as the link is now (from the link statistics the drone's end
  * reports into rc_input; nothing while it reports nothing for a second). */
 float rlink_budget(const rlink_cfg *L);

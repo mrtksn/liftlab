@@ -79,6 +79,7 @@ function pilotStep(dt) {
   ctl.vRef = pilot.vref.slice();
 }
 function pilotHold() {   // hold where the flight software believes it is
+  if (typeof liveOn === 'function' && liveOn()) { radioHold(); flashCtl('hold'); return; }   // the real drone's hold switch
   if (!est.havePos) return;   // no position estimate (no navigation): nothing to hold
   if (radioActive()) { radioHold(); flashCtl('hold'); return; }   // the hold switch on the handset
   const hub = est.p;
@@ -87,7 +88,7 @@ function pilotHold() {   // hold where the flight software believes it is
   pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0];
   flashCtl('hold');
 }
-function pilotHome() { if (!hasTask("nav")) return; if (radioActive()) { radioHome(); flashCtl('home'); return; } const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
+function pilotHome() { if (!hasTask("nav")) return; if (typeof liveOn === 'function' && liveOn()) { radioHome(); flashCtl('home'); return; } if (radioActive()) { radioHome(); flashCtl('home'); return; } const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
 function setPilotLevel(k) {
   pilot.level = k;
   document.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === k)));

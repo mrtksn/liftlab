@@ -497,7 +497,7 @@ function renderLaunch() {
   let k = -1, title = '', sub = '', tone = '';
   if (P.phase !== 'flying') launchUi.flyT = null;
   const starting = !brt.err || /^starting/.test(brt.err);
-  if (editMode || S.crashed) title = '';
+  if (editMode || S.crashed || liveOn()) title = '';
   else if (!cargo.power) { title = 'No power'; sub = 'The battery is off the drone. Reset (R) to start again.'; tone = 'bad'; }
   else if (!brt.ready) { k = 0; title = starting ? 'Starting up' : 'Can\'t start'; sub = starting ? 'Loading the flight program onto each board' : brt.err; tone = starting ? '' : 'bad'; }
   else if (P.phase === 'ground') { k = 1; title = 'Levelling'; sub = 'The flight core\'s attitude settles while it stands still'; }
@@ -846,10 +846,11 @@ function renderRun() {   // one button: shows pause while running, play while pa
   b.setAttribute('aria-label', running ? 'Pause' : 'Run'); b.title = running ? 'Pause (K)' : 'Run (K)';
 }
 $('#runBtn').addEventListener('click', () => {
+  if (typeof liveOn === 'function' && liveOn()) return;               // (the real drone: no simulation to run)
   if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
   running = !running; renderRun();
 });
-function doReset() { pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
+function doReset() { if (typeof liveOn === 'function' && liveOn()) return; pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
 $('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
 /* Poke: hold to charge, release to hit. Strength grows with hold time up to POKE_FULL seconds. */
 const POKE_FULL = 1.5;
@@ -1021,7 +1022,7 @@ function save() {
   if (typeof markDesign === 'function') markDesign();   // undo history and "unsaved changes" (designs.js)
   try {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
-    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designPreset: typeof designs !== 'undefined' ? designs.preset : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, tlmV: 1 }));
+    localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designPreset: typeof designs !== 'undefined' ? designs.preset : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, radio2: { ...radioCfg2 }, tlmV: 1 }));
   } catch (e) {}
 }
 // Brings a design saved by an older version up to date.
@@ -1063,6 +1064,10 @@ function load() {
     for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps']) if (s.radio[k] != null && isFinite(s.radio[k])) radioCfg[k] = +s.radio[k];
     const ph = radioPhraseOk(s.radio.bind); if (ph) radioCfg.bind = ph;
   }
+  if (s.radio2) {                                                    // the second link (none: kind '')
+    radioCfg2.kind = RADIO_LINKS[s.radio2.kind] ? s.radio2.kind : '';
+    for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'lr', 'sta', 'baud', 'half', 'medium', 'tether', 'kbps']) if (s.radio2[k] != null && isFinite(s.radio2[k])) radioCfg2[k] = +s.radio2[k];
+  }
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
@@ -1102,7 +1107,8 @@ function boot() {
   function frame(now) {
     const cpuStart = performance.now(), simStart = S.t, rawDt = Math.max(0, (now - lastT) / 1000);
     const dt = Math.min(0.05, rawDt); lastT = now;
-    if (running) {
+    if (liveOn()) liveView();                                        // the real drone: the view from its telemetry
+    else if (running) {
       // Keep the 0.5 ms integration/control step. Bound work per rendered frame
       // instead of letting a late frame request still more catch-up work.
       const requested = Math.round(dt * speed / PDT), budgeted = Math.max(1, Math.floor(11 / physicsCostPerStep));

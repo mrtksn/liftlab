@@ -17,6 +17,7 @@
  * one (wifi,sta); a laptop joins it as any network. */
 #define _DEFAULT_SOURCE            /* (glibc: POSIX and BSD calls also under a strict -std; on a Mac all are there) */
 #include "radio_udp.h"
+#include "radio_session.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -42,18 +43,6 @@ typedef struct {
 
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 
-/* a random session number, not 0 (the other end tells our restarts by it) */
-static uint32_t random_session(void) {
-  uint32_t s = 0;
-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-  arc4random_buf(&s, sizeof s);
-#else
-  int fd = open("/dev/urandom", O_RDONLY);
-  if (fd >= 0) { if (read(fd, &s, sizeof s) != (ssize_t)sizeof s) s = 0; close(fd); }
-#endif
-  if (!s) { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); s = (uint32_t)t.tv_nsec ^ (uint32_t)t.tv_sec * 2654435761u ^ (uint32_t)getpid() << 16; }
-  return s ? s : 1;
-}
 
 static void addr_text(const struct sockaddr_in *a, char *out, int n) {
   char ip[INET_ADDRSTRLEN] = "?"; inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
@@ -103,6 +92,8 @@ static int udp_write(radio_io *R, const uint8_t *b, int n) {
   return n;
 }
 
+static uint32_t udp_peer_ses(radio_io *R) { return ((udp_ctx *)R->ctx)->P.known; }
+static void udp_hear(radio_io *R, int lq, int rssi) { plink_hear(&((udp_ctx *)R->ctx)->P, lq, rssi); }
 radio_io *radio_udp_open(int role, const char *peer_host, int port, const char *phrase, const char *name) {
   if (port <= 0 || port > 65535) { fprintf(stderr, "%s: no such port %d\n", name, port); return 0; }
   struct sockaddr_in peer; memset(&peer, 0, sizeof peer);
@@ -124,10 +115,11 @@ radio_io *radio_udp_open(int role, const char *peer_host, int port, const char *
   radio_io *R = calloc(1, sizeof *R); udp_ctx *C = calloc(1, sizeof *C);
   if (!R || !C) { free(R); free(C); close(fd); return 0; }
   plink_cfg cfg; plink_cfg_default(&cfg, role); plink_key(phrase ? phrase : "liftlab", &cfg.k0, &cfg.k1);
-  plink_init(&C->P, &cfg, random_session());
+  plink_init(&C->P, &cfg, radio_session());
   C->role = role; C->name = name; C->t_good = now_s(); C->t_bad_warned = -1e9;
   if (role == PLINK_GROUND) { C->peer = peer; C->have_peer = 1; }
   R->name = name; R->read = udp_read; R->write = udp_write; R->fd = fd; R->ctx = C;
+  R->peer = udp_peer_ses; R->hear = udp_hear;
   return R;
 }
 void radio_udp_close(radio_io *R) { if (!R) return; if (R->fd >= 0) close(R->fd); free(R->ctx); free(R); }

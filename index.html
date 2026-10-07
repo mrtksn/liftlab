@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=268fc26a55">
+<link rel="stylesheet" href="css/style.css?v=a73517910a">
 </head>
 <body>
 <div class="app">
@@ -59,6 +59,15 @@
           <button type="button" data-speed="0.5" aria-pressed="false" title="Half speed">0.5x</button>
           <button type="button" data-speed="1" aria-pressed="true" title="Real time">1x</button>
         </div>
+      </div>
+    </div>
+    <div class="hgroup" role="group" aria-labelledby="grpLive">
+      <span class="lbl" id="grpLive">Real drone</span>
+      <div class="hrow">
+        <button class="btn live-btn" id="liveBtn" type="button" aria-pressed="false" title="Fly the real drone from this page over Bluetooth LE (its ESP32-S3 or C3 set to radio=ble)">
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 5 7 6-3.5 3V2l3.5 3-7 6"/></svg>
+          <span class="live-lbl">Connect to drone</span>
+        </button>
       </div>
     </div>
   </header>
@@ -281,6 +290,32 @@
         <div class="liftoff-sub" id="liftoffSub"></div>
         <ol class="liftoff-steps" id="liftoffSteps"></ol>
       </div>
+      <div class="live-bar" id="liveBar" role="region" aria-label="The real drone" hidden>
+        <div class="live-head"><span class="live-dot" aria-hidden="true"></span><b>Live</b><span id="liveName"></span><span class="live-state" id="liveState" role="status"></span></div>
+        <div class="live-read" id="liveRead"></div>
+        <div class="live-alert" id="liveAlert" role="alert" hidden></div>
+        <div class="live-btns">
+          <button class="btn tog live-arm" type="button" id="liveArm" aria-pressed="false" title="The arm switch">Arm</button>
+          <button class="btn tog" type="button" id="liveFly" aria-pressed="false" title="The fly switch: take off, and land when off">Take off</button>
+          <button class="btn" type="button" id="liveHold" title="Hold where it is (Space)">Hold</button>
+          <button class="btn" type="button" id="liveHome" title="Fly home (H)">Home</button>
+          <button class="btn" type="button" id="liveStop" title="Leave the real drone: the simulation comes back">Disconnect</button>
+        </div>
+        <p class="live-note" id="liveNote"></p>
+      </div>
+      <dialog class="ask live-dlg" id="liveDlg" aria-labelledby="liveTitle">
+        <h2 id="liveTitle">Fly the real drone</h2>
+        <p>This page becomes the command module. Its program runs here and talks to the drone's ESP32-S3 or C3 over Bluetooth LE, set to <code>radio=ble</code>. The 3D view and the Ground tab show the drone's telemetry, and the simulation pauses while you're connected.</p>
+        <ul class="live-list">
+          <li>Binding phrase: <b id="livePhrase"></b> (the Ground tab's). The drone's <code>bind=</code> must be the same.</li>
+          <li id="liveMode"></li>
+          <li>Props off the first time. Arm and take off are switches on the bar over the view.</li>
+          <li>Keep this tab in front. A hidden tab slows to once a second, the channels stop, and the drone's failsafe takes over.</li>
+        </ul>
+        <p class="hint" id="liveNoBt" hidden>This browser has no Web Bluetooth here. Use Chrome or Edge on a computer or Android (not Safari, Firefox or iOS), with the page served over https or from localhost.</p>
+        <p class="hint" id="liveDlgMsg" role="status"></p>
+        <div class="ask-btns"><button class="btn" type="button" id="liveClose">Cancel</button><button class="btn primary" type="button" id="liveFind">Find the drone</button></div>
+      </dialog>
       <div class="crash" id="crash" role="alert" hidden>
         <b>Crashed</b>
         <span id="crashWhy"></span>
@@ -322,6 +357,7 @@
     </section>
 
     <aside class="panel" id="telemetry" aria-label="Simulation readouts">
+      <p class="live-paused" id="livePaused" hidden>The simulation is paused while you fly the real drone: these are the simulator's. The real drone's telemetry is in the Ground tab and the bar over the view.</p>
       <section class="status" id="statusSec" aria-label="Status">
         <div class="tiles">
           <div class="tile" id="tileAir" role="status"><svg class="ti" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 4 4.5v5c0 4 2.6 6.6 6 8 3.4-1.4 6-4 6-8v-5z"/><path d="m7.2 10 2 2 3.8-4"/></svg><span class="tk">Airframe</span><b class="tv" id="airT">…</b><span class="ts" id="envSpace"></span></div>
@@ -444,9 +480,9 @@
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=c8cd75bea1"></script>
 <script src="js/view3d.js?v=256588fbe1"></script>
-<script src="js/pilot.js?v=0b46445ed6"></script>
+<script src="js/pilot.js?v=d9a66347ce"></script>
 <script src="js/computers-ui.js?v=fdab19c540"></script>
-<script src="js/ui.js?v=fce7379256"></script>
+<script src="js/ui.js?v=0c027b4e3e"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
 <script src="js/flight-physics-ui.js?v=83817933aa"></script>
@@ -454,25 +490,26 @@
 <script src="js/designs.js?v=f77fdcfab8"></script>
 <script src="js/share.js?v=edbc08e171"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
-<script src="js/hardware.js?v=d54f57726a"></script>
+<script src="js/hardware.js?v=271889915e"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
-<script src="js/hardware-ui.js?v=374f7643fa"></script>
-<script src="js/install-ui.js?v=872191cef9"></script>
+<script src="js/hardware-ui.js?v=6f09c7650e"></script>
+<script src="js/install-ui.js?v=b63297106b"></script>
 <script src="js/editor.js?v=d532ccb7bc"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
-<script src="js/board-wasm.js?v=7a62419e07"></script>
+<script src="js/board-wasm.js?v=3a752bd79a"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
-<script src="js/link.js?v=23280f475e"></script>
+<script src="js/link.js?v=b295de3ea4"></script>
 <script src="js/link-elrs.js?v=d0e32ae52f"></script>
 <script src="js/link-packet.js?v=46dfd89eed"></script>
 <script src="js/link-nrf24.js?v=963a738f55"></script>
-<script src="js/link-serial.js?v=053e754655"></script>
-<script src="js/boards.js?v=60ca0b9e2d"></script>
+<script src="js/link-serial.js?v=43560834db"></script>
+<script src="js/boards.js?v=f6c7c8b218"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
-<script src="js/gs-ui.js?v=2175f29049"></script>
-<script src="js/agent.js?v=f469f23ce8"></script>
+<script src="js/live.js?v=3ef1c4007f"></script>
+<script src="js/gs-ui.js?v=b8a3312c93"></script>
+<script src="js/agent.js?v=2a04e7b264"></script>
 <script src="js/agent-tools.js?v=607908ba36"></script>
-<script src="js/agent-tools-more.js?v=12586e76c1"></script>
+<script src="js/agent-tools-more.js?v=2a71220340"></script>
 <script src="js/agent-hardware.js?v=3dfb149f42"></script>
 <script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>

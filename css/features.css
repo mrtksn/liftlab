@@ -885,3 +885,31 @@ html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100
 .hw-wire-list dd{margin:0;display:flex;flex-direction:column;gap:var(--space-4)}
 .hw-wire-list small{color:var(--muted);font-size:var(--text-xs)}
 .hw-overview{margin-top:0}
+/* The real drone, live over Bluetooth (live.js): the top bar's button, the bar over the view, its dialog. */
+.live-btn svg{width:14px;height:14px;margin-right:var(--space-3);vertical-align:-2px}
+.live-btn.on{border-color:var(--good);background:var(--good-soft);color:var(--ink)}
+.view.live .hud-tl,.view.live .crash,.view.live #pokeBtn{display:none}
+.live-bar{position:absolute;top:10px;left:12px;display:flex;flex-direction:column;gap:var(--space-4);width:min(400px,calc(100% - 226px));min-width:250px;padding:var(--space-8) var(--space-10);border:1px solid var(--good);border-radius:var(--radius-card);background:color-mix(in srgb,var(--panel) 92%,transparent);font-size:var(--text-sm);color:var(--ink-2);z-index:3}
+.live-head{display:flex;align-items:center;gap:var(--space-5);flex-wrap:wrap}
+.live-head b{font-family:var(--f-display);font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--good)}
+.live-dot{width:9px;height:9px;border-radius:50%;background:var(--good);animation:livePulse 1.6s ease-in-out infinite}
+@keyframes livePulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.live-dot{animation:none}}
+.live-state{margin-left:auto;font-family:var(--f-mono);font-size:var(--text-xs)}
+.live-state[data-tone="good"]{color:var(--good)}.live-state[data-tone="warn"]{color:var(--warn)}.live-state[data-tone="bad"]{color:var(--bad)}
+.live-read{font-family:var(--f-mono);font-size:var(--text-xs);color:var(--ink)}
+.live-alert{padding:var(--space-3) var(--space-6);border-radius:var(--radius-control);font-weight:600}
+.live-alert[data-tone="bad"]{background:var(--bad-soft);color:var(--bad)}.live-alert[data-tone="warn"]{background:var(--warn-soft);color:var(--warn)}
+.live-btns{display:flex;flex-wrap:wrap;gap:var(--space-4)}
+.live-btns .btn{padding:var(--space-3) var(--space-9);font-size:var(--text-sm)}
+.live-btns .live-arm[aria-pressed="true"]{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
+.live-note{margin:0;font-size:var(--text-xs);color:var(--muted)}
+.live-note.flash{animation:liveFlash .6s}
+@keyframes liveFlash{30%{color:var(--bad)}}
+.live-dlg .live-list{margin:var(--space-6) 0;padding-left:var(--space-16);display:flex;flex-direction:column;gap:var(--space-4)}
+#liveDlgMsg[data-tone="bad"]{color:var(--bad)}
+.live-paused{margin:0 0 var(--space-6);padding:var(--space-5) var(--space-8);border:1px solid var(--good);border-radius:var(--radius-control);background:var(--good-soft);font-size:var(--text-sm);color:var(--ink)}
+.live-on #telemetry>:not(.live-paused){opacity:.45}
+@media (max-width:700px){.live-bar{width:calc(100% - 24px);min-width:0;top:84px}}
+html.phone .bar:not(.open) .live-btn:not(.on) .live-lbl{display:none}
+html.phone .bar:not(.open) .live-btn svg{margin-right:0}

@@ -78,12 +78,12 @@ Object.assign(AGENT_TOOLS, {
     } },
   get_radio: { desc: 'The radio and the command module: whether the drone has a radio, the link (kind: elrs ExpressLRS 2.4 GHz, espnow ESP-NOW ESP32 to ESP32, wifi Wi-Fi UDP) and its settings, the link statistics of the last 5 s, the telemetry the command module decoded, its alert, and its log.',
     params: obj({}),
-    run: () => JSON.parse(JSON.stringify({ has_radio: hasTask('tlm'), active: radioActive(), link_kind: radioCfg.kind, link_label: radioModel().label, settings: radioCfg, setting_lines: radioSettingLines(radioCfg),
+    run: () => JSON.parse(JSON.stringify({ has_radio: hasTask('tlm'), active: radioActive(), link_kind: radioCfg.kind, link_label: radioModel().label, settings: radioCfg, second_link: radioTwo() ? { ...radioCfg2, label: RADIO_LINKS[radioCfg2.kind].label } : 'none', setting_lines: radioSettingLines(radioCfg),
       wifi: pk.assoc && radioModel().packets ? pk.assoc.state : undefined, link: hasTask('tlm') ? linkStats(radio.t) : null, note: radioModel().roomNote(radioCfg) || undefined,
       ground: { alert: gs.alert, link: gs.link, telemetry: gs.v, frames: gs.frames, log: (gs.log || []).slice(-10).map(l => typeof l === 'string' ? l : (l.msg || l.text || JSON.stringify(l)).slice(0, 160)) } },
       (k, v) => (typeof v === 'number' ? +v.toFixed(2) : v))) },
-  set_radio: { desc: 'The radio\'s settings; both ends take them at once, in flight too. kind: elrs, espnow, ble, wifi, serial or nrf24 (another link: the drone sees a short gap; Wi-Fi then joins its network, 1–3 s). ExpressLRS: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet: 2…128), power [mW: 10, 25, 100, 250, 500, 1000]. ESP-NOW: channel (1–13), lr (long range, true/false). Wi-Fi: sta (true: the drone joins a network; false: it makes one, an access point), channel (1–13, the access point\'s). Serial line (a laser, fibre, infrared, a radio modem or a wire carrying a UART\'s bytes): baud (19200, 38400, 57600, 115200, 230400, 460800, 921600), half (true: one way at a time, as radio modems; 38400 and up), medium (the simulator\'s: 0 fibre or wire, 1 laser, 2 infrared, 3 radio modem), tether [m: 10, 25, 50, 100, 300] for fibre or wire. nRF24L01: kbps (250, 1000 or 2000: 250 reaches furthest). ESP-NOW, Wi-Fi, serial and nRF24L01: bind (the binding phrase, the same at both ends, 1–31 characters). Any link: extra (extra path loss [dB]: distance, walls).',
-    params: obj({ kind: { type: 'string', enum: ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'] }, kbps: { type: 'integer' }, baud: { type: 'integer' }, half: { type: 'boolean' }, medium: { type: 'integer' }, tether: { type: 'number' }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' },
+  set_radio: { desc: 'The radio\'s settings; both ends take them at once, in flight too. kind: elrs, espnow, ble, wifi, serial or nrf24 (another link: the drone sees a short gap; Wi-Fi then joins its network, 1–3 s). ExpressLRS: rate (packets a second: 50, 150, 250, 500), ratio (telemetry every Nth packet: 2…128), power [mW: 10, 25, 100, 250, 500, 1000]. ESP-NOW: channel (1–13), lr (long range, true/false). Wi-Fi: sta (true: the drone joins a network; false: it makes one, an access point), channel (1–13, the access point\'s). Serial line (a laser, fibre, infrared, a radio modem or a wire carrying a UART\'s bytes): baud (19200, 38400, 57600, 115200, 230400, 460800, 921600), half (true: one way at a time, as radio modems; 38400 and up), dir (up or down: a line that goes one way only, for beside a second link; both as it was), medium (the simulator\'s: 0 fibre or wire, 1 laser, 2 infrared, 3 radio modem), tether [m: 10, 25, 50, 100, 300] for fibre or wire. nRF24L01: kbps (250, 1000 or 2000: 250 reaches furthest). ESP-NOW, Wi-Fi, serial and nRF24L01: bind (the binding phrase, the same at both ends, 1–31 characters). Any link: extra (extra path loss [dB]: distance, walls).',
+    params: obj({ kind: { type: 'string', enum: ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'] }, kbps: { type: 'integer' }, baud: { type: 'integer' }, half: { type: 'boolean' }, dir: { type: 'string', enum: ['both', 'up', 'down'] }, medium: { type: 'integer' }, tether: { type: 'number' }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' },
       channel: { type: 'integer' }, lr: { type: 'boolean' }, sta: { type: 'boolean' }, bind: { type: 'string' } }),
     run: a => {
       const bad = [], ok = (k, test, why) => { if (a[k] != null && !test(a[k])) bad.push(`${k}: ${why}`); };
@@ -96,10 +96,23 @@ Object.assign(AGENT_TOOLS, {
       if (bad.length) throw new Error('Radio not changed: ' + bad.join('; '));
       for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'baud', 'medium', 'tether', 'kbps']) if (a[k] != null) radioCfg[k] = +a[k];
       for (const k of ['lr', 'sta', 'half']) if (a[k] != null) radioCfg[k] = a[k] ? 1 : 0;
+      if (a.dir) radioCfg.half = a.dir === 'up' ? 2 : a.dir === 'down' ? 3 : radioCfg.half > 1 ? 0 : radioCfg.half;
       if (a.bind != null) radioCfg.bind = radioPhraseOk(a.bind);
       if (a.kind) radioCfg.kind = a.kind;
       save(); boardsRadioCfg(); if (typeof renderGs === 'function') renderGs(true);
       return { settings: radioCfg, setting_lines: radioSettingLines(radioCfg), note: radioModel().roomNote(radioCfg) || 'applied at both ends now' };
+    } },
+  set_second_link: { desc: 'A second link at once beside the first (runner/fc/lmux.h): both carry everything; the drone takes the channels from the first while it has them and the second fills in; commands and messages arrive once. kind: none, or a kind other than the first\'s (elrs, espnow, ble, wifi, serial, nrf24), with its settings as set_radio\'s (rate, ratio, power, channel, lr, sta, baud, half, dir, medium, tether, kbps, extra). The binding phrase is the first link\'s. Applied at both ends now.',
+    params: obj({ kind: { type: 'string', enum: ['none', 'elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'] }, kbps: { type: 'integer' }, baud: { type: 'integer' }, half: { type: 'boolean' }, dir: { type: 'string', enum: ['both', 'up', 'down'] }, medium: { type: 'integer' }, tether: { type: 'number' }, rate: { type: 'number' }, ratio: { type: 'number' }, power: { type: 'number' }, extra: { type: 'number' }, channel: { type: 'integer' }, lr: { type: 'boolean' }, sta: { type: 'boolean' } }),
+    run: a => {
+      if (a.kind && a.kind !== 'none' && (!RADIO_LINKS[a.kind] || a.kind === radioCfg.kind)) throw new Error('Second link not changed: kind: none, or a kind other than the first link\'s (' + radioCfg.kind + ')');
+      if (a.baud != null && !SL_BAUDS.includes(+a.baud)) throw new Error('Second link not changed: baud: ' + SL_BAUDS.join(', '));
+      for (const k of ['rate', 'ratio', 'power', 'extra', 'channel', 'baud', 'medium', 'tether', 'kbps']) if (a[k] != null && isFinite(a[k])) radioCfg2[k] = +a[k];
+      for (const k of ['lr', 'sta', 'half']) if (a[k] != null) radioCfg2[k] = a[k] ? 1 : 0;
+      if (a.dir) radioCfg2.half = a.dir === 'up' ? 2 : a.dir === 'down' ? 3 : radioCfg2.half > 1 ? 0 : radioCfg2.half;
+      if (a.kind) radioCfg2.kind = a.kind === 'none' ? '' : a.kind;
+      save(); boardsRadioCfg2(); if (typeof renderGs === 'function') { if (typeof GS_UI !== 'undefined') GS_UI.kindShown = null; renderGs(true); }
+      return { second: radioTwo() ? { ...radioCfg2 } : 'none', setting_lines: radioSettingLines(radioCfg) };
     } },
   get_events: { desc: 'Everything logged lately, newest first: the boards, the supervisor, the cargo (up to 40 lines).', params: obj({ n: { type: 'integer' } }), run: a => agentEvents(clamp(num(a.n, 20), 1, 40)) },
 

@@ -129,6 +129,11 @@ function buildGs() {
 // focus stays on the control it was on).
 function buildGsRadio() {
   const box = GS_UI.radioCfg; if (!box) return;
+  if (typeof liveOn === 'function' && liveOn()) {                    // the real drone: its link is set on it
+    box.textContent = ''; box.append(el('p', { class: 'hint', text: `This page talks Bluetooth LE to the drone, with the binding phrase "${radioCfg.bind}" (the drone set to radio=ble and the same bind=). The simulator's link settings come back when you disconnect.` }));
+    if (GS_UI.radioSmall) GS_UI.radioSmall.textContent = radioModel().label;
+    return;
+  }
   keepFocus(() => {
     box.textContent = '';
     const M = radioModel(), apply = () => { save(); boardsRadioCfg(); };
@@ -158,8 +163,21 @@ function buildGsRadio() {
       own.append(UI.field({ label: 'Binding phrase', class: 'gs-sel gs-bind', hint: 'The same at both ends: it signs the packets.' }, inp, say));
     }
     box.append(own);
+    // a second link at once (runner/fc/lmux.h): any other kind; both carry, the channels by the first while it has them
+    const two = el('div', { class: 'gs-row' }), M2 = RADIO_LINKS[radioCfg2.kind], apply2 = () => { save(); boardsRadioCfg2(); };
+    const pick2 = UI.choice({ id: 'gs-kind2', label: 'Second link', commit: true, value: radioTwo() ? radioCfg2.kind : '',
+      options: [['', 'None'], ...RADIO_KINDS.filter(k => RADIO_LINKS[k] && k !== radioCfg.kind).map(k => [k, RADIO_LINKS[k].label])],
+      onChange: v => { if (v === radioCfg2.kind) return; radioCfg2.kind = v; apply2(); buildGsRadio(); renderGs(true); } });
+    two.append(UI.field({ label: 'Second link', class: 'gs-sel gs-linkpick', hint: 'Both carry everything: the drone takes the channels from the first while it has them, the second fills in; commands and messages arrive once. A line that goes one way only belongs here.' }, pick2));
+    if (radioTwo()) for (const s2 of M2.settings) {
+      if (s2.show && !s2.show(radioCfg2)) continue;
+      const c = UI.choice({ id: 'gs2-' + s2.key, label: s2.label, options: s2.options, value: radioCfg2[s2.key],
+        onChange: v => { radioCfg2[s2.key] = +v; apply2(); if (M2.settings.some(x => x.show)) buildGsRadio(); } });
+      two.append(UI.field({ label: s2.label, class: 'gs-sel' }, c));
+    }
+    box.append(two);
   });
-  if (GS_UI.radioSmall) GS_UI.radioSmall.textContent = radioModel().label;
+  if (GS_UI.radioSmall) GS_UI.radioSmall.textContent = radioModel().label + (radioTwo() ? ' + ' + RADIO_LINKS[radioCfg2.kind].label : '');
 }
 // What the link log shows: by the filters, after the last Clear.
 const LOG_GROUP = { stick: 'stick', switch: 'stick', cmd: 'cmd', msg: 'msg', mode: 'msg', link: 'link', drop: 'link' };
@@ -208,7 +226,7 @@ function renderGs(force) {
   const gk = computers().ground, gname = `${gk.name === 'Command module' ? '' : gk.name + ', '}${BOARD_KINDS[gk.kind].label}`;
   setText($('#gsRadioNote'), has ? `The receiver is on ${boardOf('tlm').name}. Its channels fly the drone${hasTask('nav') ? ' (the sticks move its target; arm, take off, hold and home are switches)' : ' (angle mode)'}; everything below came down the link.`
     : 'No board runs the Telemetry & radio task (Computers tab): the drone has no radio, so nothing comes down and the simulator\'s pilot reaches the boards directly.');
-  setText($('#gsCmdNote'), !has ? '' : !brt.gnd ? (brt.err ? `Not running: ${brt.err}` : 'Starting…') : brt.gndErr ? brt.gndErr : `Your keys and the simulator's pilot are the buttons of the command module (${gname}): it shapes them (stickInput${gs.shaped === false ? ', not answering: the raw sticks go up' : ''}), sends the channels and commands to the transmitter module, decodes what comes back and warns (groundAlerts).`);
+  setText($('#gsCmdNote'), typeof liveOn === 'function' && liveOn() ? `The real drone: this page is the command module (its program here, over Bluetooth LE to ${live.name}). Your keys, the pads, a gamepad and the bar's switches are its buttons; everything below came from the drone.` : !has ? '' : !brt.gnd ? (brt.err ? `Not running: ${brt.err}` : 'Starting…') : brt.gndErr ? brt.gndErr : `Your keys and the simulator's pilot are the buttons of the command module (${gname}): it shapes them (stickInput${gs.shaped === false ? ', not answering: the raw sticks go up' : ''}), sends the channels and commands to the transmitter module, decodes what comes back and warns (groundAlerts).`);
   if (has && gs.alert) {
     const a = gs.alert, cap = s => s.charAt(0).toUpperCase() + s.slice(1);
     if (a.level) W.alert.set(cap(a.text), t, a.level >= 2 ? 'bad' : 'warn');

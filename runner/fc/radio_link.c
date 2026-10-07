@@ -4,7 +4,7 @@
 const char *const rlink_names[RLINK_KINDS] = { "elrs", "espnow", "wifi", "serial", "nrf24", "ble" };
 const char *const rlink_labels[RLINK_KINDS] = { "ExpressLRS 2.4 GHz", "ESP-NOW (ESP32 to ESP32)", "Wi-Fi (UDP)", "Serial line (laser, fibre, radio modem)", "nRF24L01 2.4 GHz", "Bluetooth LE (ESP32 to ESP32)" };
 
-void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; L->baud = 115200; L->half = 0; L->kbps = 1000; }
+void rlink_default(rlink_cfg *L) { L->kind = RLINK_ELRS; L->rate_hz = 250; L->ratio = 4; L->channel = 1; L->lr = 0; L->sta = 0; L->baud = 115200; L->half = 0; L->kbps = 1000; L->dir = RLINK_BOTH; }
 
 static int say(char *err, int en, const char *s) { int k = 0; if (en > 0) { while (s[k] && k < en - 1) { err[k] = s[k]; k++; } err[k] = 0; } return -1; }
 static int same(const char *a, int n, const char *b) { int k = 0; while (k < n && b[k] && a[k] == b[k]) k++; return k == n && !b[k]; }
@@ -46,12 +46,13 @@ int rlink_parse(rlink_cfg *L, const char *s, char *err, int en) {
   if (kind == RLINK_BLE && (*v || rlink_make(L, kind, 0, 0))) return say(err, en, "ble: no settings (both ends ESP32s with the same binding phrase)");
   if (kind == RLINK_NRF24 && (ints(v, x, 2) != 1 || rlink_make(L, kind, x[0], 0)))   /* nrf24,KBPS */
     return say(err, en, "nrf24,rate: the air data rate in kbit/s, 250, 1000 or 2000 (250 reaches furthest), the same at both ends");
-  if (kind == RLINK_SERIAL) {                                        /* serial,BAUD[,half] */
+  if (kind == RLINK_SERIAL) {                                        /* serial,BAUD[,half|,up|,down] */
     int k2 = 0; while (v[k2] && v[k2] != ',') k2++;
     char num[12]; int m = 0; while (m < k2 && m < 11) { num[m] = v[m]; m++; } num[m] = 0;
-    int half = v[k2] == ',' ? (same(v + k2 + 1, 4, "half") && !v[k2 + 5] ? 1 : -1) : 0;
-    if (k2 == 0 || k2 > 11 || ints(num, x, 1) != 1 || half < 0) return say(err, en, "serial,baud[,half]: the line's speed, the same at both ends (115200, say), and half for a line that goes one way at a time (most radio modems)");
-    if (rlink_make(L, kind, x[0], half)) return say(err, en, half ? "serial,baud,half: 38400 to 4000000 baud (slower can't carry the channels often enough, answers and all)" : "serial,baud: 19200 to 4000000 baud (slower can't carry the channels often enough)");
+    const char *o = v + k2 + 1;
+    int opt = v[k2] != ',' ? 0 : same(o, 4, "half") && !o[4] ? 1 : same(o, 2, "up") && !o[2] ? 2 : same(o, 4, "down") && !o[4] ? 3 : -1;
+    if (k2 == 0 || k2 > 11 || ints(num, x, 1) != 1 || opt < 0) return say(err, en, "serial,baud[,half|up|down]: the line's speed, the same at both ends (115200, say); half for a line that goes one way at a time (most radio modems); up or down for one that goes one way only");
+    if (rlink_make(L, kind, x[0], opt)) return say(err, en, opt == 1 ? "serial,baud,half: 38400 to 4000000 baud (slower can't carry the channels often enough, answers and all)" : "serial,baud: 19200 to 4000000 baud (slower can't carry the channels often enough)");
   }
   return 0;
 }
@@ -62,9 +63,28 @@ int rlink_make(rlink_cfg *L, int kind, int a, int b) {
   else if (kind == RLINK_WIFI && (a == 0 || a == 1) && b >= 1 && b <= 13) { c.sta = a; c.channel = b; }
   else if (kind == RLINK_BLE && a == 0 && b == 0) {}
   else if (kind == RLINK_NRF24 && (a == 250 || a == 1000 || a == 2000) && b == 0) c.kbps = a;
-  else if (kind == RLINK_SERIAL && (b == 0 || b == 1) && a >= (b ? RLINK_BAUD_HALF_MIN : RLINK_BAUD_MIN) && a <= RLINK_BAUD_MAX) { c.baud = a; c.half = b; }
+  else if (kind == RLINK_SERIAL && b >= 0 && b <= 3 && a >= (b == 1 ? RLINK_BAUD_HALF_MIN : RLINK_BAUD_MIN) && a <= RLINK_BAUD_MAX) { c.baud = a; c.half = b == 1; c.dir = b == 2 ? RLINK_UP : b == 3 ? RLINK_DOWN : RLINK_BOTH; }
   else return -1;
   *L = c; return 0;
+}
+int rlink_pair_ok(const rlink_cfg *a, const rlink_cfg *b, int esp32, char *err, int en) {
+  int ka = a->kind, kb = b->kind;
+  int wifi_a = ka == RLINK_ESPNOW || ka == RLINK_WIFI, wifi_b = kb == RLINK_ESPNOW || kb == RLINK_WIFI;
+  int uart_a = ka == RLINK_ELRS || ka == RLINK_SERIAL, uart_b = kb == RLINK_ELRS || kb == RLINK_SERIAL;
+  if (ka == kb && !(ka == RLINK_SERIAL && !esp32)) return say(err, en, "the two links must be different kinds (two serial lines only on a Pi or a computer, on two ports)");
+  if (wifi_a && wifi_b) return say(err, en, "ESP-NOW and Wi-Fi share the ESP32's one 2.4 GHz radio: pick one of them");
+  if (esp32 && uart_a && uart_b) return say(err, en, "ExpressLRS and a serial line both need the radio's UART (crsf= or tx=): only one of them on an ESP32");
+  if (esp32 && ((ka == RLINK_BLE && wifi_b) || (kb == RLINK_BLE && wifi_a))) return say(err, en, "Bluetooth LE beside ESP-NOW or Wi-Fi: not enough memory on the ESP32: pick another pair");
+  if (!rlink_up(a) && !rlink_up(b)) return say(err, en, "neither link carries the channels up: one of them must");
+  return 0;
+}
+void rlink_args(const rlink_cfg *L, int *a, int *b) {
+  *a = *b = 0;
+  if (L->kind == RLINK_ELRS) { *a = L->rate_hz; *b = L->ratio; }
+  else if (L->kind == RLINK_ESPNOW) { *a = L->channel; *b = L->lr; }
+  else if (L->kind == RLINK_WIFI) { *a = L->sta; *b = L->channel; }
+  else if (L->kind == RLINK_NRF24) *a = L->kbps;
+  else if (L->kind == RLINK_SERIAL) { *a = L->baud; *b = L->half ? 1 : L->dir == RLINK_UP ? 2 : L->dir == RLINK_DOWN ? 3 : 0; }
 }
 static int put(char *o, int n, int k, const char *s) { while (*s) { if (k < n - 1) o[k] = *s; k++; s++; } if (n > 0) o[k < n ? k : n - 1] = 0; return k; }
 static int put_int(char *o, int n, int k, int x) { char b[12]; int i = 11; b[i] = 0; int neg = x < 0; unsigned u = neg ? 0u - (unsigned)x : (unsigned)x; do { b[--i] = (char)('0' + u % 10); u /= 10; } while (u); if (neg) b[--i] = '-'; return put(o, n, k, b + i); }
@@ -73,7 +93,7 @@ int rlink_describe(const rlink_cfg *L, char *out, int n) {
   if (L->kind == RLINK_WIFI) { if (L->sta) return put(out, n, 0, "wifi,sta"); int k = put(out, n, 0, "wifi,ap,"); return put_int(out, n, k, L->channel); }
   if (L->kind == RLINK_BLE) return put(out, n, 0, "ble");
   if (L->kind == RLINK_NRF24) { int k = put(out, n, 0, "nrf24,"); return put_int(out, n, k, L->kbps); }
-  if (L->kind == RLINK_SERIAL) { int k = put(out, n, 0, "serial,"); k = put_int(out, n, k, L->baud); return L->half ? put(out, n, k, ",half") : k; }
+  if (L->kind == RLINK_SERIAL) { int k = put(out, n, 0, "serial,"); k = put_int(out, n, k, L->baud); return L->half ? put(out, n, k, ",half") : L->dir == RLINK_UP ? put(out, n, k, ",up") : L->dir == RLINK_DOWN ? put(out, n, k, ",down") : k; }
   if (L->kind != RLINK_ELRS) return put(out, n, 0, "?");
   int k = put(out, n, 0, "elrs,"); k = put_int(out, n, k, L->rate_hz); k = put(out, n, k, ","); return put_int(out, n, k, L->ratio);
 }
@@ -121,6 +141,7 @@ void rlink_sizing(const rlink_cfg *L, int *mtu_down, int *mtu_up, float *up_hz, 
 /* ExpressLRS: each telemetry packet carries 5 bytes of a frame (the stubborn sender's chunks); one packet in `ratio`
  * is telemetry. */
 float rlink_budget(const rlink_cfg *L) {
+  if (!rlink_down(L)) return 0;                                     /* (a link that goes up only carries none) */
   if (L->kind == RLINK_ELRS) return L->ratio > 0 ? (float)L->rate_hz / L->ratio * 5 * 0.9f : 0;
   /* the packet links: up to 100 packets a second down of up to 226 bytes of frames (plink.h), so ~22 KB/s; the
    * telemetry gets a share that leaves room for messages and repeats on a poor link (ESP-NOW's long-range mode, at

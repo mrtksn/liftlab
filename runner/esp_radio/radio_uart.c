@@ -40,7 +40,7 @@ radio_io *radio_uart_start(const rlink_cfg *L, int role, const char *bind, int u
   if (tx_pin < 0 || rx_pin < 0 || tx_pin == rx_pin) { if (say) say("serial line: it needs two pins, one to the line's input and one from its output"); return 0; }
   if (!KP && !(KP = calloc(1, sizeof *KP))) { if (say) say("serial line: no memory"); return 0; }
   pk_init(KP, L->half ? "serial line, one way at a time" : "serial line", role, bind, say);
-  plink_cfg C = KP->L.C; plink_cfg_link(&C, L); KP->L.C = C;           /* (the sizes and rates for its speed) */
+  plink_cfg C = KP->L.C; plink_cfg_link(&C, L); plink_init(&KP->L, &C, KP->L.session);   /* (the sizes and rates for its speed; one way or both) */
   uart_config_t uc = { .baud_rate = L->baud, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };
   /* a TX buffer of about two of the biggest packets: a packet is either on its way or not sent (ua_send) */
   esp_err_t e = uart_driver_install(uart, 1024, 2 * PFRAME_WIRE(PLINK_MTU) + 16, 0, NULL, 0);

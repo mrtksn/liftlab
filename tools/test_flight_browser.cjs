@@ -93,6 +93,12 @@ try{
       assert(radio.downFrames>0 && radio.txChT>0,kind+' has no bidirectional traffic');
       passed.push(kind+' packet radio with flight physics');
     }
+    // Two links at once: ESP-NOW and a laser that goes up only; ESP-NOW gone, the laser keeps the drone flying (runner/fc/lmux.c).
+    Object.assign(radioCfg,{kind:'espnow',bind:'flight-regression',extra:0,half:0});Object.assign(radioCfg2,{kind:'serial',baud:57600,half:2,medium:1,extra:0});
+    await settle('quadx',8);assert(radioConnected() && radio.lqUp>90 && !S.crashed && brt.fcState===1,'two links failed to fly');
+    radioCfg.extra=200;for(let i=0;i<3/PDT;i++){if(i%20===0)pilotStep(.01);physStep();}
+    assert(!S.crashed && brt.fcState===1 && radioEnds().drone.link_followed(brt.t)===1 && radio.lqUp<10,'the second link did not take over');
+    radioCfg.extra=0;radioCfg2.kind='';passed.push('two links: ESP-NOW and an up-only laser, failover');
     radioCfg.kind='elrs';radioCfg.bind='liftlab';
     // Persist an explicit profile, then verify it again after the storage reload.
     await settle('quadx');c=actuators()[0];flightFixedMotor(c,'brushless');c.propPhysics={radius:c.prop,rows:[[6000,1,.01],[12000,4,.04]]};envr.pressure=80000;envr.sensorEffects=true;recomputeProps();save();

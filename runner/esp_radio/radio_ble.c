@@ -29,6 +29,10 @@
 static const ble_uuid128_t SVC = BLE_UUID128_INIT(0x62, 0x6c, 0x74, 0x66, 0x69, 0x6c, 0x7e, 0x9a, 0x8b, 0x4e, 0x3d, 0x6b, 0x01, 0x00, 0x1f, 0x6c);
 static const ble_uuid128_t CHR_UP = BLE_UUID128_INIT(0x62, 0x6c, 0x74, 0x66, 0x69, 0x6c, 0x7e, 0x9a, 0x8b, 0x4e, 0x3d, 0x6b, 0x02, 0x00, 0x1f, 0x6c);
 static const ble_uuid128_t CHR_DOWN = BLE_UUID128_INIT(0x62, 0x6c, 0x74, 0x66, 0x69, 0x6c, 0x7e, 0x9a, 0x8b, 0x4e, 0x3d, 0x6b, 0x03, 0x00, 0x1f, 0x6c);
+/* (and one to read: the connection's MTU now and this service's version, for a central that can't ask its own
+ * Bluetooth stack, as a web page can't: js/live.js) */
+static const ble_uuid128_t CHR_INFO = BLE_UUID128_INIT(0x62, 0x6c, 0x74, 0x66, 0x69, 0x6c, 0x7e, 0x9a, 0x8b, 0x4e, 0x3d, 0x6b, 0x04, 0x00, 0x1f, 0x6c);
+#define SVC_VERSION 1
 #define MFG_ID 0xFFFF            /* (the "no company" ID: the mark is ours) */
 
 typedef struct { uint8_t n; int8_t rssi; uint8_t p[PLINK_MTU]; } rx_pkt;
@@ -52,8 +56,12 @@ static void use_mtu(uint16_t mtu) { int m = mtu - 3; if (m > PLINK_MTU) m = PLIN
 
 /* ── the drone: a peripheral ── */
 static int chr_access(uint16_t c, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
-  (void)c; (void)attr; (void)arg;
+  (void)attr; (void)arg;
   if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) got_mbuf(ctxt->om);
+  else if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {               /* the info: the MTU (little-endian), the version */
+    uint16_t m = ble_att_mtu(c); uint8_t v[3] = { (uint8_t)(m & 0xFF), (uint8_t)(m >> 8), SVC_VERSION };
+    return os_mbuf_append(ctxt->om, v, sizeof v) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+  }
   return 0;
 }
 static uint16_t down_val;
@@ -61,6 +69,7 @@ static const struct ble_gatt_svc_def svcs[] = {
   { .type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &SVC.u, .characteristics = (struct ble_gatt_chr_def[]) {
       { .uuid = &CHR_UP.u, .access_cb = chr_access, .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE },
       { .uuid = &CHR_DOWN.u, .access_cb = chr_access, .val_handle = &down_val, .flags = BLE_GATT_CHR_F_NOTIFY },
+      { .uuid = &CHR_INFO.u, .access_cb = chr_access, .flags = BLE_GATT_CHR_F_READ },
       { 0 } } },
   { 0 } };
 static int gap_event(struct ble_gap_event *ev, void *arg);
@@ -117,7 +126,7 @@ static int on_svc(uint16_t c, const struct ble_gatt_error *e, const struct ble_g
 }
 static int on_mtu(uint16_t c, const struct ble_gatt_error *e, uint16_t mtu, void *arg) {
   (void)arg; if (e->status == 0) use_mtu(mtu);
-  ble_gattc_disc_svc_by_uuid(c, &SVC.u, on_svc, NULL);
+  if (role == PLINK_GROUND) ble_gattc_disc_svc_by_uuid(c, &SVC.u, on_svc, NULL);
   return 0;
 }
 
@@ -135,8 +144,15 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
     case BLE_GAP_EVENT_CONNECT:
       if (ev->connect.status) { start(); return 0; }
       conn = ev->connect.conn_handle; h_up = h_down = 0; rssi_now = 0;
-      if (role == PLINK_GROUND) ble_gattc_exchange_mtu(conn, on_mtu, NULL);
-      else pk_say(KP, "Bluetooth LE: the command module connected");
+      ble_gattc_exchange_mtu(conn, on_mtu, NULL);                     /* (the drone asks too: a phone's or a computer's
+                                                                          stack may not, and 23 bytes carry no packet) */
+      if (role == PLINK_DRONE) {                                      /* and asks for a quick connection, as the command
+                                                                          module's: a computer's may be 30–50 ms */
+        struct ble_gap_upd_params up; memset(&up, 0, sizeof up);
+        up.itvl_min = 6; up.itvl_max = 12; up.latency = 0; up.supervision_timeout = 100;
+        ble_gap_update_params(conn, &up);
+        pk_say(KP, "Bluetooth LE: connected (%s)", "the command module, or a browser");
+      }
       return 0;
     case BLE_GAP_EVENT_DISCONNECT:
       conn = BLE_HS_CONN_HANDLE_NONE; ready = 0;

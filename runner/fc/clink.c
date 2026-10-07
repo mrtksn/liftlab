@@ -177,13 +177,14 @@ int clink_from_air(clink *L, const uint8_t *p, int n, int rssi, double t) {
       new_pair(L, own, seq, t);
     } else if (!take_seq(L, seq, t)) return 0;
     L->knows_me = heard == L->session;                         /* (another of ours, or none: they don't know this start of ours) */
+    if (L->knows_me) L->known = L->peer;
     L->N.hellos++;
   } else {
     if (!L->peer || n < HDR + CLINK_TAG) { L->N.bad++; return 0; }
     uint32_t seq = extend(L, (uint16_t)(p[1] | p[2] << 8));
     if (tag != tag_of(L, p, n - CLINK_TAG, L->peer, L->session, seq, 0)) { L->N.bad++; return 0; }
     if (!take_seq(L, seq, t)) return 0;
-    L->knows_me = 1;
+    L->knows_me = 1; L->known = L->peer;
     stream_ack(L, p[3], p[4]);
     if (p[5] <= 100) L->peer_lq = p[5];
     const uint8_t *b = p + HDR; int m = n - HDR - CLINK_TAG;
@@ -213,7 +214,7 @@ int clink_to_air(clink *L, double t, uint8_t *p, int cap) {
     int kind = K_ST;
     if (L->C.role == PLINK_GROUND && rc_fresh && !(stream_waiting(L, t) && L->st_turn)) kind = K_CH;
     p[0] = (uint8_t)(0x40 | kind << 2 | L->C.role); p[1] = (uint8_t)seq; p[2] = (uint8_t)(seq >> 8);
-    p[3] = (uint8_t)(L->rx.expect - 1); p[4] = early_bits(&L->rx); p[5] = (uint8_t)clink_lq(L, t); k = HDR;
+    p[3] = (uint8_t)(L->rx.expect - 1); p[4] = early_bits(&L->rx); { int q = clink_lq(L, t); p[5] = (uint8_t)(L->said_lq > q ? L->said_lq : q); } k = HDR;
     if (kind == K_CH) { copy(p + k, L->rc, RC_BYTES); k += RC_BYTES; L->st_turn = 1; }
     else {
       uint8_t num; const uint8_t *d; int m = stream_chunk(L, t, &num, &d);

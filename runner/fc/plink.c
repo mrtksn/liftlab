@@ -34,7 +34,7 @@ void plink_key(const char *phrase, uint64_t *k0, uint64_t *k1) {
 }
 
 void plink_cfg_default(plink_cfg *C, int role) {
-  C->role = role; C->mtu = PLINK_MTU; C->up_hz = 100; C->down_hz_min = 20; C->down_hz_max = 100; C->half = 0;
+  C->role = role; C->mtu = PLINK_MTU; C->up_hz = 100; C->down_hz_min = 20; C->down_hz_max = 100; C->half = 0; C->oneway = PLINK_DUPLEX; C->repeats = 3;
   plink_key("liftlab", &C->k0, &C->k1);
 }
 void plink_init(plink *L, const plink_cfg *C, uint32_t session) {
@@ -42,7 +42,14 @@ void plink_init(plink *L, const plink_cfg *C, uint32_t session) {
   L->C = *C; if (L->C.mtu > PLINK_MTU) L->C.mtu = PLINK_MTU;
   L->session = session ? session : 1;
   L->t_peer = L->t_fresh = L->t_sent = L->t_stats = L->t_up = L->t_rc = -1e9; L->peer_lq = L->peer_rssi = 0; L->peer_took = 255;
+  if (L->C.repeats < 1) L->C.repeats = 1;
+  if (L->C.oneway) L->C.half = 0;                                    /* (one way has no answers to wait for) */
 }
+void plink_tie(plink *L, uint32_t peer) {
+  L->tied = 1; L->allow = peer;
+  if (L->C.oneway == PLINK_SEND_ONLY) L->peer = peer;                /* (named in our packets) */
+}
+void plink_hear(plink *L, int lq, int rssi) { L->said_lq = lq < 0 ? 0 : lq > 100 ? 100 : lq; L->said_rssi = rssi; }
 
 /* ── what the stack writes ── */
 static int reliable(const uint8_t *f) { return f[2] == CRSF_EXT && f[1] >= 3 && (f[3] == CRSF_EXT_TEXT || f[3] == CRSF_EXT_CMD); }
@@ -85,9 +92,12 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
   if (n < PLINK_HDR + PLINK_TAG || n > PLINK_MTU || p[0] != MAGIC || (p[1] >> 4) != VERSION) { L->N.bad++; return 0; }
   uint64_t tag = 0; for (int k = 7; k >= 0; k--) tag = tag << 8 | p[n - PLINK_TAG + k];
   if (tag != plink_siphash(L->C.k0, L->C.k1, p, n - PLINK_TAG) || (int)(p[1] & 15) == L->C.role) { L->N.bad++; return 0; }
+  if (L->C.oneway == PLINK_SEND_ONLY) { L->N.bad++; return 0; }    /* (nothing comes this way) */
+  int listen = L->C.oneway == PLINK_RECV_ONLY;
   uint16_t seq = (uint16_t)get16(p + 2); uint32_t ses = get32(p + 4);
+  if (listen && L->tied && ses != L->allow) { L->N.stale_sessions++; return 0; }   /* one way beside a two-way link: its sender only */
   if (ses != L->peer) {                                              /* the other end started (again) */
-    if (L->peer && t - L->t_peer < 0.5) { L->N.stale_sessions++; return 0; }   /* (not while the one we have still talks: a replay) */
+    if (L->peer && t - L->t_peer < 0.5 && !(listen && L->tied)) { L->N.stale_sessions++; return 0; }   /* (not while the one we have still talks: a replay) */
     L->peer = ses; L->rx_any = 0; L->rx_next = 0;
     for (int i = 0; i < L->rq_n; i++) L->rq[i].num = (uint8_t)i;    /* it takes our reliable frames from 0 again */
     L->rq_next = (uint8_t)L->rq_n; L->peer_took = 255;
@@ -111,15 +121,15 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
    * taken in: its acknowledgement, what it hears of us, its frames. One that names none or another (the other end
    * hasn't heard us yet; or a recording of an older session played back: it can't name ours, the signature covers
    * it) is answered, so the other end learns our session, and goes no further. */
-  if (get32(p + 8) != L->session) { L->peer_lq = 0; L->peer_rssi = 0; return 1; }
-  L->t_fresh = t;
-  {
+  if (!listen && get32(p + 8) != L->session) { L->peer_lq = 0; L->peer_rssi = 0; return 1; }
+  L->t_fresh = t; L->known = L->peer;
+  if (!listen) {                                                     /* (one way: no acknowledgement in it) */
     uint8_t took = p[12];
     while (L->rq_n && (uint8_t)(took - L->rq[0].num) < 128) { for (int i = 1; i < L->rq_n; i++) L->rq[i - 1] = L->rq[i]; L->rq_n--; }
     L->peer_took = took;
-    if (p[13] <= 100) L->peer_lq = p[13];
-    L->peer_rssi = (int8_t)p[14];
   }
+  if (p[13] <= 100) L->peer_lq = p[13];                              /* (one way: what its program hears of ours, by its other link) */
+  L->peer_rssi = (int8_t)p[14];
   /* the records */
   int k = PLINK_HDR, end = n - PLINK_TAG, first = 1;
   while (k + 1 < end) {
@@ -145,6 +155,7 @@ int plink_from_air(plink *L, const uint8_t *p, int n, int rssi, double t) {
 int plink_to_air(plink *L, double t, uint8_t *p, int cap) {
   int mtu = L->C.mtu < cap ? L->C.mtu : cap; if (mtu < PLINK_HDR + PLINK_TAG + 8) return 0;
   double since = t - L->t_sent;
+  if (L->C.oneway == PLINK_RECV_ONLY) return 0;                     /* (this end only listens) */
   if (L->C.role == PLINK_GROUND) {                                   /* on a fixed beat: asked every 4 ms, a 10 ms beat stays 10 */
     double per = 1.0 / L->C.up_hz;
     if (t < L->t_up - 1e-6) return 0;
@@ -166,13 +177,22 @@ int plink_to_air(plink *L, double t, uint8_t *p, int cap) {
   p[0] = MAGIC; p[1] = (uint8_t)(VERSION << 4 | L->C.role); put16(p + 2, L->seq++); put32(p + 4, L->session);
   put32(p + 8, L->peer);                                             /* who we talk to: what follows is about them */
   p[12] = (uint8_t)(L->rx_next - 1);
-  p[13] = (uint8_t)plink_lq(L, t); p[14] = (uint8_t)(int8_t)L->rssi; p[15] = 0;
+  {                                                                  /* what we hear of them: this link's, or its program's over all its links if better */
+    int lq = L->C.oneway == PLINK_SEND_ONLY ? 0 : plink_lq(L, t), rssi = L->rssi;
+    if (L->said_lq > lq) { lq = L->said_lq; rssi = L->said_rssi; }
+    p[13] = (uint8_t)lq; p[14] = (uint8_t)(int8_t)rssi;
+  }
+  p[15] = 0;
   int k = PLINK_HDR, room = mtu - PLINK_TAG;
   if (L->rc_n && t - L->t_rc <= PLINK_RC_STALE && k + 1 + L->rc_n <= room) { p[k++] = REC_ONCE; copy(p + k, L->rc, L->rc_n); k += L->rc_n; }   /* the channels as they are now, first */
   for (int i = 0; i < L->rq_n; i++) {                                /* the reliable ones not yet taken, oldest first, as many as fit */
     int n = L->rq[i].n; if (k + 2 + n > room) break;
     p[k++] = REC_RELIABLE; p[k++] = L->rq[i].num; copy(p + k, L->rq[i].f, n); k += n;
     if (L->rq[i].tries++) L->N.resent++;
+  }
+  if (L->C.oneway == PLINK_SEND_ONLY) {                              /* one way: each reliable frame in `repeats` packets, then done */
+    int j = 0; for (int i = 0; i < L->rq_n; i++) if (L->rq[i].tries < L->C.repeats) L->rq[j++] = L->rq[i];
+    L->rq_n = j;
   }
   int u = 0;                                                         /* then the frames that go once, as many as fit */
   while (u < L->uq_n) { int n = L->uq[u + 1] + 2; if (k + 1 + n > room) break; p[k++] = REC_ONCE; copy(p + k, L->uq + u, n); k += n; u += n; }

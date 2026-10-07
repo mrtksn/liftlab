@@ -44,10 +44,44 @@ const RADIO_LINKS = {};
 // phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
 const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
 const RADIO_KINDS = ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'];
+// A second link at once (runner/fc/lmux.h: both carry; the channels by the first while it has them, the second fills in;
+// commands and messages once): its settings as radioCfg's, kind '' for none; the binding phrase is radioCfg's. Its
+// model steps with its own state: radioOn2 swaps it in (radioCfg, the model's own object, the parts of radio a model
+// keeps, the boards' second packet layer) and back.
+const radioCfg2 = { kind: '', rate: 250, ratio: 4, power: 100, extra: 0, channel: 6, lr: 0, sta: 0, baud: 57600, half: 0, medium: 1, tether: 50, kbps: 250 };
+const radioTwo = () => !!(radioCfg2.kind && RADIO_LINKS[radioCfg2.kind] && radioCfg2.kind !== radioCfg.kind && !(typeof liveOn === 'function' && liveOn()));
+const radioDirs = c => c.kind === 'serial' ? [+c.half === 3 ? 0 : 1, +c.half === 2 ? 0 : 1] : [1, 1];   // [carries up, carries down] (radio_link.h rlink_up, rlink_down)
+const RADIO_PARTS = ['rf', 'rfAt', 'lqUp', 'lqDown', 'dropRun', 'toBoard', 'toGround'];
+const radio2 = { pk: {}, elrs: {}, parts: {} };
+function swapObj(a, b) { const t = { ...a }; for (const k of Object.keys(a)) delete a[k]; Object.assign(a, b); for (const k of Object.keys(b)) delete b[k]; Object.assign(b, t); }
+function radioSwap2() {
+  const bind = radioCfg.bind; swapObj(radioCfg, radioCfg2); radioCfg.bind = bind;
+  if (typeof pk !== 'undefined') swapObj(pk, radio2.pk);
+  if (typeof elrs !== 'undefined') swapObj(elrs, radio2.elrs);
+  for (const k of RADIO_PARTS) { const v = radio[k]; radio[k] = radio2.parts[k]; radio2.parts[k] = v; }
+  radio.on2 = !radio.on2;
+}
+// fn with the second link's model in place (quiet: nothing it says goes in the log or the statistics: a frame's
+// bookkeeping that the first link's model has already logged).
+function radioOn2(fn, quiet) {
+  const E = radioEnds(), q = radio.quiet; radioSwap2(); radio.quiet = !!quiet;
+  for (const w of [E.gnd, E.drone]) if (w) w.plink_sel(1);
+  try { return fn(); } finally { for (const w of [E.gnd, E.drone]) if (w) w.plink_sel(0); radio.quiet = q; radioSwap2(); }
+}
+function radio2Reset() {
+  Object.assign(radio2, { pk: {}, elrs: {}, parts: { rf: null, rfAt: -1, lqUp: 0, lqDown: 0, dropRun: null, toBoard: [], toGround: [] } });
+  if (radioTwo()) radioOn2(() => radioModel().reset());
+}
+// The second link's settings changed (the Ground tab, the agent): both ends set up again with it.
+function boardsRadioCfg2() {
+  if (!brt.ready || (typeof liveOn === 'function' && liveOn())) return;
+  radio2Reset(); radioLinkSetup();
+  linkLog('↕', 'link', radioTwo() ? `a second link: ${RADIO_LINKS[radioCfg2.kind].label}` : 'one link again', 'both ends set up again', 'warn');
+}
 // A binding phrase as both ends take it (the boards' bind=: 1–31 printable characters, no spaces at the ends;
 // runner/esp_radio/radio_cfg.h), or null.
 function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
-const radioModel = () => RADIO_LINKS[radioCfg.kind] || RADIO_LINKS.elrs;
+const radioModel = () => (typeof liveModel === 'function' && liveModel()) || RADIO_LINKS[radioCfg.kind] || RADIO_LINKS.elrs;   // (connected to the real drone: live.js's)
 const radio = {};
 function radioReset() {
   Object.assign(radio, {
@@ -59,6 +93,7 @@ function radioReset() {
     stackIn: { gnd: crsfParser(), drone: crsfParser() }, setup: null,
   });
   radioModel().reset();
+  radio2Reset();
   gsReset();
 }
 const radioActive = () => typeof hasTask === 'function' && hasTask('tlm') && brt.ready;
@@ -86,10 +121,10 @@ function linkPath() {
 
 // Each 1 ms step: the link's packets due. Fills radio.toBoard with the bytes the receiver writes to the drone's UART,
 // radio.toGround with what the pilot's module hands the command module.
-function radioStep(dt, t, ends) { radioModel().step(dt, t, ends); }
+function radioStep(dt, t, ends) { radioModel().step(dt, t, ends); if (radioTwo()) radioOn2(() => radioModel().step(dt, t, ends)); }
 // What the drone's board wrote to its receiver: each whole frame gets a record (for its latency and the log), then
 // the link takes it.
-function radioFromDrone(bytes) { radio.fromDrone.feed(bytes, f => radioModel().fromDrone(f, linkNoteDown(f))); }
+function radioFromDrone(bytes) { radio.fromDrone.feed(bytes, f => { const id = linkNoteDown(f); radioModel().fromDrone(f, id); if (radioTwo()) radioOn2(() => radioModel().fromDrone(f, id), true); }); }
 function linkNoteDown(f) {
   const id = ++radio.downFrames;
   radio.meta.set(id, { id, t0: radio.t, desc: frameDesc(f), kind: frameKind(f), tries: 0, bytes: f });
@@ -102,10 +137,10 @@ function linkNoteDown(f) {
 function radioFromGround(bytes) {
   radio.fromGround.feed(bytes, f => {
     if (f[2] === CRSF.RC) { radio.txCh = crsfRcRead(f.subarray(3, f.length - 1)); radio.txChT = radio.t; linkEv('chMade', radio.t); }
-    else if (f[2] === CRSF.EXT) radioModel().command(f);
+    else if (f[2] === CRSF.EXT) { radioModel().command(f); if (radioTwo()) radioOn2(() => radioModel().command(f), true); }
   });
 }
-const radioConnected = () => radioModel().connected();
+const radioConnected = () => radioModel().connected() || (radioTwo() && radioOn2(() => radioModel().connected()));
 // A command for the command module to send (go to, calibrate…). 0, or −1 if it has too many waiting (said in the
 // log, not silently lost).
 function radioCommand(cmd, values) {
@@ -120,9 +155,10 @@ function radioHome() { radio.homeUntil = radio.t + 0.3; }
 // in flight too; nothing else resets). Another link, or another binding phrase: both ends switch at once (the
 // packet layers set up again); the drone sees a short gap in its link.
 function boardsRadioCfg() {
-  if (!brt.ready) return;                                            // (starting: the boards take radioCfg as they start)
+  if (!brt.ready || (typeof liveOn === 'function' && liveOn())) return;   // (the real drone: its link is set on it; the boards take this at the disconnect)                                            // (starting: the boards take radioCfg as they start)
   const M = radioModel(), a = M.wasm(radioCfg), S = radio.setup || {};
   for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w) w.radio_link(...a); }
+  if ((S.kind2 || '') !== (radioTwo() ? radioCfg2.kind : '') && S.kind === radioCfg.kind) { boardsRadioCfg2(); return; }   // (the second link came or went: the first is the same one)
   if (S.kind !== radioCfg.kind) {
     radio.toBoard = []; radio.toGround = []; radio.meta.clear();
     M.reset(); if (M.resume) M.resume(radio.t);
@@ -137,18 +173,25 @@ function boardsRadioCfg() {
 function radioEnds() { const b = typeof boardOf === 'function' ? boardOf('tlm') : null; return { gnd: brt.gnd, drone: b ? brt.inst.get(b.id) || null : null }; }
 // As the boards start (boardsStart), and when the link changes: a packet link's two ends set up, each with the binding
 // phrase and a session number of its own (the simulator's random numbers: the same each run).
+// Two links: each end's two packet layers (one session number for both, as a program's: radio_mux.h), and the
+// merger before its stack (board_wasm.c link_mux), which ways each carries.
 function radioLinkSetup() {
-  radio.setup = { kind: radioCfg.kind, bind: radioCfg.bind };
-  if (!radioModel().packets) return;
-  const E = radioEnds();
-  if (E.gnd) plinkSetup(E.gnd, 0, radioCfg.bind);
-  if (E.drone) plinkSetup(E.drone, 1, radioCfg.bind);
+  const two = radioTwo(), M2 = two ? RADIO_LINKS[radioCfg2.kind] : null;
+  radio.setup = { kind: radioCfg.kind, bind: radioCfg.bind, kind2: two ? radioCfg2.kind : '' };
+  const E = radioEnds(), d1 = radioDirs(radioCfg), d2 = two ? radioDirs(radioCfg2) : [0, 0];
+  for (const [w, role] of [[E.gnd, 0], [E.drone, 1]]) {
+    if (!w) continue;
+    const ses = radioModel().packets || (M2 && M2.packets) ? 1 + Math.floor(radioRand() * 0x7FFFFFFE) : 0;
+    w.plink_sel(0); if (radioModel().packets) plinkSetup(w, role, radioCfg.bind, ses); else w.plink_off();
+    if (two) { w.plink_sel(1); if (M2.packets) plinkSetup(w, role, radioCfg.bind, ses, M2.wasm(radioCfg2)); else w.plink_off(); w.plink_sel(0); }
+    w.link_mux(two ? 2 : 1, d1[0], d1[1], d2[0], d2[1], role, ...(two ? M2.wasm(radioCfg2) : [0, 0, 0]));
+  }
 }
-function plinkSetup(w, role, phrase) {
+function plinkSetup(w, role, phrase, ses, link) {
   const b = new TextEncoder().encode(String(phrase)).slice(0, 63);
   (radio.phrase || (radio.phrase = {}))[role ? 'drone' : 'gnd'] = String(phrase);   // (Bluetooth LE: the command module connects only to its own phrase's advertising)
   new Uint8Array(w.memory.buffer, w.rbuf_ptr(), b.length).set(b);
-  w.plink_setup(role, b.length, 1 + Math.floor(radioRand() * 0x7FFFFFFE), ...radioModel().wasm(radioCfg));   // (the link: a serial line's packet sizes follow its speed)
+  w.plink_setup(role, b.length, ses || 1 + Math.floor(radioRand() * 0x7FFFFFFE), ...(link || radioModel().wasm(radioCfg)));   // (the link: a serial line's packet sizes follow its speed)
 }
 // One end given another phrase (as if its program had been installed with it): to try a mismatch. end 'gnd' or 'drone'.
 function radioBindEnd(end, phrase) {
@@ -163,7 +206,19 @@ function radioStackOut(w, end, t) {
   const n = w.plink_stack_out(t); if (!n) return;
   const b = Uint8Array.from(new Uint8Array(w.memory.buffer, w.rbuf_ptr(), n));
   if (end === 'gnd') w.gnd_from_radio(n, t); else w.radio_in(n, t);
-  radio.stackIn[end].feed(b, f => radioModel().toStack(end, f, t));
+  radio.stackIn[end].feed(b, f => { const M = radioModel(); if (M.toStack) M.toStack(end, f, t); if (radioTwo()) radioOn2(() => { const M2 = radioModel(); if (M2.toStack) M2.toStack(end, f, t); }, true); });
+}
+// Two links: what a module link (ExpressLRS) brought this step goes into the merger as its link's (link_in), not to
+// the stack itself.
+function radioModuleIn(w, end) {
+  const key = end === 'gnd' ? 'toGround' : 'toBoard';
+  [[radio, radioModel()], [radio2.parts, RADIO_LINKS[radioCfg2.kind]]].forEach(([st, M], i) => {
+    const q = st[key]; if (!q || !q.length) return;
+    if (M && M.packets) { st[key] = []; return; }
+    const rb = new Uint8Array(w.memory.buffer, w.rbuf_ptr(), 2048); let n = 0, k = 0;
+    for (; k < q.length; k++) { if (n + q[k].length > 2048) break; rb.set(q[k], n); n += q[k].length; }
+    st[key] = q.slice(k); if (n) w.link_in(i, n, radio.t);
+  });
 }
 
 // The command module's inputs (ground_core.h): the buttons held (GB bits) and the analog sticks. With navigation the
@@ -184,11 +239,14 @@ function groundInputs(t) {
 /* ───────── the link log: what passes through the simulated radio (only a simulator can watch this) ───────── */
 let radioLogAll = false;   // every frame (busy), or only commands, switches, messages, the flight mode and link events
 function linkLog(dir, kind, data, meta, tone, bytes) {
+  if (radio.quiet) return;
+  if (radio.on2) data = 'link 2 · ' + data;
   radio.log.unshift({ id: ++radio.logN, t: radio.t, dir, kind, data, meta: meta || '', tone: tone || '', bytes: bytes ? Uint8Array.from(bytes) : null });
   if (radio.log.length > 300) radio.log.length = 300;
 }
 // What happened in the last 5 s, for the statistics: [time, value] per kind.
 function linkEv(kind, t, v) {
+  if (radio.on2) return;                                             // (the statistics are the first link's)
   const a = radio.ev[kind] || (radio.ev[kind] = []); a.push([t, v ?? 0]);
   while (a.length && a[0][0] < t - 5) a.shift();
 }

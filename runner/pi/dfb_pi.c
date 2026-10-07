@@ -68,6 +68,7 @@
 #include "radio_serial.h"
 #include "radio_udp.h"
 #include "radio_pserial.h"
+#include "radio_mux.h"
 #include "radio_nrf24.h"
 #include "rn_link.h"
 #include "latch_hw.h"
@@ -239,9 +240,20 @@ static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
   if (len && write(fd, fr, len) < 0 && errno != EAGAIN) perror("link");
 }
 
+/* One link's end here (radio_io.h), as set; dev: its port (a serial line, an ExpressLRS receiver). 0: it didn't
+ * open (said why). said: what it is, for the start line. */
+static radio_io *open_link(const rlink_cfg *L, const char *dev, const char *nrf_spi, int nrf_ce, int radio_port, const char **bind_phrase, char *said, int sn) {
+  char d[32]; rlink_describe(L, d, sizeof d);
+  if (L->kind != RLINK_ELRS && !*bind_phrase) { *bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": give both ends a phrase of their own\n"); }
+  if (L->kind == RLINK_NRF24) { snprintf(said, (size_t)sn, "an nRF24L01 (%s) on %s, CE GPIO %d", d, nrf_spi, nrf_ce); return radio_nrf24_open(PLINK_DRONE, L, nrf_spi, nrf_ce, *bind_phrase, "nRF24L01"); }
+  if (L->kind == RLINK_SERIAL) { snprintf(said, (size_t)sn, "a serial line (%s) on %s", d, dev); return radio_pserial_open(PLINK_DRONE, dev, L, *bind_phrase, "serial line"); }
+  if (L->kind == RLINK_WIFI) { snprintf(said, (size_t)sn, "Wi-Fi (%s), UDP port %d", d, radio_port); return radio_udp_open(PLINK_DRONE, 0, radio_port, *bind_phrase, "Wi-Fi radio"); }
+  snprintf(said, (size_t)sn, "an ExpressLRS receiver on %s", dev); return radio_serial_open(dev, CRSF_BAUD, "ExpressLRS receiver (serial)");
+}
+
 int main(int argc, char **argv) {
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
-  rlink_cfg RL; rlink_default(&RL); const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
+  rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
@@ -251,6 +263,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
     else if (!strcmp(argv[i], "--crsf") || !strcmp(argv[i], "--radio-dev")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--radio") || !strcmp(argv[i], "--elrs")) { char err[120]; if (rlink_parse(&RL, argv[++i], err, sizeof err)) { fprintf(stderr, "%s: %s\n", argv[i - 1], err); return 2; } }
+    else if (!strcmp(argv[i], "--radio2")) { char err[120]; if (rlink_parse(&RL2, argv[++i], err, sizeof err)) { fprintf(stderr, "--radio2: %s\n", err); return 2; } two = 1; }
+    else if (!strcmp(argv[i], "--radio2-dev")) dev2 = argv[++i];
     else if (!strcmp(argv[i], "--bind")) bind_phrase = argv[++i]; else if (!strcmp(argv[i], "--nrf-spi")) nrf_spi = argv[++i]; else if (!strcmp(argv[i], "--nrf-ce")) nrf_ce = atoi(argv[++i]); else if (!strcmp(argv[i], "--radio-port")) radio_port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
@@ -260,6 +274,7 @@ int main(int argc, char **argv) {
     "              [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,CHANNEL|wifi,sta [--bind PHRASE] [--radio-port 14570]\n"
     "               | --radio serial,BAUD[,half] --radio-dev /dev/ttyAMA1 [--bind PHRASE]\n"
     "               | --radio nrf24,250|1000|2000 [--nrf-spi /dev/spidev0.0] [--nrf-ce 25] [--bind PHRASE]]\n"
+    "              [--radio2 KIND,... [--radio2-dev DEV]] (a second link at once, as --radio: both carry; e.g. --radio2 serial,57600,up --radio2-dev /dev/ttyUSB1)\n"
     "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"
     "radio: an ExpressLRS receiver on a serial port (--crsf), or this Pi's Wi-Fi (--radio wifi,...: UDP; the Pi makes the network\n"
@@ -271,6 +286,15 @@ int main(int argc, char **argv) {
   if (RL.kind == RLINK_WIFI && crsf_dev) { fprintf(stderr, "--crsf is an ExpressLRS receiver's port: with --radio wifi the radio is this Pi's Wi-Fi (no --crsf)\n"); return 2; }
   if (RL.kind == RLINK_ELRS && bind_phrase) fprintf(stderr, "--bind is for the packet links (wifi, serial): an ExpressLRS receiver has its own binding phrase\n");
   if (RL.kind == RLINK_SERIAL && !crsf_dev) { fprintf(stderr, "--radio serial,...: say which port the line is on (--radio-dev /dev/ttyAMA1, or /dev/ttyUSB0 for a USB adapter)\n"); return 2; }
+  if (!two && !rlink_up(&RL)) { fprintf(stderr, "--radio serial,...,down carries nothing up: the drone would get no channels (as a second link, --radio2, it can)\n"); return 2; }
+  if (two) {
+    char err[160];
+    if (RL2.kind == RLINK_BLE || RL2.kind == RLINK_ESPNOW) { fprintf(stderr, "--radio2: %s needs an ESP32\n", rlink_names[RL2.kind]); return 2; }
+    if (RL.kind == RLINK_ELRS && !crsf_dev) { fprintf(stderr, "--radio2: the first link (--radio) must be here too (--crsf for an ExpressLRS receiver)\n"); return 2; }
+    if (rlink_pair_ok(&RL, &RL2, 0, err, sizeof err)) { fprintf(stderr, "--radio2: %s\n", err); return 2; }
+    if ((RL2.kind == RLINK_SERIAL || RL2.kind == RLINK_ELRS) && !dev2) { fprintf(stderr, "--radio2 %s: say which port it is on (--radio2-dev /dev/ttyUSB1)\n", rlink_names[RL2.kind]); return 2; }
+    if (dev2 && crsf_dev && !strcmp(dev2, crsf_dev)) { fprintf(stderr, "--radio2-dev: the same port as the first link's\n"); return 2; }
+  }
 
   setvbuf(stdout, NULL, _IOLBF, 0);   /* a line at a time, also into a pipe or a log file */
   static rn_host H; static nav_state N; static learn_state LS; static super_state SS;
@@ -299,24 +323,16 @@ int main(int argc, char **argv) {
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
   int crsf = -1;
   radio_io *R = 0;                                  /* the pilot's radio link's bytes (radio_io.h) */
-  int packets = rlink_packets(&RL) || rlink_compact(&RL);                 /* a packet link: R does the receiver's part, read() every pass drives it */
-  char radio_said[160];
-  if (RL.kind == RLINK_NRF24) {
-    if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": give both ends a phrase of their own\n"); }
-    R = radio_nrf24_open(PLINK_DRONE, &RL, nrf_spi, nrf_ce, bind_phrase, "nRF24L01"); if (!R) return 1; crsf = R->fd;
-    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "an nRF24L01 (%s) on %s, CE GPIO %d", d, nrf_spi, nrf_ce);
+  int packets = rlink_packets(&RL) || rlink_compact(&RL) || two;          /* a packet link (or two links): R does the receiver's part, read() every pass drives it */
+  char radio_said[320];
+  if (RL.kind != RLINK_ELRS || crsf_dev) { R = open_link(&RL, crsf_dev, nrf_spi, nrf_ce, radio_port, &bind_phrase, radio_said, sizeof radio_said); if (!R) return 1; crsf = R->fd; }
+  else snprintf(radio_said, sizeof radio_said, "on the ESP32, if it has one");
+  if (two) {                                                         /* a second link at once (fc/radio_mux.h): both as one */
+    char said2[160]; radio_io *R2 = open_link(&RL2, dev2, nrf_spi, nrf_ce, radio_port, &bind_phrase, said2, sizeof said2); if (!R2) return 1;
+    radio_io *M = radio_mux_open(R, &RL, R2, &RL2, LMUX_DRONE, now_s); if (!M) { fprintf(stderr, "no memory for two links\n"); return 1; }
+    R = M; crsf = -1; size_t k = strlen(radio_said); snprintf(radio_said + k, sizeof radio_said - k, " + %s", said2);
   }
-  else if (crsf_dev && RL.kind == RLINK_SERIAL) {
-    if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": give both ends a phrase of their own\n"); }
-    R = radio_pserial_open(PLINK_DRONE, crsf_dev, &RL, bind_phrase, "serial line"); if (!R) return 1; crsf = R->fd;
-    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "a serial line (%s) on %s", d, crsf_dev);
-  }
-  else if (crsf_dev) { R = radio_serial_open(crsf_dev, CRSF_BAUD, "ExpressLRS receiver (serial)"); if (!R) return 1; crsf = R->fd; snprintf(radio_said, sizeof radio_said, "%s", crsf_dev); }
-  else if (RL.kind == RLINK_WIFI) {
-    if (!bind_phrase) { bind_phrase = "liftlab"; fprintf(stderr, "warning: no --bind PHRASE: using the default phrase \"liftlab\": anyone with LiftLab on this network can fly the drone; give both ends a phrase of their own\n"); }
-    R = radio_udp_open(PLINK_DRONE, 0, radio_port, bind_phrase, "Wi-Fi radio"); if (!R) return 1; crsf = R->fd;
-    char d[32]; rlink_describe(&RL, d, sizeof d); snprintf(radio_said, sizeof radio_said, "Wi-Fi (%s), UDP port %d", d, radio_port);
-  } else snprintf(radio_said, sizeof radio_said, "on the ESP32, if it has one");
+  const int radio_here = R != 0;                    /* (the radio's end here: its fd may be −1, an nRF24L01's or two links') */
   static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
   tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
   double tlm_want = -10, next_pub = 0, next_radio = 0, next_pack = 0; nav_sp last_sp; memset(&last_sp, 0, sizeof last_sp);
@@ -377,7 +393,7 @@ int main(int argc, char **argv) {
       int type = rn_link_feed(&L, rx[i]);
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
-      if (type == RN_LINK_TLM && crsf >= 0) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
+      if (type == RN_LINK_TLM && radio_here) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
       if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
       if ((type == RN_LINK_TELEM && L.len == 144) || (type == RN_LINK_LTEL && L.len >= 8)) { memcpy(&fc_state, L.buf + 4, 4); fc_state_t = t; }   /* the flight core's state */
       if (type == RN_LINK_LTEL && (have_learn || have_super)) {   /* the learning and the supervisor, on every frame */
@@ -458,7 +474,7 @@ int main(int argc, char **argv) {
       cg_drive = d;
       if (CG.nmsg != cg_said) { cg_said = CG.nmsg; printf("cargo: %s\n", CG.msg); }
     }
-    if ((have_learn || have_super || crsf >= 0) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (crsf >= 0 ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
+    if ((have_learn || have_super || radio_here) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, and the ESP32's telemetry for our radio, please */
     /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
     if (t >= next_pub) {
       next_pub = t + 0.01;
@@ -467,13 +483,13 @@ int main(int argc, char **argv) {
       if (have_super) tlm_from_super(&TS, &TW, &SS, t);
       if (CG.n) tlm_from_cargo(&TS, &CG, t);
       if (G.fix && G.t > last_fix_t - 1) { static double gps_t; if (G.t != gps_t) { gps_t = G.t; tlm_from_gps(&TS, G.lat, G.lon, (float)G.alt, sqrtf(G.v[0] * G.v[0] + G.v[1] * G.v[1]), atan2f(-G.v[1], G.v[0]) * 57.29578f + (G.v[1] > 0 ? 360 : 0), G.sats, t); } }
-      if (crsf >= 0) tlm_from_link(&TS, &RCI, t);
+      if (radio_here) tlm_from_link(&TS, &RCI, t);
     }
-    if (crsf >= 0 && t >= next_radio) {
+    if (radio_here && t >= next_radio) {
       next_radio = t + 0.005; static uint8_t out[512];
-      int n = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(&RL, &RCI, t), out, sizeof out);
+      int n = tlm_service(&TS, &tlm_crsf, t, rlink_budget_now(radio_mux_is(R) ? radio_mux_link(R) : &RL, &RCI, t), out, sizeof out);
       if (n && R->write(R, out, n) < 0) perror("crsf");
-    } else if (crsf < 0 && t - tlm_want < 1 && t >= next_pack) {
+    } else if (!radio_here && t - tlm_want < 1 && t >= next_pack) {
       next_pack = t + 0.05; static float pk[TLM_PACK_MAX]; int n = tlm_pack(&TS, pk, TLM_PACK_MAX); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
     }
     if (P.arm && t - last_nav > 0.3) P.arm = P.fly = 0;   /* lost the drone's telemetry: nothing to fly on */

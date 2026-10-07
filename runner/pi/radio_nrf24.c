@@ -7,6 +7,7 @@
  * Not on a Mac (no SPI): radio_nrf24_open says so. */
 #define _DEFAULT_SOURCE
 #include "radio_nrf24.h"
+#include "radio_session.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,8 @@ static int nrf_write(radio_io *R, const uint8_t *b, int n) {
   nrf_t *K = R->ctx; double t = now_s(); clink_from_stack(&K->N.L, b, n, t); nrf24_poll(&K->N, t); return n;
 }
 
+static uint32_t nrf_peer(radio_io *R) { return ((nrf_t *)R->ctx)->N.L.known; }
+static void nrf_hear(radio_io *R, int lq, int rssi) { (void)rssi; clink_hear(&((nrf_t *)R->ctx)->N.L, lq); }
 radio_io *radio_nrf24_open(int role, const rlink_cfg *L, const char *spidev, int ce_line, const char *phrase, const char *name) {
 #ifndef __linux__
   (void)role; (void)L; (void)spidev; (void)ce_line; (void)phrase;
@@ -66,13 +69,12 @@ radio_io *radio_nrf24_open(int role, const rlink_cfg *L, const char *spidev, int
   K->spi = spi; K->ce = rq.fd;
   nrf24_hal H = { hal_xfer, hal_ce, hal_delay, K };
   clink_cfg C; clink_cfg_default(&C, role); clink_cfg_link(&C, L); plink_key(phrase ? phrase : "liftlab", &C.k0, &C.k1);
-  uint32_t ses = 0; int fd = open("/dev/urandom", O_RDONLY); if (fd >= 0) { if (read(fd, &ses, sizeof ses) != (ssize_t)sizeof ses) ses = 0; close(fd); }
-  if (!ses) ses = (uint32_t)time(0) ^ (uint32_t)getpid() << 16;
-  if (!ses) ses = 1;
+  uint32_t ses = radio_session();
   char err[120];
   if (nrf24_start(&K->N, &H, &C, ses, role, L->kbps, err, sizeof err)) { fprintf(stderr, "%s: %s\n", name, err); close(spi); close(rq.fd); free(R); free(K); return 0; }
   snprintf(K->name, sizeof K->name, "nRF24L01 at %d kbit/s", L->kbps);
   R->name = K->name; R->read = nrf_read; R->write = nrf_write; R->fd = -1; R->ctx = K;
+  R->peer = nrf_peer; R->hear = nrf_hear;
   return R;
 #endif
 }
