@@ -1065,3 +1065,19 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .dialog-toolbar{flex-wrap:wrap}
 .design-dialog .dialog-toolbar h2{font-size:var(--text-lg)}
 @media(max-width:480px){.formula-finder{grid-template-columns:1fr}.program-metrics{column-gap:var(--space-6)}.dialog-toolbar{top:calc(-1 * var(--space-16))}.computer-dialog .dialog-toolbar{top:calc(-1 * var(--space-12))}.dialog-actions{margin-left:auto}.computer-tools{gap:var(--space-6)}.computer-tool{font-size:var(--text-sm)}}
+
+/* Ground: received instruments first, compact connection cards, scoped detail dialogs. */
+.gs-instruments{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));gap:var(--space-14)}
+.gs-instrument{min-width:0;padding:var(--space-10);border:1px solid var(--line);border-radius:var(--radius-card)}
+.gs-instrument h3{margin:0 0 var(--space-8);font-family:var(--f-display);font-size:var(--text-label);color:var(--ink-2)}
+.gs-alerts{margin-bottom:var(--space-12)}
+.gs-alerts .gs-moderow{margin-bottom:var(--space-4)}
+.gs-command-help{font-size:var(--text-sm);color:var(--muted)}
+.gs-command-help summary{cursor:pointer}
+.gs-radio-card{gap:var(--space-8)}
+.gs-radio-card .w-bar{width:100%;margin:0}
+.gs-peer-actions{display:flex;align-items:center;justify-content:space-between;gap:var(--space-8);flex-wrap:wrap}
+.gs-peers:empty{display:none}
+.ground-dialog h3{font-family:var(--f-display);font-size:var(--text-label);margin-top:var(--space-16)}
+.ground-dialog .gs-stats{overflow-wrap:anywhere}
+@media(max-width:480px){.ground-dialog .gs-row{grid-template-columns:repeat(2,minmax(0,1fr))}.ground-dialog .gs-bind{grid-column:1/-1}.gs-stats{table-layout:fixed;overflow-wrap:anywhere}.gs-stats th,.gs-stats td{white-space:normal}}

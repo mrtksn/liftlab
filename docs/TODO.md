@@ -1,8 +1,14 @@
 # Project memory
 
+## Ground instruments and link cards — 2026-10-07
+- Ground groups received map, horizon/flight, battery and motor/task instruments at the top. Radio becomes a clickable summary with live uplink/telemetry quality bars; its settings, channels and measurements live in a native detail dialog.
+- Other drones keeps its peer list/Ping, Talk and fleet-program controls; fleet phrase/channel/details move behind Settings. Link log and telemetry messages come last. Radio/peer configuration remains saved world data outside design history.
+- FIXED: a radio reset could discard an uncommitted binding/fleet phrase while typing. Ground refreshes retain the focused text draft and cursor; regression explicitly resets an open editor with an unapplied draft.
+- Dialogs retain selected-drone ownership and native Close/Escape. Instrument widgets and log rows keep existing update/staleness behavior; no new physics work. Regression checklist: settings and link changes, peers/ping/fleet control, per-drone/reset/reload, log pause/filter/raw bytes, no-data/stale telemetry, desktop/phone themes. Passed tools/test_ground_cards.cjs with actual telemetry/peer ping/fleet engagement, both links, pending drafts/cursor, selection/reload/reset, no-radio and lost-link behavior, logs/bytes and desktop/phone light/dark layouts; no page errors. Existing peer transport, mocked Bluetooth, multi-drone, sidebar/shared UI fixtures and Computers regressions passed. The complete flight/radio browser suite also passed. Syntax, diff and asset fingerprints passed.
+
 ## Battery power and board links — 2026-10-07
 - Integrated Claude’s completed battery-wiring work: Computers shows battery connection and board-link cards, wiring details, and Add a part includes Battery. No connected onboard battery leaves boards and motors unpowered; the saved connection survives undo, files and reload.
-- Regression checklist: disconnect/reconnect, no battery, add battery, board-link UART/USB details, undo/file/reload. Passed tools/test_power_links.cjs and hardware/installer/agent checks; no firmware source changes or physical hardware validation.
+- Regression checklist: disconnect/reconnect, no battery, add battery, board-link UART/USB details, undo/file/reload. Passed tools/test_power_links.cjs and hardware/installer/agent checks; no firmware source changes or physical hardware validation. Published ed0a252 on claude/battery-wiring and main before Ground edits; Pages and all firmware/host CI jobs passed.
 
 ## Computers tools and search refinements — 2026-10-07
 - Formula editor and Wiring overview now live in a pinned icon toolbar at the top of Computers. Command-module wiring comes first in the overview.

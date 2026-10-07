@@ -62,7 +62,7 @@ function fleetRefresh() {
   renderBattery(); syncFlightUi(); syncSp(); syncAllocFields(); setPilotLevel(pilot.level);
   $('#keepLearn').checked=learnPrefs.keep;$('#holdPulses').checked=learnPrefs.holdPulses;$('#thenCal').checked=throwCfg.thenCalibrate;
   setLaunch(launchMode,false); for (const f of throwFieldRefs) f(); for (const f of allocFieldRefs) f();
-  matchT = 0; matchCache = []; launchUi.key = ''; GS_UI.next = 0; GS_UI.logKey = ''; GS_UI.logN = -1; GS_UI.items.clear(); GS_UI.cargoN = -1;
+  matchT = 0; matchCache = []; launchUi.key = ''; GS_UI.built = false; GS_UI.next = 0; GS_UI.logKey = ''; GS_UI.logN = -1; GS_UI.items.clear(); GS_UI.cargoN = -1;
   $('#designName').value = designs.name; renderUndo(); renderDesigns(); refreshEnvelope(); renderMass(); refreshFormulaStatus();
   for (const [k,src] of fleet.selected.formulaDrafts) { const card = lawCards.get(k); if (card) card.ta.value = src; }
   agent.rec = fleet.selected.agentMemory.rec; agent.recNext = fleet.selected.agentMemory.recNext; agent.recLast = fleet.selected.agentMemory.recLast;
