@@ -39,6 +39,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include "rn_host.h"
+#include "bus.h"
 
 #define FC_MAX_MOTORS 12
 #define FC_MAX_JOINTS 8
@@ -167,6 +168,7 @@ typedef struct {
   /* what goes to the learning and the supervisor (LTEL): sums since the last frame */
   float lt_f[3], lt_w[3], lt_u[FC_MAX_MOTORS], lt_v[FC_MAX_MOTORS], lt_tc[FC_MAX_JOINTS]; int lt_n;
   float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
+  bus *bus; int bt[7];                   /* the board's data bus, if it has one (fc_bus_attach), and this code's topics on it */
 } fc_state;
 
 /* Parse an airframe blob. Returns 0 or −1 with F->why set. */
@@ -174,6 +176,10 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len);
 /* Set up: the host runs the formulas. Checks every formula takes what this code passes (the signatures), and
  * gives servoPredictor a memory per joint. Call after rn_host_init, before any program is staged. */
 int fc_init(fc_state *F, rn_host *H);
+/* Publish on the board's data bus (bus.h, docs/topic-bus.md): fc.state, fc.attitude, fc.imu, fc.height, fc.output,
+ * fc.torque after each step, cmd.pilot with each command taken. Without a bus (B NULL) nothing is published.
+ * Returns 0, or −1 if the bus has no room for them. */
+int fc_bus_attach(fc_state *F, bus *B);
 /* A command from the pilot (the Pi link now, a radio receiver later). Values are clamped; one that isn't finite is
  * ignored. Arming needs the arm switch seen off since the last disarm. */
 void fc_command(fc_state *F, const fc_cmd *c);

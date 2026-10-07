@@ -732,6 +732,16 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 #bodySec{gap:0;padding-bottom:0}
 #bodySec h2{margin-bottom:var(--space-8)}
 #bodySec .fold:last-child{border-bottom:0}
+/* Live data: the boards' data buses (bus-ui.js) */
+.bus-board{margin-top:var(--space-10)}
+.bus-scroll{overflow-x:auto;margin-top:var(--space-6)}
+.bus-table{width:100%;border-collapse:collapse;font-size:var(--text-sm)}
+.bus-table th{text-align:left;font-weight:600;color:var(--muted);font-size:var(--text-xs);padding:var(--space-4) var(--space-6);border-bottom:1px solid var(--line)}
+.bus-table td{padding:var(--space-4) var(--space-6);border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:baseline}
+.bus-table td.bus-num{text-align:right;font-family:var(--f-mono);font-size:var(--text-xs)}
+.bus-table code{font-family:var(--f-mono);font-size:var(--text-xs)}
+.bus-vals{font-family:var(--f-mono);font-size:var(--text-xs);color:var(--muted)}
+.bus-kind{color:var(--accent);font-size:var(--text-xs)}
 /* controller tuning (tuning-ui.js) */
 #tuneSec > .hint{margin-bottom:var(--space-4)}
 #tuneSec .fold:last-of-type{border-bottom:1px solid var(--line)}

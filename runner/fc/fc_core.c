@@ -212,6 +212,32 @@ static float axis_tilt(const fc_state *F) {
 
 static int batt_ok(const fc_state *F) { return F->vbatt > 0.6f * F->vref && F->vbatt < 1.35f * F->vref; }
 
+/* ── the data bus (docs/topic-bus.md) ── */
+enum { BT_STATE, BT_ATT, BT_IMU, BT_HEIGHT, BT_OUT, BT_TORQUE, BT_CMD };
+int fc_bus_attach(fc_state *F, bus *B) {
+  static const char *names[] = { "fc.state", "fc.attitude", "fc.imu", "fc.height", "fc.output", "fc.torque", "cmd.pilot" };   /* (BT_ order) */
+  static const int sizes[] = { 7, 7, 6, 3, FC_MAX_MOTORS + FC_MAX_JOINTS, 3, 10 };
+  F->bus = 0; if (!B) return 0;
+  for (int i = 0; i < 7; i++) if ((F->bt[i] = bus_topic(B, names[i], sizes[i])) < 0) return -1;
+  F->bus = B; return 0;
+}
+static void bus_after_step(fc_state *F, const fc_out *o) {
+  bus *B = F->bus; if (!B) return;
+  float v[FC_MAX_MOTORS + FC_MAX_JOINTS];
+  v[0] = (float)F->state; v[1] = (float)F->att_ok; v[2] = (float)F->have_alt; v[3] = (float)F->cmd.guided; v[4] = (float)F->sup_mode; v[5] = (float)F->use_learned; v[6] = (float)F->trap;
+  bus_pub(B, F->bt[BT_STATE], v, 7);
+  for (int k = 0; k < 4; k++) v[k] = F->q[k];
+  for (int k = 0; k < 3; k++) v[4 + k] = F->w[k];
+  bus_pub(B, F->bt[BT_ATT], v, 7);
+  if (F->have_imu) { for (int k = 0; k < 3; k++) { v[k] = F->fb[k]; v[3 + k] = F->gb[k]; } bus_pub(B, F->bt[BT_IMU], v, 6); }
+  v[0] = F->have_alt ? F->alt_e : 0; v[1] = F->have_alt ? F->vz_e : F->vz_i; v[2] = (float)F->have_alt;
+  bus_pub(B, F->bt[BT_HEIGHT], v, 3);
+  for (int i = 0; i < FC_MAX_MOTORS; i++) v[i] = o->motor[i];
+  for (int j = 0; j < FC_MAX_JOINTS; j++) v[FC_MAX_MOTORS + j] = o->servo[j];
+  bus_pub(B, F->bt[BT_OUT], v, FC_MAX_MOTORS + FC_MAX_JOINTS);
+  if (F->state == FC_ARMED || F->state == FC_FAILSAFE) bus_pub(B, F->bt[BT_TORQUE], F->tau_des, 3);
+}
+
 void fc_command(fc_state *F, const fc_cmd *in) {
   /* a command with a number that isn't finite is ignored (it doesn't count as a command either) */
   if (!fin(in->roll) || !fin(in->pitch) || !fin(in->yaw) || !fin(in->throttle) || !fin(in->test_throttle)) return;
@@ -224,6 +250,7 @@ void fc_command(fc_state *F, const fc_cmd *in) {
   if (c->test_motor < 0 || c->test_motor >= FC_MAX_MOTORS) c->test_motor = -1;
   int prev_test = F->cmd.test_motor;
   F->cmd = *c; F->cmd_t = F->t;
+  if (F->bus) { float v[10] = { (float)c->arm, c->roll, c->pitch, c->yaw, c->throttle, (float)c->guided, c->acc[0], c->acc[1], c->acc[2], c->heading }; bus_pub(F->bus, F->bt[BT_CMD], v, 10); }
   if (!c->arm) { F->arm_released = 1; if (F->state == FC_ARMED || F->state == FC_FAILSAFE || F->state == FC_CRASHED) { F->state = FC_DISARMED; fc_say(F, "disarmed"); F->sup_mode = 0; F->sup_landing = 0; } }
   if (c->test_motor < 0) F->test_released = 1;
   if (c->arm && F->state == FC_DISARMED) {   /* arming takes the switch going on: after any disarm it must be seen off first */
@@ -548,13 +575,14 @@ void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   after_flight(F, was);
   ltel_add(F, e ? &F->last_out : &n, dt);
   int flying = F->state == FC_ARMED || F->state == FC_FAILSAFE;
-  if (!e) { *o = n; F->err_t = 0; if (flying) F->last_out = n; return; }
+  if (!e) { *o = n; F->err_t = 0; if (flying) F->last_out = n; bus_after_step(F, o); return; }
   /* A formula failed even after the program slots fell back to the built-in program: hold the last outputs for a
    * moment (a one-off glitch passes), then stop the motors. */
-  if (flying && (F->err_t += dt) <= FC_ERR_HOLD) { *o = F->last_out; return; }
+  if (flying && (F->err_t += dt) <= FC_ERR_HOLD) { *o = F->last_out; bus_after_step(F, o); return; }
   if (flying) { F->state = FC_CRASHED; fc_say(F, "the flight formulas failed: motors off"); }
   memset(o, 0, sizeof *o);
   for (int j = 0; j < F->A.n_joints; j++) o->servo[j] = F->th_cmd[j];
+  bus_after_step(F, o);
 }
 
 /* ── the learning task's and the supervisor's frames ── */

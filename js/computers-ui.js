@@ -193,7 +193,7 @@ function buildComputers() {
     section('computerSensorsSec','Sensors',el('div',{class:'computer-grid',id:'computerSensors'})),
     section('computerCargoSec','Cargo outputs',el('div',{class:'computer-grid',id:'computerCargo'})),
     section('computerRadioSec','Radio',el('div',{class:'computer-grid',id:'computerRadio'})),
-    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},computerToolButton('formulasOpen','Formula editor…','<path d="M7 4L2 10l5 6m6-12 5 6-5 6M11 3l-2 14"/>',()=>openFormulaEditor()),computerToolButton('wiringOpen','Wiring overview…','<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M4.5 7v8.5H13M7 4.5h8.5V13"/>',()=>openComputerView({kind:'wiring'})))));
+    section('computerToolsSec','Tools',el('div',{class:'computer-tools'},computerToolButton('formulasOpen','Formula editor…','<path d="M7 4L2 10l5 6m6-12 5 6-5 6M11 3l-2 14"/>',()=>openFormulaEditor()),computerToolButton('busOpen','Live data…','<path d="M2 15h3l3-9 4 12 3-7h3"/>',()=>openComputerView({kind:'bus'})),computerToolButton('wiringOpen','Wiring overview…','<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M4.5 7v8.5H13M7 4.5h8.5V13"/>',()=>openComputerView({kind:'wiring'})))));
   pane.prepend($('#computerToolsSec'));
   pane.append(el('div',{id:'hardwareRows',hidden:true}));
   const detail=computerDialog('computerDlg','Computer details');pane.append(detail.dialog);
@@ -358,6 +358,7 @@ function computerWiringIssues(box,b){
 function renderComputerDetail(){
   const view=COMP.view,box=$('#computerDlgBody');if(!view||!box)return;box.textContent='';box.classList.toggle('device-detail',view.kind==='device');const C=computers();
   renderUndo();
+  if(view.kind==='bus'){renderBusView(box);return;}
   if(view.kind==='wiring'){$('#computerDlgTitle').textContent='Wiring overview';mountHardware(box,'[data-hw-role="ground"]');box.append(renderWiringOverview(C));mountHardware(box,'#hardwareReport');return;}
   if(view.kind==='task'||view.kind==='radio'){
     const t=view.kind==='radio'?'tlm':view.id,T=TASKS[t];$('#computerDlgTitle').textContent=view.kind==='radio'?'Radio assignment & wiring':T.label;

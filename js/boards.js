@@ -254,7 +254,47 @@ function boardsStart() {
   groundStart();
   radioLinkSetup();                                                  // (a packet link: both ends' packet layers, with the binding phrase)
   if (typeof peerSetup === 'function') peerSetup();                  // (the drone's own link to the others in the fleet: peer-air.js)
+  busSetup();
   brt.ready = true;
+}
+
+/* ───────── the data bus between boards (docs/topic-bus.md) ───────── */
+// Each board's flight code publishes on its own bus (runner/fc/bus.h). Over each board link the boards copy what the
+// other asks for, in RN_LINK_BUS_SUB and RN_LINK_BUS frames with the link's delay: the board linked to the flight
+// core follows its state, attitude, height and the commands it takes; the flight core follows that board's navigation.
+const BUS_WANTS = [   // [the topic's writer: 'core' or 'other', name, period (s; 0 on change)]
+  ['core', 'fc.state', 0], ['core', 'fc.attitude', 0.02], ['core', 'fc.height', 0.05], ['core', 'cmd.pilot', 0],
+  ['other', 'nav.estimate', 0.05], ['other', 'nav.command', 0.05],
+];
+const busTopics = w => { const n = w.bus_list(), v = new Float32Array(w.memory.buffer, w.bus_list_ptr(), n * (5 + 32)), out = []; let k = 0;
+  for (let i = 0; i < n; i++) { const m = v[k + 1]; out.push({ name: cstr(w, w.bus_name_ptr(i), 24), mirror: v[k] > 0.5, n: m, got: v[k + 2], age: v[k + 3], bad: v[k + 4], vals: Array.from(v.subarray(k + 5, k + 5 + m)) }); k += 5 + m; }
+  return out; };
+function busWant(w, name, n, period) { const b = new TextEncoder().encode(name + '\0'); new Uint8Array(w.memory.buffer, w.txt_ptr(), b.length).set(b); return w.bus_want(n, period); }
+function busSetup() {
+  brt.busLinks = []; brt.nextBusSub = 0;
+  const C = computers(), core = C.boards.find(b => b.tasks.includes('core')), cw = core && brt.inst.get(core.id); if (!cw) return;
+  for (const b of C.boards) { const w = brt.inst.get(b.id); if (w && !needsProgram(b)) w.bus_reset(); }
+  for (const b of C.boards) {
+    const w = brt.inst.get(b.id); if (b === core || !w || !b.tasks.length) continue;
+    const have = (x, name) => busTopics(x).find(t => t.name === name && !t.mirror);
+    for (const [writer, name, period] of BUS_WANTS) {
+      const [from, to] = writer === 'core' ? [cw, w] : [w, cw], t = have(from, name);
+      if (t) busWant(to, name, t.n, period);
+    }
+    brt.busLinks.push(b);
+  }
+}
+// Each control step: renew the subscriptions twice a second, and send what has fallen due, both ways on each link.
+function busStep() {
+  const core = boardOf('core'), cw = core && brt.inst.get(core.id); if (!cw || !brt.busLinks || !brt.busLinks.length) return;
+  const renew = brt.t >= brt.nextBusSub - 1e-9; if (renew) brt.nextBusSub = brt.t + 0.5;
+  for (const b of brt.busLinks) {
+    const w = brt.inst.get(b.id); if (!w) continue;
+    for (const [from, fw, to, tw] of [[core, cw, b, w], [b, w, core, cw]]) {
+      if (renew) { const n = tw.bus_sub_out(); if (n) sendFrame(to, from, 'bussub', frOut(tw, n)); }
+      const n = fw.bus_out(to.id); if (n) sendFrame(from, to, 'bus', frOut(fw, n));
+    }
+  }
 }
 // The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
 // A program that doesn't compile, fit or load leaves it with none (not the last run's): it sends the raw sticks
@@ -362,7 +402,7 @@ function pilotCargoCmd(latch, action) {
 
 /* ───────── frames between the tasks ───────── */
 // Each goes over the serial link (LINK_DELAY) unless both tasks are on the same board.
-function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + (fromB && toB.id === fromB.id ? 0 : LINK_DELAY), to: toB, kind, data }); }
+function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + (fromB && toB.id === fromB.id ? 0 : LINK_DELAY), from: fromB, to: toB, kind, data }); }
 function deliverFrames() {
   const coreB = boardOf('core'), navB = boardOf('nav'), learnB = boardOf('learn'), superB = boardOf('super');
   for (let k = 0; k < brt.q.length;) {
@@ -376,6 +416,8 @@ function deliverFrames() {
     else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
     else if (m.kind === 'fleet') w.fleet_in(n);                       // the peer table, for the fleet program (fleet.h)
     else if (m.kind === 'fleetout') w.fleet_apply(n, brt.t);         // what the fleet program publishes and sends
+    else if (m.kind === 'bussub') w.bus_sub_in(m.from ? m.from.id : 0, n);   // the data bus (docs/topic-bus.md): what the other board wants
+    else if (m.kind === 'bus') w.bus_in(n);                           // … and its topics
     else if (m.kind === 'model') { if (coreB && m.to.id === coreB.id) w.fc_model(n); if (superB && m.to.id === superB.id) w.super_model(n); }
     else if (m.kind === 'set') {
       if (coreB && m.to.id === coreB.id) { flightRememberSettings(w, m.data); w.fc_set(n); setJointView(m.data); }
@@ -438,6 +480,7 @@ function boardsControl(dt) {
   const idle = () => { for (const c of acts) { const st = act.get(c.id); if (st) setThrottle(c, st, 0, 0); } };
   if (!brt.ready || !coreB) { idle(); return; }
   brt.t += dt;
+  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w) w.bus_time(brt.t); }   // (each board's clock: the bus stamps its topics with it)
   if (!cargo.power) {                                               // no battery connected on board: every board is dark (cargo.js)
     idle(); brt.fcState = 0; brt.fcWhy = 'no power: ' + powerWhy(); brt.navOut = null;
     const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
@@ -453,6 +496,7 @@ function boardsControl(dt) {
   const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
   if (tw) radioTick(dt, tlmB, tw, coreB, navB);
   cargoTick();
+  busStep();
 
   // The flight core: commands that have arrived, then a step on the newest IMU sample.
   while (brt.toCore.length && brt.toCore[0].at <= brt.t + 1e-9) {

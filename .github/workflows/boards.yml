@@ -67,6 +67,8 @@ jobs:
           /tmp/test-fleet
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
           /tmp/test-esp-radio
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_bus.c runner/fc/bus.c -o /tmp/test-bus
+          /tmp/test-bus
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do

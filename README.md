@@ -890,6 +890,16 @@ Nothing that flies changes before step 4. The Computers tab shows where an edit 
 - **Memory:** three slots take about 250 KB. That's comfortable on an ESP32-S3, and tight on a plain ESP32 without PSRAM; there, put the loaded slots in PSRAM or build for fewer inputs.
 - **`tools/export_program.js`** makes a program image from `js/laws.js` (with `--edit key=file.js` for edits). `--c runner/rn_builtin.c` writes it as the firmware's built-in program.
 
+### The data bus
+
+Each board also keeps a **data bus** (`runner/fc/bus.h`): named topics its programs publish and read (`fc.attitude`,
+`fc.state`, `cmd.pilot`, `nav.estimate`, …), each with one writer, a sequence number and an age. Boards copy the topics
+they ask each other for over their link (`RN_LINK_BUS_SUB`, `RN_LINK_BUS`), at a rate or on change. In the simulator
+the flight core and the navigation publish on it and the Pi follows the flight core's topics; **Computers → Live
+data…** shows every board's topics live. It's the groundwork for programs of your own talking to the flight code and to
+each other: the design, the rules (the flight loop never waits on it; one writer per topic; stale is missing; a link
+budget) and the steps still to come are in [docs/topic-bus.md](docs/topic-bus.md).
+
 ### Cost
 
 **Measured on an ESP32-D0WDQ6** (ESP32-WROOM-32, 240 MHz, no PSRAM) with the bench firmware (`runner/bench`), which runs the default program's formulas on their self-test inputs:

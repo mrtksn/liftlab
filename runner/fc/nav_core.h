@@ -21,6 +21,7 @@
 #define NAV_CORE_H
 #include <stdint.h>
 #include "rn_host.h"
+#include "bus.h"
 
 /* What the navigation needs to know about the drone (exported by the simulator with the airframe). */
 typedef struct {
@@ -72,6 +73,7 @@ typedef struct {
   nav_out last;                          /* the last step's output (held while a step can't be made) */
   char why[64];
   uint32_t steps;
+  bus *bus; int bt[3];                   /* the board's data bus, if it has one (nav_bus_attach), and this code's topics */
 } nav_state;
 
 /* A nav_config blob: magic 'DFNC', version 1, the fields above as floats (refs too), CRC32. Returns 0 or −1. */
@@ -83,6 +85,9 @@ int nav_init(nav_state *N, rn_host *H);
  * a moment, and a gap that lasts ends in its failsafe); or −1 if a formula failed (then out->fly is 0: the caller
  * stops sending commands, and the flight core's failsafe lands it). */
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out);
+/* Publish on the board's data bus (docs/topic-bus.md) after each step: nav.estimate, nav.setpoint, nav.command.
+ * Without a bus (B NULL) nothing is published. 0, or −1 if the bus has no room. */
+int nav_bus_attach(nav_state *N, bus *B);
 /* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. In the
  * air the mode only steps up; on the ground it is as sent. */
 void nav_set(nav_state *N, const float *p, int n);
