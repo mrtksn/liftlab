@@ -10,7 +10,7 @@
 
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
-const undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
+let undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
 const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, environment: flightEnvironment(), computers: computers(), laws: lawSet() });
 const designSnap = () => JSON.stringify(designOf());
 
@@ -62,7 +62,7 @@ window.addEventListener('keydown', e => {
 });
 
 /* ───────── saved designs ───────── */
-const designs = { list: [], cur: null, name: '', preset: null, savedSnap: null, baseSnap: null, col: null, where: 'browser' };   // preset: the layout it started from (until saved under a name)
+let designs = { list: [], cur: null, name: '', preset: null, savedSnap: null, baseSnap: null, col: null, where: 'browser' };   // preset: the layout it started from (until saved under a name)
 // Changed and not saved: different from how it was loaded (a layout, a design, a file) and from its last save.
 const designChanged = () => { const s = designSnap(); return s !== designs.baseSnap && !(designs.cur && s === designs.savedSnap); };
 const LSD = 'drone-force-bench-v1-designs';
@@ -219,9 +219,13 @@ function renderDesignState() {
 // with * once it's changed. Share works for anything but a layout as it comes (there's nothing to share there).
 function syncAirLabel() {
   const P = designs.preset && PRESETS[designs.preset], changed = designChanged();
+  const sh = document.getElementById('designShare'); if (sh) { const off = !!P && !designs.name && !changed; sh.disabled = off; sh.title = off ? 'A layout as it comes: change it or open a design to share it (or open a shared one from the Layouts menu)' : 'Share this design with a link'; }
+  if (typeof fleet !== 'undefined' && fleet.ready) {
+    const b = document.querySelector('#presetSlot .mb-btn'); if (b) { setText(b.querySelector('span'),'Add drone…'); b.title='Add an airframe or saved design to the shared world'; b.setAttribute('aria-label','Add drone'); }
+    fleetRenderSelector(); return;
+  }
   const base = designs.name || (P ? P.label.replace(/\s*\(.*\)\s*$/, '') : 'Untitled design'), txt = base + (changed ? '*' : '');
   const b = document.querySelector('#presetSlot .mb-btn'); if (b) { const s = b.querySelector('span'); if (s && s.textContent !== txt) s.textContent = txt; b.title = `${designs.name || (P ? P.label : 'Untitled design')}${changed ? ' (changed since it was opened or saved)' : ''}. Pick a layout or one of your saved designs.`; b.setAttribute('aria-label', 'Airframe: ' + b.title); }
-  const sh = document.getElementById('designShare'); if (sh) { const off = !!P && !designs.name && !changed; sh.disabled = off; sh.title = off ? 'A layout as it comes: change it or open a design to share it (or open a shared one from the Layouts menu)' : 'Share this design with a link'; }
 }
 const designSummary = d => {
   const cs = d.design.comps, n = t => cs.filter(c => c.type === t).length, parts = [];

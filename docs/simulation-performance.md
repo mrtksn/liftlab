@@ -101,3 +101,29 @@ Software WebGL produced only roughly 13–17 FPS with long frame gaps and could 
 The same M1 hardware-rendered harness checked merged code `8efeb51`, including the rebuilt packet-radio board WASM, with the default ExpressLRS link. [Raw combined results](benchmarks/flight-physics/combined-m1.json) record no page errors or crashed cases. Quad animation stayed about 60 FPS at 1×/2×/4×; tilt quad stayed about 60 FPS at 1×/2× and 59.5 FPS at requested 4×, with actual playback 2.47×. CPU p95 was 5.2/6.9/9.8 ms for quad and 8.6/12.3/14.4 ms for tilt. Tilt 4× had an isolated CPU p99 of 21.5 ms; the budget is an estimate, not a hard frame deadline.
 
 Batch p95 was 1.7 ms quad, 3.1 ms hex, 3.7 ms tilt, 1.6 ms wing, 1.5 ms measured-table quad and 3.6 ms overlapping octo. Hex exceeded the original incremental p95 target by 0.1 ms in this repeat; tilt remained below its 5 ms target. These differences show run-to-run variability, so the earlier acceptance result should not be treated as a universal bound. Both ESP-NOW and Wi-Fi separately passed the combined browser flight/power/persistence regression locally and on the deployed site; those functional checks do not establish their sustained frame-performance cost.
+
+
+## Shared-world fleet measurements — 2026-10-07
+
+Production rendering loop, Headless Chrome on the same Apple M1 hardware renderer, 1440×1000, open terrain, default boards/physics and 1× requested speed. Each case warms to three simulated seconds and records 240 rendered frames. Drones spawn apart; all remained flying without page errors. These short local results do not establish mobile performance or dense-swarm capacity. Raw data: [fleet trace](benchmarks/fleet/m1-2026-10-07.json); reproduce with `BENCH_OUTPUT=/tmp/fleet.json node tools/benchmark_fleet.cjs --hardware-gpu`.
+
+| Preset | Drones | FPS | Actual simulation rate | Frame CPU median / p95 |
+| --- | --- | --- | --- | --- |
+| Quad X | 1 | 60.0 | 0.99× | 2.7 / 5.5 ms |
+| Quad X | 2 | 60.0 | 0.99× | 4.0 / 6.2 ms |
+| Quad X | 4 | 60.0 | 0.99× | 6.8 / 8.6 ms |
+| Quad X | 8 | 59.8 | 0.97× | 11.4 / 13.5 ms |
+| Quad X | 16 | 59.5 | 0.38× | 11.8 / 16.3 ms |
+| Tilt quad | 2 | 59.8 | 0.98× | 9.4 / 14.3 ms |
+
+The existing 11 ms adaptive physics target now applies to the whole fleet. As load grows, equal ticks advance every drone more slowly, preserving relative timing. Sixteen quads maintained about 60 FPS here by advancing at only 0.38× real time. The target uses a smoothed cost estimate: individual frames can exceed 11 ms; rendering/sidebar work is additional. Garbage collection, thermal load, terrain, edited formulas and close contacts can change the result. Do not interpret 16 as a supported real-time drone count.
+
+A separate deliberately overlapping collision microbenchmark resets positions/velocities and spinning props before each of 40 contact passes (no rendering or physics integration). It measures the full pair/component/prop contact calculation, not sustained flight FPS:
+
+| Simultaneously overlapping quads | Contact pass median / p95 |
+| --- | --- |
+| 2 | 0.2 / 1.4 ms |
+| 4 | 1.0 / 2.0 ms |
+| 8 | 3.8 / 5.5 ms |
+
+Close contacts substantially reduce the number of 0.5 ms ticks that fit in a frame. Craft and component sphere bounds avoid detailed box contacts for distant parts; large crowded fleets still need spatial indexing/contact simplification before scaling. [Ownership and collision approximations](multi-drone.md) describe the current boundary.

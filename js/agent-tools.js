@@ -33,7 +33,7 @@ async function agentRun(seconds, o = {}) {
       if (running) { running = false; renderRun(); }
       const now = performance.now(), dt = o.fast ? 0.25 : Math.min(0.25, (now - last) / 1000 * speed); last = now;
       const n = Math.max(1, Math.round(Math.min(dt, until - S.t) / PDT));
-      for (let i = 0; i < n && !S.crashed; i++) { if (i % 20 === 0) pilotStep(20 * PDT); physStep(); }
+      for (let i = 0; i < n && !S.crashed; i++) { if (typeof fleet !== 'undefined' && fleet.ready) fleetStep(1); else { if (i % 20 === 0) pilotStep(20 * PDT); physStep(); } }
     } else if (!running) { running = true; renderRun(); }
     await new Promise(r => setTimeout(r, o.fast ? 0 : 40));
   }

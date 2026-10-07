@@ -2,12 +2,12 @@
 // Law registry: holds the active version of every formula, compiles edits, validates results and
 // falls back to the default when an edited formula throws or returns something unusable.
 
-const LAWS = {};
+let LAWS = {};
 for (const def of LAW_DEFS) {
   LAWS[def.key] = { def, fn: def.fn, src: def.fn.toString(), defSrc: def.fn.toString(), status: 'default', err: '' };
 }
 const lawListeners = new Set(); // UI callbacks: (key) => void
-const notifyLaw = key => { for (const f of lawListeners) f(key); };
+const notifyLaw = key => { for (const f of lawListeners) { if (typeof droneUiActive === 'function' && !droneUiActive() && f !== rnOnLaw) continue; f(key); } };
 
 let evalAllowed = true;
 try { evalAllowed = (new Function('return 1'))() === 1; } catch (e) { evalAllowed = false; }

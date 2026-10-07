@@ -105,6 +105,7 @@ function agentEvents(n = 8) {
 function agentState() {
   const s = agentSample();
   return {
+    drone: typeof fleet !== 'undefined' && fleet.ready ? {id:fleet.selected.id,name:fleetName(fleet.selected),world_count:fleet.drones.length} : undefined,
     time: s.t, simulation: running ? 'running' : 'paused', speed, crashed: S.crashed || null, phase: flightPhaseText(),
     position: [s.x, s.y, s.alt], velocity: [s.vx, s.vy, s.climb], attitude_deg: { roll: s.roll, pitch: s.pitch, yaw: s.yaw, tilt: s.tilt },
     target: { x: s.tx, y: s.ty, z: s.tz, heading: s.heading }, distance_to_target: s.err,
@@ -144,6 +145,7 @@ function triggerTest(T) {
   return f.fn;
 }
 function agentTriggers(s) {
+  if (typeof droneUiActive === 'function' && !droneUiActive()) return;
   for (const T of agent.triggers) {
     if (!T.on) continue;
     if (T.last > s.t) T.last = -1e9;   // (the clock went back: a reset)
@@ -166,6 +168,7 @@ const triggerText = T => T.kind === 'expr' ? T.expr : TRIGGER_KINDS[T.kind].labe
 function agentSystem() {
   return [
     'You are the AI agent inside LiftLab, a browser simulator of a multirotor drone you can rebuild while it flies. You work on the SIMULATOR only.',
+    'Several drones can share the world. Your tools and this conversation operate on the selected drone; other drones keep flying. The environment and play/pause/speed affect the whole world. Selection stays fixed while you work.',
     'Axes: X forward, Y left, Z up, metres, from the world origin (the start point). Body axes on the airframe: the same, from the frame hub. Angles in degrees.',
     'Flight computers: boards (ESP32 microcontrollers, Raspberry Pi) run tasks: core (attitude, control, mixing), nav (position), learn, super (health), tlm (radio), cargo (latches). Each task runs formulas: JavaScript functions you can read and replace (same arguments, same kind of return value).',
     'Work in small steps and check: after a change, run the simulation for a few seconds (wait) and read the state. Read a formula (get_formula) before you replace it, and keep its signature.',
@@ -178,13 +181,15 @@ function agentSystem() {
 }
 /* threads */
 const threadOf = id => agent.threads.find(t => t.id === id) || null;
+const threadBelongsToDrone = t => typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected.id;
 function threadNew(kind = 'chat', o = {}) {
   const t = { id: (kind === 'trigger' ? 'g' : 'c') + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), kind, title: o.title || 'New chat',
+    droneId: typeof fleet !== 'undefined' && fleet.selected ? fleet.selected.id : 'drone-1',
     triggerId: o.triggerId || null, msgs: [], feed: [], tokens: { in: 0, out: 0 }, requests: 0, created: Date.now(), updated: Date.now() };
   agent.threads.push(t); return t;
 }
 function threadForTrigger(T) {
-  let t = agent.threads.find(x => x.kind === 'trigger' && x.triggerId === T.id);
+  let t = agent.threads.find(x => x.kind === 'trigger' && x.triggerId === T.id && threadBelongsToDrone(x));
   if (!t) t = threadNew('trigger', { triggerId: T.id, title: triggerText(T) });
   return t;
 }

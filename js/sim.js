@@ -69,15 +69,15 @@ const PRESETS = {
     const r = 0.2; const c = [45, 135, 225, 315].flatMap((a, i) => mkServoMotor('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360 }, { spin: i % 2 ? -1 : 1, tmax: 6 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
 };
-const cfg = { frame: { mass: 0.45 }, comps: [] };
+let cfg = { frame: { mass: 0.45 }, comps: [] };
 let mode = 'tilt';
 // Steering the controller uses right now: leaning, while its servos are held because it hasn't measured them yet.
 const flyMode = () => learn.view && learn.view.holdServos ? 'tilt' : mode;
-const setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
+let setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
 const envr = { wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25, pressure: 101325, sensorEffects: false, rotorSamples: 5 };   // texture and light matter to optical flow
 // No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
 // (a few percent, its own every time, fixed by its id). The controller and supervisor aren't told.
-const spreadCache = new Map();
+let spreadCache = new Map();
 function spreadOf(c) {
   const k = envr.spread ?? 1, hit = spreadCache.get(c.id); if (hit && hit.k === k) return hit;
   const R = mulberry32(c.id * 7919 + 104729), n = () => clamp(Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()), -2.5, 2.5);
@@ -86,14 +86,14 @@ function spreadOf(c) {
 
 /* ───────── state ───────── */
 // p, v: the frame's centre (the hub) in the world; q, w: its attitude and body rates. Joints carry their own angles (jst).
-const S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battV: 16.8, battK: 1, rotors: [], mb: null, crashed: null, t: 0, steps: 0 };
-const act = new Map();   // id -> { u: throttle, v: believed thrust fraction, Omega: prop speed, i: current, T: still-air thrust, Tcmd: steady thrust for u }
-const pend = new Map();  // id -> { p, v, Tn }
+let S = { p: [0, 0, 1.5], v: [0, 0, 0], q: [1, 0, 0, 0], w: [0, 0, 0], acc: [0, 0, 0], wdot: [0, 0, 0], batt: {}, battV: 16.8, battK: 1, rotors: [], mb: null, crashed: null, t: 0, steps: 0 };
+let act = new Map();   // id -> { u: throttle, v: believed thrust fraction, Omega: prop speed, i: current, T: still-air thrust, Tcmd: steady thrust for u }
+let pend = new Map();  // id -> { p, v, Tn }
 // Mixed steering: the servos take up to `share` of the sideways force; `rho` tracks how much of what they
 // were asked for they actually made (low-passed), so the body leans more when they can't keep up.
-const steerMix = { share: 0.5, rho: 1 };
+let steerMix = { share: 0.5, rho: 1 };
 const mixShare = () => steerMix.share * steerMix.rho;
-const ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0, vRef: [0, 0, 0] };  // vRef: pilot's commanded velocity
+let ctl = { iPos: [0, 0, 0], iAtt: [0, 0, 0], wDes: [0, 0, 0, 0, 0, 0], sat: false, eAtt: 0, vRef: [0, 0, 0] };  // vRef: pilot's commanded velocity
 let truth = null, model = null, nb = [0, 0, 1];
 let onCrash = () => {};
 
@@ -213,7 +213,7 @@ function recomputeProps() {
 
 // Weights for how the allocation breaks ties (see allocationPreferences). horizon: how far ahead a servo
 // move is planned [s]; what it can reach in that time bounds each step's servo change.
-const allocPrefs = { allowance: 0.02, efficiency: 0.02, servoMove: 0.01, horizon: 0.08 };
+let allocPrefs = { allowance: 0.02, efficiency: 0.02, servoMove: 0.01, horizon: 0.08 };
 const powerFull = c => { const mp = flightMotor(c); return mp.ratedQ * mp.Om; };   // shaft power at the reference operating point
 // Each input's share of the steering: the size of its effect on rotation (over its whole range), relative to the largest.
 function setAuthority(rows) {
@@ -692,8 +692,8 @@ function envelopeCalc() {
 }
 
 /* ───────── history ───────── */
-const hist = { t: [], tilt: [], err: [], est: [], util: [] }; const HMAX = 500;
-const trail = [];
+let hist = { t: [], tilt: [], err: [], est: [], util: [] }; const HMAX = 500;
+let trail = [];
 function pushHist() {
   const R = qmat(S.q); const { hub } = hubState(R); const up = clamp(dot(m3v(R, nb), [0, 0, 1]), -1, 1);
   let util = 0; for (const c of actuators()) { const st = act.get(c.id); util = Math.max(util, st.Tcmd / c.tmax); }

@@ -1,5 +1,5 @@
 'use strict';
-const HW_UI={open:new Set(),drafts:new Map()};
+let HW_UI={open:new Set(),drafts:new Map()};
 function hardwareSelect(label,id,options,value,change) {
   return UI.choice({label,id,options,value,onChange:change,commit:true});
 }

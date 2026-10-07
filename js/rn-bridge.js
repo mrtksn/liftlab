@@ -20,7 +20,7 @@
 
 const RN_STEP_OPS = 6;          // budget: one step ≈ 6 of the budget's operations (dispatch, operands, the math)
 const RN_SHADOW_S = 1.0, RN_BLEND_S = 0.3, RN_TESTS_PER_FN = 2;
-const RN = {
+let RN = {
   want: true, engine: null, wasmErr: '', P: null, A: null, trapped: {}, buildErr: '',
   steps: {}, calls: {}, maxSteps: {}, lastWork: 0, compileMs: 0,
   act: null, prev: null, stage: null, pool: [], module: null, log: [], flying: {}, samples: {}, sampleN: {},
@@ -48,9 +48,10 @@ function rnTakeEngine() {
 function rnGiveBack(E) { if (E && E.w && RN.pool.length < 3) RN.pool.push(E.w); }
 function rnFillPool() {
   if (!RN.module) return;
+  const owner = RN;
   while (RN.pool.length + (RN.poolPending || 0) < 2) {
     RN.poolPending = (RN.poolPending || 0) + 1;
-    RnWasm.fromModule(RN.module).then(w => { RN.poolPending--; RN.pool.push(w); }, e => { RN.poolPending--; RN.wasmErr = String(e && e.message || e); });
+    RnWasm.fromModule(RN.module).then(w => { owner.poolPending--; owner.pool.push(w); }, e => { owner.poolPending--; owner.wasmErr = String(e && e.message || e); });
   }
 }
 
@@ -90,7 +91,7 @@ function rnInstall(E, P) {
   RN.steps = {}; RN.calls = {}; RN.maxSteps = {};
   rnFillPool(); rnRender();
 }
-const rnRender = () => { if (typeof renderRunner === 'function') renderRunner(); };
+const rnRender = () => { if (typeof droneUiActive === 'function' && !droneUiActive()) return; if (typeof renderRunner === 'function') renderRunner(); };
 
 /* ───────── staged reload ───────── */
 function rnCancelStage() { if (RN.stage) { rnGiveBack(RN.stage.E); RN.stage = null; } }
@@ -288,13 +289,20 @@ function rnDownload() {
 }
 
 // Start: compile now (the JavaScript runner can fly at once), then switch to the C runner when it's ready.
-function rnOnLaw(key) { if (RN_SIGS[key]) { clearTimeout(RN.pending); RN.pending = setTimeout(() => { rnStage(); if (typeof boardsStageProgram === 'function') boardsStageProgram(); }, 30); } }
+function rnOnLaw(key) { if (RN_SIGS[key]) { const owner = RN; clearTimeout(RN.pending); RN.pending = setTimeout(() => { const f = () => { rnStage(); if (typeof boardsStageProgram === 'function') boardsStageProgram(); }; if (typeof window.runDroneCallback === 'function') window.runDroneCallback(owner,f); else f(); }, 30); } }
 rnRebuild();
 lawListeners.add(rnOnLaw);
-(function startWasm() {
+let runnerModulePromise = null;
+function rnLoadWasm() {
+  if (RN.loading) return RN.loading;
+  const owner = RN;
+  const callback = fn => typeof window.runDroneCallback === 'function' ? window.runDroneCallback(owner,fn) : fn();
   if (typeof WebAssembly !== 'object' || typeof RN_WASM_B64 !== 'string') { RN.wasmErr = 'this browser has no WebAssembly'; return; }
   let bytes;
   try { bytes = Uint8Array.from(atob(RN_WASM_B64), c => c.charCodeAt(0)); } catch (e) { RN.wasmErr = e.message; return; }
-  WebAssembly.compile(bytes).then(m => { RN.module = m; return Promise.all([RnWasm.fromModule(m), RnWasm.fromModule(m), RnWasm.fromModule(m)]); })
-    .then(ws => { RN.pool.push(...ws); rnRebuild(); }, e => { RN.wasmErr = 'WebAssembly is blocked here (' + (e && e.message || e) + ')'; rnRender(); });
-})();
+  runnerModulePromise ||= WebAssembly.compile(bytes);
+  RN.loading = (RN.module ? Promise.resolve(RN.module) : runnerModulePromise).then(m => { owner.module = m; return Promise.all([RnWasm.fromModule(m), RnWasm.fromModule(m), RnWasm.fromModule(m)]); })
+    .then(ws => { owner.pool.push(...ws); callback(rnRebuild); }, e => { owner.wasmErr = 'WebAssembly is blocked here (' + (e && e.message || e) + ')'; callback(rnRender); });
+  return RN.loading;
+}
+rnLoadWasm();

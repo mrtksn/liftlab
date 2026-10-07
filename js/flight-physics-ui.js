@@ -117,6 +117,9 @@ function buildFlightPhysicsUI() {
   $('#paneAir').append(el('section', {class: 'sec'}, el('h2', {text: 'Flight physics'}), readout,
     el('p', {class: 'hint', text: 'Thrust per watt is a lifting metric, not propulsive efficiency. Disk loading uses weight and summed rotor area; overlapping/tilted disks are not corrected. Generic tip losses start above Mach 0.7; Mach 0.6 is not a universal optimum.'}),
     UI.details({title: 'Frame timing', id: 'flightTimingFold', class: 'fold'}, performance, el('p', {class: 'hint', text: 'Rolling 240 frames. CPU includes scene submission and UI; GPU execution is asynchronous. Real-time rate is simulated seconds per wall second. Playback slows when estimated physics work exceeds an 11 ms frame budget; integration accuracy stays at the same fixed step.'}))));
+  buildFlightEnvironmentFields();
+}
+function buildFlightEnvironmentFields() {
   $('#spFields').append(flightNumber(envr, 'pressure', 'Air pressure', 20000, 120000, 100, 'Pa', 101325, () => { refreshEnvelope(); renderMass(); save(); }, 'air'));
   const check = UI.input({type: 'checkbox', id: 'flight-sensor-effects'}); check.checked = envr.sensorEffects;
   check.addEventListener('change', () => { envr.sensorEffects = check.checked; save(); });

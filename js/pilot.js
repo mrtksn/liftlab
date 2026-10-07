@@ -45,7 +45,7 @@ function setKeyLayout(k, store = true) {
   const f = document.getElementById('fwdKey'); if (f) f.textContent = keyOf('fwd');
 }
 document.querySelectorAll('[data-keys]').forEach(b => b.addEventListener('click', () => setKeyLayout(b.dataset.keys)));
-const pilot = { held: new Map(), level: 'normal', vref: [0, 0, 0] };   // held: control -> set of sources
+let pilot = { held: new Map(), level: 'normal', vref: [0, 0, 0] };   // held: control -> set of sources
 
 const isHeld = c => pilot.held.has(c);
 function markPad(c) { const b = document.querySelector(`[data-ctrl="${c}"]`); if (b) b.setAttribute('aria-pressed', String(isHeld(c))); }

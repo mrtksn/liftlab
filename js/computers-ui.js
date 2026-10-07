@@ -3,7 +3,7 @@
 // board) that runs it, as math plus its live code, editable. The physics and sensor models are the world's, not any
 // board's: they come last.
 
-const lawOpen = new Set();
+let lawOpen = new Set();
 const lawCards = new Map(); // key -> { card, status, ta, err, applyBtn, resetBtn }
 
 function statusText(L) { return L.status === 'error' ? 'Error' : L.status === 'edited' ? 'Edited' : 'Default'; }

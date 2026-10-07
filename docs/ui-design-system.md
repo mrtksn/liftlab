@@ -71,6 +71,10 @@ The Edit viewport shows saved-design characteristics through `js/design-stats.js
 
 Run `node tools/test_chat_design.cjs` for Markdown safety, design equations, mode/visibility transitions and responsive light/dark checks. Set `LIVE_URL` to verify a deployment or `TEST_SCREENSHOTS` to a path prefix for previews. Use `--hardware-gpu` for hardware-rendered screenshots. This is separate from the full flight/radio regression in `tools/test_flight_browser.cjs`.
 
+## Selected-drone UI
+
+The top dropdown and viewport selection bind both sidebars to one drone. Add airframe creates another instance. Use the same native controls and HUD for every instance; the design HUD retains its transparent flight-HUD styling. Selection rebuilds controls that capture drone-local objects and restores per-drone drafts/undo/chat context. Shared world/view controls remain shared. Ownership and callback rules are in [multi-drone architecture](multi-drone.md).
+
 ## Checkpoint and rollback
 
 The complete pre-refactor state is commit `53cf25c`, tagged `ui-before-refactor-2026-10-06`. The refactor is on `codex/ui-components`. Compare with `git diff ui-before-refactor-2026-10-06..codex/ui-components`. With a clean checkout, switching to the tag restores the original version in detached HEAD; switching back to `codex/ui-components` restores this version. Preserve subsequent local work before switching. Avoid a hard reset as a rollback shortcut.

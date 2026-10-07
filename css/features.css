@@ -773,6 +773,9 @@ html.phone .bar:not(.open) #resetBtn,html.phone .bar:not(.open) #launchSeg,html.
 html.phone .bar:not(.open) #runBtn{order:-1}
 html.phone .bar:not(.open) #presetSlot{flex:1;min-width:0;display:flex}
 html.phone .bar:not(.open) #presetSlot .mb-btn{width:100%;justify-content:space-between}
+html.phone .bar:not(.open) #presetSlot .mb-btn{min-width:0}
+html.phone .bar:not(.open) #droneSelect{flex:1;min-width:0;width:0}
+html.phone .bar:not(.open) #droneRemove,html.phone .bar:not(.open) #designShare{display:none}
 html.phone #hdrMore{display:inline-flex;order:9;flex:none}
 html.phone .bar.open #hdrMore{position:absolute;right:12px;top:10px}
 html.phone .bar.open{position:relative}

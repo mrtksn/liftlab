@@ -81,7 +81,7 @@ function listView() {
   const list = el('div', { class: 'ai-list' });
   const newChat = UI.button( { class: 'btn primary ai-new', type: 'button', id: 'aiNewChat', text: '+ New chat', onclick: () => { agent.cur = threadNew().id; aiUi.view = 'chat'; agentRender(); setTimeout(() => { const i = $('#aiInput'); if (i) i.focus(); }); } });
   list.append(newChat);
-  const chats = agent.threads.filter(t => t.kind === 'chat' && (t.msgs.length || t.feed.length)).sort((a, b) => b.updated - a.updated);
+  const chats = agent.threads.filter(t => t.kind === 'chat' && (typeof fleet === 'undefined' || !fleet.ready || t.droneId === fleet.selected.id) && (t.msgs.length || t.feed.length)).sort((a, b) => b.updated - a.updated);
   list.append(el('div', { class: 'ai-group' }, el('span', { class: 'lbl', text: 'Chats' })));
   if (!chats.length) list.append(el('p', { class: 'hint ai-none', text: 'No chats yet.' }));
   for (const t of chats) list.append(threadRow(t, t.title, `${ago(t.updated)}${t.tokens.in ? ' · ' + kfmt(t.tokens.in + t.tokens.out) + ' tokens' : ''}`));
@@ -242,7 +242,7 @@ function settingsView() {
   const data = UI.card( { class: 'ai-card' }, el('span', { class: 'lbl', text: 'Chats' }),
     el('p', { class: 'hint', text: 'Kept in this browser (the newest 30, and each trigger\'s).' }),
     el('div', { class: 'ai-row' }, UI.button( { class: 'btn danger', type: 'button', text: 'Delete all chats', onclick: () => {
-      if (!confirm('Delete every chat? Triggers stay.')) return; for (const t of agent.threads.filter(x => x.kind === 'chat')) threadDelete(t.id); agentRender(); } })));
+      if (!confirm('Delete every chat for the selected drone? Triggers stay.')) return; for (const t of agent.threads.filter(x => x.kind === 'chat' && threadBelongsToDrone(x))) threadDelete(t.id); agentRender(); } })));
   box.append(el('div', { class: 'ai-list' }, conn, beh, data));
   return box;
 }

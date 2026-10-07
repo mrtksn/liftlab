@@ -53,7 +53,7 @@ const PK_AIR = {
     lat: () => 0.0005 + 0.0075 * radioRand(), stall: 0, beacon: 0.04, lose: 1, join: [0.15, 0.5],   // (the next connection event; advertising every 40 ms, a 1 s supervision timeout, scan and connect)
   },
 };
-const pk = {};   // the packet model's own state (radio, in link.js, holds what every link shares)
+let pk = {};   // the packet model's own state (radio, in link.js, holds what every link shares)
 const pkP = margin => 1 / (1 + Math.exp(-(margin - 2) / 1.3));   // one try gets through (802.11's error rate falls off faster than LoRa's)
 const pkKey = f => String.fromCharCode.apply(null, f);
 const pkReliable = f => f[2] === CRSF.EXT && f[1] >= 3 && (f[3] === CRSF.EXT_TEXT || f[3] === CRSF.EXT_CMD);   // what plink sends reliably (plink.c reliable)

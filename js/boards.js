@@ -153,7 +153,7 @@ function boardBudget(b) {
 }
 
 /* ───────── the runtime: one instance of the flight code per board ───────── */
-const brt = {
+let brt = {
   module: null, err: '', inst: new Map(), sig: null, ready: false,
   toCore: [], toNav: [], q: [], tel: null, navOut: null, navReady: false, home: null,
   coreElapsed: 0, t: 0, nextTel: 0, nextNav: 0.005, nextStick: 0, nextLtel: 0, nextHealth: 0, nextView: 0, nextRadio: 0, nextPub: 0, nextPack: 0, nextRc: 0, nextGnd: 0, nextGsRead: 0, nextCargo: 0, cargoN: 0,
@@ -164,11 +164,13 @@ const brt = {
 const FC_STATES = ['disarmed', 'armed', 'failsafe', 'crashed', 'motor test'];
 // learn_core.h commands
 const LN_CMD = { calibrate: 1, stop: 2, useDesc: 3, useLearned: 4, keepOn: 5, keepOff: 6, throw: 7, holdOn: 8, holdOff: 9, thenCalOn: 10, thenCalOff: 11 };
+let boardsModulePromise = null;
 function boardsLoad() {   // compile the module once (instances are then made at once)
   if (brt.module || brt.loading) return brt.loading;
   if (typeof WebAssembly !== 'object' || typeof BOARD_WASM_B64 !== 'string') { brt.err = 'this browser has no WebAssembly: the flight computers can\'t run'; return null; }
-  const bytes = Uint8Array.from(atob(BOARD_WASM_B64), c => c.charCodeAt(0));
-  brt.loading = WebAssembly.compile(bytes).then(m => { brt.module = m; brt.sig = null; doReset(); }, e => { brt.err = 'the flight computers didn\'t load: ' + e.message; });
+  boardsModulePromise ||= WebAssembly.compile(Uint8Array.from(atob(BOARD_WASM_B64), c => c.charCodeAt(0)));
+  const owner = brt, callback = fn => typeof window.runDroneCallback === 'function' ? window.runDroneCallback(owner,fn) : fn();
+  brt.loading = boardsModulePromise.then(m => { owner.module = m; callback(() => { brt.sig = null; resetSim(); }); }, e => { owner.err = 'the flight computers didn\'t load: ' + e.message; });
   return brt.loading;
 }
 const cstr = (w, ptr, max = 64) => { const b = new Uint8Array(w.memory.buffer, ptr, max); let n = 0; while (n < max && b[n]) n++; return new TextDecoder().decode(b.slice(0, n)); };
@@ -274,7 +276,7 @@ function groundStart() {
   else if (e) brt.gndErr = `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
   brt.gnd = g;
 }
-const learnPrefs = { keep: true, holdPulses: true };
+let learnPrefs = { keep: true, holdPulses: true };
 const boardSrcKey = (tasks, srcs) => rnTaskFormulas(tasks).map(k => srcs[k]).join('\u0000');
 // A formula edited in flight: every board whose tasks use it stages its new program through its own loading steps.
 function boardsStageProgram() {
@@ -603,7 +605,7 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
 }
 // The ground station's target and the drone's: an edit of the target (the fields, Hold and Home buttons of the
 // simulator) goes up as a "go to"; otherwise the target shown is the one the drone flies to (moved by the sticks).
-const gsSet = { x: null, pending: null };
+let gsSet = { x: null, pending: null };
 function gsSyncTarget() {
   const r = brt.navOut.radio, home = brt.home || spawnAt || [0, 0, 0];
   const tgt = [home[0] + r.target[0], home[1] + r.target[1], home[2] + r.target[2]], yaw = r.heading * R2D;

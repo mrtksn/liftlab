@@ -46,7 +46,7 @@ const FLIGHT_COST = {
 // Occasional fits that run once (at the end of a test, or at the moment a throw is solved), not every step.
 const isOneOff = (key, args) => key === 'identifyMotorResponse' || key === 'identifyServoResponse' || (key === 'identifyThrow' && args[6] === true);
 
-const budget = {
+let budget = {
   chip: (() => { try { return localStorage.getItem('dfb-chip') || 'esp32'; } catch (e) { return 'esp32'; } })(),
   keys: {}, sum: {}, steps: 0, total: 0, peakWin: 0, peakKeys: null, peaks: [], flightMax: 0, flightMaxKeys: null,
   oneOffs: [], memPeak: 0, lastRender: 0,

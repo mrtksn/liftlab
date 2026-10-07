@@ -7,6 +7,7 @@
 function battEdited() { undoKey = 'battery'; recomputeProps(); refreshEnvelope(); renderMass(); save(); renderBattSmall(); for (const refresh of flightBatteryFieldRefs) refresh(); }
 function renderBattSmall() { const b = battCfg(); $('#battSmall').textContent = `${b.cells}S · ${b.capacity.toFixed(1)} Ah · ${(battMass() * 1000).toFixed(0)} g`; }
 function renderBattery() {
+  if (typeof flightBatteryFieldRefs !== 'undefined') flightBatteryFieldRefs.length=0;
   const box = $('#battFields'); if (!box) return; box.textContent = '';
   const b = battCfg();
   const num = (key, d) => numField('batt-' + key, d, () => battCfg()[key], v => { battCfg()[key] = key === 'cells' ? Math.round(v) : v; battEdited(); }).node;

@@ -23,7 +23,7 @@ const ELRS_RATES = { 50: -115, 150: -112, 250: -108, 500: -105 };   // receiver 
 const ELRS_AIR = { 50: 0.013, 150: 0.005, 250: 0.003, 500: 0.0016 };  // a packet's time on air, roughly [s]: it arrives that long after it's sent
 const ELRS_RATIOS = [2, 4, 8, 16, 32, 64, 128];
 const ELRS_POWERS = [10, 25, 100, 250, 500, 1000];   // [mW]
-const elrs = {};   // the model's own state (radio, in link.js, holds what every link shares)
+let elrs = {};   // the model's own state (radio, in link.js, holds what every link shares)
 
 // The signal at the drone: transmit power and the path, against the receiver's sensitivity at this rate.
 function elrsRf() {

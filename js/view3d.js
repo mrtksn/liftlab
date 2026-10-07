@@ -41,8 +41,8 @@ const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -60, 260); orthoCam.
 let camera = perspCam;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 0.85));
 const sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(3, -4, 6); scene.add(sun);
-let grid = null; const drone = new THREE.Group(); scene.add(drone);
-const worldFx = new THREE.Group(); scene.add(worldFx);
+let grid = null; let drone = new THREE.Group(); scene.add(drone);
+let worldFx = new THREE.Group(); scene.add(worldFx);
 let headArrow = null, mats = {}, rangeVis = new Map(), jointGroups = new Map(), parts = new Map(), pickGroups = new Map(), pendVis = new Map(), ghost = null, cogDot, modelRing, gravArrow, windArrow, spMarker, trailLine;
 let tqNetGlyph = null, tqWantArrow = null, tqRotor = [];   // torque: net about the centre of mass, the controller's wish, per rotor
 const cam = { az: -2.2, el: 0.42, dist: 3.2, target: new THREE.Vector3(0, 0, 1.5), anim: null };
@@ -369,7 +369,7 @@ function buildGhost() {   // outline of where the flight software thinks the dro
 /* ───────── wings: each one's lift and drag, as arrows from where they act ───────── */
 // Lift (across the air past the wing) and drag (along it), each smoothed over 0.1 s like the torques, and sized like
 // the thrust arrows (a few cm per newton), so they compare with them. Seen through the airframe.
-const aeroVis = { arrows: [], sm: [] };
+let aeroVis = { arrows: [], sm: [] };
 function aeroArrow(col) {
   const a = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.2, col, 0.035, 0.022);
   for (const o of [a.line, a.cone]) { o.userData.noPick = true; o.material.depthTest = false; o.material.transparent = true; o.renderOrder = 19; }
@@ -392,7 +392,7 @@ function updateAeroVis(R, live) {
 }
 
 /* ───────── cargo: loose bodies, the latches' jaws, how far an open latch is from what it could grab ───────── */
-const looseVis = new Map(), reachVis = [];   // loose body id -> group; per latch: { line, ring }
+let looseVis = new Map(), reachVis = [];   // loose body id -> group; per latch: { line, ring }
 function looseGroup(L) {   // its parts, drawn at rest in the body's own axes (origin: its grab point)
   const g = new THREE.Group(), at = (m, p) => { m.position.set(...p); g.add(m); };
   for (const c of L.parts) {
@@ -524,11 +524,11 @@ function updateTorque(R, live) {
     tqWantArrow.position.set(cg[0], cg[1], cg[2]); tqWantArrow.setDirection(tmpV.set(u[0], u[1], u[2])); tqWantArrow.setLength(0.06 + 0.3 * f, 0.03, 0.02);
   }
 }
-function updateScene() {
+function updateScene(selected = true) {
   if (droneShown !== cargo.rev + ':' + editMode) rebuildDrone();
   if (grid) grid.visible = view.grid;
   const R = qmat(S.q); const { hub } = hubState(R);
-  updateCity(hub);
+  if (selected) updateCity(hub);
   drone.position.set(...hub);
   if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
   else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
@@ -593,6 +593,7 @@ function updateScene() {
   spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
+  if (!selected) return;
   let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   const selC = editMode && compById(edit.sel);
   if (selC) {   // editing: orbit round the selected part; with the servo panel open, keep it clear of the panel

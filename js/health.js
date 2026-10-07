@@ -16,8 +16,8 @@
 // what's left: normally, carefully, back home, or straight down.
 
 /* ───────────────────────── the real drone ───────────────────────── */
-const hs = new Map();   // id -> { T, loss, dead, jam, limp, cause, failT }, for motors and servos
-const hb = { T: 25, fade: 0, cellsLost: 0, cut: false, cause: '', lvc: false, lvcT: 0 };
+let hs = new Map();   // id -> { T, loss, dead, jam, limp, cause, failT }, for motors and servos
+let hb = { T: 25, fade: 0, cellsLost: 0, cut: false, cause: '', lvc: false, lvcT: 0 };
 const ambient = () => (envr.ambient ?? 25);
 function hsOf(c) {
   let s = hs.get(c.id);
@@ -116,7 +116,7 @@ function servoFault(j, st, t) {
 /* ───────────────────────── sensors ───────────────────────── */
 // What the drone's electronics report: each with its rate, noise and delay. A temperature sensor sits on
 // the stator or the pack, so it trails the true temperature.
-const hread = { m: new Map(), b: {}, next: {} };
+let hread = { m: new Map(), b: {}, next: {} };
 // Their own noise, seeded apart from the flight sensors', so fitting health sensors doesn't change the rest.
 let hSeed = 0x9e3779b9;
 function hrandn() {
@@ -142,9 +142,9 @@ function sampleHealth(dt) {
 /* ───────────────────────── what the boards were told ───────────────────────── */
 // The flight core corrects the throttle for the battery's voltage when it has a voltage reading (fc.vComp). jAng: the
 // angle the supervisor says a stuck servo is really at (for the simulator's view of what the flight code believes).
-const fc = { vComp: true, jAng: new Map() };
+let fc = { vComp: true, jAng: new Map() };
 // The simulator's own events (a part breaking, a restart), shown with the supervisor's in the Health panel.
-const sup = { log: [] };
+let sup = { log: [] };
 function healthEvent(msg, tone = 'info') { sup.log.unshift({ t: S.t, msg, tone }); if (sup.log.length > 12) sup.log.pop(); }
 function healthStep(dt) { sampleHealth(dt); }
 // The health readings as the supervisor's board gets them (super_core.h super_health).

@@ -11,7 +11,7 @@
 // Turning a rigid part about a hinge is linear in cos θ and sin θ, so this is exact, and the motor's effect
 // at any joint angles is a fixed sum of learned columns.
 
-const learn = {
+let learn = {
   index: new Map(), n: 0, sig: '',
   view: null,         // the learning task's status, as its board reports it (boards.js boardsLearnView)
   msg: '',
@@ -122,7 +122,7 @@ function trueImuOffset() {   // mean IMU position relative to the true CoG, body
 // The throw start (after Blaha, Smeur & Remes, TU Delft, 2024): the drone is held in the hand, armed with its motors
 // off; the learning task is told a throw is coming. The hand then swings it up to speed and spin and lets go. From
 // there the learning task flies it: it notices the free fall, pulses each motor, fits its model and catches itself.
-const throwCfg = { height: 7, spin: 6, thenCalibrate: true, handH: 1.2 };   // apex height [m], tumble [rad/s], hand height [m]
+let throwCfg = { height: 7, spin: 6, thenCalibrate: true, handH: 1.2 };   // apex height [m], tumble [rad/s], hand height [m]
 let thr = null;          // { phase: 'hand' | 'toss' | 'free', t, toss } while the hand has it or it's in the air
 let launchMode = 'hover';   // what Reset does: start on the ground and take off, or throw
 function startThrow() { thr = { phase: 'hand', t: 0 }; }   // called right after resetSim(): held at hand height

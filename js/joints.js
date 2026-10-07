@@ -136,7 +136,7 @@ const motorsUnder = j => actuators().filter(c => isUnder(c, j));
 const steerJoints = () => joints().filter(j => j.mode === 'auto' && motorsUnder(j).length);
 
 /* ───────── joint state ───────── */
-const jst = new Map();   // id -> { th: true angle, thR: horn angle, thCmd, thHat: believed angle, pst, rate, acc }
+let jst = new Map();   // id -> { th: true angle, thR: horn angle, thCmd, thHat: believed angle, pst, rate, acc }
 const restAngle = j => j.mode === 'manual' ? j.manual * D2R : 0;
 const angleTrue = j => { const s = jst.get(j.id); return s ? s.th : restAngle(j); };
 function angleSeen(j) {   // what the flight software uses

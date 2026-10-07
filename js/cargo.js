@@ -30,7 +30,7 @@ function topOf(c) {
 }
 
 /* ───────── what's on the drone now ───────── */
-const cargo = {
+let cargo = {
   off: new Set(),        // design parts not on the drone now
   extra: [],             // parts picked up: copies with their own ids, attached to a latch
   loose: [],             // loose bodies in the world

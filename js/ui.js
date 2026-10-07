@@ -87,7 +87,7 @@ const FIX_TUNED = ['rateFix', 'lat', 'fixNoise', 'wander', 'velNoise'];
 const getP = (o, p) => p.reduce((a, k) => a[k], o);
 function setP(o, p, v) { const last = p[p.length - 1]; p.slice(0, -1).reduce((a, k) => a[k], o)[last] = v; }
 const fmtV = (v, d) => (d.k ? v * d.k : v).toFixed(d.dp) + ' ' + d.u;
-const openSet = new Set();
+let openSet = new Set();
 // How a servo is mounted: which way it swings what it carries (see swingOf), relative to what it's on.
 const swingTag = j => { const p = swingPreset(j), w = swingOf(j); return 'swings ' + (p ? p.label.toLowerCase() : `${w.swing.toFixed(0)}°`) + (Math.abs(w.lean) > 0.5 ? `, lean ${w.lean.toFixed(0)}°` : ''); };
 const ROD_PRESETS = [['down', 'Straight down', 0, -90], ['fwd', 'Forward', 0, 0], ['back', 'Back', 180, 0], ['left', 'Left', 90, 0], ['right', 'Right', -90, 0], ['up', 'Straight up', 0, 90], ['custom', 'Custom direction', null, null]];
@@ -287,7 +287,7 @@ function compCard(c) {
   }
   return card;
 }
-const foldSet = new Set();
+let foldSet = new Set();
 let dragId = null;
 function dropTarget(elm, holder) {   // accept a dragged part if it may be attached here
   const ok = () => { const c = compById(dragId); return c && (holder ? canAttach(c, holder) : !!parentOf(c)); };
@@ -771,7 +771,7 @@ function drawChart() {
 const spRefs = [];
 function spSlider(key, label, min, max, step, u, obj, ends) {
   const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? (step < 0.1 ? 2 : 1) : 0, ends }, () => obj[key], v => {
-    obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; }
+    obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; if (typeof fleetSave === 'function') fleetSave(); }
     else if (obj === envr) { refreshEnvelope(); renderMass(); save(); }
   });
   spRefs.push(f.refresh);
@@ -794,8 +794,8 @@ const presetMenu = menuButton({ text: 'Layouts', key: 'presetMenu', align: 'left
     { value: 'x:paste', label: 'Open a shared design…', group: 'Shared with you', hint: 'paste a link or a code' }],
   onPick: v => {
     if (v === 'x:paste') { openShare(true); return; }
-    if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) askToSave(d.name || 'Untitled design', () => openDesign(d)); }
-    else { const k = v.slice(2); if (PRESETS[k]) askToSave(PRESETS[k].label, () => loadPreset(k)); }
+    if (v.startsWith('d:')) { const d = designs.list.find(x => x.id === v.slice(2)); if (d) fleetCreate('quadx',{design:d.design,name:d.name,designName:d.name,designId:d.id}); }
+    else { const k = v.slice(2); if (PRESETS[k]) fleetCreate(k); }
   } });
 $('#presetSlot').replaceWith(presetMenu.node); presetMenu.node.id = 'presetSlot';
 function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.frame; setFrameShape(p.frameShape); cfg.comps = migrateComps(p.comps); cfg.battery = p.battery || defaultBattery(); setMode(p.mode, false); openSet.clear();
@@ -902,7 +902,10 @@ window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', 
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 // The world: open ground or a city (terrain.js). Changing it starts the flight again in the open plaza.
 function applyTerrain(kind, seed) {
-  setTerrain(kind, seed); syncTerrainUi(); cPts = contactPoints(); doReset(); save();
+  setTerrain(kind, seed); syncTerrainUi();
+  if (typeof fleet !== 'undefined' && fleet.ready) for(const d of fleet.drones)withDrone(d,resetSim);
+  else { cPts = contactPoints(); doReset(); }
+  syncSp();save();
 }
 function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
 commitSelect($('#terrainSel'), v => { if (v !== terrain.kind) applyTerrain(v, terrain.seed); }, 'Press Enter to switch: it starts the flight again');
@@ -910,7 +913,7 @@ $('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + 
 function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }
 document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
 [['tFollow', 'follow'], ['tChase', 'chase']].forEach(([id, k]) => { const b = $('#' + id); b.addEventListener('click', () => { view[k] = !view[k]; b.setAttribute('aria-pressed', String(view[k])); }); });
-onCrash = () => { $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
+onCrash = () => { if (typeof droneUiActive === 'function' && !droneUiActive()) return; $('#crashWhy').textContent = S.crashed; $('#crash').hidden = false; };
 
 /* ───────── Show menu: what the view draws ───────── */
 // One switch per overlay (LAYERS in view3d.js), grouped, with presets. The choice is kept in this browser.
@@ -1024,6 +1027,7 @@ function save() {
     const laws = {}; for (const L of editedLaws()) laws[L.def.key] = L.src;
     localStorage.setItem(LS, JSON.stringify({ cfg, mode, laws, sensing, keepLearning: learnPrefs.keep, holdPulses: learnPrefs.holdPulses, allocPrefs: { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove }, mixShare: steerMix.share, designCur: typeof designs !== 'undefined' ? designs.cur : null, designPreset: typeof designs !== 'undefined' ? designs.preset : null, designName: typeof designs !== 'undefined' ? designs.name : '', designClean: typeof designs !== 'undefined' && !!designs.cur && designs.savedSnap === designSnap(), designEdited: typeof designs !== 'undefined' && designChanged(), terrain: { kind: terrain.kind, seed: terrain.seed }, launch: launchMode, throwCfg: { v: 2, height: throwCfg.height, spin: throwCfg.spin, thenCalibrate: throwCfg.thenCalibrate }, radio: { ...radioCfg }, radio2: { ...radioCfg2 }, tlmV: 1 }));
   } catch (e) {}
+  if (typeof fleetSave === 'function') fleetSave();
 }
 // Brings a design saved by an older version up to date.
 function migrateComps(comps) {
@@ -1088,7 +1092,7 @@ function load() {
 }
 
 /* ───────── theme ───────── */
-const onTheme = () => { applyTheme(); renderEnvelope(); };
+const onTheme = () => { if (typeof fleet !== 'undefined' && fleet.ready) fleetTheme(); else applyTheme(); renderEnvelope(); };
 const mq = window.matchMedia('(prefers-color-scheme: dark)'); mq.addEventListener && mq.addEventListener('change', onTheme);
 new MutationObserver(onTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
@@ -1103,9 +1107,10 @@ function boot() {
   let tab = 'air'; try { tab = localStorage.getItem(LS + '-tab') || 'air'; } catch (e) {}
   UI_PANELS.editor.select(tab);
   UI_PANELS.readouts.restore();
+  fleetInit();
   let lastT = performance.now(), envT = 0, uiT = 0, physicsCostPerStep = .1;
   function frame(now) {
-    const cpuStart = performance.now(), simStart = S.t, rawDt = Math.max(0, (now - lastT) / 1000);
+    const cpuStart = performance.now(), simStart = fleet.time, rawDt = Math.max(0, (now - lastT) / 1000);
     const dt = Math.min(0.05, rawDt); lastT = now;
     if (liveOn()) liveView();                                        // the real drone: the view from its telemetry
     else if (running) {
@@ -1113,7 +1118,7 @@ function boot() {
       // instead of letting a late frame request still more catch-up work.
       const requested = Math.round(dt * speed / PDT), budgeted = Math.max(1, Math.floor(11 / physicsCostPerStep));
       const steps = Math.min(200, requested, budgeted);
-      pilotStep(steps * PDT); for (let n = 0; n < steps; n++) physStep();
+      fleetStep(steps);
       if (steps > 0) physicsCostPerStep = .9 * physicsCostPerStep + .1 * Math.max(.001, (performance.now() - cpuStart) / steps);
     }
     const physicsMs = performance.now() - cpuStart;
@@ -1121,8 +1126,8 @@ function boot() {
     renderGs();
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); }
     renderLaunch();
-    updateScene(); renderer.render(scene, camera);
-    flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, S.t - simStart)); requestAnimationFrame(frame);
+    fleetScene(); renderer.render(scene, camera);
+    flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, fleet.time - simStart)); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 }

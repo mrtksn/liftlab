@@ -64,12 +64,14 @@ try{
   if(process.env.TEST_SCREENSHOTS){await page.evaluate(()=>{UI_PANELS.editor.select('ai');document.getElementById('aiFeed').scrollTop=0;});await page.waitForTimeout(500);await page.screenshot({path:process.env.TEST_SCREENSHOTS+'-desktop.png'});}
   for(const theme of ['light','dark']){
     await page.setViewportSize({width:390,height:844});await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;renderDesignHud();},theme);
+    await page.waitForFunction(()=>document.documentElement.classList.contains('phone'));
+    await page.evaluate(()=>{setLayers({readouts:true});renderDesignHud();});
     await page.waitForTimeout(250);
-    await page.evaluate(()=>{view.readouts=true;showApply();renderDesignHud();});
+    const hudBounds=await page.evaluate(()=>{const h=document.querySelector('.hud-tl'),r=h.getBoundingClientRect(),v=document.querySelector('.view').getBoundingClientRect();return {hud:{left:r.left,right:r.right,bottom:r.bottom,width:r.width},view:{left:v.left,right:v.right},scroll:h.scrollWidth,client:h.clientWidth,editTop:document.getElementById('editBar').getBoundingClientRect().top,text:h.innerText};});
     assert(await page.evaluate(()=>{
       const hud=document.querySelector('.hud-tl'),r=hud.getBoundingClientRect(),v=document.querySelector('.view').getBoundingClientRect();
       return r.width>0&&r.right<=v.right+1&&r.left>=v.left&&hud.scrollWidth<=hud.clientWidth+1&&r.bottom<document.getElementById('editBar').getBoundingClientRect().top;
-    }),'Mobile design HUD overflows');
+    }),'Mobile design HUD overflows: '+JSON.stringify(hudBounds));
     if(process.env.TEST_SCREENSHOTS)await page.screenshot({path:process.env.TEST_SCREENSHOTS+'-'+theme+'-mobile.png'});
   }
   await page.reload({waitUntil:'networkidle'});await page.waitForFunction(()=>brt.ready);

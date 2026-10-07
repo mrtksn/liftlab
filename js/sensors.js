@@ -37,9 +37,9 @@ const defaultSensors = () => [
 ];
 
 /* ───────── runtime ───────── */
-const sens = new Map();   // sensor id -> { st, acc, queue, latest, fresh }
-const vib = new Map();    // motor id -> { ph, u, um }
-const est = { fGyro: [0, 0, 0], fAccel: [0, 0, 9.81], q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], havePos: false, haveImu: false, drv: {} };
+let sens = new Map();   // sensor id -> { st, acc, queue, latest, fresh }
+let vib = new Map();    // motor id -> { ph, u, um }
+let est = { fGyro: [0, 0, 0], fAccel: [0, 0, 9.81], q: [1, 0, 0, 0], R: [1, 0, 0, 0, 1, 0, 0, 0, 1], w: [0, 0, 0], p: [0, 0, 0], v: [0, 0, 0], havePos: false, haveImu: false, drv: {} };
 let sensing = 'sensors';  // what the controller flies on: 'sensors' or 'truth'
 const sensorsOf = kind => cfg.comps.filter(c => c.type === 'sensor' && c.kind === kind);
 const allSensors = () => cfg.comps.filter(c => c.type === 'sensor');

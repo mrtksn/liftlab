@@ -42,17 +42,17 @@ const RADIO_LINKS = {};
 // fibre or a wire, tether [m] long; 1 a laser; 2 infrared LEDs; 3 a radio modem); nRF24L01: kbps (250, 1000, 2000);
 // the packet links: bind (the binding
 // phrase, the same at both ends); every link: extra (path loss [dB], the simulator's)
-const radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
+let radioCfg = { kind: 'elrs', rate: 250, ratio: 4, power: 100, extra: 0, channel: 1, lr: 0, sta: 0, baud: 115200, half: 0, medium: 1, tether: 50, kbps: 1000, bind: 'liftlab' };
 const RADIO_KINDS = ['elrs', 'espnow', 'ble', 'wifi', 'serial', 'nrf24'];
 // A second link at once (runner/fc/lmux.h: both carry; the channels by the first while it has them, the second fills in;
 // commands and messages once): its settings as radioCfg's, kind '' for none; the binding phrase is radioCfg's. Its
 // model steps with its own state: radioOn2 swaps it in (radioCfg, the model's own object, the parts of radio a model
 // keeps, the boards' second packet layer) and back.
-const radioCfg2 = { kind: '', rate: 250, ratio: 4, power: 100, extra: 0, channel: 6, lr: 0, sta: 0, baud: 57600, half: 0, medium: 1, tether: 50, kbps: 250 };
+let radioCfg2 = { kind: '', rate: 250, ratio: 4, power: 100, extra: 0, channel: 6, lr: 0, sta: 0, baud: 57600, half: 0, medium: 1, tether: 50, kbps: 250 };
 const radioTwo = () => !!(radioCfg2.kind && RADIO_LINKS[radioCfg2.kind] && radioCfg2.kind !== radioCfg.kind && !(typeof liveOn === 'function' && liveOn()));
 const radioDirs = c => c.kind === 'serial' ? [+c.half === 3 ? 0 : 1, +c.half === 2 ? 0 : 1] : [1, 1];   // [carries up, carries down] (radio_link.h rlink_up, rlink_down)
 const RADIO_PARTS = ['rf', 'rfAt', 'lqUp', 'lqDown', 'dropRun', 'toBoard', 'toGround'];
-const radio2 = { pk: {}, elrs: {}, parts: {} };
+let radio2 = { pk: {}, elrs: {}, parts: {} };
 function swapObj(a, b) { const t = { ...a }; for (const k of Object.keys(a)) delete a[k]; Object.assign(a, b); for (const k of Object.keys(b)) delete b[k]; Object.assign(b, t); }
 function radioSwap2() {
   const bind = radioCfg.bind; swapObj(radioCfg, radioCfg2); radioCfg.bind = bind;
@@ -82,7 +82,7 @@ function boardsRadioCfg2() {
 // runner/esp_radio/radio_cfg.h), or null.
 function radioPhraseOk(p) { if (typeof p !== 'string') return null; p = p.trim(); return p && p.length <= 31 && /^[\x20-\x7e]+$/.test(p) ? p : null; }
 const radioModel = () => (typeof liveModel === 'function' && liveModel()) || RADIO_LINKS[radioCfg.kind] || RADIO_LINKS.elrs;   // (connected to the real drone: live.js's)
-const radio = {};
+let radio = {};
 function radioReset() {
   Object.assign(radio, {
     t: 0, seed: 0x2545F491,
@@ -359,7 +359,7 @@ function linkChannels(ch, t, fr, lat) {
 // second: values by kind with when each came (gs.at, simulator time), the messages, the alert, the channels it sent.
 // The battery voltage of each battery frame (vHist, vN of them so far) and the track of each position frame are kept
 // here, on the data path, whether the tab is open or not.
-const gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null, rate: [], vHist: [], vN: 0 };
+let gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null, rate: [], vHist: [], vN: 0 };
 function gsReset() {
   Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, vHist: [], vN: 0 });
   if (typeof GS_UI !== 'undefined') Object.assign(GS_UI, { built: false, paused: null, clearId: 0, logN: -1 });   // (the widgets hold the old run's values: built again; the log starts again)

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=a73517910a">
+<link rel="stylesheet" href="css/style.css?v=fe18a2d416">
 </head>
 <body>
 <div class="app">
@@ -17,8 +17,15 @@
       <span>multibody physics · control allocation · flight envelope</span>
     </div>
     <button class="btn icon hdr-more" id="hdrMore" type="button" aria-expanded="false" aria-controls="topBar" aria-label="More controls" title="More: the world, reset, the start and the speed"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="12.5" cy="8" r="1.4"/></svg></button>
+    <div class="hgroup" role="group" aria-labelledby="grpDrone">
+      <span class="lbl" id="grpDrone">Selected drone</span>
+      <div class="hrow">
+        <select id="droneSelect" aria-label="Selected drone" title="Select a drone to inspect, edit or fly"></select>
+        <button class="btn icon" id="droneRemove" type="button" aria-label="Remove selected drone" title="Remove the selected drone from this simulation">×</button>
+      </div>
+    </div>
     <div class="hgroup" role="group" aria-labelledby="grpAir">
-      <span class="lbl" id="grpAir">Airframe</span>
+      <span class="lbl" id="grpAir">Add airframe</span>
       <div class="hrow">
         <span id="presetSlot"></span>
         <button class="btn icon" id="designShare" type="button" aria-label="Share this design" title="Share this design with a link"><svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="3.5" r="1.8"/><circle cx="12" cy="12.5" r="1.8"/><circle cx="4" cy="8" r="1.8"/><path d="m5.6 7.1 4.8-2.7M5.6 8.9l4.8 2.7"/></svg></button>
@@ -44,7 +51,7 @@
           <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>
           <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.3-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5z"/></svg>
         </button>
-        <button class="btn icon" id="resetBtn" type="button" aria-label="Reset" title="Reset the flight (R)">
+        <button class="btn icon" id="resetBtn" type="button" aria-label="Reset selected drone" title="Reset the selected drone's flight (R)">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div class="launch" role="group" aria-labelledby="launchLbl" id="launchSeg">
@@ -78,6 +85,7 @@
       <div class="pane" id="paneAir" role="tabpanel" aria-labelledby="tabAir">
       <section class="sec" id="designSec">
         <h2>Design <small id="designState"></small></h2>
+        <label class="field-row" for="droneName"><span class="lbl">Drone name</span><input type="text" id="droneName" aria-label="Drone name" maxlength="80" autocomplete="off"></label>
         <div class="design-row">
           <input type="text" id="designName" placeholder="Name this design" aria-label="Design name" maxlength="60" autocomplete="off">
           <button class="btn primary" id="designSave" type="button">Save</button>
@@ -460,62 +468,65 @@
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=7f3f1b0df1"></script>
 <script src="js/laws.js?v=b07e147705"></script>
-<script src="js/runtime.js?v=798dfc02ea"></script>
-<script src="js/budget.js?v=62a2d9c4cc"></script>
+<script src="js/runtime.js?v=ce54484755"></script>
+<script src="js/budget.js?v=64a652a46f"></script>
 <script src="js/rn-parse.js?v=cc79bcdaf9"></script>
 <script src="js/rn-ops.js?v=c53390b2b4"></script>
 <script src="js/rn-compile.js?v=6406d11fac"></script>
 <script src="js/rn-sigs.js?v=0b66218cfb"></script>
 <script src="js/rn-vm.js?v=eaf422615c"></script>
 <script src="js/rn-wasm.js?v=57aa3966fb"></script>
-<script src="js/rn-bridge.js?v=bffc67a733"></script>
+<script src="js/rn-bridge.js?v=5590bca63a"></script>
 <script src="js/flight-physics.js?v=42d90f7013"></script>
-<script src="js/sim.js?v=16dd51180a"></script>
+<script src="js/sim.js?v=9513684a2f"></script>
 <script src="js/flight-model.js?v=4b6da32aed"></script>
-<script src="js/joints.js?v=3fc4d783ab"></script>
+<script src="js/joints.js?v=0b25b1a019"></script>
 <script src="js/multibody.js?v=8ebcaadfdb"></script>
-<script src="js/cargo.js?v=d3a4267220"></script>
-<script src="js/sensors.js?v=719f82ea09"></script>
-<script src="js/health.js?v=29f7d5297a"></script>
+<script src="js/cargo.js?v=bed265693b"></script>
+<script src="js/sensors.js?v=1ded9749be"></script>
+<script src="js/health.js?v=b5b2a8d06c"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
-<script src="js/learn.js?v=c8cd75bea1"></script>
-<script src="js/view3d.js?v=256588fbe1"></script>
-<script src="js/pilot.js?v=d9a66347ce"></script>
-<script src="js/computers-ui.js?v=fdab19c540"></script>
-<script src="js/ui.js?v=0c027b4e3e"></script>
+<script src="js/learn.js?v=a736a09f3a"></script>
+<script src="js/view3d.js?v=745002e9c6"></script>
+<script src="js/pilot.js?v=52cf1a9d65"></script>
+<script src="js/computers-ui.js?v=f3fa4c9f63"></script>
+<script src="js/ui.js?v=05735e53a6"></script>
 <script src="js/place-ui.js?v=245f5d12f2"></script>
 <script src="js/cargo-ui.js?v=ba123e5302"></script>
-<script src="js/flight-physics-ui.js?v=83817933aa"></script>
-<script src="js/health-ui.js?v=7498e8ab38"></script>
-<script src="js/designs.js?v=f77fdcfab8"></script>
+<script src="js/flight-physics-ui.js?v=7af6d96079"></script>
+<script src="js/health-ui.js?v=e1c85557e0"></script>
+<script src="js/designs.js?v=7cf171c5d1"></script>
 <script src="js/share.js?v=edbc08e171"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=271889915e"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
-<script src="js/hardware-ui.js?v=6f09c7650e"></script>
+<script src="js/hardware-ui.js?v=a6234ec2c8"></script>
 <script src="js/install-ui.js?v=b63297106b"></script>
 <script src="js/editor.js?v=d532ccb7bc"></script>
 <script src="js/fc-export.js?v=ec491a7bac"></script>
 <script src="js/board-wasm.js?v=3a752bd79a"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
-<script src="js/link.js?v=b295de3ea4"></script>
-<script src="js/link-elrs.js?v=d0e32ae52f"></script>
-<script src="js/link-packet.js?v=46dfd89eed"></script>
+<script src="js/link.js?v=43d9b3ae82"></script>
+<script src="js/link-elrs.js?v=33789af5df"></script>
+<script src="js/link-packet.js?v=e182da6569"></script>
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
-<script src="js/boards.js?v=f6c7c8b218"></script>
+<script src="js/boards.js?v=bf05a02e81"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
 <script src="js/live.js?v=3ef1c4007f"></script>
 <script src="js/gs-ui.js?v=b8a3312c93"></script>
-<script src="js/agent.js?v=2a04e7b264"></script>
-<script src="js/agent-tools.js?v=607908ba36"></script>
+<script src="js/agent.js?v=135e98b883"></script>
+<script src="js/agent-tools.js?v=6f3b4bf3bc"></script>
 <script src="js/agent-tools-more.js?v=2a71220340"></script>
 <script src="js/agent-hardware.js?v=3dfb149f42"></script>
 <script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>
-<script src="js/agent-ui.js?v=562834b98b"></script>
+<script src="js/agent-ui.js?v=92a315e631"></script>
 <script src="js/audio.js?v=126beda013"></script>
+<script src="js/drone-context.js?v=b7075d943b"></script>
+<script src="js/fleet.js?v=2afa1a5818"></script>
+<script src="js/fleet-collisions.js?v=c7d66b4f9f"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=55293d65c7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"
