@@ -86,8 +86,7 @@ function flightPhysicsFields(c) {
   } else if (c.type === 'mass') {
     if (c.battery) {
       const check = UI.input({type: 'checkbox', id: `${prefix}-auto`}); check.checked = c.batteryAutoMass !== false;
-      spRefs.push(() => { check.checked = !!envr.sensorEffects; });
-  check.addEventListener('change', () => { c.batteryAutoMass = check.checked; delete c.batterySizing; changed(); });
+      check.addEventListener('change', () => { c.batteryAutoMass = check.checked; delete c.batterySizing; changed(); });
       box.append(el('label', {class: 'check', for: check.id}, check, 'Scale battery mass with capacity and cell count'),
         el('p', {class: 'hint', text: 'Scaling starts from this pack’s saved mass, capacity and cell count. Editing mass switches to a manual weight.'}));
     }

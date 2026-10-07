@@ -26,6 +26,7 @@ try{
  await page.selectOption('#droneSelect','');await page.waitForTimeout(250);
  assert(await page.evaluate(()=>!fleet.selected&&$('#airframe').hidden&&$('#telemetry').hidden&&!$('#worldPanel').hidden&&!$('#rtab-world')),'World selection/sidebar state wrong');
  assert(await page.evaluate(()=>$('.view').clientWidth>innerWidth*.9&&$('#resetBtn').disabled&&$('#tEdit').disabled),'World canvas/controls wrong');
+ assert(await page.evaluate(()=>{const old=envr.sensorEffects;try{for(const auto of [true,false]){const field=flightPhysicsFields({id:'regression-battery',type:'mass',battery:true,batteryAutoMass:auto});envr.sensorEffects=!auto;syncSp();if(field.querySelector('input[type=checkbox]').checked!==auto)return false;}return true;}finally{envr.sensorEffects=old;syncSp();}}),'World sensor setting changed battery mass-scaling checkbox');
  const before=await page.evaluate(()=>({targets:fleet.drones.map(d=>({...d.state.setpoint})),undo:undo.i}));
  for(const key of ['ArrowUp','Space','h','g','e','p','t','r','3'])await page.keyboard.press(key);
  await page.keyboard.press('Meta+z');await page.keyboard.press('Control+z');
