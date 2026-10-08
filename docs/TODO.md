@@ -1,5 +1,14 @@
 # Project memory
 
+## Hardware bring-up blockers — 2026-10-08
+- Context: first real-hardware tests (ESP32-WROOM, ESP32-S3 with L9110S/L293D H-bridges and 3.7 V brushed motors, GY-87-style 10DOF, PCB-antenna nRF24L01+). Checked-in bundles (fa8b834+fleet) were 8 firmware-source commits stale and this Mac has no ESP-IDF.
+- Build stamp: build_firmware.sh passes DFB_FW_COMMIT (cache entry → PROJECT_VER); both firmwares answer `version` ("firmware COMMIT CHIP ROLE") and print it at power-on. The install dialog asks on Connect/after the wiring restart and compares with firmware/manifest.json (same/other build, chip, role, pre-version firmware). tools/check_firmware_fresh.sh compares the manifest commit with the firmware source. CI builds each bundle (ONLY=), writes the manifest (MANIFEST_ONLY=1), uploads firmware-COMMIT and warns when firmware/ is stale; committing the bundles stays manual.
+- Safety: hw_defaults now wires no motors/servos, so a fresh/erased/refused-wiring board drives no pin (old default: ESC 1000 µs at 400 Hz = 40% duty on the S3's GPIO 4–7, the motortest L9110S pins). Boards keeping older saved wiring are unchanged.
+- `scan` (disarmed): every answering I²C address with hw_i2c_name hints (0x0D QMC5883L has no driver; a GY-87's HMC answers once IMU bypass is on).
+- USB 3D view (js/usb-view.js): install step 3 "Show it in the 3D view" follows RN_LINK_TELEM attitude/height over the installer's cable, simulation paused, watch-only; Console/Stop/Run/Disconnect/unplug end or return. Angle signs reuse the BLE view's liveQuat and are unconfirmed on hardware.
+- Regression checklist PASSED locally: motor/config native tests for ESP32/S3/C3 (no default pins, I²C names), test_board_install (version answers), new tools/test_usb_view.cjs (mock serial: version cases, attitude/height, Console/Stop/Run/Disconnect, no page errors), test_computer_cards, test_live_ble, test_power_links, test_flight_browser, hardware/agent/driver checks, asset stamps. NOT verified: ESP-IDF compile of flight.c/hw.c/ground.c (needs CI), real boards.
+- A concurrent session was editing runner/fc (pid_tuning.h, RN_LINK_TUNE in flight.c, fc_core/nav_core, dfb_pi) in the same checkout; keep those hunks separate from this work.
+
 ## Agent/cable publication — 2026-10-08
 - Pushed implementation d62d973 to main. Pages run 37747338850 passed; live HTML and all 12 changed JavaScript assets match the tested revision. Both agent flight-tool/source/bus checks and the full slack-cable regression passed directly on the live site without page errors.
 - Firmware/host CI run 37747340484 was still running at publication; local native/numerical/flight/browser validation passed as recorded below. No physical-flight validation or newly built physical firmware bundles are claimed. Only the existing untracked .claude workspace remains outside this release.

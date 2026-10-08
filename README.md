@@ -1090,6 +1090,8 @@ It's tested end to end on a PC: `runner/pi/test_dfb_pi.c` puts a fake ESP32 (the
 | `python3 fly.py PORT status` | Show what it's doing and its wiring |
 | `python3 fly.py PORT airframe my-drone.dfa` | Send the airframe; it's kept in flash |
 | `python3 fly.py PORT watch` | Show telemetry and messages |
+| `python3 fly.py PORT version` | Which firmware build it runs (as `firmware/manifest.json` records it) |
+| `python3 fly.py PORT scan` | Every address answering on its I²C bus, and what usually sits there |
 | `python3 fly.py PORT test 1 0.1` | Spin motor 1 at 10% for 2 s (**props off**) |
 | `python3 fly.py PORT fly --gamepad` | Fly with a gamepad (`pip install pygame`), or with the keyboard for tethered tests |
 | `python3 fly.py PORT program formulas.rnp` | Send edited formulas; they reload in flight as before |

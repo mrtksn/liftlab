@@ -7,6 +7,8 @@
     python3 fly.py PORT program formulas.rnp       send flight formulas (hot reload, as send_program.py)
     python3 fly.py PORT set motors=25,26,27,14 servos=16,17   change the wiring (then: save, reboot)
     python3 fly.py PORT save | reboot | show
+    python3 fly.py PORT version                    which firmware build it runs (firmware/manifest.json's commit)
+    python3 fly.py PORT scan                       every address that answers on its I2C bus, and what usually sits there
     python3 fly.py PORT test 1 0.1                 spin motor 1 at 10% for 2 s (PROPS OFF)
     python3 fly.py PORT fly [--gamepad] [--program f.rnp]   fly: keyboard (tethered bench tests) or a gamepad
 
@@ -204,7 +206,7 @@ def main():
         except KeyboardInterrupt: pass
     elif w[0] == 'status':
         L.send(frame(STATUS)); L.send(frame(SETTING, b'show')); listen(L, 1.5)
-    elif w[0] in ('show', 'save', 'reboot', 'defaults'):
+    elif w[0] in ('show', 'save', 'reboot', 'defaults', 'version', 'scan'):
         L.send(frame(SETTING, w[0].encode())); listen(L, 1.5)
     elif w[0] == 'set':
         for kv in w[1:]: L.send(frame(SETTING, kv.encode())); listen(L, 0.5)

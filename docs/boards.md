@@ -28,13 +28,19 @@ Flight formula uploads are temporary and last until reboot. Pi companion formula
 
 The provided firmware uses UART0, not native USB Serial/JTAG, for its live console/design link. Use the board’s USB-to-UART connector (CP210x/CH340/FTDI) or an external 3.3 V USB-to-UART adapter. A native USB connector can flash S3/C3, but after flashing select the UART adapter to send the design. A board with only native USB needs that adapter for the running firmware.
 
-| Chip | UART0 TX → adapter/Pi RX | UART0 RX ← adapter/Pi TX | Default I2C SDA, SCL | Default motor pins |
+| Chip | UART0 TX → adapter/Pi RX | UART0 RX ← adapter/Pi TX | Default I2C SDA, SCL | Suggested motor pins |
 | --- | --- | --- | --- | --- |
 | ESP32 | 1 | 3 | 21, 22 | 25, 26, 27, 14 (then 32, 33, 4, 13) |
 | S3 | 43 | 44 | 17, 18 | 4, 5, 6, 7 |
 | C3 | 21 | 20 | 0, 1 | 4, 5, 6, 7 |
 
 Connect grounds. Do not drive UART pins from a USB adapter and Pi at the same time. The installer maps motors by name and validates chip/output limits and duplicate pins when sending hardware settings. Send wiring first, allow reboot, verify it with `show`, then send the airframe. This order is currently an instruction, not an enforced upload gate: **Send the airframe** does not check the saved wiring or matching custom firmware. Keep MOSFET motor power disconnected until the board runs the intended driver settings. Defaults are conservative DevKit profiles: check the exact module schematic, especially PSRAM and onboard peripherals. On ESP32 WROVER, 16/17 belong to PSRAM; change servo and ground-controller wiring accordingly.
+
+A freshly flashed board (or one whose saved wiring was refused) drives **no** motor or servo pin: the suggested pins above are only offered by the installer and printed at power-on. Nothing is driven until `motors=`/`servos=` are sent, saved and the board restarts. A board flashed with firmware from before this change keeps whatever wiring it saved, including the old default ESC pulses on the suggested pins (1000 µs at 400 Hz: a 40% duty cycle on an H-bridge or MOSFET input).
+
+**Which build, which chips.** `version` makes a board answer `firmware COMMIT CHIP ROLE`; the install dialog asks on Connect and compares it with the page's `firmware/manifest.json` (same build, another build, another chip or role, or firmware from before version reporting). `scan` (flight firmware, disarmed) lists every address answering on the sensors' I²C bus with what usually sits there: 0x1E is an HMC5883L, 0x0D a QMC5883L (no driver yet), 0x68/0x69 the MPU-6050 family, 0x76/0x77 BMP280/BMP180. A GY-87's compass answers only once the IMU driver has turned the MPU's bypass on.
+
+**Watching a board in the 3D view.** In the install dialog's step 3, **Show it in the 3D view** pauses the simulation and makes the drone follow the connected flight board's telemetry (attitude, and height with a barometer) over the same USB cable, on any ESP32 (no Bluetooth needed). It only watches: nothing is sent. The bar over the view has **Console** (back to the dialog, same connection) and **Stop**; Run, Disconnect or unplugging ends it too. The roll/pitch/yaw signs follow the Bluetooth live view's and are not yet confirmed against a physical board.
 
 C3 has few available pins: its default servo pins (3,10) are also the default radio UART choice. Remove unused servos or move the receiver to free pins before enabling CRSF. Its sample ground wiring leaves throttle unassigned because four analog axes plus UART would overlap; for manual throttle, free an ADC pin by leaving another axis unassigned.
 
@@ -46,7 +52,7 @@ C3 has few available pins: its default servo pins (3,10) are also the default ra
 
 With ESP-IDF 5.3.2 activated, run `sh tools/build_firmware.sh`. It builds both roles for each chip, writes `firmware/<chip>-<role>/`, and records offsets, sizes and SHA-256 in a version-2 manifest. It leaves sdkconfig/build products in `/tmp/liftlab-firmware-build` by default (`BUILD_DIR` overrides this). Rebuild firmware after changing C hardware profiles; original-ESP32 binaries cannot be reused for S3/C3. The installer also checks image chip IDs for locally selected files.
 
-Run `node tools/test_board_install.js` for manifest/image/wiring checks. `.github/workflows/boards.yml` compiles the six ESP combinations and host programs on Linux/macOS and runs wiring/agent/driver checks. It does not currently run the native flight/navigation/runner/ground behavioral suites or regenerate downloadable firmware. Source changes need rebuilt, committed bundles and a manifest before Pages can serve new firmware; see [deployment](deployment.md).
+Run `node tools/test_board_install.js` for manifest/image/wiring checks. `.github/workflows/boards.yml` builds the six ESP bundles (uploaded with their manifest as the `firmware-COMMIT` artifact, and a warning when the checked-in ones are stale) and host programs on Linux/macOS, and runs wiring/agent/driver checks. It does not currently run the native flight/navigation/runner/ground behavioral suites, and it doesn't commit the bundles: source changes need those bundles committed before Pages can serve new firmware; see [deployment](deployment.md). `node tools/test_usb_view.cjs` (Playwright) checks the install dialog's version comparison and the USB 3D view against a mock serial port.
 
 Local compilation and browser tests do not establish flight stability, sensor compatibility or timing on a physical board. Bench-check outputs and loop timing with props removed before flight. The [2026-10-06 review](review-2026-10-06.md) records two repeatable macOS navigation test failures and the current installer/diagnostic gaps.
 

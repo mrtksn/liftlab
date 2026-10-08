@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=a151d44944">
+<link rel="stylesheet" href="css/style.css?v=52f872a3a4">
 </head>
 <body>
 <div class="app">
@@ -326,6 +326,15 @@
         </div>
         <p class="live-note" id="liveNote"></p>
       </div>
+      <div class="live-bar usb-bar" id="usbBar" role="region" aria-label="The board on USB" hidden>
+        <div class="live-head"><span class="live-dot" aria-hidden="true"></span><b>USB</b><span id="usbName"></span><span class="live-state" id="usbState" role="status"></span></div>
+        <div class="live-read" id="usbRead"></div>
+        <div class="live-btns">
+          <button class="btn" type="button" id="usbConsole" title="Back to the board's install dialog: its messages and settings">Console</button>
+          <button class="btn" type="button" id="usbStop" title="Leave the board's view: the simulation comes back (the cable stays connected)">Stop</button>
+        </div>
+        <p class="live-note">Watching only: tilt the board and the drone tilts. Nothing is sent to it; the simulation is paused.</p>
+      </div>
       <dialog class="ask live-dlg" id="liveDlg" aria-labelledby="liveTitle">
         <h2 id="liveTitle">Fly the real drone</h2>
         <p>This page becomes the command module. Its program runs here and talks to the drone's ESP32-S3 or C3 over Bluetooth LE, set to <code>radio=ble</code>. The 3D view and the Ground tab show the drone's telemetry, and the simulation pauses while you're connected.</p>
@@ -556,7 +565,7 @@
 <script src="js/view3d.js?v=6b6856b603"></script>
 <script src="js/pilot.js?v=8f44f0defc"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
-<script src="js/ui.js?v=9610216ca1"></script>
+<script src="js/ui.js?v=aa648419e3"></script>
 <script src="js/place-ui.js?v=8c208dd787"></script>
 <script src="js/cargo-ui.js?v=23f282f7f4"></script>
 <script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
@@ -569,7 +578,7 @@
 <script src="js/hardware.js?v=518db316db"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=1eff2e8a18"></script>
-<script src="js/install-ui.js?v=1e0de0ce6d"></script>
+<script src="js/install-ui.js?v=854e885cd9"></script>
 <script src="js/editor.js?v=0589e4ef33"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
 <script src="js/board-wasm.js?v=4f049f3a27"></script>
@@ -586,7 +595,8 @@
 <script src="js/apps.js?v=93c0cbb01e"></script>
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
-<script src="js/live.js?v=3ef1c4007f"></script>
+<script src="js/live.js?v=351bf507a2"></script>
+<script src="js/usb-view.js?v=676b6e4056"></script>
 <script src="js/gs-ui.js?v=f5317a6c08"></script>
 <script src="js/agent.js?v=da1e6999ce"></script>
 <script src="js/agent-tools.js?v=8560e44482"></script>

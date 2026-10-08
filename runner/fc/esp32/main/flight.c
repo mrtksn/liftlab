@@ -21,6 +21,9 @@
  * command; with it, they go to the Pi (RN_LINK_RC). The telemetry task (tlm_core.h) sends what the flight core and the
  * Pi's tasks publish back down the radio as CRSF frames, within the link's budget. Without a radio, if the Pi runs the
  * telemetry task (it sends RN_LINK_WANT bit 2), the flight core's items go to the Pi instead (RN_LINK_TLM).
+ * A fresh board drives no pin: no motors or servos until the wiring (motors=, servos=) is set, saved and rebooted.
+ * "version" says the build (firmware COMMIT CHIP flight, as firmware/manifest.json records it); "scan" lists every
+ * address that answers on the sensors' I2C bus (disarmed).
  * Which radio (settings, as all the others: over the link, save, reboot; "show" lists them, the secrets masked):
  *   radio=elrs,250,4      an ExpressLRS (or Crossfire) receiver on a second UART, crsf=RX,TX (CRSF at 420000 baud);
  *                         the packet rate and telemetry ratio as set on the radio (the default)
@@ -81,6 +84,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "driver/uart.h"
@@ -301,8 +305,13 @@ static void telemetry(void) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) t[28 + j] = OUT.servo[j] * 57.29578f;
   link_send(RN_LINK_TELEM, t, sizeof t);
 }
+/* The build as the installer compares it with firmware/manifest.json: "firmware COMMIT CHIP flight". */
+static void fw_version(char *s, int n) { snprintf(s, (size_t)n, "firmware %s %s flight", esp_app_get_description()->version, CONFIG_IDF_TARGET); }
+#define LB_STR_(...) #__VA_ARGS__
+#define LB_STR(...) LB_STR_(__VA_ARGS__)
 static void setting(const char *line) {
   char s[800];
+  if (!strcmp(line, "version")) { fw_version(s, sizeof s); report(s); return; }
   if (!strcmp(line, "show")) {
     hw_describe(&HW, s, sizeof s); report(s);
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
@@ -321,9 +330,10 @@ static void setting(const char *line) {
     report(radio_peer_ping(id) ? "no such drone (or peers=off): see peers" : "ping sent: its round trip shows in peers"); return;
   }
   if (F.state != FC_DISARMED) { report("disarm first"); return; }
+  if (!strcmp(line, "scan")) { hw_i2c_scan(s, sizeof s); report(s); return; }   /* (disarmed: the probes hold the bus for a moment) */
   if (!strcmp(line, "save")) { report(hw_save(&HW_next) ? "couldn't save the settings" : "saved; reboot to use them"); return; }
   if (!strcmp(line, "reboot")) { report("rebooting"); vTaskDelay(pdMS_TO_TICKS(100)); hw_outputs_safe(); esp_restart(); }
-  if (!strcmp(line, "defaults")) { hw_defaults(&HW_next); report("default wiring; save and reboot to use it"); return; }
+  if (!strcmp(line, "defaults")) { hw_defaults(&HW_next); report("the defaults: no motors or servos wired; save and reboot to use them"); return; }
   char err[96];
   if (hw_set(&HW_next, line, err, sizeof err)) { report(err); return; }
   snprintf(s, sizeof s, "set %s (save, then reboot, to use it)", line); report(s);
@@ -485,8 +495,9 @@ void app_main(void) {
   hw_load(&HW); HW_next = HW;
   char log[200];
   int oe = hw_outputs_init(&HW, log, sizeof log);
-  printf("\n\nLiftLab flight controller\n%s\n", log);
+  { char v[80]; fw_version(v, sizeof v); printf("\n\nLiftLab flight controller\n%s\n%s\n", v, log); }
   if (oe) printf("OUTPUTS DIDN'T START: motors stay off\n");
+  if (!hw_outputs_wired(&HW)) printf("no motors or servos wired: no pin is driven until the wiring is sent (this chip's usual motor pins: motors=" LB_STR(LB_MOTOR_PINS) ")\n");
 
   int se = hw_sensors_init(&HW, &SENS, log, sizeof log);
   printf("IMU: %s\nbarometer: %s\n%s%s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none (the throttle stick sets vertical acceleration; the failsafe descent is rough)", log, log[0] ? "\n" : "");

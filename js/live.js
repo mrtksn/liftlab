@@ -74,6 +74,7 @@ async function liveFind() {
   liveStart(dev, G);
 }
 function liveStart(dev, G) {
+  if (typeof usbViewOn === 'function' && usbViewOn()) usbViewStop(false);   // (the USB board's view ends: one real drone at a time)
   live.wasRunning = running;
   doReset();                                                         // (the simulated drone back on the ground, its boards started again)
   running = false; renderRun();

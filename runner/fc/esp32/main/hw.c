@@ -79,6 +79,23 @@ static int custom_write(int addr,int reg,int value) {
 }
 #include "custom_sensors.h"
 
+int hw_i2c_scan(char *out, int n) {
+  int k = 0, found = 0, mpu = 0, mag = 0;
+  #define APP(...) do { if (k < n) { int w = snprintf(out + k, (size_t)(n - k), __VA_ARGS__); if (w > 0) k += w < n - k ? w : n - k; } } while (0)
+  APP("I2C on SDA %d, SCL %d:", sensor_config.sda, sensor_config.scl);
+  if (!imu_i2c_bus) { APP(" the bus didn't start"); return 0; }
+  for (int a = 0x08; a <= 0x77; a++) {
+    if (i2c_master_probe(imu_i2c_bus, (uint16_t)a, 10) == ESP_OK) {
+      found++; APP(" 0x%02x %s;", a, hw_i2c_name(a));
+      mpu |= a == 0x68 || a == 0x69; mag |= a == 0x0C || a == 0x0D || a == 0x1E;
+    }
+    vTaskDelay(1);                                           /* (the sensor task's reads come in between) */
+  }
+  if (!found) APP(" nothing answers: check SDA/SCL, 3.3 V, ground and the pull-ups");
+  else if (mpu && !mag && imu_kind != 1) APP(" (a GY-87's compass sits behind the MPU: it answers once the IMU driver is on, imu=0,0)");
+  #undef APP
+  return found;
+}
 
 int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   memset(s, 0, sizeof *s); int k = 0; sensor_config=*c;

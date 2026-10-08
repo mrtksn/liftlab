@@ -27,14 +27,14 @@ assert.throws(() => checkBoardWiring(ESP_PROFILES.c3, '4,5,6,7', '3,10,0', 4, 3)
 assert.throws(() => checkBoardWiring(ESP_PROFILES.c3, '4,5,6,18', '', 4, 0), /reserved/);
 assert.throws(() => checkBoardWiring(ESP_PROFILES.s3, '4,5,6,17', '', 4, 0), /I2C/);
 let corrupt = false;
-const ctx = vm.createContext({ console, crypto: webcrypto, navigator: {}, Uint8Array, DataView, TextEncoder, TextDecoder,
+const ctx = vm.createContext({ console, crypto: webcrypto, navigator: {}, Uint8Array, DataView, TextEncoder, TextDecoder, setTimeout, clearTimeout,
   $: () => ({ addEventListener() {} }),
   fetch: async url => { const b = fs.readFileSync(url); if (corrupt && url.endsWith('dfb_flight.bin')) b[100] ^= 1;
     return { ok: true, json: async () => JSON.parse(b), arrayBuffer: async () => b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength) }; },
 });
 vm.runInContext(fs.readFileSync('js/board-hardware.js','utf8'),ctx);
 vm.runInContext(fs.readFileSync('js/hardware.js','utf8'),ctx);
-vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { firmwareParts, ESP_PROFILES, INST, espSendWiring, hardwareSettings, boardWiringPlan };',ctx);
+vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { firmwareParts, ESP_PROFILES, INST, espSendWiring, hardwareSettings, boardWiringPlan, instFwLine, instAskVersion };',ctx);
 (async () => {
   for (const p of Object.values(ctx.audit.ESP_PROFILES)) for (const role of ['flight','ground']) {
     const fw = await ctx.audit.firmwareParts(role,p);
@@ -61,5 +61,17 @@ vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { fir
   ctx.answers=[...setReplies,'saved; reboot to use them','rebooting'];
   await ctx.audit.espSendWiring('4,5,6,7','',msg);
   assert.match(msg.className,/good/);
-  console.log('All board installation checks passed (3 chips × 2 roles, wrong-chip rejection, corruption, wiring limits).');
+  // Which build a board runs: "firmware COMMIT CHIP ROLE" (version), and old firmware's answer to "version".
+  ctx.audit.INST.board=null; ctx.audit.instFwLine('firmware 05c2aa4+changes esp32s3 flight');
+  assert.deepEqual({...ctx.audit.INST.board},{commit:'05c2aa4+changes',chip:'esp32s3',role:'flight'});
+  ctx.audit.INST.board=null; ctx.audit.instFwLine('firmware: something else'); assert.equal(ctx.audit.INST.board,null);
+  for (const [ground,reply,want] of [[false,'expected key=value',{old:true}],[true,'unknown (show, version, set)',{old:true}],[false,'firmware abc1234 esp32 flight',null]]) {
+    const sent=[];const c={write:async b=>sent.push(b),waitFor:async test=>test(reply)?reply:null};
+    ctx.audit.INST.board=null;ctx.audit.INST.conn=c;ctx.audit.INST.connTarget=ground?'ground':target;
+    await ctx.audit.instAskVersion(c);
+    if (want) assert.deepEqual({...ctx.audit.INST.board},want); else assert.equal(ctx.audit.INST.board,null);   // (the text callback parses a real answer)
+    assert.equal(new TextDecoder().decode(sent[0]).includes('version'),true);
+  }
+  ctx.audit.INST.conn=null;
+  console.log('All board installation checks passed (3 chips × 2 roles, wrong-chip rejection, corruption, wiring limits, firmware version answers).');
 })().catch(e => { console.error(e); process.exitCode=1; });

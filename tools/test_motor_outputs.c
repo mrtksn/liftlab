@@ -51,6 +51,11 @@ int main(void){
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
+  /* A fresh board drives nothing: no motor or servo pin until the wiring is sent. */
+  assert(!hw_outputs_wired(&settings));for(int i=0;i<FC_MAX_MOTORS;i++)assert(settings.motor_pin[i]==-1);for(int j=0;j<FC_MAX_JOINTS;j++)assert(settings.servo_pin[j]==-1);
+  assert(!hw_outputs_init(&settings,log,sizeof log)&&strstr(log,"0 ESCs")&&strstr(log,"0 MOSFETs")&&strstr(log,"0 servos"));assert(!hw_outputs_ok(1,0,log,sizeof log));
+  {hw_config w=settings;assert(!hw_set(&w,"motors=4",log,sizeof log)&&hw_outputs_wired(&w)==1);}
+  assert(strstr(hw_i2c_name(0x0D),"QMC5883L")&&strstr(hw_i2c_name(0x1E),"HMC5883L")&&strstr(hw_i2c_name(0x68),"MPU")&&strstr(hw_i2c_name(0x77),"BMP180")&&!strcmp(hw_i2c_name(0x50),"unknown"));
   assert(!hw_check(&settings,log,sizeof log));assert(!hw_set(&settings,"motor_driver=1,0,1,0",log,sizeof log));assert(!hw_set(&settings,"motor_max=60,100,70,100",log,sizeof log));assert(!hw_set(&settings,"brushed_hz=30000",log,sizeof log));
   const char *bad[]={"motor_driver=2","motor_driver=0.5","motor_driver=NaN","motor_max=0","motor_max=101","motor_max=10.5","brushed_hz=999","brushed_hz=30001","brushed_hz=20000.5","motor_driver=1,0,1,0,1,0,1,0,1,0,1,0,1","brushed_hz=20000junk"};
   for(unsigned i=0;i<sizeof bad/sizeof *bad;i++){hw_config before=settings;assert(hw_set(&settings,bad[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}
@@ -69,5 +74,5 @@ int main(void){
   assert(!hw_set(&settings,"peers=off",log,sizeof log)&&!hw_peers(&settings)&&!hw_set(&settings,"radio2=none",log,sizeof log));
   char text[800];hw_describe(&settings,text,sizeof text);assert(strstr(text,"motor_driver=") && strstr(text,"motor_max=") && strstr(text,"brushed_hz=30000"));
   struct {char text[8];char canary[8];} small;memset(&small,42,sizeof small);hw_describe(&settings,small.text,sizeof small.text);assert(small.text[7]==0);for(int i=0;i<8;i++)assert(small.canary[i]==42);
-  puts("Motor output tests passed: mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v10 migration, a second radio link, the other drones' settings.");
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v10 migration, a second radio link, the other drones' settings.");
 }

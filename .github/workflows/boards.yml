@@ -1,28 +1,65 @@
 name: Board firmware and host programs
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # Each chip and role built as the installer serves it (tools/build_firmware.sh), stamped with this commit.
   esp:
     runs-on: ubuntu-latest
     container: espressif/idf:v5.3.2
     strategy:
       matrix:
         chip: [esp32, esp32s3, esp32c3]
-        role: [fc, ground]
+        role: [flight, ground]
     steps:
       - uses: actions/checkout@v4
-      - name: Compile firmware
+      - name: Build the firmware bundle
         shell: bash
         run: |
           . /opt/esp/idf/export.sh
-          cd runner/${{ matrix.role }}/esp32
-          idf.py -B /tmp/board-build -D SDKCONFIG=/tmp/board-build/sdkconfig -D IDF_TARGET=${{ matrix.chip }} build
+          ONLY=${{ matrix.chip }}-${{ matrix.role }} DFB_FW_COMMIT=${GITHUB_SHA::7} sh tools/build_firmware.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.chip }}-${{ matrix.role }}
+          path: firmware/${{ matrix.chip }}-${{ matrix.role }}/
+          retention-days: 3
+  # The six bundles and their manifest as one artifact (firmware-COMMIT): unzip it over firmware/ and commit it to
+  # publish this build (docs/deployment.md). It warns when the checked-in bundles are older than the source.
+  firmware:
+    needs: esp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Are the checked-in bundles current?
+        run: sh tools/check_firmware_fresh.sh || echo "::warning title=Firmware bundles are stale::firmware/ is older than the firmware source. Unzip this run's firmware-${GITHUB_SHA::7} artifact over firmware/ and commit it (docs/deployment.md)."
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: /tmp/bundles
+      - name: Write the manifest
+        run: |
+          for d in /tmp/bundles/bundle-*; do n=${d#/tmp/bundles/bundle-}; rm -rf "firmware/$n"; mkdir -p "firmware/$n"; cp -R "$d/." "firmware/$n/"; done
+          MANIFEST_ONLY=1 DFB_FW_COMMIT=${GITHUB_SHA::7} sh tools/build_firmware.sh
+          echo "FW_NAME=firmware-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FW_NAME }}
+          path: |
+            firmware/manifest.json
+            firmware/esp32-flight/
+            firmware/esp32-ground/
+            firmware/esp32s3-flight/
+            firmware/esp32s3-ground/
+            firmware/esp32c3-flight/
+            firmware/esp32c3-ground/
+          retention-days: 30
   host:
     runs-on: ${{ matrix.os }}
     strategy:

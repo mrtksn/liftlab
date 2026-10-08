@@ -8,13 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Default pins for an ESP32 DevKit (ESP32-WROOM-32): outputs that are free at boot (no strapping pins). */
+/* The defaults: no motors and no servos. A fresh board (or one whose saved wiring was refused) drives no pin until the
+ * wiring says which: an ESC's idle pulse (1000 µs at 400 Hz: 40% duty) on a pin that turns out to be an H-bridge or
+ * MOSFET input would spin that motor. The chip's usual pins (LB_MOTOR_PINS, LB_SERVO_PINS) are only suggested. */
 void hw_defaults(hw_config *c) {
   memset(c, 0, sizeof *c);
   c->version = HW_VERSION;
   memset(c->motor_pin, -1, sizeof c->motor_pin); memset(c->servo_pin, -1, sizeof c->servo_pin);
-  static const int8_t mp[] = { LB_MOTOR_PINS }, sp[] = { LB_SERVO_PINS };
-  memcpy(c->motor_pin, mp, sizeof mp); memcpy(c->servo_pin, sp, sizeof sp);
   memset(c->motor_max_pct,100,sizeof c->motor_max_pct);c->brushed_hz=20000;
   c->esc_hz = 400; c->esc_min_us = 1000; c->esc_max_us = 2000;
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
@@ -30,6 +30,28 @@ void hw_defaults(hw_config *c) {
   c->peer_channel = 0; strcpy(c->fleet, RCFG_BIND_DEFAULT);
 }
 int hw_peers(const hw_config *c) { return c->peer_channel; }
+int hw_outputs_wired(const hw_config *c) {
+  int n = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) n += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) n += c->servo_pin[j] >= 0;
+  return n;
+}
+/* What usually answers at an I2C address: a guess from the address alone ("show" says what was identified). */
+const char *hw_i2c_name(int a) {
+  switch (a) {
+    case 0x0C: return "AK8963 compass (an MPU-9250's): no driver";
+    case 0x0D: return "QMC5883L compass: no driver yet";
+    case 0x1E: return "HMC5883L compass";
+    case 0x18: case 0x19: return "LIS3DH accelerometer";
+    case 0x29: return "VL53L0X rangefinder: no driver";
+    case 0x3C: case 0x3D: return "OLED display";
+    case 0x40: return "INA219 or PCA9685";
+    case 0x48: case 0x49: case 0x4A: case 0x4B: return "ADS1115 or a temperature sensor";
+    case 0x53: return "ADXL345 accelerometer: no driver";
+    case 0x68: case 0x69: return "MPU-6050 family IMU (or a clock chip)";
+    case 0x76: return "BMP280/BME280 barometer";
+    case 0x77: return "BMP180, BMP280 or BME280 barometer";
+    default: return "unknown";
+  }
+}
 int hw_radio2(const hw_config *c, rlink_cfg *L) { return c->radio2_kind < 0 ? -1 : rlink_make(L, c->radio2_kind, (int)c->radio2_a, (int)c->radio2_b); }
 void hw_radio(const hw_config *c, rlink_cfg *L) {
   int e = c->radio_kind == RLINK_ESPNOW ? rlink_make(L, RLINK_ESPNOW, c->radio_channel, c->radio_opt)

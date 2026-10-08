@@ -858,6 +858,7 @@ function renderRun() {   // one button: shows pause while running, play while pa
 $('#runBtn').addEventListener('click', () => {
   if (typeof liveOn === 'function' && liveOn()) return;               // (the real drone: no simulation to run)
   if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
+  if (typeof usbViewOn === 'function' && usbViewOn()) usbViewStop(false);   // (Run ends the board's view)
   running = !running; renderRun();
 });
 function doReset() { if (typeof liveOn === 'function' && liveOn()) return; pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
@@ -1134,7 +1135,9 @@ function boot() {
     const cpuStart = performance.now(), simStart = fleet.time, rawDt = Math.max(0, (now - lastT) / 1000);
     const dt = Math.min(0.05, rawDt); lastT = now;
     if (liveOn()) liveView();                                        // the real drone: the view from its telemetry
+    else if (usbViewOn() && !running) usbViewFrame();                // the board on the USB cable: the view from its telemetry
     else if (running) {
+      if (usbViewOn()) usbViewStop(false);                           // (Run ends the board's view)
       // Keep the 0.5 ms integration/control step. Bound work per rendered frame
       // instead of letting a late frame request still more catch-up work.
       const requested = Math.round(dt * speed / PDT), budgeted = Math.max(1, Math.floor(11 / physicsCostPerStep));

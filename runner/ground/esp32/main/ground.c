@@ -76,6 +76,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"
 #include "esp_random.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -383,6 +384,7 @@ static void usb_line(void *ctx, char *line) {
   (void)ctx; double t = t_line; char reply[700] = "";
   if (!strncmp(line, "set ", 4)) { char err[160]; int r = setting(line + 4, err, sizeof err); snprintf(reply, sizeof reply, r ? "%s" : err[0] ? "ok (save, then reboot); but %s" : "ok (save, then reboot)%s", err); }
   else if (!strcmp(line, "show")) show(reply, sizeof reply);
+  else if (!strcmp(line, "version")) snprintf(reply, sizeof reply, "firmware %s %s ground", esp_app_get_description()->version, CONFIG_IDF_TARGET);
   else if (!strcmp(line, "save")) snprintf(reply, sizeof reply, cfg_save() ? "couldn't save" : "saved");
   else if (!strcmp(line, "radio")) esp_radio_status(RADIO, reply, sizeof reply);
   else if (!strcmp(line, "reboot") && drone_up()) snprintf(reply, sizeof reply, "the telemetry says the drone is armed or flying: the channels would stop for a second or two (it would fly home). reboot force to do it anyway");
@@ -400,7 +402,7 @@ static void usb_line(void *ctx, char *line) {
       snprintf(reply, sizeof reply, "this command module's own buttons and sticks fly now (arm and fly start off)");
     }
   }
-  else if (!gnd_text(&G, &TI, line, t, reply, sizeof reply)) snprintf(reply, sizeof reply, "unknown (show, set, save, reboot, radio, local, press, release, tap, stick, goto, calibrate, latch, cmd, status, messages)");
+  else if (!gnd_text(&G, &TI, line, t, reply, sizeof reply)) snprintf(reply, sizeof reply, "unknown (show, version, set, save, reboot, radio, local, press, release, tap, stick, goto, calibrate, latch, cmd, status, messages)");
   if (reply[0]) con("%s\n", reply);
 }
 
@@ -408,7 +410,7 @@ void app_main(void) {
   esp_log_set_vprintf(log_out);                                      /* (the log too is quiet while a computer drives it) */
   if (nvs_flash_init() != ESP_OK) { nvs_flash_erase(); nvs_flash_init(); }
   cfg_load();
-  printf("\nLiftLab command module (ESP32)\n");
+  printf("\nLiftLab command module (ESP32)\nfirmware %s %s ground\n", esp_app_get_description()->version, CONFIG_IDF_TARGET);
   float *ar[3] = { arenas_[0], arenas_[1], arenas_[2] }, *po[3] = { pools_[0], pools_[1], pools_[2] }; int32_t *co[3]; for (int i = 0; i < 3; i++) co[i] = calloc(2048, sizeof(int32_t));
   int e = co[0] && co[1] && co[2] ? rn_host_init(&H, rn_builtin_ground_img, rn_builtin_ground_len, ar, 2048, co, 2048, po, 1024) : RN_E_TOO_BIG;
   gnd_config gc; gnd_config_default(&gc); gc.latch = C.latch; GC = gc; gc.seq0 = (uint8_t)esp_random();   /* (gnd_config.seq0) */

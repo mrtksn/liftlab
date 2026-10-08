@@ -3,5 +3,12 @@
 cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../.." "${CMAKE_CURRENT_LIST_DIR}/../../fc" "${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_CURRENT_LIST_DIR}/../../esp_radio")
 set(COMPONENTS main)
+# The build's name, as the board reports it ("version", and at power-on): tools/build_firmware.sh sets the commit it
+# was built from, the same one firmware/manifest.json records; a build by hand gets ESP-IDF's git describe.
+if(DFB_FW_COMMIT)
+  set(PROJECT_VER "${DFB_FW_COMMIT}")
+elseif(DEFINED ENV{DFB_FW_COMMIT})
+  set(PROJECT_VER "$ENV{DFB_FW_COMMIT}")
+endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(dfb_ground)

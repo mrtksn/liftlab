@@ -15,8 +15,13 @@ For a manual retry, open the Pages run for the intended commit and use **Re-run 
 
 ## Firmware is a separate release
 
-**Board firmware and host programs** validates chip/host builds and selected tests. It does not publish a website or replace the checked-in firmware bundles. A successful Pages run does not imply that board checks passed, and neither proves real-flight behavior.
+**Board firmware and host programs** validates chip/host builds and selected tests, and uploads the built firmware bundles as an artifact. It does not publish a website or replace the checked-in firmware bundles. A successful Pages run does not imply that board checks passed, and neither proves real-flight behavior.
 
-After native firmware changes, activate ESP-IDF 5.3.2, run `sh tools/build_firmware.sh`, run the relevant tests, and review the generated chip/role bundles and `firmware/manifest.json`. Commit the intended bundles and manifest along with the source changes. Pages serves those files; it does not compile firmware on demand. For browser C/WebAssembly changes, regenerate the corresponding checked-in artifacts with `runner/fc/build_wasm.sh` or `runner/build_wasm.sh` and validate them separately.
+After native firmware changes, the bundles in `firmware/` must be rebuilt and committed; Pages serves those files and does not compile firmware on demand. Two ways:
+
+- **From CI (no local ESP-IDF):** every run of **Board firmware and host programs** builds the six chip/role bundles with `tools/build_firmware.sh` in the ESP-IDF 5.3.2 container and uploads them with their manifest as the artifact `firmware-COMMIT` (30 days). Download it (`gh run download RUN -n firmware-COMMIT -D firmware`), review `git diff --stat firmware`, and commit the bundles and manifest.
+- **Locally:** activate ESP-IDF 5.3.2 and run `sh tools/build_firmware.sh`. It stamps every build with this checkout's commit (`+changes` when `runner/` has uncommitted edits); `ONLY=esp32s3-flight` builds one bundle.
+
+Each build reports that stamp to `version` and at power-on, and the manifest records it: the install dialog compares the two when it connects. `sh tools/check_firmware_fresh.sh` says whether the checked-in bundles were built from the current firmware source (exit 1 lists the commits since); CI runs it and leaves a warning when they are stale. For browser C/WebAssembly changes, regenerate the corresponding checked-in artifacts with `runner/fc/build_wasm.sh` or `runner/build_wasm.sh` and validate them separately.
 
 Custom sensor C saved in a design needs a matching rebuilt firmware installation. Saving a design or deploying the website does not compile its driver source. See [hardware wiring](hardware-wiring.md) and [board support](boards.md).

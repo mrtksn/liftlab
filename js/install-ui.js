@@ -8,7 +8,7 @@
 const FW_DIR = 'firmware/';
 const LK = { PROGRAM: 1, STATUS: 2, AIRFRAME: 4, SETTING: 5, EVENT: 0x81, REPORT: 0x82, TELEM: 0x83 };
 const INST_STATES = ['disarmed', 'ARMED', 'FAILSAFE', 'CRASHED', 'motor test'];
-const INST = { target: null, conn: null, busy: false, preparing: false, fw: null, files: null, log: [] };
+const INST = { target: null, conn: null, connTarget: null, busy: false, preparing: false, fw: null, files: null, log: [], board: null };
 const instPref = (k, d) => { try { return localStorage.getItem('dfb.install.' + k) ?? d; } catch (e) { return d; } };
 const instSave = (k, v) => { try { localStorage.setItem('dfb.install.' + k, v); } catch (e) {} };
 
@@ -160,6 +160,7 @@ function installHistory(action){
   if(target)openInstall(target);else closeInstall();
 }
 function openInstall(target) {
+  if (INST.conn && INST.connTarget !== target) { if (typeof usbViewStop === 'function') usbViewStop(); INST.conn.close(); INST.conn = null; INST.board = null; }
   INST.target = target; renderUndo();
   const dlg = $('#installDlg'), kind = instKind(target), K = BOARD_KINDS[kind];
   setText($('#installTitle'), `Install / export: ${instName(target)}`);
@@ -183,10 +184,11 @@ function openInstall(target) {
   }
   if (!dlg.open) dlg.showModal();
   dlg.scrollTop = 0; $('#installTitle').focus();   // start at the top, not at its first input
+  instFwRender();                                   // (now that its line is in the page: the build the connected board runs)
 }
 function closeInstall() {
   if (INST.busy||INST.preparing) { instMsg($('#installBusy')||$('#installSub'), 'Wait until the current board operation finishes.', 'bad'); return; }
-  if (INST.conn) { INST.conn.close(); INST.conn = null; }
+  if (INST.conn && !(typeof usbViewOn === 'function' && usbViewOn())) { INST.conn.close(); INST.conn = null; INST.board = null; }   // (the 3D view keeps the cable open)
   $('#installDlg').close();
 }
 
@@ -204,7 +206,7 @@ function espGuide(t) {
   out.push(instPara(`What goes on it: the ${ground ? 'command module' : 'flight controller'} firmware (the same C the simulator runs for this board), then ${ground ? 'its wiring, typed in below' : 'this design: the airframe, which board pins the motors and servos are on, and any formulas you edited'}.`));
   for (const n of notes) out.push(el('p', { class: 'inst-note', text: n }));
   out.push(el('div', { class: 'inst-safety' }, el('b', { text: 'Before you plug it in' }), el('ul', {},
-    el('li', { text: 'Props off. A freshly flashed board, or a wrong pin, can twitch an ESC.' }),
+    el('li', { text: 'Props off. A freshly flashed board drives no motor or servo pin until the wiring is sent, but a wrong pin in the wiring can still spin a motor.' }),
     el('li', { text: 'Battery unplugged (or the ESCs\' 5 V wire off the board) while the USB cable is in: two supplies can push current back into your computer.' }),
     el('li', { text: 'A USB cable that carries data (some only charge). Chrome or Edge on a computer.' }))));
   const serialOk = 'serial' in navigator;
@@ -224,12 +226,14 @@ function espGuide(t) {
   out.push(ground ? espGroundWiring(profile) : espDesign(t, edited));
   // the board's messages
   const con = el('pre', { class: 'inst-console', id: 'instConsole', 'aria-live': 'polite' });
-  const live = el('p', { class: 'hint inst-live', id: 'instLive' });
-  const line = UI.input( { type: 'text', id: 'instLine', placeholder: ground ? 'A command: show, set tx=17,16, save, reboot, status…' : 'A setting: show, set baud=921600, save, reboot…', 'aria-label': 'Send a line to the board', spellcheck: 'false', autocomplete: 'off' });
+  const live = el('p', { class: 'hint inst-live', id: 'instLive' }), fwLine = UI.status({ class: 'hint inst-fw', id: 'instFw', role: 'status' });
+  const line = UI.input( { type: 'text', id: 'instLine', placeholder: ground ? 'A command: show, version, set tx=17,16, save, reboot, status…' : 'A setting: show, scan, version, set baud=921600, save, reboot…', 'aria-label': 'Send a line to the board', spellcheck: 'false', autocomplete: 'off' });
   const send = UI.button( { class: 'btn', type: 'button', text: 'Send' });
   const baud = UI.select( { id: 'instBaud', 'aria-label': 'Speed' }, ...(ground ? [115200] : [921600, 460800, 230400, 115200]).map(b => el('option', { value: b, text: b + ' baud' })));
   const conn = UI.button( { class: 'btn', type: 'button', id: 'instConn', text: 'Connect' });
-  conn.addEventListener('click', async () => { if (INST.conn) { await INST.conn.close(); INST.conn = null; instConnUi(); } else await espConnect(); });
+  conn.addEventListener('click', async () => { if (INST.conn) { if (typeof usbViewStop === 'function') usbViewStop(); await INST.conn.close(); INST.conn = null; INST.board = null; instConnUi(); } else await espConnect(); });
+  const view = ground ? null : UI.button({ class: 'btn', type: 'button', id: 'instView', text: 'Show it in the 3D view', title: 'The drone in the view follows this board\'s attitude and height; the simulation pauses. Watching only: nothing is sent to the board.' });
+  if (view) view.addEventListener('click', async () => { if (!await espConnect()) return; usbViewStart(); closeInstall(); });
   const sendLine = async () => {
     const s = line.value.trim(); if (!s) return;
     if (!await espConnect()) return;
@@ -240,11 +244,13 @@ function espGuide(t) {
     line.value = '';
   };
   send.addEventListener('click', sendLine); line.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); sendLine(); } });
-  if (!serialOk) [conn, send, line].forEach(x => { x.disabled = true; });
-  out.push(instStep(3, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : `What it says over USB: its events, and twice a second what it's doing. Settings are typed without <code>set</code> or with it: <code>motors=${profile.motors.slice(0,4).join(',')}</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is.`),
-    el('div', { class: 'inst-row' }, conn, baud), live, con, el('div', { class: 'inst-row inst-line' }, line, send)));
+  if (!serialOk) [conn, send, line, view].forEach(x => { if (x) x.disabled = true; });
+  out.push(instStep(3, 'Its messages', instPara(ground ? 'What it prints over USB (115200 baud). Type its commands here as you would in a terminal.' : `What it says over USB: its events, and twice a second what it's doing. Settings are typed without <code>set</code> or with it: <code>motors=${profile.motors.slice(0,4).join(',')}</code>, then <code>save</code> and <code>reboot</code>; <code>status</code> and <code>show</code> say where it is, <code>scan</code> which I²C addresses answer (which compass chip a module really has), <code>version</code> which firmware build it runs.`),
+    el('div', { class: 'inst-row' }, conn, baud, view), fwLine, live, con, el('div', { class: 'inst-row inst-line' }, line, send)));
   out.push(espManual(t, ground, fwName, edited));
-  INST.log = []; instConnUi();
+  if (INST.conn && INST.connTarget === t) { for (const [s, k] of INST.log) con.append(el('span', { class: k || '', text: s + '\n' })); requestAnimationFrame(() => { con.scrollTop = con.scrollHeight; }); }   // (back from the 3D view: the same cable, its messages so far)
+  else INST.log = [];
+  instConnUi();
   return out;
 }
 function espDesign(t, edited) {
@@ -264,7 +270,7 @@ function espDesign(t, edited) {
   sendAf.addEventListener('click', () => espSendAirframe(msg));
   sendWire.addEventListener('click', () => espSendWiring(mp.value, sp.value, msg));
   const kids = [
-    ...(wiring.motorConfigs.some(m=>m.driver==='brushed')?[el('p',{class:'inst-note',text:'For MOSFET motors, keep motor power disconnected until these saved driver settings have been sent and the board has restarted. Factory/default wiring uses ESC pulses, which are not a stopped MOSFET signal.'})]:[]),
+    ...(wiring.motorConfigs.some(m=>m.driver==='brushed')?[el('p',{class:'inst-note',text:'For MOSFET motors, keep motor power disconnected until these saved driver settings have been sent and the board has restarted. A fresh board drives no motor pin, but a board that still has older saved wiring keeps sending ESC pulses on its pins, which are not a stopped MOSFET signal.'})]:[]),
     instPara('Once the firmware is on, send the wiring first and let it restart, then send the airframe. Use the UART0 USB-to-serial connection. Both are kept on the board: send them again when the design or wiring changes.'),
     instPara(`Battery ADC: ${wiring.bus.batteryPin<0?'not connected':'GPIO '+wiring.bus.batteryPin+' · divider '+wiring.bus.batteryDivider}. ${!wiring.radioBoard?'':radioCfg.kind==='elrs'||radioCfg.kind==='serial'?`${radioCfg.kind==='serial'?'Serial line':'Receiver'} UART: ${wiring.bus.crsfRx<0?'not connected':'board RX GPIO '+wiring.bus.crsfRx+' / TX GPIO '+wiring.bus.crsfTx}. `:''}${wiring.radioBoard&&radioCfg.kind==='nrf24'?`nRF24L01 SPI: ${(wiring.bus.nrfPins||[]).every(p=>p>=0)?'GPIO '+wiring.bus.nrfPins.join(', '):'not connected'} (SCK, MOSI, MISO, CSN, CE). `:''}${wiring.radioBoard?`Radio: <code>${radioSettingLines(radioCfg).join(' ')}</code> (the link and binding phrase from the Ground tab, sent with the hardware settings)${radioCfg.kind==='elrs'||radioCfg.kind==='serial'?'':'; built in, nothing to wire'}.`:''}`),
     instPara(`<b>Wiring:</b> which GPIO each ESC signal and servo is on, in the airframe's order. I²C is GPIO ${wiring.bus.sda}, ${wiring.bus.scl}. Change these assignments in the board and device cards in <b>Computers</b>. The defaults avoid the pins that upset booting; the ones it can drive are ${profile.pins.join(', ')}.`),
@@ -327,13 +333,62 @@ function instConnUi() {
   const c = $('#instConn'); if (!c) return;
   c.textContent = INST.conn ? 'Disconnect' : 'Connect'; const b = $('#instBaud'); if (b) b.disabled = !!INST.conn;
   if (!INST.conn) setText($('#instLive'), '');
+  instFwRender();
 }
-function instTelem(f) {
+// The flight firmware's telemetry (RN_LINK_TELEM, flight.c) as one line: the install dialog's and the 3D view's bar.
+function instTelemText(f) {
   const fl = f[13], st = INST_STATES[f[1]] || '?';
-  const bits = [st, `roll ${f[2].toFixed(0)}° pitch ${f[3].toFixed(0)}°`, `loop ${f[11].toFixed(0)} µs`];
+  const bits = [st, `roll ${f[2].toFixed(0)}° pitch ${f[3].toFixed(0)}° yaw ${f[4].toFixed(0)}°`];
+  if (fl & 2) bits.push(`height ${f[8].toFixed(2)} m`);
+  bits.push(`loop ${f[11].toFixed(0)} µs`);
   if (f[10] > 0) bits.push(f[10].toFixed(2) + ' V');
   bits.push(fl & 1 ? (fl & 4 ? 'gyro ok' : 'settling') : 'NO GYRO', fl & 2 ? 'barometer' : 'no barometer', fl & 16 ? 'airframe loaded' : 'NO AIRFRAME');
-  setText($('#instLive'), bits.join(' · '));
+  return bits.join(' · ');
+}
+function instTelem(f) {
+  setText($('#instLive'), instTelemText(f));
+  if (typeof usbViewTelem === 'function') usbViewTelem(f);
+}
+
+/* ───────── which build the board runs ───────── */
+// The boards say "firmware COMMIT CHIP ROLE" (asked with "version"; the command module also at power-on). Firmware from
+// before that answers "expected key=value" (flight) or "unknown (…)" (command module): an old build.
+let instManifest = null;
+async function fwManifest() {
+  if (instManifest) return instManifest;
+  try { const r = await fetch(FW_DIR + 'manifest.json', { cache: 'no-cache' }); if (r.ok) instManifest = await r.json(); } catch (e) {}
+  return instManifest;
+}
+function instFwLine(s) {
+  const m = /^firmware (\S+) (esp32\w*) (flight|ground)$/.exec(s); if (!m) return;
+  INST.board = { commit: m[1], chip: m[2], role: m[3] }; instFwRender();
+}
+async function instAskVersion(c) {
+  if (!c) return;
+  for (let k = 0; k < 2 && INST.conn === c && !INST.board; k++) {
+    if (k) await new Promise(r => setTimeout(r, 2500));                 // (just restarted: its link starts after the boot log)
+    if (INST.conn !== c || INST.board) return;
+    const ground = INST.connTarget === 'ground', w = c.waitFor(s => /^firmware |^expected key=value|^unknown \(/.test(s), 1500);
+    try { await c.write(ground ? new TextEncoder().encode('version\n') : dfFrame(LK.SETTING, 'version')); } catch (e) { return; }
+    const r = await w;
+    if (r && !/^firmware /.test(r)) { INST.board = { old: true }; instFwRender(); return; }
+  }
+}
+async function instFwRender() {
+  const p = $('#instFw'); if (!p) return;
+  const b = INST.conn && INST.connTarget === INST.target ? INST.board : null;
+  if (!b) { instMsg(p, ''); return; }
+  const man = await fwManifest(); if ($('#instFw') !== p) return;
+  const t = INST.target, profile = instProfile(t), role = t === 'ground' ? 'ground' : 'flight', page = man && man.commit;
+  if (b.old) { instMsg(p, `This board runs firmware from before version reporting: older than this page's${page ? ` (${page}, built ${man.built})` : ''}. Install now (step 1) to update it.`, 'bad'); return; }
+  const base = x => String(x).split(/[+-]/)[0];
+  const what = `Firmware on the board: ${b.commit} (${b.chip}, ${b.role}).`;
+  if (b.chip !== profile.chip) instMsg(p, `${what} This design says ${profile.label} (${profile.chip}): pick the board's real chip in Computers, or plug in the right board.`, 'bad');
+  else if (b.role !== role) instMsg(p, `${what} This board is set up as the ${role === 'ground' ? 'command module' : 'flight controller'}: Install now (step 1) puts the right firmware on it.`, 'bad');
+  else if (!page) instMsg(p, `${what} This page's firmware/manifest.json didn't load, so it can't be compared.`, '');
+  else if (b.commit === page) instMsg(p, `${what} The same build as this page's (built ${man.built}).`, 'good');
+  else if (base(b.commit) === base(page)) instMsg(p, `${what} This page's is ${page}: the same commit, but one of them was built with local changes. Install now to be sure.`, 'bad');
+  else instMsg(p, `${what} This page's is ${page} (built ${man.built}): a different build. Install now (step 1) to run the one this page was made for.`, 'bad');
 }
 // Opens the board's port for the link (asking which one, the first time). Returns false if it couldn't.
 async function espConnect(){
@@ -346,9 +401,10 @@ async function espConnectPrepared() {
   let port = INST.port;
   try { if (!port) port = INST.port = await navigator.serial.requestPort(); } catch (e) { return false; }
   const baud = +($('#instBaud') ? $('#instBaud').value : 921600);
-  const c = new BoardConn(port, { text: (s, k) => instLog(s, k), telem: instTelem });
+  const c = new BoardConn(port, { text: (s, k) => { instLog(s, k); instFwLine(s); }, telem: instTelem });
   try { await c.open(baud); } catch (e) { instLog('Couldn\'t open the port: ' + e.message + (/already open|in use/i.test(e.message) ? ' (another program has it: close it there)' : ''), 'bad'); INST.port = null; return false; }
-  INST.conn = c; instConnUi(); instLog(`connected at ${baud} baud`, 'me');
+  INST.conn = c; INST.connTarget = INST.target; INST.board = null; instConnUi(); instLog(`connected at ${baud} baud`, 'me');
+  instAskVersion(c);
   return true;
 }
 async function espSend(bytes, until, ms, msg, what) {
@@ -381,6 +437,7 @@ async function espSendWiring(motors, servos, msg) {
   const reboot = await espSend(dfFrame(LK.SETTING, 'reboot'), s => /rebooting|disarm first/.test(s), 2000, msg, 'Restarting it');
   if (reboot !== 'rebooting') { instMsg(msg, 'Wiring saved, but restart was not confirmed: ' + (reboot || 'no answer'), 'bad'); return; }
   instMsg(msg, 'Saved: it restarted on the new wiring. Check it with show (below).', 'good');
+  INST.board = null; const c = INST.conn; setTimeout(() => instAskVersion(c), 1500);
 }
 async function espSendProgram(msg) {
   let img; try { img = boardImage(INST.target); } catch (e) { instMsg(msg, 'The formulas don\'t compile: ' + e.message, 'bad'); return; }
@@ -457,7 +514,8 @@ async function espFlashPrepared(name, profile, prog, msg) {
     prog.value = 1;
     INST.customFirmware = !!(INST.files && INST.files.length);
     await loader.after('hard_reset');
-    say('Installed and checked: the board restarted on the new firmware.' + (name === 'flight' ? ' Now send it this design (step 2).' : ' Now connect and set up its wiring (step 2).'));
+    say('Installed and checked: the board restarted on the new firmware.' + (name === 'flight' ? ' Now send it this design (step 2). Its motor and servo pins stay off until the wiring is sent.' : ' Now connect and set up its wiring (step 2).'));
+    INST.board = null; instFwRender();
     msg.className = 'ui-status hint inst-msg good';
   } catch (e) {
     const m = String(e && e.message || e);
@@ -612,5 +670,5 @@ function groundPiGuide(K) {
 $('#installClose').addEventListener('click', closeInstall);
 $('#installDlg').addEventListener('cancel', e => { e.preventDefault(); closeInstall(); });
 if ('serial' in navigator) navigator.serial.addEventListener('disconnect', e => {
-  if (INST.port && e.target === INST.port) { if (INST.conn) { INST.conn.close(); INST.conn = null; } INST.port = null; instConnUi(); instLog('the board was unplugged', 'bad'); }
+  if (INST.port && e.target === INST.port) { if (typeof usbViewStop === 'function') usbViewStop(); if (INST.conn) { INST.conn.close(); INST.conn = null; } INST.board = null; INST.port = null; instConnUi(); instLog('the board was unplugged', 'bad'); }
 });

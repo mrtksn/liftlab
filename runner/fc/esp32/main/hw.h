@@ -69,6 +69,10 @@ void hw_radio(const hw_config *c, rlink_cfg *L);
 int hw_radio2(const hw_config *c, rlink_cfg *L);
 /* The other drones' channel (peers=), 0: off. */
 int hw_peers(const hw_config *c);
+/* How many motors and servos have a pin (0 on a fresh board: nothing is driven). */
+int hw_outputs_wired(const hw_config *c);
+/* What usually answers at a 7-bit I2C address (a guess from the address alone). */
+const char *hw_i2c_name(int addr);
 
 /* airframe blob in flash */
 int hw_airframe_load(uint8_t *buf, uint32_t cap, uint32_t *len);
@@ -88,6 +92,8 @@ int hw_imu_read(fc_imu *m);
 int hw_baro_read(float *alt);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
+/* Every address that answers on the sensors' I2C bus, with what usually sits there, as one line. Returns how many. */
+int hw_i2c_scan(char *out, int n);
 
 /* outputs: throttles 0–1; zero becomes ESC minimum pulse or MOSFET zero duty, servo angles in rad */
 int hw_outputs_init(const hw_config *c, char *log, int logn);
