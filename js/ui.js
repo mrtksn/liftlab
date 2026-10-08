@@ -100,7 +100,7 @@ function summary(c) {
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.push ? 'pusher · ' : ''}${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass' && isWing(c)) return `${c.mass.toFixed(2)} kg wing · span ${c.size[1].toFixed(2)} m · chord ${c.size[0].toFixed(2)} m · ${(c.inc || 0).toFixed(1)}° · ${p}`;
-  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.model ? (PART_CATEGORIES[c.category] || 'Payload').toLowerCase() : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'latch') { const n = descendants(c).length; return `${c.closed ? 'closed' : 'open'} at take-off · holds ${n} part${n === 1 ? '' : 's'} · reach ${Math.round((c.reach ?? 0.08) * 100)} cm · ${p}`; }
   if (c.type === 'sensor') {
     const u = (c.known ? '' : ' · mount unknown'), g = Math.round(c.mass * 1000) + ' g · ';
@@ -174,15 +174,16 @@ function checkF(c, key, label) {
 function compBody(c) {
   cardRefresh.set(c.id, []);
   const b = el('div', { class: 'comp-body' });
-  const nid = `f-${c.id}-name`; const ni = UI.input( { type: 'text', id: nid, value: c.name, maxlength: '18' });
+  const nid = `f-${c.id}-name`; const ni = UI.input( { type: 'text', id: nid, value: c.name, maxlength: '60' });
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
   b.append(el('div', { class: 'field' }, el('label', { for: nid, text: 'Name' }), ni));
   // Attached to: the frame, or any servo joint that isn't this part or below it.
-  const holders = [['', 'Frame']].concat(cfg.comps.filter(h => canAttach(c, h)).map(h => [String(h.id), `${h.name} (${h.type === 'link' ? 'rod end' : h.type === 'latch' ? 'latch' : 'servo'})`]));
+  const holders = partMountOptions(c);
   const aid = `f-${c.id}-parent`, asel = UI.select( { id: aid });
-  for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') === v) o.selected = true; asel.append(o); }
-  asel.addEventListener('change', () => { attachTo(c, asel.value ? compById(+asel.value) : null); if (c.type === 'hang') reseatPend(c); structural(); });
+  for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') + (c.parentPoint ? '|' + c.parentPoint : '') === v) o.selected = true; asel.append(o); }
+  asel.addEventListener('change', () => { partChooseMount(c, asel.value); if (c.type === 'hang') reseatPend(c); structural(); });
   b.append(el('div', { class: 'field' }, el('label', { for: aid, text: 'Attached to' }), asel));
+  const own = partOwnMountField(c); if (own) b.append(own);
   const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
   if (parentOf(c) || isHolder(c)) b.append(el('p', { class: 'hint', text: 'Positions are body axes with every servo at 0°; the servos above a part carry it from there. Moving or turning a servo or rod carries what\'s on it.' }));
   const presetSel = (list, kAz, kEl, label) => {   // quick directions, with the exact angles below
@@ -220,10 +221,11 @@ function compBody(c) {
       el('span', { class: 'lbl', text: 'Base' }), pos, presetSel(ROD_PRESETS, 'az', 'el', 'Points'), slider(c, 'laz'), slider(c, 'lel'), slider(c, 'lroll'), slider(c, 'llen'), slider(c, 'mass'),
       checkF(c, 'known', 'Controller knows this rod\'s mass'));
   } else if (c.type === 'mass') {
-    b.append(selectF(c, 'aero', 'In the air', [['prism', 'Prism: blunt (drag)'], ['wing', 'Wing: lift and drag']], () => { if (c.aero === 'wing') c.shape = 'box'; edited(c, 'shape'); rerender(); }));
-    if (isWing(c)) b.append(slider(c, 'mass'), pos, el('div', { class: 'subgrid' }, slider(c, 'wchord'), slider(c, 'wspan'), slider(c, 'wthick')), slider(c, 'inc'),
+    if (c.model) b.append(slider(c, 'mass'), pos, partModelFields(c));
+    else b.append(selectF(c, 'aero', 'In the air', [['prism', 'Prism: blunt (drag)'], ['wing', 'Wing: lift and drag']], () => { if (c.aero === 'wing') c.shape = 'box'; edited(c, 'shape'); rerender(); }));
+    if (!c.model && isWing(c)) b.append(slider(c, 'mass'), pos, el('div', { class: 'subgrid' }, slider(c, 'wchord'), slider(c, 'wspan'), slider(c, 'wthick')), slider(c, 'inc'),
       el('p', { class: 'hint', text: 'Chord along X (the leading edge forward), span along Y. It lifts as the air meets it at an angle, stalls past about 15°, and catches the wind and the rotors\' wash (the Wing lift and drag formula). On a servo set by you, it is a flap, a tilting wing or an air brake. The flight computers aren\'t told about it: to them it\'s an oddly shaped body.' }));
-    else {
+    else if (!c.model) {
       b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
       if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
       else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
@@ -257,6 +259,7 @@ function compBody(c) {
   if (c.type === 'motor' && (flightMotor(c).kind !== 'generic' || c.propPhysics?.rows)) {
     for (const key of ['tmax', 'tau']) b.querySelectorAll(`[id^="f-${c.id}-${key}"]`).forEach(input => { input.disabled = true; input.title = 'Derived by the fixed physical model'; });
   }
+  b.append(partMassFields(c));
   return b;
 }
 function compCard(c) {
@@ -337,7 +340,7 @@ function edited(c, key) {
 }
 // Last seen place of every servo and rod, so editing one carries what's on it along.
 const holderSnap = new WeakMap();
-function snapHolder(c) { if (isHolder(c)) holderSnap.set(c, { pos: c.pos.slice(), dir: c.type === 'link' ? linkDir(c) : null, F: c.type === 'link' ? rodFrameOf(c) : null, len: c.length }); }
+function snapHolder(c) { if (isHolder(c)) holderSnap.set(c, { pos: c.pos.slice(), dir: c.type === 'link' ? linkDir(c) : null, F: partRot(c), len: c.length }); }
 function carryAlong(c) {
   const s0 = holderSnap.get(c); if (!s0) { snapHolder(c); return; }
   const d = sub(c.pos, s0.pos);
@@ -345,8 +348,9 @@ function carryAlong(c) {
   if (c.type === 'link') {
     const dir = linkDir(c);
     const F = rodFrameOf(c); if (F.some((v, i) => Math.abs(v - s0.F[i]) > 1e-9)) rotateSubtree(c, m3m(F, m3T(s0.F)), c.pos);   // what's on it keeps its place and angle relative to the rod
-    if (Math.abs(c.length - s0.len) > 1e-9) shiftSubtree(c, scl(dir, c.length - s0.len));
+    if (Math.abs(c.length - s0.len) > 1e-9) for (const x of childrenOf(c).filter(x => !x.parentPoint || x.parentPoint === 'tip' && !c.points)) { const d = scl(dir, c.length - s0.len); x.pos = add(x.pos, d); shiftSubtree(x, d); }
   }
+  if (c.type !== 'link' && s0.F) { const F = partRot(c); if (F.some((v, i) => Math.abs(v - s0.F[i]) > 1e-9)) rotateSubtree(c, m3m(F, m3T(s0.F)), c.pos); }
   snapHolder(c); for (const k of descendants(c)) snapHolder(k);
   for (const k of descendants(c)) { refreshCard(k); if (k.type === 'hang') reseatPend(k); }
 }
@@ -837,6 +841,7 @@ function renderFrameShape() {
   sel.value = frameWing() ? 'wing' : 'prism';
   sel.addEventListener('change', () => { cfg.frame.aero = sel.value; changed(); renderFrameShape(); });
   box.append(el('div', { class: 'field' }, el('label', { for: 'frameAero', text: 'Frame shape' }), sel));
+  box.append(partMassFields(cfg.frame, true));
   if (!frameWing()) return;
   const f = (key, d) => numField('frame-' + key, d, () => frameShapeOf()[key], v => { cfg.frame[key] = v; changed(); }).node;
   box.append(el('div', { class: 'subgrid' }, f('span', { label: 'Span', min: 0.2, max: 2, hmin: 0.1, hmax: 4, step: 0.01, u: 'm', dp: 2 }), f('chord', { label: 'Chord', min: 0.05, max: 0.8, hmax: 1.5, step: 0.01, u: 'm', dp: 2 }), f('thick', { label: 'Thickness', min: 0.005, max: 0.1, hmax: 0.2, step: 0.005, u: 'm', dp: 3 })),
@@ -1071,6 +1076,7 @@ function migrateComps(comps) {
   comps = migrateTiltParts(comps);   // saved before servo joints existed
   for (const c of comps) if (c.type === 'motor' && !c.prop) withProp(c);
   for (const c of comps) {   // saved before the hidden hardware traits existed
+    validatePartGeometry(c);
     if (c.type === 'motor') { delete c.curve; delete c.kappa; }   // the throttle curve, and the prop's drag (κ), now come from the motor and prop physics
     if (c.type === 'motor' && !c.pitch) c.pitch = 'fixed';
     if (c.type === 'motor') { c.push = !!c.push; for (const [k, v] of Object.entries({ tsens: false, telem: true, tmaxC: 120, cool: 1, failHeat: true, failMode: 'stop', failLoss: 50 })) if (c[k] == null) c[k] = v; }

@@ -58,6 +58,7 @@ function renderUndo() {
   for (const b of document.querySelectorAll('#redoBtn,#redoBtn2,[data-design-history=redo]')) b.disabled = undo.i >= undo.stack.length - 1 || (b.closest('#installDlg') && typeof installHistoryLocked==='function' && installHistoryLocked());
 }
 window.addEventListener('keydown', e => {
+  if (typeof partImport !== 'undefined' && partImport.active) return;
   if (!(e.ctrlKey || e.metaKey) || e.altKey || typingIn(e.target) || document.querySelector('dialog[open]')) return;   // text fields keep their own undo
   if (typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   const k = e.key.toLowerCase();
@@ -118,16 +119,23 @@ async function saveDesign(asNew = false) {
   const same = designs.list.find(d => d.name === name);
   if (asNew && same) { designNote('That name is already saved. Choose another name for this copy.'); inp.focus(); inp.select(); return false; }
   const snapshot = designSnap();
-  const rec = { id: asNew ? newId() : same ? same.id : (designs.cur && designs.list.find(d => d.id === designs.cur && d.name === name) ? designs.cur : newId()), name, savedAt: Date.now(), design: JSON.parse(snapshot) };
   const btn = $('#designSave'); btn.disabled = true; $('#designSaveAs').disabled = true;
-  const ok = await storeDesign(rec);
-  btn.disabled = false; $('#designSaveAs').disabled = false;
+  const design = JSON.parse(snapshot);
+  let rec, ok;
+  try {
+    rec = { id: asNew ? newId() : same ? same.id : (designs.cur && designs.list.find(d => d.id === designs.cur && d.name === name) ? designs.cur : newId()), name, savedAt: Date.now(), design: design.comps.some(c => c.model) ? await partDesignWithAssets(design) : design };
+    ok = await storeDesign(rec);
+  } catch (e) { designNote('Could not save the design: ' + (e.message || e)); }
+  finally { btn.disabled = false; $('#designSaveAs').disabled = false; }
   if (!ok) return false;
   designs.cur = rec.id; designs.name = name; designs.preset = null; inp.value = name; designs.savedSnap = designs.baseSnap = snapshot;
   designNote(same ? `Updated “${name}”.` : `Saved “${name}”.`);
   renderDesigns(); save(); return true;
 }
 function applyDesign(d) {
+  for (const c of d.comps) validatePartGeometry(c);
+  if (d.frameShape) validatePartGeometry(d.frameShape);
+  partAssetsRestore(d);
   cfg.frame.mass = +d.frame || 0.45; setFrameShape(d.frameShape);
   cfg.comps = migrateComps(JSON.parse(JSON.stringify(d.comps)));
   cfg.battery = { ...defaultBattery(), ...(d.battery || {}) };
@@ -150,7 +158,10 @@ function openDesign(rec) {
 const FILE_FORMAT = 'drone-force-bench-design';
 async function exportDesign(rec) {
   const name = rec ? rec.name : (designs.name || $('#droneName').value || 'Untitled design');
-  const body = JSON.stringify({ format: FILE_FORMAT, version: 1, name, savedAt: new Date().toISOString(), design: rec ? rec.design : JSON.parse(designSnap()) }, null, 1);
+  let design;
+  try { design = await partDesignWithAssets(rec ? rec.design : JSON.parse(designSnap())); }
+  catch (e) { designNote('Could not export: ' + (e.message || e)); return; }
+  const body = JSON.stringify({ format: FILE_FORMAT, version: 1, name, savedAt: new Date().toISOString(), design }, null, 1);
   const filename = (name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'design') + '.json';
   const dl = await claudeUse('downloads');
   if (dl) {
@@ -167,9 +178,15 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
   const o = JSON.parse(text);
   const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode, battery: o.cfg.battery, computers: o.cfg.computers, environment: o.cfg.environment, laws: o.laws, tuning: o.cfg.tuning, programs: o.cfg.programs, apps: o.cfg.apps } : o;
   if (!d || !Array.isArray(d.comps) || !d.comps.every(c => c && typeof c.type === 'string' && Array.isArray(c.pos))) throw new Error('not a design');
+  for (const c of d.comps) validatePartGeometry(c);
+  if (d.frameShape) validatePartGeometry(d.frameShape);
+  partAssetsDecode(d);
   for (const c of d.comps) { if (c.propPhysics?.rows) FlightPhysics.propTable(c.propPhysics.rows); if (c.polar) FlightPhysics.polar(c.polar); }
   if (d.frameShape?.polar) FlightPhysics.polar(d.frameShape.polar);
   const keep = { frame: d.frame, frameShape: d.frameShape, comps: d.comps, mode: d.mode };   // (and the rest of the drone, when the file has it)
+  if (d.modelFiles) {
+    keep.modelFiles = d.modelFiles.map(f => { const id = newObjId('part-file-'); for (const c of keep.comps) if (c.model?.fileId === f.id) c.model.fileId = id; return { ...f, id }; });
+  }
   if (d.battery && typeof d.battery === 'object') keep.battery = d.battery;
   if (d.environment && typeof d.environment === 'object') keep.environment = d.environment;
   if (d.computers && Array.isArray(d.computers.boards)) keep.computers = d.computers;

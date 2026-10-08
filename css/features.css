@@ -672,10 +672,11 @@ button.chip{background:transparent;cursor:pointer}
 .ai-expr{flex:1;font-family:var(--f-mono)}
 .ai-err{color:var(--bad);font-size:var(--text-xs)}
 .ai-err:empty{display:none}
-/* the game key layout: the move pad on the left, under W A S D (pilot.js) */
+/* Game and Intuitive: the W A S D pad on the left (pilot.js swaps Intuitive's vertical buttons). */
 .pilot.game > .pad:first-child{order:3}
 .pilot.game > .pilot-mid{order:2}
 .pilot.game > .pad:last-child{order:1}
+@media(max-width:640px){.pilot.game > .pilot-mid{order:-1}}
 .keys-pop .seg{align-self:flex-start}
 /* Steering: its three choices share the row (no gap at the end) */
 #steerSec .seg{display:flex}
@@ -845,7 +846,7 @@ html.phone #tKeys{display:none}
 html.phone .show-wrap .show-menu{position:fixed;left:8px;right:8px;bottom:8px;top:auto;width:auto;max-height:65vh;overflow:auto;z-index:60}
 html.phone #tKeys,html.phone #kbdHint,html.phone .pk kbd,html.phone .pilot-acts kbd,html.phone .pilot-mid > .seg,html.phone [data-act="hold"]{display:none!important}
 html.phone .pilot{flex-wrap:wrap;row-gap:var(--space-12)}
-html.phone .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
+html.phone .pilot-mid,html.phone .pilot.game > .pilot-mid{order:-1;flex:1 0 100%;flex-direction:row;flex-wrap:wrap;justify-content:center}
 html.phone .pad{grid-template-columns:repeat(3,34px);grid-template-rows:repeat(3,34px);gap:var(--space-2)}
 html.phone .pad-cap{font-size:8.5px}
 html.phone .crash,html.phone .liftoff{bottom:200px}
@@ -1193,3 +1194,27 @@ html.phone .rp-sub .rp-opt:first-of-type{display:none}
 .seed-snap .btn.icon{width:26px;height:24px}
 .seed-say{margin:0;font-size:var(--text-xs);color:var(--ink-2)}
 .seed-say:empty{display:none}
+
+/* Imported drone objects: editable preview beside the drone. */
+.part-import-panel{min-height:0;min-width:0;overflow:auto;padding:12px;border:1px solid var(--accent);border-radius:var(--radius-card);background:var(--panel);display:flex;flex-direction:column;gap:var(--space-8);overscroll-behavior:contain}
+.work.part-importing #telemetry{display:none}
+.work.part-importing #editBar{display:none}
+.part-import-panel .dialog-toolbar{position:sticky;top:-12px;background:var(--panel);z-index:1}
+.part-import-panel h2{margin:0;font-size:var(--text-lg)}
+.part-import-panel .dialog-toolbar{padding-bottom:8px;margin:0}
+.part-import-panel .field{grid-template-columns:110px minmax(0,1fr)}
+.part-vector{display:flex;gap:6px;min-width:0}
+.part-vector label{display:flex;align-items:center;gap:3px;min-width:0;flex:1;font-size:var(--text-xs)}
+.part-vector input{width:100%;min-width:0;padding-inline:4px}
+.part-physical,.part-point-list{display:flex;flex-direction:column;gap:8px}
+.part-point{padding:8px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.part-point>input{width:100%}
+.part-model-fields{display:flex;flex-direction:column;gap:8px}
+.part-library-entry{display:flex;gap:4px;min-width:0}
+.part-library-entry>.btn:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+#partImportVectors{display:flex;flex-direction:column;gap:8px}
+@media(max-width:1100px){
+  .work.part-importing #airframe{display:none}
+  .work.part-importing .view{height:38vh;min-height:220px}
+  .part-import-panel{order:2;max-height:50vh}
+}

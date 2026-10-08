@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=665966fc22">
+<link rel="stylesheet" href="css/style.css?v=4ed9a50804">
 </head>
 <body>
 <div class="app">
@@ -246,6 +246,7 @@
               <div class="seg seg-sm" role="group" aria-labelledby="keyLayLbl">
                 <button type="button" data-keys="handset" aria-pressed="true" title="As a handset (Mode 2): the left stick climbs and turns (W A S D), the right stick moves (the arrows)">Handset</button>
                 <button type="button" data-keys="game" aria-pressed="false" title="As in games: W A S D move, the arrows climb and turn">Game</button>
+                <button type="button" data-keys="intuitive" aria-pressed="false" title="W/S climb and descend, A/D move left and right; the arrows move forward and back, and turn">Intuitive</button>
               </div></div>
             <div class="show-grp"><span class="lbl">Flying</span><dl>
               <dt id="keysMove"></dt><dd>forward, back, left, right (from the heading: the red arrow beside the drone)</dd>
@@ -480,6 +481,8 @@
           <button class="btn" type="button" data-add="mass">Rigid mass</button>
           <button class="btn" type="button" data-add="hang">Mass on cable</button>
           <button class="btn" type="button" data-add="latch">Latch / gripper</button>
+          <button class="btn" type="button" id="partModelImport">Import 3D object…</button>
+          <input type="file" id="partModelFile" accept=".glb,.gltf,.obj,.stl,.bin,.png,.jpg,.jpeg,.webp,.ktx2" multiple hidden>
         </div></section>
         <section><h3>Sensors</h3><div class="addrow">
           <button class="btn" type="button" data-add="imu">IMU</button>
@@ -615,34 +618,35 @@
 <script src="js/rn-wasm.js?v=57aa3966fb"></script>
 <script src="js/rn-bridge.js?v=e89e4956ec"></script>
 <script src="js/flight-physics.js?v=42d90f7013"></script>
-<script src="js/sim.js?v=e68dcaa281"></script>
+<script src="js/sim.js?v=8d2e36994a"></script>
 <script src="js/tuning.js?v=113a9c04af"></script>
 <script src="js/flight-model.js?v=4b6da32aed"></script>
-<script src="js/joints.js?v=0b25b1a019"></script>
-<script src="js/multibody.js?v=8ebcaadfdb"></script>
-<script src="js/cargo.js?v=fbc483c0af"></script>
+<script src="js/joints.js?v=8479511f02"></script>
+<script src="js/part-geometry.js?v=cb7ec7b8aa"></script>
+<script src="js/multibody.js?v=39780e2134"></script>
+<script src="js/cargo.js?v=3d41ba2ab9"></script>
 <script src="js/sensors.js?v=96e5105808"></script>
 <script src="js/health.js?v=b1cf776935"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=4139e0373b"></script>
-<script src="js/view3d.js?v=5622529437"></script>
-<script src="js/pilot.js?v=37ac21bd22"></script>
+<script src="js/view3d.js?v=efe098769c"></script>
+<script src="js/pilot.js?v=12b8fd8abe"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
-<script src="js/ui.js?v=a803822b18"></script>
-<script src="js/place-ui.js?v=8c208dd787"></script>
+<script src="js/ui.js?v=1ff79fced2"></script>
+<script src="js/place-ui.js?v=0b90a86d58"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
 <script src="js/tuning-ui.js?v=c313a25da8"></script>
 <script src="js/autotune.js?v=ab42d73944"></script>
-<script src="js/designs.js?v=8d23ac8618"></script>
-<script src="js/share.js?v=026e34bc2b"></script>
+<script src="js/designs.js?v=d4557d0384"></script>
+<script src="js/share.js?v=626dfa369f"></script>
 <script src="js/board-hardware.js?v=13bee47a53"></script>
 <script src="js/hardware.js?v=518db316db"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=1eff2e8a18"></script>
 <script src="js/install-ui.js?v=1d285e0e09"></script>
-<script src="js/editor.js?v=0cccedf741"></script>
+<script src="js/editor.js?v=353d66287c"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
 <script src="js/board-wasm.js?v=4200ad9605"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
@@ -673,11 +677,13 @@
 <script src="js/audio.js?v=82fc0795cb"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=1a153bcd4f"></script>
-<script src="js/fleet-collisions.js?v=bc231a68ff"></script>
+<script src="js/fleet-collisions.js?v=02dc955e6c"></script>
 <script src="js/world-objects.js?v=4edfb4e3c3"></script>
 <script src="js/world-edit.js?v=cb7f36845f"></script>
 <script src="js/replay.js?v=a0a90ea626"></script>
 <script src="js/maps.js?v=afc69fdbd8"></script>
+<script src="js/part-import.js?v=9b94fdbaf1"></script>
+<script src="js/part-edit-ui.js?v=d0ec8b75a9"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"

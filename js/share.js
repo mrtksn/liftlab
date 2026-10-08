@@ -13,7 +13,7 @@ const unb64u = t => { const s = atob(t.replace(/-/g, '+').replace(/_/g, '/') + '
 async function pipeBytes(bytes, stream) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer()); }
 
 async function designCode(name) {
-  const json = JSON.stringify({ format: FILE_FORMAT, version: 1, name, design: JSON.parse(designSnap()) });
+  const json = JSON.stringify({ format: FILE_FORMAT, version: 1, name, design: await partDesignWithAssets(JSON.parse(designSnap())) });
   const raw = new TextEncoder().encode(json);
   if (typeof CompressionStream === 'function') return 'v1.' + b64u(await pipeBytes(raw, new CompressionStream('deflate-raw')));
   return 'j1.' + b64u(raw);

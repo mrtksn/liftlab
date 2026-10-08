@@ -23,6 +23,7 @@ const LATCH_HOOK = [0, 0, -0.018];                 // where a load hangs from, b
 const hookOf = l => add(l.pos, LATCH_HOOK);        // at rest, body axes
 // How far a part's top sits above its own position, so it hangs under a hook rather than through it.
 function topOf(c) {
+  if (c.model) return Math.max(...partBoxes(c).flatMap(b => boxCorners([0, 0, 0], partBoxSize(b), massRot(c)).map(p => add(m3v(massRot(c), partBoxCenter(b)), p)[2])));
   if (c.type === 'mass') return c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2;
   if (c.type === 'hang') return 0;
   if (c.type === 'motor' || c.type === 'link') return 0;
@@ -74,11 +75,12 @@ function looseBody(name, parts, kind = 'rigid') {
   const items = [], pts = [];
   for (const c of parts) {
     const ball = 0.4 * c.mass * 0.015 * 0.015, I0 = [ball, 0, 0, 0, ball, 0, 0, 0, ball];   // (a point mass still has some size)
-    if (c.type === 'mass') items.push({ m: c.mass, r: c.pos, I: shapeI(c) });
-    else if (c.type === 'link') items.push({ m: c.mass, r: add(c.pos, scl(linkDir(c), c.length / 2)), I: rodI(c) });
-    else items.push({ m: c.mass || 0.01, r: c.pos, I: I0 });
+    if (c.type === 'mass') items.push({ m: c.mass, r: partMassRest(c), I: shapeI(c) });
+    else if (c.type === 'link') items.push({ m: c.mass, r: partMassRest(c), I: rodI(c) });
+    else items.push({ m: c.mass || 0.01, r: partMassRest(c), I: I0 });
     if (c.type === 'mass') {
-      if (c.shape === 'box') for (const p of boxPoints(c.pos, c.size, massRot(c))) pts.push({ r: p.rest, rad: p.r });
+      if (c.model) for (const p of partSolidContacts(c)) pts.push({ r: p.rest, rad: p.r });
+      else if (c.shape === 'box') for (const p of boxPoints(c.pos, c.size, massRot(c))) pts.push({ r: p.rest, rad: p.r });
       else if (c.shape === 'sphere') pts.push({ r: c.pos.slice(), rad: c.radius });
       else pts.push({ r: add(c.pos, [0, 0, c.length / 2 - c.radius]), rad: c.radius }, { r: add(c.pos, [0, 0, -c.length / 2 + c.radius]), rad: c.radius });
     } else if (c.type === 'link') pts.push({ r: c.pos.slice(), rad: 0.006 }, { r: linkTip(c), rad: 0.009 });

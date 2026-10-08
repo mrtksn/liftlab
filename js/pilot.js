@@ -19,26 +19,38 @@ const PILOT_LEVELS = {
 const PILOT_ACCEL = 3;                  // how fast the commanded velocity ramps [m/s²]
 const PILOT_TICK = 20;                  // the target moves every 20 physics steps (10 ms), whatever the frame rate
 const PILOT_BOX = { xy: 25, zMin: 0.15, zMax: 15 };   // (as the drone's own box, rc_core.c: low enough to reach a parcel)
-// Two layouts. Handset: as a Mode 2 radio, the left hand climbs and turns (W A S D, the left stick), the right moves
+// Handset: as a Mode 2 radio, the left hand climbs and turns (W A S D, the left stick), the right moves
 // (the arrows, the right stick); the command module's keys and most drone simulators do this. Game: W A S D move, as
-// in games, and the arrows climb and turn.
+// in games, and the arrows climb and turn. Intuitive swaps Game's vertical keys: W/S climb/descend,
+// A/D move sideways, the up/down arrows move forward/back and the left/right arrows turn.
 const KEY_LAYOUTS = {
   handset: { KeyW: 'up', KeyS: 'down', KeyA: 'yawL', KeyD: 'yawR', ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right' },
   game: { KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right', ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'yawL', ArrowRight: 'yawR' },
+  intuitive: { KeyW: 'up', KeyS: 'down', KeyA: 'left', KeyD: 'right', ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'yawL', ArrowRight: 'yawR' },
 };
 const KEY_NAMES = { KeyW: 'W', KeyS: 'S', KeyA: 'A', KeyD: 'D', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
 const CTRL_NAMES = { up: 'Climb', down: 'Descend', yawL: 'Turn left', yawR: 'Turn right', fwd: 'Forward', back: 'Back', left: 'Left', right: 'Right' };
-let keyLayout = 'handset'; try { if (localStorage.getItem('dfb-keys') === 'game') keyLayout = 'game'; } catch (e) {}
+let keyLayout = 'handset'; try { const saved = localStorage.getItem('dfb-keys'); if (Object.hasOwn(KEY_LAYOUTS, saved)) keyLayout = saved; } catch (e) {}
 const KEYMAP = { ...KEY_LAYOUTS[keyLayout] };
 const keyOf = c => KEY_NAMES[Object.keys(KEYMAP).find(k => KEYMAP[k] === c)];
 function setKeyLayout(k, store = true) {
-  if (!KEY_LAYOUTS[k]) return;
+  if (!Object.hasOwn(KEY_LAYOUTS, k)) return;
   releaseAll(); keyLayout = k;
   for (const x of Object.keys(KEYMAP)) delete KEYMAP[x]; Object.assign(KEYMAP, KEY_LAYOUTS[k]);
   if (store) try { localStorage.setItem('dfb-keys', k); } catch (e) {}
-  // the pads show their keys; in the game layout the move pad goes on the left, under the hand on W A S D
+  // Keep each button's action and bound handlers together when swapping the vertical pad controls.
+  const intuitive = k === 'intuitive', altPad = document.querySelector('.pilot > .pad:first-child'), movePad = document.querySelector('.pilot > .pad:last-child');
+  if (altPad && movePad) {
+    for (const c of ['up', 'down']) (intuitive ? movePad : altPad).append(document.querySelector(`[data-ctrl="${c}"]`));
+    for (const c of ['fwd', 'back']) (intuitive ? altPad : movePad).append(document.querySelector(`[data-ctrl="${c}"]`));
+    altPad.setAttribute('aria-label', intuitive ? 'Forward/back and heading' : 'Altitude and heading');
+    movePad.setAttribute('aria-label', intuitive ? 'Altitude and lateral movement' : 'Move');
+    altPad.querySelector('.pad-cap').innerHTML = intuitive ? 'MOVE<br>TURN' : 'ALT<br>TURN';
+    movePad.querySelector('.pad-cap').innerHTML = intuitive ? 'ALT<br>MOVE' : 'MOVE';
+  }
+  // Game and Intuitive put W A S D on the left, with the arrows on the right.
   document.querySelectorAll('[data-ctrl]').forEach(b => { const c = b.dataset.ctrl, kb = b.querySelector('kbd'); if (kb) kb.textContent = keyOf(c); b.setAttribute('aria-label', `${CTRL_NAMES[c]} (${keyOf(c)})`); });
-  const pl = document.querySelector('.pilot'); if (pl) pl.classList.toggle('game', k === 'game');
+  const pl = document.querySelector('.pilot'); if (pl) pl.classList.toggle('game', k !== 'handset');
   document.querySelectorAll('[data-keys]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.keys === k)));
   const kb = (...cs) => cs.map(c => `<kbd>${keyOf(c)}</kbd>`).join(' ');
   const set = (id, h) => { const e = document.getElementById(id); if (e) e.innerHTML = h; };
@@ -110,6 +122,7 @@ const typingIn = t => t && (t.isContentEditable || t.tagName === 'TEXTAREA' || t
 // the tabs, Space and Enter press a button or tick a box. Letters still fly from a button, so a click on one
 // doesn't take the keyboard away.
 function ownsKey(t, e) {
+  if (typeof partImport !== 'undefined' && partImport.active) return true;
   if (!t || t === document.body || t === document.documentElement || !t.tagName) return false;
   if (typingIn(t)) return true;
   const k = e.key, nav = /^(Arrow|Page)/.test(k) || k === 'Home' || k === 'End', act = k === ' ' || k === 'Enter' || k === 'Spacebar';

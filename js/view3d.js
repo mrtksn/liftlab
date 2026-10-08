@@ -273,7 +273,7 @@ function rebuildDrone() {
   const js = comps.filter(c => c.type === 'joint').sort((a, b) => chainOf(a).length - chainOf(b).length);
   const holder = c => { const j = parentJoint(c); return j ? { g: jointGroups.get(j.id), o: j.pos } : { g: drone, o: [0, 0, 0] }; };
   // A part's connector starts where it hangs from: a rod's tip, a joint's pivot, or the hub.
-  const rel = c => { const h = holder(c), par = parentOf(c); return { g: h.g, p: sub(c.pos, h.o), from: par && par.type === 'link' ? sub(linkTip(par), h.o) : [0, 0, 0] }; };
+  const rel = c => { const h = holder(c); return { g: h.g, p: sub(c.pos, h.o), from: sub(partMountOrigin(c), h.o) }; };
   for (const j of js) {
     const { g, p, from } = rel(j);
     const r = rod(from, p, 0.007, mats.frame); if (r) { r.userData.compId = j.id; g.add(r); }   // clicking the arm a part hangs on picks the part
@@ -317,12 +317,13 @@ function rebuildDrone() {
       const stub = new THREE.Mesh(new THREE.BoxGeometry(pr * 0.7, 0.012, 0.004), mats.stub); stub.position.z = 0.02; stub.visible = false; axis.add(stub);   // what's left of a broken prop
       parts.set(c.id, { axis, disc, arrow, wake, body, spin: sm, stub });
     } else if (c.type === 'mass') {
+      if (c.model) { const m = partModelVisual(c); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m); continue; }
       let geo;
       if (c.shape === 'sphere') geo = new THREE.SphereGeometry(c.radius, 20, 14);
       else if (c.shape === 'cylinder') geo = new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2);
       else geo = isWing(c) ? airfoilGeo(...c.size) : new THREE.BoxGeometry(...c.size);
       const m = new THREE.Mesh(geo, c.cargo ? mats.cargo : isWing(c) ? mats.wing : c.known ? mats.mass : mats.massUnknown); m.position.set(...p); m.userData.compId = c.id; pickGroups.set(c.id, m); g.add(m);
-      if (c.inc) m.setRotationFromMatrix(m4of(massRot(c)));
+      m.setRotationFromMatrix(m4of(massRot(c)));
     } else if (c.type === 'latch') {   // a hook: its body, and a jaw that swings open (updateScene)
       const lg = new THREE.Group(); lg.position.set(...p); lg.userData.compId = c.id; pickGroups.set(c.id, lg); g.add(lg);
       lg.add(new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.022, 0.012), mats.frame));
@@ -399,8 +400,9 @@ function looseGroup(L) {   // its parts, drawn at rest in the body's own axes (o
   const g = new THREE.Group(), at = (m, p) => { m.position.set(...p); g.add(m); };
   for (const c of L.parts) {
     if (c.type === 'mass') {
+      if (c.model) { at(partModelVisual(c), c.pos); continue; }
       const geo = c.shape === 'sphere' ? new THREE.SphereGeometry(c.radius, 20, 14) : c.shape === 'cylinder' ? new THREE.CylinderGeometry(c.radius, c.radius, c.length, 20).rotateX(Math.PI / 2) : isWing(c) ? airfoilGeo(...c.size) : new THREE.BoxGeometry(...c.size);
-      const mm = new THREE.Mesh(geo, c.origin == null ? mats.cargo : isWing(c) ? mats.wing : mats.mass); if (c.inc) mm.setRotationFromMatrix(m4of(massRot(c))); at(mm, c.pos);
+      const mm = new THREE.Mesh(geo, c.origin == null ? mats.cargo : isWing(c) ? mats.wing : mats.mass); mm.setRotationFromMatrix(m4of(massRot(c))); at(mm, c.pos);
     } else if (c.type === 'motor') {
       const mg = new THREE.Group(); mg.quaternion.setFromUnitVectors(Z, new THREE.Vector3(...mountDir(c)));
       mg.add(new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.03, 14).rotateX(Math.PI / 2), mats.motor));
@@ -597,7 +599,8 @@ function updateScene(selected = true) {
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
   if (!selected) return;
   let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
-  const selC = editMode && compById(edit.sel);
+  const selC = editMode && !partImport.active && compById(edit.sel);
+  if (partImport.active && partImport.draft) tgt = drone.localToWorld(new THREE.Vector3(...scl(partImport.draft.pos, .5)));
   if (selC) {   // editing: orbit round the selected part; with the servo panel open, keep it clear of the panel
     // The centre is set when the part is picked (clicking it again re-centres), not followed: dragging a part
     // mustn't move the view under the pointer.

@@ -29,7 +29,7 @@ A design is the whole drone: the airframe, its flight computers (the boards and 
 
 **Which way is forward.** A red arrow on the hub points to the drone's nose (red, as the X axis on the orientation triad). A fainter red arrow beside the drone, level and just outside the props, shows the way the forward key moves it: the heading it holds (with navigation), or its nose (without). **Show ▾ → Forward** turns it off.
 
-**Keys ?** lists every keyboard shortcut, and picks the layout: **Handset** (the default: W/S climb and descend, A/D turn, the arrows move, as the left and right sticks of a Mode 2 radio, the command module's keys and most drone simulators) or **Game** (W A S D move, the arrows climb and turn; the move pad goes to the left). The choice is kept in this browser. The flight keys don't take keys a focused control needs: Space and Enter press a focused button or tick a box, arrows move a focused slider, and the tabs move with ←/→. Selects that reset the flight (the world, a task's board) apply a keyboard change on Enter or when you leave them, so stepping through them with the arrows doesn't reset anything.
+**Keys ?** lists every keyboard shortcut, and picks the layout: **Handset** (the default: W/S climb and descend, A/D turn, the arrows move, as the left and right sticks of a Mode 2 radio, the command module's keys and most drone simulators), **Game** (W A S D move, the arrows climb and turn; the move pad goes to the left), or **Intuitive** (W/S climb and descend, A/D move left/right; ↑/↓ move forward/back, ←/→ turn left/right). Intuitive's left pad combines altitude and sideways movement; its right pad combines forward/back and turning. The choice is kept in this browser. The flight keys don't take keys a focused control needs: Space and Enter press a focused button or tick a box, arrows move a focused slider, and the tabs move with ←/→. Selects that reset the flight (the world, a task's board) apply a keyboard change on Enter or when you leave them, so stepping through them with the arrows doesn't reset anything.
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
 
@@ -91,6 +91,8 @@ A quad that clips a wall usually loses its front props and flips. You can also b
 - Buildings between the camera and the drone turn see-through.
 - A soft shadow under the drone, on the street or a roof, helps judge height. Its switch is Shadow in the Show menu.
 - In the full-scale city, the view reaches further and you can zoom out to 300 m.
+
+**Imported drone parts.** Airframe → Add a part → Payloads → **Import 3D object…** imports GLB/glTF, OBJ or STL as a rigid mass using the world's voxel solidity. Preview it beside the drone, set its size, weight, name and category, and choose its center of mass and any named mounting points. A reusable copy appears in that category. Existing rigid parts also expose CoM and mounting-point editors; frame controls are in Tune. Design files and shared codes include the original model assets. See [imported parts, coordinates and storage](docs/imported-parts.md).
 
 ## Flight computers
 

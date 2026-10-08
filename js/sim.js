@@ -123,14 +123,16 @@ const frameWing = () => cfg.frame.aero === 'wing';
 const frameDims = () => frameWing() ? [cfg.frame.chord || 0.25, cfg.frame.span || 0.8, cfg.frame.thick || 0.03] : FRAME_BOX;
 function incR(deg) { const a = -(deg || 0) * D2R, c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }   // leading edge (+X) up by deg
 // The frame's shape, as a design keeps it.
-const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0, polar: cfg.frame.polar, source: cfg.frame.source });
+const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0, polar: cfg.frame.polar, source: cfg.frame.source, cog: cfg.frame.cog, points: cfg.frame.points });
 function setFrameShape(o) {
   o = o || {}; const n = (v, d, lo, hi) => isFinite(+v) ? clamp(+v, lo, hi) : d;
   Object.assign(cfg.frame, { aero: o.aero === 'wing' ? 'wing' : 'prism', span: n(o.span, 0.8, 0.1, 4), chord: n(o.chord, 0.25, 0.05, 1.5), thick: n(o.thick, 0.03, 0.005, 0.2), inc: n(o.inc, 0, -20, 20) });
   cfg.frame.polar = o.polar ? FlightPhysics.polar(o.polar) : undefined; cfg.frame.source = o.source;
+  validatePartGeometry(o); cfg.frame.cog = o.cog ? o.cog.slice() : undefined; cfg.frame.points = o.points ? JSON.parse(JSON.stringify(o.points)) : undefined;
 }
 const isWing = c => c.type === 'mass' && c.aero === 'wing' && c.shape === 'box';
-const massRot = c => c.type === 'mass' && c.inc ? incR(c.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const massRot = c => c.type === 'mass' ? m3m(eulerR(...(c.rotation || [0, 0, 0])), incR(c.inc)) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const setMassRot = (c, R) => { c.rotation = eulerFromR(m3m(R, m3T(incR(c.inc)))); };
 const frameRot = () => frameWing() && cfg.frame.inc ? incR(cfg.frame.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
 // The frontal area a prism shows along its X, Y and Z [m²].
 function frontalAreas(c) {
@@ -144,11 +146,13 @@ const boxCorners = (pos, size, R) => [-1, 1].flatMap(x => [-1, 1].flatMap(y => [
 /* ───────── mass properties ───────── */
 function boxI(m, a, b, c) { return [m * (b * b + c * c) / 12, 0, 0, 0, m * (a * a + c * c) / 12, 0, 0, 0, m * (a * a + b * b) / 12]; }
 function shapeI(c) {
-  const m = c.mass;
+  if (c.model) return partSolidInertia(c);
+  const m = c.mass; let I;
   if (c.shape === 'sphere') { const I = 0.4 * m * c.radius * c.radius; return [I, 0, 0, 0, I, 0, 0, 0, I]; }
-  if (c.shape === 'cylinder') { const r = c.radius, L = c.length, ix = m * (3 * r * r + L * L) / 12; return [ix, 0, 0, 0, ix, 0, 0, 0, m * r * r / 2]; }
-  const I = boxI(m, c.size[0], c.size[1], c.size[2]), R = massRot(c);
-  return c.inc ? m3m(m3m(R, I), m3T(R)) : I;
+  if (c.shape === 'cylinder') { const r = c.radius, L = c.length, ix = m * (3 * r * r + L * L) / 12; I = [ix, 0, 0, 0, ix, 0, 0, 0, m * r * r / 2]; }
+  else I = boxI(m, c.size[0], c.size[1], c.size[2]);
+  const R = massRot(c);
+  return c.inc || c.rotation ? m3m(m3m(R, I), m3T(R)) : I;
 }
 const frameI = () => boxI(cfg.frame.mass, ...frameDims());
 // Mass, CoG and inertia with every part where its joints put it: the true angles for the physics, the
@@ -157,13 +161,13 @@ const frameI = () => boxI(cfg.frame.mass, ...frameDims());
 function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; return [0, 1, 2].flatMap(i => [0, 1, 2].map(j => k * ((i === j ? 1 : 0) - d[i] * d[j]))); }
 // The truth is what's on the drone now (a load dropped or picked up, cargo.js); the model is the design.
 function massProps(which, comps = which === 'truth' ? liveComps() : cfg.comps, ang = which === 'truth' ? angleTrue : angleSeen, includeCables = false) {
-  const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() }];
+  const items = [{ m: cfg.frame.mass, r: partMassRest(cfg.frame), I: frameI() }];
   for (const c of comps) {
-    const pose = () => poseOf(c, ang);
+    const pose = () => posePoint(c, partMassRest(c), ang);
     if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
     else if (c.type === 'hang') { if (which === 'model' && includeCables && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
-    else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
+    else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
   }
   let m = 0, cm = [0, 0, 0]; for (const it of items) { m += it.m; cm = add(cm, scl(it.r, it.m)); } cm = scl(cm, 1 / m);
   opc(30 * items.length);
@@ -285,6 +289,7 @@ function contactPoints() {
       pts.push({ rest: add(c.pos, [0, 0, -0.03]), b, r: 0 }, { rest: c.pos.slice(), b, r: c.type === 'motor' ? 0.018 : 0.015 });
       if (!parentOf(c)) for (const k of [1 / 3, 2 / 3]) pts.push({ rest: scl(c.pos, k), b: 0, r: 0.008 });   // the arm from the hub
     } else if (c.type === 'mass') {
+      if (c.model) { for (const p of partSolidContacts(c)) pts.push({ ...p, b }); continue; }
       const hz = c.shape === 'box' ? c.size[2] / 2 : c.shape === 'sphere' ? c.radius : c.length / 2;
       pts.push({ rest: add(c.pos, [0, 0, -hz]), b, r: 0 });
       if (c.shape === 'box') for (const p of boxPoints(c.pos, c.size, massRot(c))) pts.push({ ...p, b });

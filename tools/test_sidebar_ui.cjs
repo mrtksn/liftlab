@@ -71,7 +71,7 @@ try{
   await page.evaluate(()=>setEditMode(false));
   // Tune uses the same existing inputs; its edits and history retain controller data.
   await page.locator('#tabTune').click();assert(await page.locator('#bodySec').isVisible());assert(await page.locator('#tuneSec').isVisible());assert(!await page.locator('#partsSec').isVisible());
-  await page.locator('#frameFold summary').click();const mass=await page.evaluate(()=>cfg.frame.mass);await page.locator('#frameMass-n').fill(String(mass+.25));await page.locator('#frameMass-n').dispatchEvent('input');
+  await page.locator('#frameFold > summary').click();const mass=await page.evaluate(()=>cfg.frame.mass);await page.locator('#frameMass-n').fill(String(mass+.25));await page.locator('#frameMass-n').dispatchEvent('input');
   await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass);assert(await page.locator('#paneTune').isVisible());await page.locator('#redoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass+.25);
   const tuning=await page.evaluate(()=>JSON.stringify(tuneOf()));await page.locator('#tune-rp-fold summary').click();
   await page.evaluate(()=>{const input=$('#tune-rp-fold input[type="range"]');input.value=String(+input.value+.1);input.dispatchEvent(new Event('input',{bubbles:true}));});

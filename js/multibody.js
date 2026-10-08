@@ -40,13 +40,13 @@ function buildBodies() {   // (what's on the drone now: a load dropped or picked
   }
   // Mass items per body, in that body's axes (rest positions relative to its pivot).
   const items = MB.bodies.map(() => []);
-  items[0].push({ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() });
+  items[0].push({ m: cfg.frame.mass, r: partMassRest(cfg.frame), I: frameI() });
   for (const c of liveComps()) {
     const b = bodyIndexOf(c), o = MB.bodies[b].pivot;
     MB.of.set(c.id, b);
-    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items[b].push({ m: c.mass, r: sub(c.pos, o), I: null });
-    else if (c.type === 'mass') items[b].push({ m: c.mass, r: sub(c.pos, o), I: shapeI(c) });
-    else if (c.type === 'link') items[b].push({ m: c.mass, r: sub(add(c.pos, scl(linkDir(c), c.length / 2)), o), I: rodI(c) });
+    if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items[b].push({ m: c.mass, r: sub(partMassRest(c), o), I: null });
+    else if (c.type === 'mass') items[b].push({ m: c.mass, r: sub(partMassRest(c), o), I: shapeI(c) });
+    else if (c.type === 'link') items[b].push({ m: c.mass, r: sub(partMassRest(c), o), I: rodI(c) });
   }
   MB.bodies.forEach((B, i) => {
     let m = 0, cm = [0, 0, 0]; for (const it of items[i]) { m += it.m; cm = add(cm, scl(it.r, it.m)); }

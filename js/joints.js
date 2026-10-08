@@ -30,7 +30,7 @@ const joints = () => cfg.comps.filter(c => c.type === 'joint');
 const links = () => cfg.comps.filter(c => c.type === 'link');
 // (also a part picked up in flight: cargo.js keeps those apart from the design)
 const compById = id => id == null ? null : cfg.comps.find(c => c.id === id) || (typeof cargo !== 'undefined' && cargo.extra.find(c => c.id === id)) || null;
-const isHolder = c => !!c && (c.type === 'joint' || c.type === 'link' || c.type === 'latch');
+const isHolder = c => !!c && (c.type === 'joint' || c.type === 'link' || c.type === 'latch' || c.type !== 'hang' && c.points?.length > 0);
 function parentOf(c) { const p = compById(c.parent); return isHolder(p) ? p : null; }   // what a part is attached to (null: the frame)
 function ancestorsOf(c) {   // what a part hangs from, nearest first
   const out = [], seen = new Set([c.id]);
@@ -61,7 +61,7 @@ function setRodFrame(l, F) {   // point and roll a rod so its frame is F (as nea
 }
 function mountFrame(c) {
   const p = parentOf(c);
-  return p && p.type === 'link' ? rodFrameOf(p) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  return p && p.type !== 'joint' ? partRot(p) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
 }
 const mountName = c => { const p = parentOf(c); return p && (p.type === 'link' || p.type === 'latch') ? p.name : p ? p.name + '\'s output' : 'the frame'; };
 // A servo's hinge axis as a heading and tilt relative to what it's mounted on (degrees), and back.
@@ -189,14 +189,16 @@ function chainVel(c, seen = false) {
 
 /* ───────── carrying parts along when a holder is edited ───────── */
 // Moving a joint or rod moves everything on it; turning a rod swings everything on it about its base.
-function shiftSubtree(a, d) { for (const c of descendants(a)) c.pos = c.pos.map((v, i) => +(v + d[i]).toFixed(4)); }
+function shiftSubtree(a, d) { for (const c of descendants(a)) c.pos = c.pos.map((v, i) => c.parentPoint || c.selfPoint ? v + d[i] : +(v + d[i]).toFixed(4)); }
 function rotateSubtree(a, R, pivot) {
   for (const c of descendants(a)) {
-    c.pos = add(pivot, m3v(R, sub(c.pos, pivot))).map(v => +v.toFixed(4));
+    const p = add(pivot, m3v(R, sub(c.pos, pivot)));
+    c.pos = c.parentPoint || c.selfPoint ? p : p.map(v => +v.toFixed(4));
     if (c.type === 'motor') { const d = m3v(R, mountDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
     else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
     else if (c.type === 'joint') setDirAzEl(c, m3v(R, jointAxis(c)), 'hingeAz', 'hingeEl');
     else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
+    else if (c.type === 'mass') setMassRot(c, m3m(R, massRot(c)));
   }
 }
 // Turn a part by R about its own pivot, carrying everything attached to it (what it's on stays put).
@@ -207,11 +209,12 @@ function turnPart(c, R) {
   else if (c.type === 'link') setRodFrame(c, m3m(R, rodFrameOf(c)));
   else if (c.type === 'motor') { const d = m3v(R, mountDir(c)); c.tilt = +(Math.acos(clamp(d[2], -1, 1)) * R2D).toFixed(1); if (c.tilt > 0.05) c.az = +(Math.atan2(d[1], d[0]) * R2D).toFixed(1); }
   else if (c.type === 'sensor') c.mount = eulerFromR(m3m(R, eulerR(...c.mount))).map(x => +x.toFixed(1));
+  else if (c.type === 'mass') partOrientMass(c, m3m(R, massRot(c)));
 }
 // What a part and everything on it look like now, to put back (a drag applies its whole turn from the start).
-const POSE_KEYS = ['pos', 'tilt', 'az', 'el', 'roll', 'hingeAz', 'hingeEl', 'mount'];
+const POSE_KEYS = ['pos', 'tilt', 'az', 'el', 'roll', 'hingeAz', 'hingeEl', 'mount', 'rotation'];
 const poseSnap = c => [c, ...descendants(c)].map(x => [x, Object.fromEntries(POSE_KEYS.filter(k => k in x).map(k => [k, Array.isArray(x[k]) ? x[k].slice() : x[k]]))]);
-const poseRestore = snap => { for (const [x, v] of snap) for (const k in v) x[k] = Array.isArray(v[k]) ? v[k].slice() : v[k]; };
+const poseRestore = snap => { for (const [x, v] of snap) for (const k of POSE_KEYS) { if (k in v) x[k] = Array.isArray(v[k]) ? v[k].slice() : v[k]; else delete x[k]; } };
 function setDirAzEl(c, d, kAz, kEl) {
   const u = unit(d); c[kEl] = +(Math.asin(clamp(u[2], -1, 1)) * R2D).toFixed(1);
   if (Math.hypot(u[0], u[1]) > 1e-4) c[kAz] = +(Math.atan2(u[1], u[0]) * R2D).toFixed(1);
@@ -225,12 +228,15 @@ function rotationBetween(a, b) {   // smallest rotation taking unit a to unit b
 // servo it goes onto the servo's output: a motor or rod right on the pivot (a tilt-rotor, an arm), anything
 // else just below it; on a latch it stays where it is (a latch holds what is hung on it, wherever that is). A servo
 // given its first motor is there to steer it, so it's handed to the allocator.
-function attachTo(c, a) {
+function attachTo(c, a, point = null, self = c.selfPoint || null) {
+  if (a && !canAttach(c, a)) return false;
   const firstMotor = a && a.type === 'joint' && c.type === 'motor' && !motorsUnder(a).length;
   c.parent = a ? a.id : null;
-  const to = !a || a.type === 'latch' ? null : a.type === 'link' ? linkTip(a)
+  c.parentPoint = point; c.selfPoint = self;
+  let to = point || self ? partPointRest(a || cfg.frame, point) : !a || a.type === 'latch' ? null : a.type === 'link' ? linkTip(a)
     : c.type === 'motor' || c.type === 'link' ? a.pos : add(a.pos, [0, 0, -0.04]);
-  if (to) { const d = sub(to, c.pos); c.pos = to.map(v => +v.toFixed(4)); shiftSubtree(c, d); }
+  if (to && self) { const own = partPoints(c).find(p => p.id === self); if (own) to = sub(to, m3v(partRot(c), own.pos)); }
+  if (to) { const d = sub(to, c.pos); c.pos = point || self ? to : to.map(v => +v.toFixed(4)); shiftSubtree(c, d); }
   if (firstMotor && a.mode === 'manual') a.mode = 'auto';
 }
 

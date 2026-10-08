@@ -13,7 +13,7 @@ let gizmo = null, travelG = null, hoverBox = null, selBox = null;
 const handleMeshes = [];   // invisible, generous hit shapes with userData { kind, axis }
 const handleVis = [];      // the visible shapes, to highlight the active one
 
-const rotAxesFor = c => c.type === 'motor' || c.type === 'link' || c.type === 'joint' ? [0, 1, 2]
+const rotAxesFor = c => c.type === 'motor' || c.type === 'link' || c.type === 'joint' || c.type === 'mass' ? [0, 1, 2]
   : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
 
 function buildGizmo() {
@@ -64,6 +64,7 @@ function buildGizmo() {
 }
 
 function setEditMode(on) {
+  if (typeof partImport !== 'undefined' && partImport.active && !on) return;
   if (on && typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   if (on === editMode) return;
   editMode = on;
@@ -275,6 +276,7 @@ function showDragReadout(c) {
 function editPointerDown(e) {
   if (worldEditOn()) return worldPointerDown(e);   // (the world's objects: world-edit.js)
   if (!editMode || e.button !== 0) return false;
+  if (partImport.active || partEditPick) { edit.down = { x: e.clientX, y: e.clientY }; return false; }
   const h = pickHandle(e);
   if (h && startDrag(h, e)) return true;
   edit.down = { x: e.clientX, y: e.clientY };
@@ -283,6 +285,7 @@ function editPointerDown(e) {
 function editPointerMove(e, orbiting) {
   if (worldEditOn()) return worldPointerMove(e, orbiting);
   if (!editMode) return false;
+  if (partImport.active || partEditPick) return false;
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)dragTo(e); return true; }
   if (orbiting) { setHover(null); return false; }
   const h = pickHandle(e);
@@ -299,6 +302,8 @@ function editPointerMove(e, orbiting) {
 function editPointerUp(e) {
   if (worldEditOn()) return worldPointerUp(e);
   if (!editMode) return false;
+  if (partImport.active) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partImportPick(e); edit.down = null; return true; }
+  if (partEditPick) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partPickSurface(e); edit.down = null; return true; }
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)endDrag(); return true; }
   if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) { edit.refocus = true; selectComp(pickComp(e)); }   // a click (not a drag) centres the view on what it picks
   edit.down = null; return false;
@@ -306,7 +311,10 @@ function editPointerUp(e) {
 
 /* ───────── per-frame ───────── */
 function updateEditView() {
+  partImportView();
+  partPhysicalView();
   if (!gizmo || worldEditView()) return;
+  if (partImport.active) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (!editMode) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);

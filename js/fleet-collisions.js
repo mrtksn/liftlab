@@ -12,7 +12,7 @@ function fleetShapesCurrent() {
     if(c.type==='hang')continue;
     const pose=poseOf(c), center=add(S.p,m3v(R,pose.p)), rotation=m3m(R,pose.R);
     const parent=parentOf(c), joint=parentJoint(c);
-    const from=parent?.type==='link' ? add(poseOf(parent).p,m3v(poseOf(parent).R,scl(linkDir(parent),parent.length))) : joint ? poseOf(joint).p : [0,0,0];
+    const from=posePoint(c,partMountOrigin(c)).p;
     const arm=sub(pose.p,from),length=nrm(arm);
     if(length>.015)boxes.push(fleetBox(add(S.p,m3v(R,scl(add(from,pose.p),.5))),m3m(R,frameFrom(scl(arm,1/length),[1,0,0])),[.014,.014,length],c));
     if(c.type==='motor') {
@@ -20,6 +20,7 @@ function fleetShapesCurrent() {
       const ro=rotorNow(c),st=act.get(c.id);
       if(st && st.Omega*propR(c)>12 && !hsOf(c).prop)props.push({c,center:add(S.p,m3v(R,ro.p)),axis:m3v(R,ro.d),radius:propR(c)});
     } else if(c.type==='mass') {
+      if(c.model) { for(const b of partBoxes(c))boxes.push(fleetBox(add(center,m3v(m3m(rotation,massRot(c)),partBoxCenter(b))),m3m(rotation,massRot(c)),partBoxSize(b),c));continue; }
       const size=c.shape==='sphere'?[2*c.radius,2*c.radius,2*c.radius]:c.shape==='cylinder'?[2*c.radius,2*c.radius,c.length]:c.size;
       boxes.push(fleetBox(center,m3m(rotation,massRot(c)),size,c));
     } else if(c.type==='link') {
