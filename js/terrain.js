@@ -10,13 +10,18 @@
 // Everything is a box aligned with the axes. The physics asks: which boxes are near a point, how deep a
 // point is inside the ground or a box (and which way is out), what a ray hits first, and how high the
 // surface under a point is.
+//
+// Objects imported into the world (world-objects.js) are made solid as boxes too, from their voxels. Each of
+// their boxes carries `obj` (the object's id). terrain.boxes is the city's and the objects' together; the
+// queries go through an index that keeps each object's boxes behind its bounds, so a detailed object far away
+// costs one box test.
 
 const TERRAINS = {
   open: { label: 'Open field', scale: 0 },
   parkour: { label: 'Parkour city', scale: 1 },
   city: { label: 'Full-scale city', scale: 8 },
 };
-const terrain = { kind: 'parkour', seed: 1, scale: 1, boxes: [], extent: 0, ver: 0 };
+const terrain = { kind: 'parkour', seed: 1, scale: 1, boxes: [], city: [], objBoxes: [], extent: 0, ver: 0 };
 
 function mulberry32(a) {
   return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -25,9 +30,15 @@ function mulberry32(a) {
 function setTerrain(kind, seed) {
   if (!TERRAINS[kind]) kind = 'parkour';
   terrain.kind = kind; terrain.seed = (seed >>> 0) || 1; terrain.scale = TERRAINS[kind].scale;
-  terrain.boxes = kind === 'open' ? [] : genCity(terrain.seed, terrain.scale);
-  terrain.extent = terrain.boxes.reduce((m, b) => Math.max(m, Math.abs(b.lo[0]), Math.abs(b.hi[0]), Math.abs(b.lo[1]), Math.abs(b.hi[1])), 0);
+  terrain.city = kind === 'open' ? [] : genCity(terrain.seed, terrain.scale);
   terrain.ver++;
+  terrainCompose();
+}
+// The objects' boxes changed (or the city did): put them together again.
+function terrainSetObjectBoxes(boxes) { terrain.objBoxes = boxes; terrainCompose(); }
+function terrainCompose() {
+  terrain.boxes = terrain.objBoxes.length ? terrain.city.concat(terrain.objBoxes) : terrain.city;
+  terrain.extent = terrain.boxes.reduce((m, b) => Math.max(m, Math.abs(b.lo[0]), Math.abs(b.hi[0]), Math.abs(b.lo[1]), Math.abs(b.hi[1])), 0);
 }
 
 // The city, in parkour units (metres at 1:1), scaled by S.
@@ -112,12 +123,36 @@ function genCity(seed, S) {
 }
 
 /* ───────── queries ───────── */
+// The index: a city box stands for itself; an object's boxes sit behind one entry with their bounds and `boxes`.
+// It's rebuilt when terrain.boxes is replaced (a test may set it directly).
+const tIndex = { src: null, items: [] };
+function terrainIndex() {
+  if (tIndex.src === terrain.boxes) return tIndex.items;
+  const items = [], groups = new Map();
+  for (const b of terrain.boxes) {
+    if (b.obj == null) { items.push(b); continue; }
+    let g = groups.get(b.obj);
+    if (!g) { g = { lo: b.lo.slice(), hi: b.hi.slice(), boxes: [] }; groups.set(b.obj, g); items.push(g); }
+    for (let i = 0; i < 3; i++) { g.lo[i] = Math.min(g.lo[i], b.lo[i]); g.hi[i] = Math.max(g.hi[i], b.hi[i]); }
+    g.boxes.push(b);
+  }
+  tIndex.src = terrain.boxes; tIndex.items = items; return items;
+}
+const nearBox = (p, r, b) => p[0] > b.lo[0] - r && p[0] < b.hi[0] + r && p[1] > b.lo[1] - r && p[1] < b.hi[1] + r && p[2] > b.lo[2] - r && p[2] < b.hi[2] + r;
 // Boxes that come within r of p.
 function terrainNear(p, r) {
   const out = [];
-  for (const b of terrain.boxes)
-    if (p[0] > b.lo[0] - r && p[0] < b.hi[0] + r && p[1] > b.lo[1] - r && p[1] < b.hi[1] + r && p[2] > b.lo[2] - r && p[2] < b.hi[2] + r) out.push(b);
+  for (const b of terrainIndex()) if (nearBox(p, r, b)) { if (b.boxes) { for (const x of b.boxes) if (nearBox(p, r, x)) out.push(x); } else out.push(b); }
   return out;
+}
+// How many walls the straight line a→b passes through (sampled at n points): a building or an object counts once.
+function terrainWalls(a, b, n) {
+  const hit = new Set(), d = sub(b, a), items = terrainIndex();
+  for (let s = 1; s < n; s++) {
+    const q = add(a, scl(d, s / n));
+    items.forEach((x, i) => { if (nearBox(q, 0, x) && (!x.boxes || x.boxes.some(y => nearBox(q, 0, y)))) hit.add(i); });
+  }
+  return hit.size;
 }
 const insideBox = (p, b) => p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && p[2] > b.lo[2] && p[2] < b.hi[2];
 // A sphere of radius r at p against box b: how deep it is and which way is out. Inside the box, the way out
@@ -150,20 +185,29 @@ const solidAt = (p, near) => p[2] < 0 ? 'the ground' : (near.find(b => insideBox
 // groundMinDown: the ground counts only for rays pointing at least this steeply down.
 function terrainRay(o, d, maxD = 1e4, groundMinDown = 0) {
   let t = d[2] < -Math.max(1e-6, groundMinDown) ? o[2] / -d[2] : Infinity;
-  for (const b of terrain.boxes) {
-    let t0 = 0, t1 = Math.min(t, maxD), ok = true;
-    for (let i = 0; i < 3 && ok; i++) {
-      if (Math.abs(d[i]) < 1e-12) { if (o[i] < b.lo[i] || o[i] > b.hi[i]) ok = false; continue; }
+  const enter = (b, far) => {   // where the ray enters box b, or Infinity if it misses it before `far`
+    let t0 = 0, t1 = far;
+    for (let i = 0; i < 3; i++) {
+      if (Math.abs(d[i]) < 1e-12) { if (o[i] < b.lo[i] || o[i] > b.hi[i]) return Infinity; continue; }
       let a = (b.lo[i] - o[i]) / d[i], c = (b.hi[i] - o[i]) / d[i]; if (a > c) [a, c] = [c, a];
-      t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) ok = false;
+      t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) return Infinity;
     }
-    if (ok && t0 < t) t = t0;
+    return t0;
+  };
+  for (const b of terrainIndex()) {
+    if (enter(b, Math.min(t, maxD)) >= t) continue;
+    if (!b.boxes) { t = enter(b, Math.min(t, maxD)); continue; }
+    for (const x of b.boxes) t = Math.min(t, enter(x, Math.min(t, maxD)));
   }
   return t <= maxD ? t : Infinity;
 }
 // Height of the surface under p (the ground, or the top of whatever stands below it).
 function surfaceBelow(p) {
   let h = 0;
-  for (const b of terrain.boxes) if (p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && b.hi[2] <= p[2] + 0.01 && b.hi[2] > h) h = b.hi[2];
+  const under = b => p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1];
+  for (const b of terrainIndex()) {
+    if (!under(b) || b.lo[2] > p[2] + 0.01) continue;
+    for (const x of b.boxes || [b]) if (under(x) && x.hi[2] <= p[2] + 0.01 && x.hi[2] > h) h = x.hi[2];
+  }
   return h;
 }

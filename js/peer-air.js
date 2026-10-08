@@ -34,11 +34,7 @@ function peerSetup() {
 function peerLoss(a, b) {
   const d = Math.max(1, nrm(sub(a, b)));
   let walls = 0;
-  if (terrain.boxes && terrain.boxes.length) {
-    const hit = new Set();
-    for (let s = 1; s < 16; s++) { const q = add(a, scl(sub(b, a), s / 16)); terrain.boxes.forEach((x, i) => { if (q[0] > x.lo[0] && q[0] < x.hi[0] && q[1] > x.lo[1] && q[1] < x.hi[1] && q[2] > x.lo[2] && q[2] < x.hi[2]) hit.add(i); }); }
-    walls = Math.min(3, hit.size);
-  }
+  if (terrain.boxes && terrain.boxes.length) walls = Math.min(3, terrainWalls(a, b, 16));
   return 40.2 + 20 * Math.log10(Math.min(d, 10)) + 33 * Math.log10(Math.max(d, 10) / 10) - 4 + 18 * walls + (a[2] < 0.3 || b[2] < 0.3 ? 6 : 0);
 }
 // Each control step of a drone (boardsControl, in its scope): what its end has due goes on the air; what reached it

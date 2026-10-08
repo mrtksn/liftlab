@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=f4aa87e4af">
+<link rel="stylesheet" href="css/style.css?v=e066a2910a">
 </head>
 <body>
 <div class="app">
@@ -174,6 +174,7 @@
               </button>
             </div>
           </section>
+          <section class="sec world-objs" id="worldObjSec"><h2>Objects <small id="worldObjCount"></small></h2><div class="world-obj-body" id="worldObjBody"></div></section>
           <section class="sec"><h2>Environment</h2><div class="sp" id="spFields"></div></section>
           <section class="sec seeds">
             <h2>Seeds</h2>
@@ -291,6 +292,11 @@
         <button class="btn" type="button" id="undoBtn2" title="Undo (Ctrl+Z or ⌘Z)">Undo</button>
         <button class="btn" type="button" id="redoBtn2" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">Redo</button>
         <button class="btn primary" type="button" id="editDone">Done</button>
+      </div>
+      <div class="edit-bar" id="worldEditBar" role="status" hidden>
+        <b>Editing world</b>
+        <span id="worldEditMsg"></span>
+        <button class="btn primary" type="button" id="worldEditDone">Done</button>
       </div>
       <div class="pick-tip" id="pickTip" hidden></div>
       <div class="pilot" aria-label="Flight controls">
@@ -585,7 +591,7 @@
 <script src="js/ui-shell.js?v=7b79a0c102"></script>
 <script src="js/math.js?v=0a111ef564"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
-<script src="js/terrain.js?v=7f3f1b0df1"></script>
+<script src="js/terrain.js?v=8b1fb3cc9f"></script>
 <script src="js/laws.js?v=a68b7dc7bb"></script>
 <script src="js/runtime.js?v=1cb6017216"></script>
 <script src="js/budget.js?v=00771e400d"></script>
@@ -607,10 +613,10 @@
 <script src="js/health.js?v=b1cf776935"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=4139e0373b"></script>
-<script src="js/view3d.js?v=6b6856b603"></script>
+<script src="js/view3d.js?v=5622529437"></script>
 <script src="js/pilot.js?v=37ac21bd22"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
-<script src="js/ui.js?v=6e9b51f175"></script>
+<script src="js/ui.js?v=30d60d7083"></script>
 <script src="js/place-ui.js?v=8c208dd787"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
@@ -624,16 +630,16 @@
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/hardware-ui.js?v=1eff2e8a18"></script>
 <script src="js/install-ui.js?v=1d285e0e09"></script>
-<script src="js/editor.js?v=0589e4ef33"></script>
+<script src="js/editor.js?v=0cccedf741"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
 <script src="js/board-wasm.js?v=4200ad9605"></script>
 <script src="js/crsf.js?v=b777a21a0a"></script>
-<script src="js/link.js?v=95e8b31724"></script>
+<script src="js/link.js?v=5fc51c9fc6"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
 <script src="js/link-packet.js?v=e182da6569"></script>
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
-<script src="js/peer-air.js?v=fe14a95e8a"></script>
+<script src="js/peer-air.js?v=82475d500b"></script>
 <script src="js/boards.js?v=d152b454b0"></script>
 <script src="js/programs.js?v=66a0fde1e7"></script>
 <script src="js/wasm-meter.js?v=3e6eded09b"></script>
@@ -654,8 +660,10 @@
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
 <script src="js/audio.js?v=82fc0795cb"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=317de48789"></script>
+<script src="js/fleet.js?v=9170c28fe0"></script>
 <script src="js/fleet-collisions.js?v=bc231a68ff"></script>
+<script src="js/world-objects.js?v=4edfb4e3c3"></script>
+<script src="js/world-edit.js?v=58dab54f5f"></script>
 <script src="js/replay.js?v=79acdaaa52"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>

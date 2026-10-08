@@ -861,6 +861,7 @@ function renderRun() {   // one button: shows pause while running, play while pa
 $('#runBtn').addEventListener('click', () => {
   if (typeof liveOn === 'function' && liveOn()) return;               // (the real drone: no simulation to run)
   if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
+  if (worldEditOn()) { wedit.wasRunning = true; worldEditSet(false); return; }   // (and editing the world's objects)
   if (typeof usbViewOn === 'function' && usbViewOn()) usbViewStop(false);   // (Run ends the board's view)
   running = !running; renderRun();
 });

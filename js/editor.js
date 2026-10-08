@@ -251,7 +251,7 @@ function dragTo(e) {
   }
   refreshCard(c); showDragReadout(c);
 }
-function endDrag() { if (edit.drag && edit.drag.h.kind === 'travel') { swingPrev.play = true; swingPrev.t0 = performance.now(); } edit.drag = null; vpEl.style.cursor = ''; highlightHandle(null); save(); updateEditMsg(); }
+function endDrag() { if (edit.drag && edit.drag.world) { worldEndDrag(); return; } if (edit.drag && edit.drag.h.kind === 'travel') { swingPrev.play = true; swingPrev.t0 = performance.now(); } edit.drag = null; vpEl.style.cursor = ''; highlightHandle(null); save(); updateEditMsg(); }
 function highlightHandle(h) {
   for (const v of handleVis) {
     const on = h && v.kind === h.kind && v.axis === h.axis;
@@ -273,6 +273,7 @@ function showDragReadout(c) {
 
 /* ───────── pointer hooks, called by the viewport's handlers ───────── */
 function editPointerDown(e) {
+  if (worldEditOn()) return worldPointerDown(e);   // (the world's objects: world-edit.js)
   if (!editMode || e.button !== 0) return false;
   const h = pickHandle(e);
   if (h && startDrag(h, e)) return true;
@@ -280,6 +281,7 @@ function editPointerDown(e) {
   return false;                                          // let the camera orbit
 }
 function editPointerMove(e, orbiting) {
+  if (worldEditOn()) return worldPointerMove(e, orbiting);
   if (!editMode) return false;
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)dragTo(e); return true; }
   if (orbiting) { setHover(null); return false; }
@@ -295,6 +297,7 @@ function editPointerMove(e, orbiting) {
   return false;
 }
 function editPointerUp(e) {
+  if (worldEditOn()) return worldPointerUp(e);
   if (!editMode) return false;
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)endDrag(); return true; }
   if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) { edit.refocus = true; selectComp(pickComp(e)); }   // a click (not a drag) centres the view on what it picks
@@ -303,7 +306,7 @@ function editPointerUp(e) {
 
 /* ───────── per-frame ───────── */
 function updateEditView() {
-  if (!gizmo) return;
+  if (!gizmo || worldEditView()) return;
   if (!editMode) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);

@@ -108,14 +108,7 @@ function linkPath() {
   const gsp = [spawnAt ? spawnAt[0] : 0, spawnAt ? spawnAt[1] : 0, 1.5];
   const d = Math.max(1, nrm(sub(S.p, gsp)));
   let walls = 0;
-  if (terrain.boxes && terrain.boxes.length) {                       // buildings in the way: sample the line of sight
-    const hit = new Set();
-    for (let s = 1; s < 24; s++) {
-      const q = add(gsp, scl(sub(S.p, gsp), s / 24));
-      terrain.boxes.forEach((b, i) => { if (q[0] > b.lo[0] && q[0] < b.hi[0] && q[1] > b.lo[1] && q[1] < b.hi[1] && q[2] > b.lo[2] && q[2] < b.hi[2]) hit.add(i); });
-    }
-    walls = Math.min(3, hit.size);
-  }
+  if (terrain.boxes && terrain.boxes.length) walls = Math.min(3, terrainWalls(gsp, S.p, 24));   // buildings in the way: sample the line of sight
   return { d, walls, loss: 20 * Math.log10(d) + 40.2 + 18 * walls + radioCfg.extra + (S.p[2] < 0.3 ? 6 : 0) };
 }
 

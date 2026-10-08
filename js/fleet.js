@@ -78,6 +78,7 @@ function fleetSelect(id) {
   if (id && !d) return false;
   if (d === fleet.selected) return true;
   if (!fleetCanSelect()) { fleetRenderSelector(); return false; }
+  if (d && worldEditOn()) worldEditSet(false);   // (picking a drone ends editing the world's objects)
   fleetRememberUi(); fleetReleaseControls();
   if (!d) {
     if (editMode) setEditMode(false);
@@ -203,7 +204,7 @@ function fleetTheme() {
 }
 function fleetSnapshot() {
   if (fleet.active) captureDroneState(fleet.active.state);
-  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},seeds:{...worldSeeds},environment:{...envr},drones:fleet.drones.map(d=>{
+  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},objects:worldObjectsSnapshot(),seeds:{...worldSeeds},environment:{...envr},drones:fleet.drones.map(d=>{
     const s=d.state;
     return {id:d.id,name:d.name,setpoint:{...s.setpoint},design:{frame:s.cfg.frame.mass,frameShape:{...s.cfg.frame},comps:s.cfg.comps,mode:s.mode,battery:s.cfg.battery,computers:s.cfg.computers,tuning:s.cfg.tuning,programs:s.cfg.programs||[],apps:s.cfg.apps||[],laws:Object.fromEntries(Object.entries(s.LAWS).filter(([,L])=>L.src!==L.defSrc).map(([k,L])=>[k,L.src]))},radio:{...s.radioCfg},radio2:{...s.radioCfg2},allocPrefs:{...s.allocPrefs},throwCfg:{...s.throwCfg},learnPrefs:{...s.learnPrefs},launch:s.launchMode,mixShare:s.steerMix.share,designId:s.designs.cur,designName:s.designs.name,preset:s.designs.preset,triggers:s.agentTriggers.map(({fired,last,was,...t})=>t),chat:s.agentChat};
   })};
@@ -223,6 +224,7 @@ function fleetInit() {
     try {
       d.id='boot-placeholder'; d.graphics.drone.userData.droneId=d.id;
       if (TERRAINS[saved.terrain?.kind]) setTerrain(saved.terrain.kind,saved.terrain.seed);
+      worldObjectsRestore(saved.objects);
       setWorldSeeds(saved.seeds || {});
       for (const rec of saved.drones) fleetCreate('quadx',rec);
       fleetRemove(d.id); fleet.nextId=Math.max(fleet.nextId,saved.nextId || 1); Object.assign(envr,saved.environment || {});
@@ -281,7 +283,7 @@ function fleetClearHover() {
   vpEl.classList.remove('selectable');
 }
 function fleetHoverScene() {
-  if (!fleetHoverPoint || fleetPointer || ptrs.size || edit.drag) {fleetClearHover();return;}
+  if (!fleetHoverPoint || fleetPointer || ptrs.size || edit.drag || worldEditOn()) {fleetClearHover();return;}
   if (performance.now()>=fleetHoverNext) {
     fleetHoverNext=performance.now()+50;
     fleetHovered=fleetHit(fleetHoverPoint);
@@ -312,7 +314,7 @@ vpEl.addEventListener('pointerup',e=>{
   const p=fleetPointer; fleetPointer=null;
   if(!p || p.id!==e.pointerId || p.dragged || Math.hypot(e.clientX-p.x,e.clientY-p.y)>=5 || edit.drag || ptrs.size>1)return;
   // Editor handles have precedence over world picking.
-  if(editMode && pickHandle(e))return;
+  if((editMode && pickHandle(e)) || worldEditOn())return;   // (editing the world, a click picks an object)
   const hit=fleetHit(e);
   if(hit!==fleet.selected){
     const changed=fleetSelect(hit?.id || null);

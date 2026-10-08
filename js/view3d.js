@@ -134,12 +134,13 @@ function buildCity() {
   cam.dist = Math.min(cam.dist, maxDist());
   city.traverse(o => { if (o.geometry) o.geometry.dispose(); }); while (city.children.length) city.remove(city.children[0]);
   bldg = [];
-  for (const b of terrain.boxes) {
+  for (const b of terrain.city) {   // (imported objects draw themselves: world-objects.js)
     const geo = new THREE.BoxGeometry(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]);
     const m = new THREE.Mesh(geo, mats.bldg); m.position.set((b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2);
     const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), mats.bldgEdge); m.add(e);
     city.add(m); bldg.push({ m, e, b, faded: false });
   }
+  if (typeof worldObjectsTheme === 'function') worldObjectsTheme();   // (the objects' own colours follow the theme)
   shadowMesh = new THREE.Mesh(new THREE.CircleGeometry(1, 36), mats.shadow); shadowMesh.renderOrder = 1; city.add(shadowMesh);
   cityVer = terrain.ver;
 }
@@ -162,6 +163,7 @@ function updateCity(hub) {
     const fade = rays.some(r => segHitsBox(c, r.d, r.L, B.b));
     if (fade !== B.faded) { B.faded = fade; B.m.material = fade ? mats.bldgFade : mats.bldg; B.e.material = fade ? mats.bldgEdgeFade : mats.bldgEdge; }
   }
+  if (typeof worldObjectsFade === 'function') worldObjectsFade(c, rays);
   // The shadow: a soft disc on whatever is right under the drone, fainter the higher it flies.
   const show = view.shadow && !editMode;
   shadowMesh.visible = show;
