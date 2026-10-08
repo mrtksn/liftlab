@@ -5,6 +5,7 @@
 - Swapping layouts releases held inputs and moves the existing action buttons with their handlers. FIXED phone wrapping in Game/Intuitive: center controls now precede both pads so they stay side by side.
 - Regression checklist PASSED: tools/test_pilot_layouts.cjs covers all eight real keys, radio stick bits/direct-target motion, pad clicks through all layout transitions, held-input release, field/slider/button focus, help/HUD, preference reload and all three layouts side by side on desktop/phone. Existing world-view/reset shortcut suite, syntax, asset fingerprints and diff checks passed; desktop/phone previews inspected. Verified locally; not committed or pushed.
 - Publication: user authorized committing and pushing Intuitive together with imported drone parts to main. Remote main matches the parent; syntax, fingerprints and diff checks passed again. CI and Pages verification are pending publication.
+- Published imported drone parts and Intuitive controls as 3b05ba5 to origin/main; local/remote implementation commits match. Firmware/host run 37789356535 and Pages run 37789353502 were queued at verification. Tracked checkout was clean; existing untracked .claude workspace remains untouched. Remote CI/deployment completion is pending.
 
 ## Imported drone parts, center of mass and mounting points — 2026-10-08
 - Added Add a part → Import 3D object using the world model readers/voxel solidity, with a preview beside the drone before attachment. Named/category-tagged rigid masses default to Payload, 20 cm longest side, solid-volume centroid and an editable estimate at 200 kg/m³.
@@ -21,6 +22,7 @@
 - Limits: 128 MB portable files; missing originals retain collision boxes with an explicit message and cannot be turned/resized. Browser storage failure is reported. Saved maps are local to this browser unless exported.
 - Regression checklist PASSED: GLB/STL/OBJ save/update/copy/reload; source-file deletion and saved-map retention; cold-browser export/import, graphics/collisions, malformed-file atomic rejection; glTF buffers/textures and exact re-export bytes; operation guards/quota-failure reporting; fleet preservation, delete and desktop/phone layout. Existing world-view suite, syntax, asset fingerprints and diff checks passed. Verified locally; no commit, push or deployment in this change.
 - Publication: user authorized pushing the map changes to main. Remote main matches the implementation's parent; local browser checks passed. Pages deployment and remote CI verification are pending publication.
+- Publication follow-up: maps were pushed as e5a5e8d; Pages run 37777492942 completed successfully.
 
 ## Hardware bring-up blockers — 2026-10-08
 - Context: first real-hardware tests (ESP32-WROOM, ESP32-S3 with L9110S/L293D H-bridges and 3.7 V brushed motors, GY-87-style 10DOF, PCB-antenna nRF24L01+). Checked-in bundles (fa8b834+fleet) were 8 firmware-source commits stale and this Mac has no ESP-IDF.
