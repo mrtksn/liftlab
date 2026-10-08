@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=ef507fffa6">
+<link rel="stylesheet" href="css/style.css?v=031b22bb2f">
 </head>
 <body>
 <div class="app">
@@ -466,6 +466,7 @@
         <p>Choose a part, then choose where to attach it.</p>
         <div class="part-import-action">
           <button class="btn primary" type="button" id="partModelImport">Import 3D object…</button>
+          <button class="btn" type="button" id="objectLibraryOpen">Object library…</button>
           <input type="file" id="partModelFile" accept=".glb,.gltf,.obj,.stl,.bin,.png,.jpg,.jpeg,.webp,.ktx2" multiple hidden>
         </div>
         <section><h3>Propulsion</h3><div class="addrow">
@@ -607,7 +608,7 @@
 <script src="js/ui-shell.js?v=7b79a0c102"></script>
 <script src="js/math.js?v=0a111ef564"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
-<script src="js/terrain.js?v=8b1fb3cc9f"></script>
+<script src="js/terrain.js?v=5bb4400367"></script>
 <script src="js/laws.js?v=a68b7dc7bb"></script>
 <script src="js/runtime.js?v=1cb6017216"></script>
 <script src="js/budget.js?v=00771e400d"></script>
@@ -619,24 +620,24 @@
 <script src="js/rn-wasm.js?v=57aa3966fb"></script>
 <script src="js/rn-bridge.js?v=e89e4956ec"></script>
 <script src="js/flight-physics.js?v=42d90f7013"></script>
-<script src="js/sim.js?v=8d2e36994a"></script>
+<script src="js/sim.js?v=71e96c63fe"></script>
 <script src="js/tuning.js?v=113a9c04af"></script>
 <script src="js/flight-model.js?v=4b6da32aed"></script>
 <script src="js/joints.js?v=8479511f02"></script>
-<script src="js/part-geometry.js?v=885e9aa6af"></script>
+<script src="js/part-geometry.js?v=3cb977d2ce"></script>
 <script src="js/multibody.js?v=39780e2134"></script>
-<script src="js/cargo.js?v=3d41ba2ab9"></script>
+<script src="js/cargo.js?v=1f101cc1ac"></script>
 <script src="js/sensors.js?v=96e5105808"></script>
 <script src="js/health.js?v=b1cf776935"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=4139e0373b"></script>
-<script src="js/view3d.js?v=605afa5154"></script>
+<script src="js/view3d.js?v=a6f32fbc9e"></script>
 <script src="js/pilot.js?v=12b8fd8abe"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
 <script src="js/ui.js?v=1ff79fced2"></script>
 <script src="js/place-ui.js?v=0b90a86d58"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
-<script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
+<script src="js/flight-physics-ui.js?v=3152ba01b2"></script>
 <script src="js/health-ui.js?v=e1c85557e0"></script>
 <script src="js/tuning-ui.js?v=c313a25da8"></script>
 <script src="js/autotune.js?v=ab42d73944"></script>
@@ -678,13 +679,14 @@
 <script src="js/audio.js?v=82fc0795cb"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=1a153bcd4f"></script>
-<script src="js/fleet-collisions.js?v=02dc955e6c"></script>
-<script src="js/world-objects.js?v=ab375f4892"></script>
-<script src="js/world-edit.js?v=b18ac839b4"></script>
+<script src="js/fleet-collisions.js?v=0f07b736ea"></script>
+<script src="js/world-objects.js?v=160eee6466"></script>
+<script src="js/world-edit.js?v=21acb90f25"></script>
 <script src="js/replay.js?v=a0a90ea626"></script>
-<script src="js/maps.js?v=afc69fdbd8"></script>
-<script src="js/part-import.js?v=3bddbc5112"></script>
-<script src="js/part-edit-ui.js?v=d0ec8b75a9"></script>
+<script src="js/maps.js?v=224ec332a4"></script>
+<script src="js/part-import.js?v=3879ccfb3c"></script>
+<script src="js/object-library.js?v=2cf0d07c67"></script>
+<script src="js/part-edit-ui.js?v=3bf10977ce"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"

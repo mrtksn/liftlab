@@ -1,6 +1,6 @@
 # Maps and world editor files
 
-Choose a map from the top bar’s World group. Open Settings → World editor to import models and edit object positions, rotations, scale, orientation and collision detail. The Maps section stays available while editing.
+Choose a map from the top bar’s World group. Open Settings → World editor to open the shared Object library and place models, then edit copy positions, rotations, scale and collision geometry. File units/orientation belong to the shared library import overlay. The Maps section stays available while editing.
 
 ## Saving and switching
 
@@ -19,7 +19,7 @@ Export map downloads the current edited world, including edits made since the la
 
 Version 1 files contain `format: "liftlab-map"`, a name, a `world` snapshot (`map`, `objects`, `seeds`, `environment`), and `files`. Each model file group has its original file names and base64-encoded model/buffer/texture bytes. Imported file IDs are regenerated to avoid overwriting other local assets. Drone designs, programs and recordings are not part of the map file.
 
-The complete JSON structure, transforms, collision boxes, seeds, environment and embedded-data encoding are validated before changing the world. Unsupported versions and invalid data produce a message. The file limit is 128 MB; there are limits of 1000 objects, 6000 collision boxes per object and 600000 boxes in total.
+The complete JSON structure, transforms, collision boxes/triangle meshes, seeds, environment and embedded-data encoding are validated before changing the world. Unsupported versions and invalid data produce a message. The file limit is 128 MB; there are limits of 1000 objects, 6000 collision boxes per object and 600000 boxes in total, and 100,000 triangles per mesh.
 
 When an original model is already missing, saving/exporting keeps its collision boxes and reports the limitation. Those objects can move but cannot turn or resize. Import can still apply a map if browser storage fails, with a message asking you to keep the imported file. A failed Save map leaves the library unchanged.
 

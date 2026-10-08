@@ -49,6 +49,7 @@ try{
  // A Y-up GLB stands up: its 3 m along Y becomes its height.
  await page.evaluate(()=>{cam.target.set(4,0,0);});
  await page.locator('#worldObjFile').setInputFiles({name:'tower.glb',mimeType:'model/gltf-binary',buffer:glbBox(1,3,1)});
+ await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#objectImportSave').click();await page.locator('#objectLibraryDlg [data-object-use]').first().click();
  await page.waitForFunction(()=>worldObjects.list.length===1&&!wedit.busy);
  let o=await page.evaluate(()=>{const o=worldObjects.list[0];return {name:o.name,size:o.size,units:o.units,pos:o.pos,boxes:o.boxes.length,sel:wedit.sel===o.id,top:terrainRay([4,0,10],[0,0,-1]),inside:solidAt([4,0,1.5],terrainNear([4,0,1.5],0)),objBoxes:terrain.boxes.filter(b=>b.obj===o.id).length};});
  assert(o.name==='tower'&&o.units==='m'&&o.sel&&o.boxes>0&&o.objBoxes===o.boxes,'GLB import wrong: '+JSON.stringify(o));
@@ -59,6 +60,7 @@ try{
  // A CAD cube in millimetres: read as millimetres, 2 m across.
  await page.evaluate(()=>{cam.target.set(-4,0,0);});
  await page.locator('#worldObjFile').setInputFiles({name:'crate.stl',mimeType:'model/stl',buffer:stlCube(2000)});
+ await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#objectImportSave').click();await page.locator('#objectLibraryDlg [data-object-use]').first().click();
  await page.waitForFunction(()=>worldObjects.list.length===2&&!wedit.busy);
  o=await page.evaluate(()=>{const o=worldObjects.list[1];return {units:o.units,scale:o.scale,boxes:o.boxes.length,dims:o.size.map(x=>x*o.scale),side:terrainRay([-10,0,1],[1,0,0])};});
  assert(o.units==='mm'&&o.scale===0.001&&o.dims.every(x=>Math.abs(x-2)<1e-6)&&o.boxes===1,'STL mm cube wrong: '+JSON.stringify(o));
@@ -68,6 +70,7 @@ try{
  // A thin wall (an open surface) is still solid: rays and the radio's line of sight meet it.
  await page.evaluate(()=>{cam.target.set(0,6,0);});
  await page.locator('#worldObjFile').setInputFiles({name:'wall.obj',mimeType:'text/plain',buffer:objWall});
+ await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#objectImportSave').click();await page.locator('#objectLibraryDlg [data-object-use]').first().click();
  await page.waitForFunction(()=>worldObjects.list.length===3&&!wedit.busy);
  o=await page.evaluate(()=>{const o=worldObjects.list[2];return {boxes:o.boxes.length,size:o.size,hit:terrainRay([0,0,1],[0,1,0]),walls:terrainWalls([0,0,1],[0,12,1],24)};});
  assert(o.boxes>0&&Math.abs(o.hit-6)<0.15&&o.walls===1,'OBJ wall not solid: '+JSON.stringify(o));

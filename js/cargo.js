@@ -216,11 +216,31 @@ function looseBox(L) {
   for (const pt of L.pts) { const p = looseAt(L, pt.r); for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], p[i] - pt.rad); hi[i] = Math.max(hi[i], p[i] + pt.rad); } }
   return (L.box = { lo, hi, what: L.name });
 }
+const looseCollisionCache=new WeakMap();
+function looseCollisionShapes(L,bounds) {
+  const cached=looseCollisionCache.get(L);if(cached?.bounds===bounds)return cached.shapes;
+  const shapes=[],bodyR=looseR(L);
+  const box=(center,size,R)=>{const corners=boxCorners(center,size,R);shapes.push({lo:[0,1,2].map(k=>Math.min(...corners.map(p=>p[k]))),hi:[0,1,2].map(k=>Math.max(...corners.map(p=>p[k]))),what:L.name});};
+  for(const c of L.parts){const R=m3m(bodyR,c.type==='mass'?massRot(c):[1,0,0,0,1,0,0,0,1]),origin=looseAt(L,c.pos);
+    if(c.model?.collision==='mesh') {
+      const triangles=[];for(let i=0;i<c.model.triangles.length;i+=3)triangles.push(...m3v(R,c.model.triangles.slice(i,i+3)));
+      const mesh=collisionMesh(triangles);shapes.push({lo:add(origin,mesh.lo),hi:add(origin,mesh.hi),mesh,origin,what:L.name});
+    }else if(c.model)for(const b of partBoxes(c))box(add(origin,m3v(R,partBoxCenter(b))),partBoxSize(b),R);
+    else if(c.type==='mass')box(origin,c.shape==='box'?c.size:c.shape==='sphere'?[2*c.radius,2*c.radius,2*c.radius]:[2*c.radius,2*c.radius,c.length],R);
+    else if(c.type==='link'){const dir=linkDir(c);box(looseAt(L,add(c.pos,scl(dir,c.length/2))),[.018,.018,c.length],m3m(bodyR,frameFrom(dir,[1,0,0])));}
+    else box(origin,c.type==='motor'?[.04,.04,.06]:[.03,.03,.03],bodyR);
+  }
+  looseCollisionCache.set(L,{bounds,shapes});return shapes;
+}
 function cargoSolids(p, r, except = null, excludeCableBalls = false) {
   const out = [];
   for (const L of cargo.loose) {
     if (!L.asleep || L === except || (excludeCableBalls && L.kind === 'hang')) continue;
     const b = looseBox(L);
+    if(L.parts.some(c=>c.model?.collision==='mesh')) {
+      for(const shape of looseCollisionShapes(L,b))if(nearBox(p,r,shape))out.push(shape);
+      continue;
+    }
     if (p[0] > b.lo[0] - r && p[0] < b.hi[0] + r && p[1] > b.lo[1] - r && p[1] < b.hi[1] + r && p[2] > b.lo[2] - r && p[2] < b.hi[2] + r) out.push(b);
   }
   return out;

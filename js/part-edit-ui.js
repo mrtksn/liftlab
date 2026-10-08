@@ -38,9 +38,10 @@ function partPhysicalView() {
   for (const [i, pos] of places.entries()) partMarks.children[i].position.copy(drone.localToWorld(new THREE.Vector3(...posePoint(c, pos, previewAngle).p)));
 }
 function partMountOptions(c) {
+  const original=partImport.active&&partImport.editId?compById(partImport.editId):null;
   const out = [['', 'Frame']];
   for (const p of partPoints(cfg.frame)) out.push(['|' + p.id, 'Frame · ' + p.name]);
-  for (const h of cfg.comps.filter(h => canAttach(c, h))) {
+  for (const h of cfg.comps.filter(h => canAttach(original || c, h))) {
     out.push([String(h.id), h.name]);
     for (const p of partPoints(h)) out.push([h.id + '|' + p.id, h.name + ' · ' + p.name]);
   }
@@ -93,18 +94,17 @@ function partMassFields(c, frame = false) {
 }
 window.addEventListener('keydown', e => { if (partEditPick && e.code === 'Escape') { partEditPick = null; updateEditMsg(); } });
 function partModelFields(c) {
-  const length = UI.input({ type: 'number', id: 'part-size-' + c.id, min: .005, max: 10, step: .005, value: Math.max(...c.size).toFixed(3), 'aria-label': 'Object longest side in metres' });
-  length.addEventListener('change', () => { const n = Number(length.value); if (n >= .005 && n <= 10) { partScale(c, n); snapHolder(c); for (const x of descendants(c)) snapHolder(x); edited(c, 'size'); renderComps(); } else length.value = Math.max(...c.size).toFixed(3); });
+  const length=objectScaleField({id:'part-scale-'+c.id,numberId:'part-size-'+c.id,max:2,limit:10,get:()=>Math.max(...c.size),set:n=>{partScale(c,n);snapHolder(c);for(const x of descendants(c))snapHolder(x);edited(c,'size');}});
   const category = UI.select({ id: 'part-category-' + c.id, 'aria-label': 'Category' }, ...Object.entries(PART_CATEGORIES).map(([k, v]) => el('option', { value: k, text: v })));
   category.value = c.category || 'payload'; category.addEventListener('change', () => { c.category = category.value; edited(c, 'category'); });
   const rotation = partVecInputs('part-rotation-' + c.id + '-', 'Object rotation in degrees', c.rotation || [0, 0, 0], (k, v) => {
     const next = (c.rotation || [0, 0, 0]).slice(); next[k] = v;
     partOrientMass(c, eulerR(...next)); edited(c, 'rotation');
   }, 5);
-  return el('div', { class: 'part-model-fields' }, UI.field({ label: 'Category' }, category), UI.field({ label: 'Longest side (m)' }, length),
+  return el('div', { class: 'part-model-fields' }, UI.button({class:'btn primary',id:'objectEditCopy-'+c.id,onclick:()=>objectUseStart(objectAsset(c),'drone',c)},'Edit object copy…'), UI.field({ label: 'Category' }, category), length.node,
     el('p', { class: 'hint', text: c.size.map(v => v.toFixed(3)).join(' × ') + ' m · ' + c.model.boxes.length + ' solid boxes. Size changes keep the chosen weight.' }),
     el('p', { class: 'hint', text: 'Rotation about X, Y and Z (degrees)' }), rotation,
-    UI.button({ class: 'btn btn-sm', onclick: () => { designNote(partLibrarySave(c) ? 'Updated the reusable part in Add a part.' : 'This browser could not save the reusable part. Export the design to keep it.'); } }, 'Save to part library'));
+    UI.button({ class: 'btn btn-sm', onclick: async () => { designNote(await objectLibrarySaveCopy(c) ? 'Saved drone use defaults in Object library.' : 'This browser could not save the reusable part. Export the design to keep it.'); } }, 'Save drone use defaults'));
 }
 function partOwnMountField(c) {
   const points = partPoints(c); if (!points.length) return null;

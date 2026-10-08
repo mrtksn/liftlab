@@ -77,6 +77,7 @@ async function mapApply(m, id) {
   for (const f of m.files) { worldObjects.files.set(f.id, f); if (!await worldFilePut(f)) kept = false; }
   worldEditSelect(null); wedit.hover = null;
   worldObjectsRestore(m.world.objects);
+  if(typeof objectLibraryAdoptPlaced === "function")await objectLibraryAdoptPlaced();
   maps.current = id;
   replayWorldChanged();
   applyWorld({ ...m.world, terrain: m.world.map });
@@ -134,10 +135,11 @@ function mapDecode(doc) {
   const ids = new Set(); let boxes = 0;
   const objects = w.objects.map(o => {
     if (!o || typeof o.id !== 'string' || !o.id || ids.has(o.id) || typeof o.fileId !== 'string' || !vec(o.pos, 5000) || !vec(o.size, 1e7, true) || !Number.isFinite(o.yaw) || Math.abs(o.yaw) > 360 || !Number.isFinite(o.scale) || o.scale <= 0 || o.scale > 1e5 || !Number.isFinite(o.h) || o.h < 0 || !Object.hasOwn(WORLD_OBJ_DETAIL, o.detail) || !['y', 'z'].includes(o.up)) bad('object transform');
+    validateCollisionGeometry(o.collision,o.triangles);
     ids.add(o.id);
     if (!Array.isArray(o.boxes) || !o.boxes.length || o.boxes.length % 6 || o.boxes.length > 36000 || (boxes += o.boxes.length / 6) > 600000 || !o.boxes.every(x => Number.isFinite(x) && Math.abs(x) <= 1e6)) bad('solid shapes');
     for (let i = 0; i < o.boxes.length; i += 6) for (let k = 0; k < 3; k++) if (o.boxes[i + k] > o.boxes[i + k + 3]) bad('solid shape bounds');
-    return { id: o.id, fileId: o.fileId, name: String(o.name || 'Object').slice(0, 60), pos: o.pos.slice(), size: o.size.slice(), yaw: o.yaw, scale: o.scale, h: o.h, up: o.up, units: Object.hasOwn(WORLD_OBJ_UNITS, o.units) ? o.units : 'custom', detail: o.detail, boxes: o.boxes.slice() };
+    return { id: o.id, fileId: o.fileId, name: String(o.name || 'Object').slice(0, 60), pos: o.pos.slice(), size: o.size.slice(), yaw: o.yaw, scale: o.scale, h: o.h, up: o.up, units: Object.hasOwn(WORLD_OBJ_UNITS, o.units) ? o.units : 'custom', detail: o.detail, collision:o.collision || "boxes", ...(o.collision === "mesh" ? {triangles:o.triangles.slice()} : {}), boxes: o.boxes.slice() };
   });
   if (!Array.isArray(doc.files) || doc.files.length > objects.length) bad('model files');
   const fileIds = new Set(); let bytes = 0;

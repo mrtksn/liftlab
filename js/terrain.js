@@ -130,7 +130,7 @@ function terrainIndex() {
   if (tIndex.src === terrain.boxes) return tIndex.items;
   const items = [], groups = new Map();
   for (const b of terrain.boxes) {
-    if (b.obj == null) { items.push(b); continue; }
+    if (b.obj == null || b.mesh) { items.push(b); continue; }
     let g = groups.get(b.obj);
     if (!g) { g = { lo: b.lo.slice(), hi: b.hi.slice(), boxes: [] }; groups.set(b.obj, g); items.push(g); }
     for (let i = 0; i < 3; i++) { g.lo[i] = Math.min(g.lo[i], b.lo[i]); g.hi[i] = Math.max(g.hi[i], b.hi[i]); }
@@ -147,18 +147,20 @@ function terrainNear(p, r) {
 }
 // How many walls the straight line a→b passes through (sampled at n points): a building or an object counts once.
 function terrainWalls(a, b, n) {
-  const hit = new Set(), d = sub(b, a), items = terrainIndex();
+  const hit = new Set(), d = sub(b, a), items = terrainIndex(),length=nrm(d);
+  if(length>1e-9)items.forEach((x,i)=>{if(x.mesh&&meshRayHits(x.mesh,sub(a,x.origin),scl(d,1/length),length).some(h=>h.distance>1e-8&&h.distance<length-1e-8))hit.add(i);});
   for (let s = 1; s < n; s++) {
     const q = add(a, scl(d, s / n));
-    items.forEach((x, i) => { if (nearBox(q, 0, x) && (!x.boxes || x.boxes.some(y => nearBox(q, 0, y)))) hit.add(i); });
+    items.forEach((x, i) => { if (nearBox(q, 0, x) && (!x.boxes ? insideBox(q,x) : x.boxes.some(y => insideBox(q,y)))) hit.add(i); });
   }
   return hit.size;
 }
-const insideBox = (p, b) => p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && p[2] > b.lo[2] && p[2] < b.hi[2];
+const insideBox = (p, b) => b.mesh ? meshInside(b.mesh,sub(p,b.origin)) : p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && p[2] > b.lo[2] && p[2] < b.hi[2];
 // A sphere of radius r at p against box b: how deep it is and which way is out. Inside the box, the way out
 // is back through the face it came in by (from `prev`, where it was a moment ago), so a fast part pushed
 // deep into a thin slab still comes out the side it hit, never through the far side.
 function boxContact(p, r, b, prev) {
+  if (b.mesh) return meshContact(sub(p,b.origin), r, b.mesh, prev && sub(prev,b.origin));
   const q = [clamp(p[0], b.lo[0], b.hi[0]), clamp(p[1], b.lo[1], b.hi[1]), clamp(p[2], b.lo[2], b.hi[2])];
   const d = sub(p, q), dl = nrm(d);
   if (dl > 1e-9) return dl < r ? { depth: r - dl, n: scl(d, 1 / dl) } : null;
@@ -196,6 +198,7 @@ function terrainRay(o, d, maxD = 1e4, groundMinDown = 0) {
   };
   for (const b of terrainIndex()) {
     if (enter(b, Math.min(t, maxD)) >= t) continue;
+    if (b.mesh) { const hit=meshRayHits(b.mesh,sub(o,b.origin),d,Math.min(t,maxD))[0]; if(hit)t=Math.min(t,hit.distance); continue; }
     if (!b.boxes) { t = enter(b, Math.min(t, maxD)); continue; }
     for (const x of b.boxes) t = Math.min(t, enter(x, Math.min(t, maxD)));
   }
@@ -207,6 +210,7 @@ function surfaceBelow(p) {
   const under = b => p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1];
   for (const b of terrainIndex()) {
     if (!under(b) || b.lo[2] > p[2] + 0.01) continue;
+    if(b.mesh){const hit=meshRayHits(b.mesh,sub(p,b.origin),[0,0,-1],p[2])[0];if(hit)h=Math.max(h,p[2]-hit.distance);continue;}
     for (const x of b.boxes || [b]) if (under(x) && x.hi[2] <= p[2] + 0.01 && x.hi[2] > h) h = x.hi[2];
   }
   return h;

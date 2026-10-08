@@ -48,6 +48,8 @@ try{
    await page.locator('#partModelImport').click();
    await page.locator('#partModelFile').setInputFiles({name,mimeType:'application/octet-stream',buffer});
    await page.waitForFunction(()=>partImport.draft&&!partImport.busy);
+   await page.locator('#partImportSize').fill('.2');await page.locator('#partImportSize').dispatchEvent('change');
+   await page.locator('#objectImportSave').click();await page.locator('#objectLibraryDlg [data-object-use]').first().click();await page.waitForFunction(()=>partImport.phase==='use'&&partImport.draft&&!partImport.busy);
  };
  const before=await page.evaluate(()=>designSnap());
  await importModel('camera.glb',glbBox(2,1,1));
@@ -117,9 +119,8 @@ try{
  await page.evaluate(id=>partPickBegin(compById(id),'cog'),id);await page.waitForTimeout(700);
  const partClick=await page.evaluate(id=>{fleetScene();renderer.render(scene,camera);const r=vpEl.getBoundingClientRect(),p=drone.localToWorld(new THREE.Vector3(...compById(id).pos)).project(camera);return {x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2};},id);
  await page.mouse.click(partClick.x,partClick.y);assert(await page.evaluate(()=>!partEditPick));await page.evaluate(()=>undoStep());
- await page.locator('[data-id="'+id+'"] button').filter({hasText:'Save to part library'}).click();
- await page.locator('#addPart').click();assert.strictEqual(await page.locator('#addPartDlg section').last().locator('.part-library-entry').count(),1);
- await page.locator('#addPartDlg .part-library-entry .btn').first().click();await page.locator('.place-opt').first().click();
+ await page.locator('[data-id="'+id+'"] button').filter({hasText:'Save drone use defaults'}).click();
+ await page.locator('#addPart').click();await page.locator('#objectLibraryOpen').click();await page.locator('#objectLibraryDlg [data-object-use]').filter({hasText:'Use on drone'}).first().click();await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#partImportAdd').click();await page.waitForFunction(()=>!partImport.active);
  assert(await page.evaluate(()=>{const copies=cfg.comps.filter(c=>c.model);return copies.length===2&&copies[1].name===copies[0].name&&copies[1].id!==copies[0].id&&nrm(partPointRest(copies[1],copies[1].selfPoint))<1e-6;}));await page.evaluate(()=>undoStep());
  console.log('GLB preview/defaults, surface picking, cancel races, multiple mounts, CoM, resize, rotation and undo passed');
  // Independent analytic rigid-box properties, translated geometry, articulated bodies and rod endpoints.
@@ -136,7 +137,7 @@ try{
  near(r.J[0],2*(.4*.4+.1*.1)/12+2*.03*.03);near(r.J[4],2*(.2*.2+.1*.1)/12);near(r.J[8],2*(.4*.4+.2*.2)/12+2*.03*.03);
  vector(r.articulated,[-4.06/3,2/3,2]);vector(r.rod[0],[0,0,0]);vector(r.rod[1],[.4,0,0]);vector(r.loose.cm,[1.03,2,3]);assert(r.loose.pts>0);near(r.loose.mass,2);
  console.log('Analytic mass/inertia, frame and rigid CoM, servo poses, rod Base/Tip and loose solid passed');
- assert(await page.evaluate(async id=>{
+ r=await page.evaluate(async id=>{
    const original=JSON.parse(designSnap()),source=compById(id),c=JSON.parse(JSON.stringify(source));
    // Two separated solid blocks must leave a real gap in the collision shape.
    c.pos=[2,0,0];c.rotation=[0,0,0];c.cog=[0,0,0];c.selfPoint=null;c.parent=null;c.model.boxes=[[-.2,-.1,-.1,-.1,.1,.1],[.1,-.1,-.1,.2,.1,.1]];cfg.comps=[c];recomputeProps();
@@ -146,13 +147,13 @@ try{
    const expected=partMassRest(payload),m=payload.mass,n=cargoRelease(latch),L=cargo.loose[0],drop=n===1&&L.m===m&&nrm(sub(L.cm,sub(expected,hookOf(latch))))<1e-8&&L.pts.length>0&&L.parts[0].model.boxes.length>0;
    // A small imported solid is carried by the normal compiled flight controller.
    loadPreset('quadx');running=false;setEditMode(false);running=false;
-   const flight=JSON.parse(JSON.stringify(source));flight.id=uid++;flight.parent=null;flight.parentPoint=null;flight.selfPoint=null;flight.rotation=[0,0,0];flight.pos=[0,0,-.07];partScale(flight,.04);flight.mass=.02;flight.cog=[.001,0,0];cfg.comps.push(flight);afterLoad();running=false;
+   const flight=JSON.parse(JSON.stringify(source));flight.id=uid++;flight.parent=null;flight.parentPoint=null;flight.selfPoint=null;flight.rotation=[0,0,0];flight.pos=[0,0,-.07];partScale(flight,.04);flight.mass=.02;flight.cog=[.001,0,0];flight.model.collision='mesh';cfg.comps.push(flight);afterLoad();running=false;
    while(!brt.ready)await new Promise(r=>setTimeout(r,20));
    for(let i=0;i<5/PDT;i++){if(i%20===0)pilotStep(.01);physStep();}
    const airborne=!S.crashed&&brt.fcState===1&&S.p.every(Number.isFinite)&&S.p[2]>.1;
-   applyDesign(original);afterLoad();running=false;setEditMode(true);selectComp(id);return goodGap&&drop&&airborne;
- },id));
- console.log('Separated solid collision gap, latch release geometry/CoM and five-second compiled-controller flight passed');
+   const result={goodGap,drop,airborne,flight:{p:S.p,crashed:S.crashed,fcState:brt.fcState}};applyDesign(original);afterLoad();running=false;setEditMode(true);selectComp(id);return result;
+ },id);assert(r.goodGap&&r.drop&&r.airborne,JSON.stringify(r));
+ console.log('Separated solid collision gap, latch release geometry/CoM and five-second compiled-controller flight with mesh contacts passed');
  // Library/file/share assets survive a fresh origin context, rather than only the warm model cache.
  await page.evaluate(()=>{$('#designName').value='Imported camera';});assert(await page.evaluate(()=>saveDesign(true)));
  const downloaded=page.waitForEvent('download');await page.evaluate(()=>exportDesign());const download=await downloaded;
@@ -169,7 +170,7 @@ try{
  gltf.buffers[0].uri='mesh.bin';gltf.images=[{uri:'color.png'}];gltf.textures=[{source:0}];gltf.materials=[{pbrMetallicRoughness:{baseColorTexture:{index:0}}}];gltf.meshes[0].primitives[0].material=0;
  const png=Buffer.from(await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=1;c.getContext('2d').fillRect(0,0,1,1);return c.toDataURL('image/png').split(',')[1];}),'base64');
  const files=[{name:'mesh.gltf',mimeType:'model/gltf+json',buffer:Buffer.from(JSON.stringify(gltf))},{name:'mesh.bin',mimeType:'application/octet-stream',buffer:binary.subarray(20+jsonLength+8)},{name:'color.png',mimeType:'image/png',buffer:png}];
- await page.locator('#addPart').click();await page.locator('#partModelImport').click();await page.locator('#partModelFile').setInputFiles(files);await page.waitForFunction(()=>partImport.draft&&!partImport.busy);
+ await page.locator('#addPart').click();await page.locator('#partModelImport').click();await page.locator('#partModelFile').setInputFiles(files);await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#objectImportSave').click();await page.locator('#objectLibraryDlg [data-object-use]').first().click();await page.waitForFunction(()=>partImport.phase==='use'&&partImport.draft&&!partImport.busy);
  assert(await page.evaluate(async()=>{let textured=false;(await partModelBase(partImport.draft)).traverse(m=>{if(m.material?.map?.image?.width===1)textured=true;});return textured;}));
  await page.locator('#partImportAdd').click();await page.waitForFunction(()=>!partImport.active);
  const packed=await page.evaluate(()=>partDesignWithAssets(JSON.parse(designSnap())));

@@ -61,13 +61,14 @@ function worldEditRender() {
   const kids = [
     el('div', { class: 'hrow' },
       UI.button({ class: 'btn primary', id: 'worldObjImport', disabled: wedit.busy || maps.busy || undefined, title: 'Read a 3D model and place it here, solid', onclick: () => file.click() }, wedit.busy ? 'Reading…' : 'Import 3D model…'),
-      UI.button({ class: 'btn', id: 'worldObjDone', title: 'Finish editing; the simulation carries on', onclick: () => worldEditSet(false) }, 'Done'), file),
+      UI.button({class:'btn',id:'worldObjectLibrary',onclick:()=>objectLibraryOpen('world')},'Object library…'),
+      UI.button({ class: 'btn', id: 'worldObjDone', disabled:wedit.busy||undefined, title: 'Finish editing; the simulation carries on', onclick: () => worldEditSet(false) }, 'Done'), file),
     el('p', { class: 'hint', text: 'glTF/GLB, OBJ or STL. With a .gltf, pick its .bin and textures too.' }),
     el('p', { class: 'world-obj-say', id: 'worldObjSay', role: 'status', text: wedit.say }),
   ];
   if (n) kids.push(el('ul', { class: 'world-obj-list', 'aria-label': 'Objects' }, ...worldObjects.list.map(o => el('li', {},
     UI.button({ class: 'world-obj-item', 'aria-pressed': String(o.id === wedit.sel), onclick: () => { worldEditSelect(o.id === wedit.sel ? null : o.id); if (wedit.sel) worldEditLookAt(o); } },
-      el('span', { text: o.name }), el('small', { text: o.loading ? 'reading…' : `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}` }))))));
+      el('span', { text: o.name }), el('small', { text: o.loading ? 'reading…' : o.collision==='mesh' ? 'mesh' : `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}` }))))));
   const o = worldObj(wedit.sel);
   if (o) kids.push(worldObjFields(o));
   box.replaceChildren(...kids);
@@ -78,11 +79,12 @@ function solidDetailControl(value, onChange, disabled = false) {
     UI.button({ 'data-solid-detail': key, 'aria-pressed': String(key === value), disabled: disabled || undefined, onclick: () => onChange(key) }, d.label)));
 }
 // State stays with each editor; this UI block is identical for world and drone solids.
-function solidShapeControls({ detail, shown, id, onDetail, onShown, disabled = false, description }) {
+function solidShapeControls({ detail, shown, id, onDetail, onShown, disabled = false, description, collision = 'boxes', onCollision }) {
   const checkbox = UI.input({ type: 'checkbox', id }); checkbox.checked = shown;
   checkbox.addEventListener('change', () => onShown(checkbox.checked));
   return el('div', { class: 'solid-shape-controls' },
-    UI.field({ label: 'Solid shape' }, solidDetailControl(detail, onDetail, disabled)),
+    onCollision ? UI.field({label:'Collision geometry'}, el('div',{class:'seg',role:'group','aria-label':'Collision geometry'}, ...[['mesh','Follows model'],['boxes','Filled boxes']].map(([key,label])=>UI.button({'data-collision':key,'aria-pressed':String(collision===key),disabled:disabled||undefined,onclick:()=>onCollision(key)},label)))) : null,
+    collision === 'boxes' ? UI.field({ label: 'Box detail' }, solidDetailControl(detail, onDetail, disabled)) : el('p',{class:'hint',text:'Uses the model’s triangle surfaces. Closed meshes enclose a volume; open meshes act as surfaces.'}),
     description ? el('p', { class: 'hint', text: description }) : null,
     el('label', { class: 'world-obj-chk' }, checkbox, ' Show the solid shape'));
 }
@@ -98,14 +100,13 @@ function worldObjFields(o) {
   name.addEventListener('change', () => { o.name = name.value.trim().slice(0, 60) || 'Object'; worldObjectsChanged(); worldEditChanged(); worldEditRender(); worldEditMsg(); });
   const at = [0, 1, 2].map(i => num('worldObjPos' + i, 'XYZ'[i] + ' position in metres', f2(o.pos[i]), moveStep(false), v => { o.pos[i] = clamp(v, -5000, 5000); worldEditMoved(o); }));
   const turn = num('worldObjYaw', 'Turn in degrees', Math.round(o.yaw * 10) / 10, 5, v => { o.yaw = ((v % 360) + 540) % 360 - 180; worldObjSolidify(o); worldEditSolidShown(o); }, { disabled: !can || undefined });
-  const units = UI.select({ id: 'worldObjUnits', 'aria-label': 'Units in the file', disabled: !can || undefined },
-    ...Object.entries(WORLD_OBJ_UNITS).map(([k, u]) => el('option', { value: k, text: u.label })), el('option', { value: 'custom', text: 'Other' }));
-  units.value = o.units;
-  units.addEventListener('change', () => { if (!WORLD_OBJ_UNITS[units.value]) { o.units = 'custom'; return; } o.units = units.value; o.scale = WORLD_OBJ_UNITS[o.units].k; worldObjSolidify(o); worldEditSolidShown(o); worldEditChanged(); worldEditRender(); });
-  const scale = num('worldObjScale', 'Metres per unit in the file', +o.scale.toPrecision(4), 'any', v => { if (v > 0) { o.scale = v; o.units = Object.keys(WORLD_OBJ_UNITS).find(k => Math.abs(WORLD_OBJ_UNITS[k].k - v) < 1e-9) || 'custom'; worldObjSolidify(o); worldEditSolidShown(o); } }, { min: 0, disabled: !can || undefined });
-  const seg = (label, items, cur, pick, dis) => el('div', { class: 'seg', role: 'group', 'aria-label': label }, ...items.map(([k, t]) => {
-    const b = UI.button({ 'aria-pressed': String(k === cur), disabled: dis || undefined, text: t }); b.addEventListener('click', () => { if (k !== cur) { pick(k); worldEditChanged(); worldEditRender(); } }); return b;
-  }));
+  const scale=objectScaleField({id:'worldObjSize',numberId:'worldObjSizeNumber',disabled:!can,get:()=>Math.max(...o.size)*o.scale,set:n=>{
+    const ratio=n/(Math.max(...o.size)*o.scale);o.scale*=ratio;o.units='custom';o.h*=ratio;
+    o.boxes=o.boxes.map(b=>({lo:b.lo.map(v=>v*ratio),hi:b.hi.map(v=>v*ratio)}));
+    if(o.triangles)o.triangles=o.triangles.map(v=>v*ratio);
+    placeGroup(o);worldObjectsChanged();worldEditSolidShown(o);worldEditChanged();
+    $('#worldCopyDims').textContent=o.size.map(v=>(v*o.scale).toFixed(2)).join(' × ')+' m (width × depth × height)';
+  }});
   const dims = o.size.map(x => x * o.scale);
   const voxel = o.h ? (o.h < 0.1 ? `${Math.round(o.h * 1000)} mm` : `${o.h.toFixed(2)} m`) : '';
   const notes = [];
@@ -116,13 +117,13 @@ function worldObjFields(o) {
     row('Name', name),
     row('Position', ...at, el('span', { class: 'unit', text: 'm' })),
     row('Turn', turn, el('span', { class: 'unit', text: '°' })),
-    row('File units', units, scale),
-    el('p', { class: 'hint world-obj-dims', text: `${dims.map(f2).join(' × ')} m (width × depth × height)` }),
-    row('Up in file', seg('Which way is up in the file', [['y', 'Y up'], ['z', 'Z up']], o.up, k => worldObjSetUp(o, k), !can)),
-    solidShapeControls({ detail: o.detail, shown: wedit.showSolid, id: 'worldObjSolid', disabled: !can,
+    scale.node,
+    el('p', { class: 'hint world-obj-dims', id:'worldCopyDims', text: `${dims.map(f2).join(' × ')} m (width × depth × height)` }),
+    solidShapeControls({ detail: o.detail, shown: wedit.showSolid, id: 'worldObjSolid', disabled: !can, collision:o.collision||'boxes',
+      onCollision:key=>{o.collision=key;worldObjSolidify(o);worldEditSolidShown(o);worldEditChanged();worldEditRender();},
       onDetail: k => { if(k !== o.detail) { o.detail = k; worldObjSolidify(o); worldEditSolidShown(o); worldEditChanged(); worldEditRender(); } },
       onShown: shown => { wedit.showSolid = shown; worldEditSolidShown(o); },
-      description: `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}${voxel ? ` from ${voxel} voxels` : ''}.` }),
+      description: o.collision==='mesh' ? `${o.triangles.length/9} collision triangles; mass is fixed to the world.` : `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}${voxel ? ` from ${voxel} voxels` : ''}.` }),
     ...notes.map(t => el('p', { class: 'hint world-obj-note', text: t })),
     el('div', { class: 'hrow world-obj-acts' },
       UI.button({ class: 'btn btn-sm', title: 'Stand it on the ground', onclick: () => { o.pos[2] = -Math.min(0, ...o.boxes.map(b => b.lo[2])); worldEditMoved(o); worldEditChanged(); worldEditRender(); } }, 'Put on the ground'),
@@ -137,20 +138,7 @@ function worldEditLookAt(o) {
   const b = worldObjBounds(o), c = new THREE.Vector3((b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2);
   cam.target.copy(c); cam.pan.set(0, 0, 0); cam.dist = clamp(Math.max(...sub(b.hi, b.lo)) * 2.2, 0.6, maxDist()); cam.anim = null;
 }
-async function worldEditImport(files) {
-  if (wedit.busy || maps.busy) return;
-  wedit.busy = true; worldEditSay('Reading the model…'); worldEditRender();
-  mapUiSync();
-  try {
-    const o = await worldObjImport(files, [cam.target.x, cam.target.y]);
-    worldEditChanged(); wedit.busy = false;
-    worldEditSay(`${o.name}: solid as ${o.boxes.length} boxes. Its size assumes the file is in ${WORLD_OBJ_UNITS[o.units].label.toLowerCase()}; change File units if it's wrong.`);
-    worldEditSelect(o.id); worldEditLookAt(o);
-  } catch (e) {
-    wedit.busy = false; worldEditSay('Could not import it: ' + (e && e.message ? e.message : e)); worldEditRender();
-  }
-  mapUiSync();
-}
+async function worldEditImport(files) { return objectImportStart(files,'world'); }
 
 /* ───────── picking and dragging, through the drone editor's handles (editor.js) ───────── */
 function pickWorldObj(e) {
@@ -163,6 +151,7 @@ function pickWorldObj(e) {
   return null;
 }
 function worldPointerDown(e) {
+  if(partImport.active)return false;
   if (e.button !== 0) return false;
   const h = pickHandle(e);
   if (h && worldStartDrag(h, e)) return true;
@@ -170,6 +159,7 @@ function worldPointerDown(e) {
   return false;   // let the camera orbit
 }
 function worldPointerMove(e, orbiting) {
+  if(partImport.active)return false;
   if (edit.drag) { if (e.pointerId === edit.drag.pointerId) worldDragTo(e); return true; }
   const tip = $('#pickTip');
   if (orbiting) { wedit.hover = null; tip.hidden = true; return false; }
@@ -181,6 +171,7 @@ function worldPointerMove(e, orbiting) {
   return false;
 }
 function worldPointerUp(e) {
+  if(partImport.active)return true;
   if (edit.drag) { if (e.pointerId === edit.drag.pointerId) worldEndDrag(); return true; }
   if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) worldEditSelect(pickWorldObj(e));
   edit.down = null; return false;
@@ -224,6 +215,7 @@ function worldEndDrag() {
 }
 // Each frame (from editor.js updateEditView): the handles on the selected object, the outlines. True while editing.
 function worldEditView() {
+  if(wedit.on&&partImport.active){travelG.visible=gizmo.visible=selBox.visible=hoverBox.visible=false;return true;}
   if (!wedit.on) return false;
   travelG.visible = false;
   if (wedit.sel && !worldObj(wedit.sel)) worldEditSelect(null);
@@ -241,7 +233,7 @@ function worldEditView() {
 }
 
 window.addEventListener('keydown', e => {
-  if (!wedit.on || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+  if (!wedit.on || partImport.active || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
   if (e.code === 'Escape') { if (wedit.sel) worldEditSelect(null); else worldEditSet(false); e.preventDefault(); }
 });
 $('#worldEditDone').addEventListener('click', () => worldEditSet(false));

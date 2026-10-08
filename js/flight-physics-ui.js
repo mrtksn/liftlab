@@ -41,8 +41,8 @@ function flightFixedMotor(c, kind) {
   c.motorPhysics = {...c.motorPhysics, kind, kv: 60 / (2 * Math.PI * mp.Ke), resistance: mp.R,
     currentLimit: mp.iMax, inertia: mp.J, friction: mp.friction, brushDrop: kind === 'brushed' ? .6 : 0};
 }
-function flightPhysicsFields(c) {
-  let changed = () => flightPhysicsEdited(c); const prefix = `physics-${c.id}`;
+function flightPhysicsFields(c, onChanged) {
+  let changed = onChanged || (() => flightPhysicsEdited(c)); const prefix = `physics-${c.id}`;
   const box = UI.details({title: 'Physical model', id: `${prefix}-fold`, class: 'fold sub'});
   const num = (owner, key, label, min, max, step, unit, fallback) => flightNumber(owner, key, label, min, max, step, unit, fallback, changed, prefix);
   if (c.type === 'motor') {

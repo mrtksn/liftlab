@@ -1221,3 +1221,10 @@ html.phone .rp-sub .rp-opt:first-of-type{display:none}
 }
 @media(max-width:640px){.part-import-panel{top:auto;max-height:44%;width:calc(100% - 24px)}}
 html.phone .part-import-panel{top:auto;max-height:44%;width:calc(100% - 24px)}
+
+/* The same asset library and import overlay serve both placement contexts. */
+.object-library-list{display:flex;flex-direction:column;gap:var(--space-12)}
+.object-library-entry{padding:var(--space-12);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.object-library-entry .hrow{flex-wrap:wrap}
+.work.part-importing #worldPanel,.work.part-importing #worldEditBar{display:none}
+.part-import-action{display:flex;flex-wrap:wrap;gap:var(--space-8)}

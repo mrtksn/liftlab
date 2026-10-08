@@ -20,6 +20,7 @@ function fleetShapesCurrent() {
       const ro=rotorNow(c),st=act.get(c.id);
       if(st && st.Omega*propR(c)>12 && !hsOf(c).prop)props.push({c,center:add(S.p,m3v(R,ro.p)),axis:m3v(R,ro.d),radius:propR(c)});
     } else if(c.type==='mass') {
+      if(c.model?.collision==='mesh'){boxes.push(fleetMesh(center,m3m(rotation,massRot(c)),c.model.triangles,c));continue;}
       if(c.model) { for(const b of partBoxes(c))boxes.push(fleetBox(add(center,m3v(m3m(rotation,massRot(c)),partBoxCenter(b))),m3m(rotation,massRot(c)),partBoxSize(b),c));continue; }
       const size=c.shape==='sphere'?[2*c.radius,2*c.radius,2*c.radius]:c.shape==='cylinder'?[2*c.radius,2*c.radius,c.length]:c.size;
       boxes.push(fleetBox(center,m3m(rotation,massRot(c)),size,c));
@@ -32,6 +33,9 @@ function fleetShapesCurrent() {
 }
 function fleetShapes(d) { return withDrone(d,fleetShapesCurrent); }
 function fleetBoxContact(a,b) {
+  if(a.mesh&&b.mesh)return fleetMeshMeshContact(a,b);
+  if(b.mesh)return fleetMeshBoxContact(b,a);
+  if(a.mesh){const hit=fleetMeshBoxContact(a,b);if(hit)hit.normal=scl(hit.normal,-1);return hit;}
   const delta=sub(a.center,b.center);
   if(dot(delta,delta)>(a.radius+b.radius)**2)return null;
   const axes=[...a.axes,...b.axes];
@@ -46,10 +50,11 @@ function fleetBoxContact(a,b) {
   const closest=(box,p)=>box.axes.reduce((v,axis,i)=>add(v,scl(axis,clamp(dot(sub(p,box.center),axis),-box.half[i],box.half[i]))),box.center.slice());
   return {depth,normal,point:scl(add(closest(a,b.center),closest(b,a.center)),.5)};
 }
-function fleetPointInBox(p,b) {const v=sub(p,b.center);return b.axes.every((axis,i)=>Math.abs(dot(v,axis))<=b.half[i]+.003);}
+function fleetPointInBox(p,b) {if(b.mesh)return meshInside(b.mesh,m3v(m3T(b.R),sub(p,b.center)));const v=sub(p,b.center);return b.axes.every((axis,i)=>Math.abs(dot(v,axis))<=b.half[i]+.003);}
 function fleetPropHit(prop,shapes) {
   // Also test the disk's interior: a thin arm can pass between sampled rim points.
   for(const box of shapes.boxes){
+    if(box.mesh){const ball={radius:.006,st:{p:prop.center}};if(fleetSphereBox(ball,box))return true;const e1=unit(crs(prop.axis,Math.abs(prop.axis[2])<.9?[0,0,1]:[1,0,0])),e2=crs(prop.axis,e1);for(let k=0;k<16;k++){ball.st.p=add(prop.center,scl(add(scl(e1,Math.cos(k*Math.PI/8)),scl(e2,Math.sin(k*Math.PI/8))),prop.radius));if(fleetSphereBox(ball,box))return true;}continue;}
     if(fleetPointInBox(prop.center,box))return true;
     const corners=Array.from({length:8},(_,i)=>box.axes.reduce((p,a,k)=>add(p,scl(a,box.half[k]*(i&(1<<k)?1:-1))),box.center.slice()));
     for(let i=0;i<8;i++)for(let k=0;k<3;k++)if(!(i&(1<<k))){
@@ -88,6 +93,7 @@ function fleetImpulse(d,point,J) {
 // Payloads are independent point masses, not rigid parts at their cable attachment.
 // Test their real world position even when the carrier's hub is nowhere near the hit drone.
 function fleetSphereBox(ball,box) {
+  if(box.mesh){const p=m3v(m3T(box.R),sub(ball.st.p,box.center)),hit=meshContact(p,ball.radius,box.mesh);return hit?{depth:hit.depth,normal:m3v(box.R,hit.n),point:sub(ball.st.p,scl(m3v(box.R,hit.n),ball.radius-hit.depth))}:null;}
   const delta=sub(ball.st.p,box.center);
   if(dot(delta,delta)>(ball.radius+box.radius)**2)return null;
   const local=box.axes.map(axis=>dot(delta,axis));
@@ -186,4 +192,35 @@ function fleetCollisions() {
   }
   // Corrections move craft; invalidate lazily so later balls use updated geometry.
   fleetPayloadCollisions(shape,d=>geometry.delete(d));
+}
+
+function fleetMesh(center,R,triangles,part) {
+  const mesh=collisionMesh(triangles),half=mesh.hi.map((v,k)=>Math.max(Math.abs(v),Math.abs(mesh.lo[k])));
+  return {center,R,mesh,triangles,half,radius:Math.hypot(...half),part,axes:[[R[0],R[3],R[6]],[R[1],R[4],R[7]],[R[2],R[5],R[8]]]};
+}
+function fleetTriangleBox(v,box) {
+  const local=v.map(p=>box.axes.map(a=>dot(sub(p,box.center),a))),edges=[sub(local[1],local[0]),sub(local[2],local[1]),sub(local[0],local[2])];
+  const basis=[[1,0,0],[0,1,0],[0,0,1]],axes=[...basis,crs(edges[0],edges[1]),...edges.flatMap(e=>basis.map(a=>crs(e,a)))];let depth=Infinity,normal;
+  for(const raw of axes){const length=nrm(raw);if(length<1e-9)continue;const a=scl(raw,1/length),h=box.half.reduce((s,x,k)=>s+x*Math.abs(a[k]),0),proj=local.map(p=>dot(p,a)),lo=Math.min(...proj),hi=Math.max(...proj);
+    if(lo>h||hi< -h)return null;const pen=Math.min(h-lo,hi+h);if(pen<depth){depth=pen;normal=scl(a,(lo+hi)>=0?-1:1);}}
+  if(!normal)return null;
+  return {depth,normal:box.axes.reduce((p,a,k)=>add(p,scl(a,normal[k])),[0,0,0]),point:triangleClosest(box.center,v)};
+}
+function fleetMeshBoxContact(mesh,box) {
+  const RT=m3T(mesh.R),local=m3v(RT,sub(box.center,mesh.center));let best=null;
+  meshCandidates(mesh.mesh,local,box.radius,t=>{const hit=fleetTriangleBox(t.v.map(p=>add(mesh.center,m3v(mesh.R,p))),box);if(hit&&(!best||hit.depth<best.depth))best=hit;});
+  if(!best){const hit=meshContact(local,0,mesh.mesh);if(hit)best={depth:hit.depth+Math.min(...box.half),normal:m3v(mesh.R,hit.n),point:box.center.slice()};}
+  // Here the normal points from the mesh towards the box.
+  return best;
+}
+function fleetMeshMeshContact(a,b) {
+  let best=null;
+  const scan=(source,target,flip)=>{
+    const RT=m3T(target.R),seen=new Set();
+    for(let i=0;i<source.triangles.length;i+=9){const v=[0,3,6].map(k=>add(source.center,m3v(source.R,source.triangles.slice(i+k,i+k+3))));
+      for(let k=0;k<3;k++){const p=v[k],key=p.map(x=>x.toFixed(6)).join();if(!seen.has(key)){seen.add(key);const hit=meshContact(m3v(RT,sub(p,target.center)),0,target.mesh);if(hit&&(!best||hit.depth>best.depth))best={depth:hit.depth,normal:scl(m3v(target.R,hit.n),flip),point:p};}
+        const start=m3v(RT,sub(p,target.center)),d=m3v(RT,sub(v[(k+1)%3],p)),length=nrm(d);if(length<1e-9)continue;
+        const hit=meshRayHits(target.mesh,start,scl(d,1/length),length)[0];if(hit&&hit.distance>1e-7&&!best){let n=unit(crs(sub(hit.v[1],hit.v[0]),sub(hit.v[2],hit.v[0])));if(dot(n,d)>0)n=scl(n,-1);best={depth:.002,normal:scl(m3v(target.R,n),flip),point:add(p,scl(sub(v[(k+1)%3],p),hit.distance/length))};}}
+    }
+  };scan(a,b,1);if(!best)scan(b,a,-1);return best;
 }

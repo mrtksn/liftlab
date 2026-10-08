@@ -144,6 +144,8 @@ function worldObjSolidify(o) {
   for (; ; k--) { r = voxelBoxes(tri, WORLD_OBJ_DETAIL[keys[k]].cells); if (r.boxes.length <= WORLD_OBJ_MAX_BOXES || k === 0) break; }
   o.coarsened = keys[k] !== o.detail ? keys[k] : null;
   o.boxes = r.boxes; o.h = r.h;
+  o.triangles = Array.from(tri);
+  validateCollisionGeometry(o.collision, o.triangles);
   worldObjectsChanged();
 }
 
@@ -160,7 +162,8 @@ function worldObjectsChanged() {
   const out = [];
   for (const o of worldObjects.list) {
     const what = o.name;
-    for (const b of o.boxes) out.push({ lo: add(o.pos, b.lo), hi: add(o.pos, b.hi), what, obj: o.id });
+    if (o.collision === 'mesh' && o.triangles?.length) {const mesh=collisionMesh(o.triangles);out.push({lo:add(o.pos,mesh.lo),hi:add(o.pos,mesh.hi),mesh,origin:o.pos.slice(),what,obj:o.id});}
+    else for (const b of o.boxes) out.push({ lo: add(o.pos, b.lo), hi: add(o.pos, b.hi), what, obj: o.id });
     o.wb = null;   // (the fade's cached world boxes)
   }
   terrainSetObjectBoxes(out); worldObjects.ver++;
@@ -198,22 +201,6 @@ async function readModel(o) {
   worldObjects.files.set(rec.id, rec);
   return standModel(await parseModel(rec), o.up).base;
 }
-// A model read from files the user picked: a new object at `at` (x, y), solid, and saved.
-async function worldObjImport(fileList, at) {
-  const files = await Promise.all([...fileList].map(async f => ({ name: f.name, data: await f.arrayBuffer() })));
-  const main = files.find(f => WORLD_OBJ_FORMATS[extOf(f.name)]);
-  if (!main) throw new Error('Pick a .glb, .gltf, .obj or .stl file (with a .gltf, its .bin and textures too)');
-  const rec = { id: newObjId('f'), name: main.name, files };
-  const ext = extOf(main.name), up = ext === 'stl' ? 'z' : 'y';
-  const { base, size } = standModel(await parseModel(rec), up);
-  const units = guessUnits(ext, size);
-  const o = { id: newObjId('o'), name: main.name.replace(/\.[^.]+$/, '').slice(0, 60) || 'Object', fileId: rec.id, pos: [at[0], at[1], 0], yaw: 0, scale: WORLD_OBJ_UNITS[units].k, units, up, detail: 'medium', size, boxes: [] };
-  objGroup(o); showModel(o, base);
-  worldObjects.files.set(rec.id, rec); worldObjects.list.push(o);
-  worldObjSolidify(o);
-  worldFilePut(rec).then(ok => { if (!ok) o.unsaved = true; });
-  return o;
-}
 function worldObjDuplicate(src) {
   const o = { ...src, id: newObjId('o'), name: (src.name + ' copy').slice(0, 60), pos: add(src.pos, [Math.max(0.5, (src.size[0] * src.scale) * 1.2), 0, 0]), boxes: src.boxes.map(b => ({ lo: b.lo.slice(), hi: b.hi.slice() })), g: null, base: null, wb: null };
   objGroup(o); worldObjects.list.push(o);
@@ -223,6 +210,7 @@ function worldObjDuplicate(src) {
 }
 function worldObjRemove(o) {
   worldObjects.list = worldObjects.list.filter(x => x !== o); disposeObj(o); worldObjectsChanged();
+  if (typeof objectLibrary !== 'undefined') return; // Library and portable copies own their source files independently.
   if (!worldObjects.list.some(x => x.fileId === o.fileId)) { worldObjects.files.delete(o.fileId); worldFileDelete(o.fileId); }
 }
 // Turn the model the other way up (it was drawn with Y up, or Z): it's stood up again and made solid again.
@@ -241,9 +229,10 @@ function worldObjectsTheme() {
   if (!worldObjMats) worldObjMats = {
     plain: new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, metalness: 0.05 }),
     fade: new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, transparent: true, opacity: 0.14, depthWrite: false }),
-    solid: new THREE.MeshBasicMaterial({ color: colorOf('--accent'), transparent: true, opacity: 0.22, depthWrite: false }),
+    solidWire: new THREE.LineBasicMaterial({color:colorOf('--accent'),transparent:true,opacity:.7,depthWrite:false}),
+    solid: new THREE.MeshBasicMaterial({ color: colorOf('--accent'), transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }),
   };
-  worldObjMats.plain.color.copy(c); worldObjMats.fade.color.copy(c); worldObjMats.solid.color.copy(colorOf('--accent'));
+  worldObjMats.plain.color.copy(c); worldObjMats.fade.color.copy(c); worldObjMats.solid.color.copy(colorOf('--accent'));worldObjMats.solidWire.color.copy(colorOf('--accent'));
 }
 // Objects between the camera and what it looks at turn see-through, as buildings do (view3d.js updateCity).
 function worldObjectsFade(c, rays) {
@@ -266,17 +255,22 @@ function solidBoxesVisual(boxes) {
   mesh.renderOrder = 18; mesh.userData.noPick = true;
   return mesh;
 }
+function collisionVisual(mode,triangles,boxes) {
+  if(mode !== 'mesh' || !triangles?.length)return solidBoxesVisual(boxes);
+  const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(triangles,3));geo.computeVertexNormals();
+  const mesh=new THREE.Mesh(geo,worldObjMats.solid);mesh.renderOrder=18;mesh.userData.noPick=true;const wire=new THREE.LineSegments(new THREE.WireframeGeometry(geo),worldObjMats.solidWire);wire.renderOrder=19;wire.userData.noPick=true;mesh.add(wire);return mesh;
+}
 function worldObjShowSolid(o) {
-  if (solidVis) { scene.remove(solidVis); solidVis.geometry.dispose(); solidVis = null; }
+  if (solidVis) { scene.remove(solidVis); disposeGroup(solidVis); solidVis = null; }
   if (!o || !o.boxes.length) return;
-  solidVis = solidBoxesVisual(o.boxes);
+  solidVis = collisionVisual(o.collision, o.triangles, o.boxes);
   solidVis.position.set(...o.pos);   // (moving the object moves this along)
   scene.add(solidVis);
 }
 
 /* ───────── saving ───────── */
 function worldObjectsSnapshot() {
-  return worldObjects.list.map(o => ({ id: o.id, name: o.name, fileId: o.fileId, pos: o.pos.map(x => +x.toFixed(4)), yaw: o.yaw, scale: o.scale, units: o.units, up: o.up, detail: o.detail, size: o.size.map(x => +x.toFixed(5)), h: +(o.h || 0).toFixed(5),
+  return worldObjects.list.map(o => ({ id: o.id, name: o.name, fileId: o.fileId, pos: o.pos.map(x => +x.toFixed(4)), yaw: o.yaw, scale: o.scale, units: o.units, up: o.up, detail: o.detail, size: o.size.map(x => +x.toFixed(5)), h: +(o.h || 0).toFixed(5), collision:o.collision || "boxes", ...(o.collision === "mesh" ? {triangles:o.triangles} : {}),
     boxes: o.boxes.flatMap(b => [...b.lo, ...b.hi]).map(x => +x.toFixed(4)) }));
 }
 // Objects from a saved world: solid at once, drawn when their files have been read.
@@ -285,9 +279,10 @@ function worldObjectsRestore(list) {
   worldObjects.list = [];
   for (const s of Array.isArray(list) ? list : []) {
     if (!s || typeof s.id !== 'string' || !Array.isArray(s.pos) || s.pos.length !== 3 || !s.pos.every(Number.isFinite) || !Array.isArray(s.boxes) || s.boxes.length % 6) continue;
+    try { validateCollisionGeometry(s.collision,s.triangles); } catch (_) { continue; }
     const boxes = []; for (let i = 0; i < s.boxes.length; i += 6) boxes.push({ lo: s.boxes.slice(i, i + 3).map(Number), hi: s.boxes.slice(i + 3, i + 6).map(Number) });
     const o = { id: s.id, name: String(s.name || 'Object').slice(0, 60), fileId: String(s.fileId || ''), pos: s.pos.map(Number), yaw: +s.yaw || 0, scale: +s.scale > 0 ? +s.scale : 1,
-      units: WORLD_OBJ_UNITS[s.units] ? s.units : 'custom', up: s.up === 'z' ? 'z' : 'y', detail: WORLD_OBJ_DETAIL[s.detail] ? s.detail : 'medium', size: Array.isArray(s.size) && s.size.length === 3 ? s.size.map(Number) : [1, 1, 1], h: +s.h || 0, boxes };
+      units: WORLD_OBJ_UNITS[s.units] ? s.units : 'custom', up: s.up === 'z' ? 'z' : 'y', detail: WORLD_OBJ_DETAIL[s.detail] ? s.detail : 'medium', size: Array.isArray(s.size) && s.size.length === 3 ? s.size.map(Number) : [1, 1, 1], h: +s.h || 0, boxes, collision:s.collision || "boxes", triangles:s.triangles?.slice() };
     objGroup(o); showModel(o, null); o.missing = false; o.loading = true; worldObjects.list.push(o);
     readModel(o).then(base => { if (worldObj(o.id) !== o) return; o.loading = false; if (base) showModel(o, base); else o.missing = true; o.faded = false; if (typeof worldEditRender === 'function') worldEditRender(); })
       .catch(() => { o.loading = false; o.missing = true; if (typeof worldEditRender === 'function') worldEditRender(); });
@@ -300,7 +295,7 @@ const WORLD_DB = 'liftlab-world-objects';
 let worldDb = null;
 function worldDbOpen() {
   if (!worldDb) worldDb = new Promise((ok, no) => {
-    try { const r = indexedDB.open(WORLD_DB, 1); r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'id' }); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }
+    try { const r = indexedDB.open(WORLD_DB, 2); r.onupgradeneeded = () => { for(const name of ['files','library'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'}); }; r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }
     catch (e) { no(e); }
   }).catch(e => { worldDb = null; throw e; });
   return worldDb;

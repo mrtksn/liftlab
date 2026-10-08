@@ -130,7 +130,7 @@ function setFrameShape(o) {
   cfg.frame.polar = o.polar ? FlightPhysics.polar(o.polar) : undefined; cfg.frame.source = o.source;
   validatePartGeometry(o); cfg.frame.cog = o.cog ? o.cog.slice() : undefined; cfg.frame.points = o.points ? JSON.parse(JSON.stringify(o.points)) : undefined;
 }
-const isWing = c => c.type === 'mass' && c.aero === 'wing' && c.shape === 'box';
+const isWing = c => c.type === 'mass' && c.aero === 'wing' && (c.shape === 'box' || !!c.model);
 const massRot = c => c.type === 'mass' ? m3m(eulerR(...(c.rotation || [0, 0, 0])), incR(c.inc)) : [1, 0, 0, 0, 1, 0, 0, 0, 1];
 const setMassRot = (c, R) => { c.rotation = eulerFromR(m3m(R, m3T(incR(c.inc)))); };
 const frameRot = () => frameWing() && cfg.frame.inc ? incR(cfg.frame.inc) : [1, 0, 0, 0, 1, 0, 0, 0, 1];

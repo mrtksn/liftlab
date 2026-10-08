@@ -597,6 +597,7 @@ function updateScene(selected = true) {
   spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
   trailLine.visible = live && view.trail;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
+  if (!selected && partImport.active && partImport.context==='world' && partImport.draft) {cam.target.set(...partImport.draft.pos);updateCamera();return;}
   if (!selected) return;
   let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   const selC = editMode && !partImport.active && compById(edit.sel);
