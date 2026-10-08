@@ -8,6 +8,7 @@
 - USB 3D view (js/usb-view.js): install step 3 "Show it in the 3D view" follows RN_LINK_TELEM attitude/height over the installer's cable, simulation paused, watch-only; Console/Stop/Run/Disconnect/unplug end or return. Angle signs reuse the BLE view's liveQuat and are unconfirmed on hardware.
 - Regression checklist PASSED locally: motor/config native tests for ESP32/S3/C3 (no default pins, I²C names), test_board_install (version answers), new tools/test_usb_view.cjs (mock serial: version cases, attitude/height, Console/Stop/Run/Disconnect, no page errors), test_computer_cards, test_live_ble, test_power_links, test_flight_browser, hardware/agent/driver checks, asset stamps. NOT verified: ESP-IDF compile of flight.c/hw.c/ground.c (needs CI), real boards.
 - A concurrent session was editing runner/fc (pid_tuning.h, RN_LINK_TUNE in flight.c, fc_core/nav_core, dfb_pi) in the same checkout; keep those hunks separate from this work.
+- Published 038dec0 (source) to main; CI run 37755426122 compiled all six bundles (ESP-IDF v5.3.2) and every host check passed. Committed its firmware-038dec0 artifact: each app image carries the 038dec0 stamp the manifest records. Real-board checks pending.
 
 ## Agent/cable publication — 2026-10-08
 - Pushed implementation d62d973 to main. Pages run 37747338850 passed; live HTML and all 12 changed JavaScript assets match the tested revision. Both agent flight-tool/source/bus checks and the full slack-cable regression passed directly on the live site without page errors.
