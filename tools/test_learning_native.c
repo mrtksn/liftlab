@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../runner/fc/nav_core.h"
-extern const uint8_t *const rn_builtin_pi_img;
-extern const uint32_t rn_builtin_pi_len;
+extern const uint8_t *const rn_builtin_img;
+extern const uint32_t rn_builtin_len;
 static rn_host H;
 static float arenas[3][131072], pools[3][8192];
 static int32_t codes[3][65536];
@@ -15,7 +15,7 @@ static void setup(void) {
   memset(&L, 0, sizeof L);
   float *a[3] = { arenas[0], arenas[1], arenas[2] }, *p[3] = { pools[0], pools[1], pools[2] };
   int32_t *c[3] = { codes[0], codes[1], codes[2] };
-  assert(!rn_host_init(&H, rn_builtin_pi_img, rn_builtin_pi_len, a, 131072, c, 65536, p, 8192));
+  assert(!rn_host_init(&H, rn_builtin_img, rn_builtin_len, a, 131072, c, 65536, p, 8192));
   assert(!learn_init(&L, &H));
   FILE *f = fopen("runner/fc/testdata/quadx.dfa", "rb"); assert(f);
   uint8_t blob[8192]; size_t len = fread(blob, 1, sizeof blob, f); fclose(f); assert(!learn_airframe(&L, blob, (uint32_t)len));

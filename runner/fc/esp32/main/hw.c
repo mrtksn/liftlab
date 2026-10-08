@@ -48,7 +48,7 @@ int hw_airframe_save(const uint8_t *buf, uint32_t len) {
 }
 
 /* ───────── sensors ───────── */
-static i2c_master_bus_handle_t bus;
+static i2c_master_bus_handle_t imu_i2c_bus;
 static i2c_master_dev_handle_t imu_dev, baro_dev, mag_dev;
 static hw_config sensor_config;
 static int custom_imu,custom_baro,custom_mag;
@@ -58,7 +58,7 @@ static int wr(i2c_master_dev_handle_t d, uint8_t reg, uint8_t v) { uint8_t b[2] 
 static int rd(i2c_master_dev_handle_t d, uint8_t reg, uint8_t *buf, int n) { return i2c_master_transmit_receive(d, &reg, 1, buf, (size_t)n, 5) == ESP_OK ? 0 : -1; }
 static i2c_master_dev_handle_t add(uint8_t addr) {
   i2c_device_config_t dc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = addr, .scl_speed_hz = 400000 };
-  i2c_master_dev_handle_t d = NULL; if (i2c_master_bus_add_device(bus, &dc, &d) != ESP_OK) return NULL; return d;
+  i2c_master_dev_handle_t d = NULL; if (i2c_master_bus_add_device(imu_i2c_bus, &dc, &d) != ESP_OK) return NULL; return d;
 }
 
 /* BMP280 calibration and state */
@@ -84,14 +84,14 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   memset(s, 0, sizeof *s); int k = 0; sensor_config=*c;
   i2c_master_bus_config_t bcfg = { .i2c_port = I2C_NUM_0, .sda_io_num = c->sda, .scl_io_num = c->scl, .clk_source = I2C_CLK_SRC_DEFAULT,
                                    .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
-  if (i2c_new_master_bus(&bcfg, &bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
+  if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
   if(c->imu_driver==3 && !custom_imu_init(c->imu_addr)) { custom_imu=1;imu_kind=3;s->imu=3;snprintf(s->imu_name,sizeof s->imu_name,"custom C at 0x%02x",c->imu_addr); }
   if(c->baro_driver==3 && !custom_baro_init(c->baro_addr)) { custom_baro=1;baro_kind=3;s->baro=3;snprintf(s->baro_name,sizeof s->baro_name,"custom C"); }
   if(c->mag_driver==3 && !custom_mag_init(c->mag_addr)) { custom_mag=1;s->mag=3;snprintf(s->mag_name,sizeof s->mag_name,"custom C"); }
   /* The IMU: an MPU-6050 family chip at 0x68/0x69 (MPU-6050, MPU-6500, MPU-9250), else a LIS3DH at 0x18/0x19. */
   for (uint8_t a = 0x68; a <= 0x69 && !imu_kind && (c->imu_driver==0 || c->imu_driver==1); a++) {
     if(c->imu_addr && c->imu_addr!=a) continue;
-    if (i2c_master_probe(bus, a, 20) != ESP_OK) continue;
+    if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
     i2c_master_dev_handle_t d = add(a); uint8_t who = 0;
     if (!d || rd(d, 0x75, &who, 1)) continue;
     const char *nm = who == 0x68 ? "MPU-6050" : who == 0x70 ? "MPU-6500" : who == 0x71 ? "MPU-9250" : who == 0x73 ? "MPU-9255" : who == 0x72 ? "MPU-6052" : NULL;
@@ -114,7 +114,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   }
   for (uint8_t a = 0x18; a <= 0x19 && !imu_kind && (c->imu_driver==0 || c->imu_driver==2); a++) {
     if(c->imu_addr && c->imu_addr!=a) continue;
-    if (i2c_master_probe(bus, a, 20) != ESP_OK) continue;
+    if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
     i2c_master_dev_handle_t d = add(a); uint8_t who = 0;
     if (!d || rd(d, 0x0F, &who, 1) || who != 0x33) continue;
     wr(d, 0x20, 0x97);                                        /* 1.344 kHz, x y z on */
@@ -125,7 +125,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   if (!imu_kind) k += snprintf(log + k, logn - k, "no IMU found on I2C (SDA %d, SCL %d); ", c->sda, c->scl);
   /* The barometer: BMP280 or BME280 at 0x76/0x77. */
   for (uint8_t a = 0x76; a <= 0x77 && !baro_kind && (c->baro_driver==0 || c->baro_driver==1); a++) {
-    if (i2c_master_probe(bus, a, 20) != ESP_OK) continue;
+    if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
     if(c->baro_addr && c->baro_addr!=a) continue;
     i2c_master_dev_handle_t d = add(a); uint8_t id = 0, cal[24];
     if (!d || rd(d, 0xD0, &id, 1) || (id != 0x58 && id != 0x60) || rd(d, 0x88, cal, 24)) continue;

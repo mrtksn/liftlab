@@ -2,7 +2,7 @@
 #include <stdint.h>
 /* 32-bit words, so the image is aligned and its steps can run straight from flash (rn_load with code = NULL).
  * Stored little-endian, as the ESP32 is. */
-const uint32_t rn_builtin_pi_words[] = {
+const uint32_t rn_builtin_words[] = {
   0x52464244u, 0x00000002u, 0x00016a5du, 0x000000a3u, 0x0000aca3u, 0x0000000du, 0x00000012u, 0x3f800000u,
   0x00000000u, 0x3f4ccccdu, 0x3e99999au, 0x3f19999au, 0x3e75c28fu, 0x40000000u, 0x3ecccccdu, 0xbf000000u,
   0x3f000000u, 0x3da2f983u, 0x3e800000u, 0x40200000u, 0x3f99999au, 0x3e19999au, 0x3fc00000u, 0x44480000u,
@@ -20504,5 +20504,5 @@ const uint32_t rn_builtin_pi_words[] = {
   0x41c80000u, 0x0000d152u, 0x00000001u, 0x3a03126fu, 0x00000000u, 0x00000000u, 0x0000d153u, 0x00000001u,
   0x4220001fu, 0x00000000u, 0x00000000u, 0xf329ea3eu,
 };
-const uint8_t *const rn_builtin_pi_img = (const uint8_t *)rn_builtin_pi_words;
-const uint32_t rn_builtin_pi_len = 655984u;
+const uint8_t *const rn_builtin_img = (const uint8_t *)rn_builtin_words;
+const uint32_t rn_builtin_len = 655984u;
