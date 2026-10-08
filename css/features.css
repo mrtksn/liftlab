@@ -831,7 +831,7 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 html.phone .bar:not(.open){flex-wrap:nowrap;align-items:center;gap:var(--space-6)}
 html.phone .bar:not(.open) .brand,html.phone .bar:not(.open) .hgroup > .lbl,html.phone .bar:not(.open) .mode-desc{display:none}
 html.phone .bar:not(.open) .hgroup,html.phone .bar:not(.open) .hrow{display:contents}
-html.phone .bar:not(.open) #resetBtn,html.phone .bar:not(.open) #launchSeg,html.phone .bar:not(.open) #speedSeg,html.phone .bar:not(.open) #terrainSel,html.phone .bar:not(.open) #terrainNew{display:none}
+html.phone .bar:not(.open) #resetBtn,html.phone .bar:not(.open) #launchSeg,html.phone .bar:not(.open) #speedSeg,html.phone .bar:not(.open) #terrainSel,html.phone .bar:not(.open) #terrainNew,html.phone .bar:not(.open) .map-label{display:none}
 html.phone .bar:not(.open) #runBtn{order:-1}
 html.phone .bar:not(.open) #presetSlot{flex:1;min-width:0;display:flex}
 html.phone .bar:not(.open) #presetSlot .mb-btn{width:100%;justify-content:space-between}
@@ -992,7 +992,13 @@ html.phone .bar:not(.open) .live-btn svg{margin-right:0}
 .world-panel .hrow select{min-width:0;flex:1}
 .world-panel:has(#worldSettingsBody[hidden]){width:auto}
 .world-panel.editing-objects{border-color:var(--accent)}
-.world-panel.editing-objects #worldSettingsBody>.sec:not(.world-objs){display:none}
+.world-panel.editing-objects #worldSettingsBody>.sec:not(.world-objs):not(.world-maps){display:none}
+.map-save{flex-wrap:wrap}
+.map-save input{flex:1;min-width:100px;width:150px}
+.map-actions{flex-wrap:wrap;margin-top:8px}
+.map-say{font-size:12px;color:var(--muted);margin:8px 0 0}
+.map-say:empty{display:none}
+#terrainSel{max-width:190px}
 .world-objs .world-obj-body{display:flex;flex-direction:column;gap:var(--space-8)}
 .world-obj-say{margin:0;font-size:var(--text-sm);color:var(--ink-2)}
 .world-obj-say:empty{display:none}

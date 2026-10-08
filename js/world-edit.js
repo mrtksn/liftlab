@@ -52,7 +52,7 @@ function worldEditRender() {
   if (!wedit.on) {
     box.replaceChildren(
       el('p', { class: 'hint', text: n ? `${n} object${n > 1 ? 's' : ''} from 3D models, solid for the drones.` : 'Bring in 3D models from Blender or any 3D tool; they are made solid for the drones.' }),
-      UI.button({ class: 'btn', id: 'worldObjEdit', title: 'Pause and edit the objects: import models, move and turn them', onclick: () => worldEditSet(true) }, 'Edit objects'));
+      UI.button({ class: 'btn', id: 'worldObjEdit', title: 'Pause and edit the objects: import models, move and turn them', onclick: () => worldEditSet(true) }, 'World editor'));
     return;
   }
   const keep = document.activeElement && box.contains(document.activeElement) ? document.activeElement.id : null;
@@ -60,7 +60,7 @@ function worldEditRender() {
   file.addEventListener('change', () => { const f = file.files; if (f && f.length) worldEditImport(f); file.value = ''; });
   const kids = [
     el('div', { class: 'hrow' },
-      UI.button({ class: 'btn primary', id: 'worldObjImport', disabled: wedit.busy || undefined, title: 'Read a 3D model and place it here, solid', onclick: () => file.click() }, wedit.busy ? 'Reading…' : 'Import 3D model…'),
+      UI.button({ class: 'btn primary', id: 'worldObjImport', disabled: wedit.busy || maps.busy || undefined, title: 'Read a 3D model and place it here, solid', onclick: () => file.click() }, wedit.busy ? 'Reading…' : 'Import 3D model…'),
       UI.button({ class: 'btn', id: 'worldObjDone', title: 'Finish editing; the simulation carries on', onclick: () => worldEditSet(false) }, 'Done'), file),
     el('p', { class: 'hint', text: 'glTF/GLB, OBJ or STL. With a .gltf, pick its .bin and textures too.' }),
     el('p', { class: 'world-obj-say', id: 'worldObjSay', role: 'status', text: wedit.say }),
@@ -125,8 +125,9 @@ function worldEditLookAt(o) {
   cam.target.copy(c); cam.pan.set(0, 0, 0); cam.dist = clamp(Math.max(...sub(b.hi, b.lo)) * 2.2, 0.6, maxDist()); cam.anim = null;
 }
 async function worldEditImport(files) {
-  if (wedit.busy) return;
+  if (wedit.busy || maps.busy) return;
   wedit.busy = true; worldEditSay('Reading the model…'); worldEditRender();
+  mapUiSync();
   try {
     const o = await worldObjImport(files, [cam.target.x, cam.target.y]);
     worldEditChanged(); wedit.busy = false;
@@ -135,6 +136,7 @@ async function worldEditImport(files) {
   } catch (e) {
     wedit.busy = false; worldEditSay('Could not import it: ' + (e && e.message ? e.message : e)); worldEditRender();
   }
+  mapUiSync();
 }
 
 /* ───────── picking and dragging, through the drone editor's handles (editor.js) ───────── */

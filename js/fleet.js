@@ -204,7 +204,7 @@ function fleetTheme() {
 }
 function fleetSnapshot() {
   if (fleet.active) captureDroneState(fleet.active.state);
-  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},objects:worldObjectsSnapshot(),seeds:{...worldSeeds},environment:{...envr},drones:fleet.drones.map(d=>{
+  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,mapId:maps.current,terrain:{kind:terrain.kind,seed:terrain.seed},objects:worldObjectsSnapshot(),seeds:{...worldSeeds},environment:{...envr},drones:fleet.drones.map(d=>{
     const s=d.state;
     return {id:d.id,name:d.name,setpoint:{...s.setpoint},design:{frame:s.cfg.frame.mass,frameShape:{...s.cfg.frame},comps:s.cfg.comps,mode:s.mode,battery:s.cfg.battery,computers:s.cfg.computers,tuning:s.cfg.tuning,programs:s.cfg.programs||[],apps:s.cfg.apps||[],laws:Object.fromEntries(Object.entries(s.LAWS).filter(([,L])=>L.src!==L.defSrc).map(([k,L])=>[k,L.src]))},radio:{...s.radioCfg},radio2:{...s.radioCfg2},allocPrefs:{...s.allocPrefs},throwCfg:{...s.throwCfg},learnPrefs:{...s.learnPrefs},launch:s.launchMode,mixShare:s.steerMix.share,designId:s.designs.cur,designName:s.designs.name,preset:s.designs.preset,triggers:s.agentTriggers.map(({fired,last,was,...t})=>t),chat:s.agentChat};
   })};
@@ -224,6 +224,7 @@ function fleetInit() {
     try {
       d.id='boot-placeholder'; d.graphics.drone.userData.droneId=d.id;
       if (TERRAINS[saved.terrain?.kind]) setTerrain(saved.terrain.kind,saved.terrain.seed);
+      maps.current = typeof saved.mapId === 'string' ? saved.mapId : null;
       worldObjectsRestore(saved.objects);
       setWorldSeeds(saved.seeds || {});
       for (const rec of saved.drones) fleetCreate('quadx',rec);

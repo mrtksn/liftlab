@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=e066a2910a">
+<link rel="stylesheet" href="css/style.css?v=665966fc22">
 </head>
 <body>
 <div class="app">
@@ -34,6 +34,15 @@
     <div class="hgroup" role="group" aria-labelledby="grpWorld">
       <span class="lbl" id="grpWorld">World</span>
       <div class="hrow">
+        <span class="mini-lbl map-label">Map</span>
+        <select id="terrainSel" aria-label="Map" title="Choose a built-in or saved map; every flight starts again">
+          <option value="open">Open field</option>
+          <option value="parkour">Parkour city</option>
+          <option value="city">Full-scale city</option>
+        </select>
+        <button class="btn icon" id="terrainNew" type="button" aria-label="Build another city" title="Build another city">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.4" cy="5.4" r="1.2"/><circle cx="10.6" cy="10.6" r="1.2"/><circle cx="8" cy="8" r="1.2"/></svg>
+        </button>
         <button class="btn" id="worldView" type="button" title="Deselect the drone and open world settings">Settings</button>
         <button class="btn icon" id="fleetReset" type="button" aria-label="Reset all drones" title="Reset all drones (hold R)">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 6.3A5 5 0 1 1 3 9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M2.2 2.6v4.2h4.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -160,19 +169,22 @@
       <aside id="worldPanel" class="world-panel" aria-label="World settings" hidden>
         <button class="btn world-toggle" id="worldSettingsToggle" type="button" aria-expanded="true" aria-controls="worldSettingsBody">World settings <span aria-hidden="true">▾</span></button>
         <div id="worldSettingsBody">
-          <section class="sec"><button class="btn" id="worldDefaults" type="button" title="Restore the original terrain and environment settings">Reset to defaults</button></section>
-          <section class="sec">
-            <h2>Terrain</h2>
-            <div class="hrow">
-              <select id="terrainSel" aria-label="World" title="Where the drone flies: open ground, a compact parkour city, or the same city at full scale">
-                <option value="open">Open field</option>
-                <option value="parkour">Parkour city</option>
-                <option value="city">Full-scale city</option>
-              </select>
-              <button class="btn icon" id="terrainNew" type="button" aria-label="Build another city" title="Build another city">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.4" cy="5.4" r="1.2"/><circle cx="10.6" cy="10.6" r="1.2"/><circle cx="8" cy="8" r="1.2"/></svg>
-              </button>
+          <section class="sec"><button class="btn" id="worldDefaults" type="button" title="Restore the original map and environment settings">Reset to defaults</button></section>
+          <section class="sec world-maps">
+            <h2>Maps</h2>
+            <p class="hint">Save the layout, objects, seeds and environment. Saved maps appear in the World selector above. Switching maps starts every flight again.</p>
+            <div class="hrow map-save">
+              <input type="text" id="mapName" maxlength="60" placeholder="Name this map" aria-label="Map name">
+              <button class="btn btn-sm" id="mapSave" type="button" title="Save in this browser. Keep the current name to update it; use a new name to save another map.">Save map</button>
             </div>
+            <div class="hrow map-actions">
+              <button class="btn btn-sm" id="mapExport" type="button">Export map…</button>
+              <button class="btn btn-sm" id="mapImport" type="button">Import map…</button>
+              <button class="btn btn-sm" id="mapDelete" type="button" disabled>Delete saved map</button>
+              <input type="file" id="mapFile" accept=".json,.liftlab-map" hidden>
+            </div>
+            <p class="hint">Map files include available 3D models and textures. Drone designs stay in the simulation.</p>
+            <p class="map-say" id="mapSay" role="status"></p>
           </section>
           <section class="sec world-objs" id="worldObjSec"><h2>Objects <small id="worldObjCount"></small></h2><div class="world-obj-body" id="worldObjBody"></div></section>
           <section class="sec"><h2>Environment</h2><div class="sp" id="spFields"></div></section>
@@ -184,10 +196,10 @@
               <button class="btn btn-sm" id="seedRandom" type="button" title="New seeds for everything, a new city among them; every flight starts again">Random world</button>
             </div>
             <div class="hrow seed-save">
-              <input type="text" id="seedName" maxlength="60" placeholder="Name this world" aria-label="Name for the saved seeds">
-              <button class="btn btn-sm" id="seedSave" type="button" title="Keep these seeds with the terrain and environment, to come back to">Save</button>
+              <input type="text" id="seedName" maxlength="60" placeholder="Name these seeds" aria-label="Name for the saved seeds">
+              <button class="btn btn-sm" id="seedSave" type="button" title="Keep these seeds with the map layout and environment, to come back to">Save seeds</button>
             </div>
-            <p class="hint" id="seedSnapsEmpty">Saved worlds appear here.</p>
+            <p class="hint" id="seedSnapsEmpty">Saved seed sets appear here. Use Save map above to include objects.</p>
             <ul class="seed-snaps" id="seedSnaps"></ul>
             <p class="seed-say" id="seedSay" role="status"></p>
           </section>
@@ -616,7 +628,7 @@
 <script src="js/view3d.js?v=5622529437"></script>
 <script src="js/pilot.js?v=37ac21bd22"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
-<script src="js/ui.js?v=30d60d7083"></script>
+<script src="js/ui.js?v=a803822b18"></script>
 <script src="js/place-ui.js?v=8c208dd787"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=8cf0f00a55"></script>
@@ -660,11 +672,12 @@
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
 <script src="js/audio.js?v=82fc0795cb"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=9170c28fe0"></script>
+<script src="js/fleet.js?v=1a153bcd4f"></script>
 <script src="js/fleet-collisions.js?v=bc231a68ff"></script>
 <script src="js/world-objects.js?v=4edfb4e3c3"></script>
-<script src="js/world-edit.js?v=58dab54f5f"></script>
-<script src="js/replay.js?v=79acdaaa52"></script>
+<script src="js/world-edit.js?v=cb7f36845f"></script>
+<script src="js/replay.js?v=a0a90ea626"></script>
+<script src="js/maps.js?v=afc69fdbd8"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>
 <script data-goatcounter="https://mrtksn.goatcounter.com/count"

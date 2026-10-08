@@ -1,5 +1,13 @@
 # Project memory
 
+## Saved maps and portable world editor files — 2026-10-08
+- Added Map selector to the top bar's World group; user-facing terrain wording is now map. World settings/editor includes Save map, Export map, Import map and delete-saved-map controls.
+- Named maps keep layout, placed objects/transforms/solid shapes, seeds, environment and independent model/texture copies in IndexedDB. Saving with the current name updates it; a new name creates another map. Portable versioned JSON embeds model files; imports also save a map when browser storage permits. Usage/format details: docs/maps.md.
+- Switching maps replaces world objects and resets flights while preserving drone designs, selection and pause state. Clear targets stay unchanged; blocked targets use the existing reset fallback to the start plaza. Built-in maps clear placed objects. Existing seed snapshots and internal terrain keys remain compatible.
+- Limits: 128 MB portable files; missing originals retain collision boxes with an explicit message and cannot be turned/resized. Browser storage failure is reported. Saved maps are local to this browser unless exported.
+- Regression checklist PASSED: GLB/STL/OBJ save/update/copy/reload; source-file deletion and saved-map retention; cold-browser export/import, graphics/collisions, malformed-file atomic rejection; glTF buffers/textures and exact re-export bytes; operation guards/quota-failure reporting; fleet preservation, delete and desktop/phone layout. Existing world-view suite, syntax, asset fingerprints and diff checks passed. Verified locally; no commit, push or deployment in this change.
+- Publication: user authorized pushing the map changes to main. Remote main matches the implementation's parent; local browser checks passed. Pages deployment and remote CI verification are pending publication.
+
 ## Hardware bring-up blockers — 2026-10-08
 - Context: first real-hardware tests (ESP32-WROOM, ESP32-S3 with L9110S/L293D H-bridges and 3.7 V brushed motors, GY-87-style 10DOF, PCB-antenna nRF24L01+). Checked-in bundles (fa8b834+fleet) were 8 firmware-source commits stale and this Mac has no ESP-IDF.
 - Build stamp: build_firmware.sh passes DFB_FW_COMMIT (cache entry → PROJECT_VER); both firmwares answer `version` ("firmware COMMIT CHIP ROLE") and print it at power-on. The install dialog asks on Connect/after the wiring restart and compares with firmware/manifest.json (same/other build, chip, role, pre-version firmware). tools/check_firmware_fresh.sh compares the manifest commit with the firmware source. CI builds each bundle (ONLY=), writes the manifest (MANIFEST_ONLY=1), uploads firmware-COMMIT and warns when firmware/ is stale; committing the bundles stays manual.

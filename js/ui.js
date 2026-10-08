@@ -931,7 +931,10 @@ function applyTerrain(kind, seed) {
   else { cPts = contactPoints(); doReset(); }
   syncSp();save();
 }
-function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
+function syncTerrainUi() {
+  if (typeof mapUiSync === 'function') mapUiSync();
+  else { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
+}
 $('#worldDefaults').addEventListener('click', () => {
   if (liveOn()) return;
   Object.assign(envr, DEFAULT_ENVIRONMENT); setWorldSeeds(DEFAULT_SEEDS);
@@ -939,7 +942,7 @@ $('#worldDefaults').addEventListener('click', () => {
   if (terrain.kind !== 'parkour' || terrain.seed !== 1) applyTerrain('parkour', 1);
   syncTerrainUi(); syncSp(); seedsUiSync(); refreshEnvelope(); renderMass(); save(); fleetSave();
 });
-commitSelect($('#terrainSel'), v => { if (v !== terrain.kind) applyTerrain(v, terrain.seed); }, 'Press Enter to switch: it starts the flight again');
+commitSelect($('#terrainSel'), v => mapSelect(v), 'Press Enter to switch maps: it starts every flight again');
 $('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + Math.floor(Math.random() * 1e9)));
 function setSpeed(v) { speed = v; document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === v))); }
 document.querySelectorAll('#speedSeg [data-speed]').forEach(b => b.addEventListener('click', () => setSpeed(+b.dataset.speed)));
@@ -1142,6 +1145,7 @@ function boot() {
   UI_PANELS.editor.select(tab);
   UI_PANELS.readouts.restore();
   fleetInit();
+  mapsInit();
   let lastT = performance.now(), envT = 0, uiT = 0, physicsCostPerStep = .1;
   function frame(now) {
     const cpuStart = performance.now(), simStart = fleet.time, rawDt = Math.max(0, (now - lastT) / 1000);

@@ -56,7 +56,7 @@ function seedSnapsRender() {
     const what = `${({ open: 'Open field', parkour: 'Parkour city', city: 'Full-scale city' })[s.terrain?.kind] || ''} · wind ${(+s.environment?.wind || 0).toFixed(1)} m/s · turbulence ${(+s.environment?.turb || 0).toFixed(2)}`;
     return el('li', { class: 'seed-snap' },
       el('span', { class: 'seed-snap-name' }, el('b', { text: s.name }), el('small', { text: what })),
-      UI.button({ class: 'btn btn-sm', title: 'Use these seeds, terrain and environment, and start every flight again', onclick: () => seedSnapLoad(i) }, 'Load'),
+      UI.button({ class: 'btn btn-sm', title: 'Use these seeds, map layout and environment, and start every flight again', onclick: () => seedSnapLoad(i) }, 'Load'),
       UI.button({ class: 'btn icon btn-sm', 'aria-label': 'Delete ' + s.name, title: 'Delete', onclick: () => { seedSnaps.splice(i, 1); saveList(SEEDS_LS, seedSnaps); seedSnapsRender(); } }, '×'));
   }));
   $('#seedSnapsEmpty').hidden = seedSnaps.length > 0;
@@ -275,7 +275,7 @@ function replayUi(force = false) {
     $('#rpBar').hidden = !open;
     const rb = $('#recBtn'); rb.classList.toggle('on', rec.on); rb.setAttribute('aria-pressed', String(rec.on));
     rb.title = rec.on ? 'Stop recording and keep it' : 'Start every flight again and record your inputs, to replay them later over the same world';
-    $('#replayBtn').disabled = rec.on || !r; $('#replayBtn').title = r ? `Replay ${r.name} over the same world (its seeds, terrain and environment)` : 'Record a flight first';
+    $('#replayBtn').disabled = rec.on || !r; $('#replayBtn').title = r ? `Replay ${r.name} over the same world (its seeds, map and environment)` : 'Record a flight first';
     if (r) {
       rpMenu.btn.firstChild.textContent = r.name.split(' · ')[0];
       rpMenu.btn.title = r.name + ' — pick another recording, or rename, save or delete this one';

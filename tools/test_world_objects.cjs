@@ -44,7 +44,7 @@ try{
  await page.evaluate(()=>{applyTerrain('open',1);running=true;renderRun();});
  await page.selectOption('#droneSelect','');await page.waitForTimeout(150);
  await page.locator('#worldObjEdit').click();
- assert(await page.evaluate(()=>wedit.on&&!running&&!$('#worldEditBar').hidden&&$('#terrainSel').offsetParent===null&&$('#worldPanel').classList.contains('editing-objects')),'Edit objects did not pause and open the object editor');
+ assert(await page.evaluate(()=>wedit.on&&!running&&!$('#worldEditBar').hidden&&$('#terrainSel').closest('.bar')&&$('#terrainSel').offsetParent!==null&&$('#mapSave').offsetParent!==null&&$('#worldPanel').classList.contains('editing-objects')),'World editor did not pause with maps available in the top bar and panel');
 
  // A Y-up GLB stands up: its 3 m along Y becomes its height.
  await page.evaluate(()=>{cam.target.set(4,0,0);});
@@ -112,6 +112,94 @@ try{
  assert(await page.evaluate(()=>terrain.boxes.filter(b=>b.obj!=null).length===worldObjects.list.reduce((s,o)=>s+o.boxes.length,0)),'Restored boxes not in the terrain');
  await page.waitForFunction(()=>worldObjects.list.every(o=>o.base&&!o.loading&&!o.missing),null,{timeout:10000});
  console.log('Reload: objects solid at once, models read back from IndexedDB');
+
+ // Save complete maps, switch away, and restore after the active model files are deleted.
+ await page.waitForFunction(()=>maps.ready);
+ await page.locator('#worldView').click();await page.locator('#worldObjEdit').click();
+ await page.evaluate(()=>{envr.wind=20;envr.pressure=60000;worldSeeds.noise=7654321;for(const d of fleet.drones)Object.assign(d.state.setpoint,{x:20,y:20,z:2});syncSp();});
+ await page.locator('#mapName').fill('My flight map');await page.locator('#mapSave').click();
+ await page.waitForFunction(()=>maps.list.length===1&&!maps.busy);
+ const mapId=await page.evaluate(()=>maps.current),snapshot=await page.evaluate(()=>mapSnapshot());
+ const drones=await page.evaluate(()=>({selected:fleet.selected?.id||null,running,designs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint}))}));
+ assert(await page.evaluate(id=>$('#terrainSel').value===id&&maps.list[0].files.length===3,mapId),'Saved map not available or model files missing');
+ const downloadEvent=page.waitForEvent('download');await page.locator('#mapExport').click();const download=await downloadEvent;
+ const portable=fs.readFileSync(await download.path()),document=JSON.parse(portable);
+ assert(document.format==='liftlab-map'&&document.version===1&&document.files.length===3,'Portable export missing original models');
+ assert(Buffer.from(document.files.find(f=>f.name==='tower.glb').files[0].data,'base64').equals(glbBox(1,3,1)),'Export changed original GLB bytes');
+ await page.selectOption('#terrainSel','open');await page.waitForFunction(()=>!maps.busy&&worldObjects.list.length===0);
+ await page.evaluate(async()=>{for(const f of [...worldObjects.files.values()]){await worldFileDelete(f.id);}worldObjects.files.clear();});
+ await page.selectOption('#terrainSel',mapId);await page.waitForFunction(()=>!maps.busy&&worldObjects.list.length===3&&worldObjects.list.every(o=>o.base&&!o.loading));
+ assert.deepStrictEqual(await page.evaluate(()=>mapSnapshot()),snapshot,'Saved map did not restore layout/objects/seeds/environment');
+ assert.deepStrictEqual(await page.evaluate(()=>({selected:fleet.selected?.id||null,running,designs:fleet.drones.map(d=>withDrone(d,designSnap)),targets:fleet.drones.map(d=>({...d.state.setpoint}))})),drones,'Map switch replaced drone settings or pause/selection');
+ await page.locator('#mapSave').click();await page.waitForFunction(()=>!maps.busy);
+ assert(await page.evaluate(()=>maps.list.length===1),'Saving current map under its name should update it');
+ await page.locator('#mapName').fill('Second map');await page.locator('#mapSave').click();await page.waitForFunction(()=>!maps.busy);
+ assert(await page.evaluate(()=>maps.list.length===2),'A new name should save a separate map');
+ await page.reload({waitUntil:'networkidle'});await page.waitForFunction(()=>fleet.ready&&maps.ready&&worldObjects.list.every(o=>o.base&&!o.loading));
+ assert(await page.evaluate(()=>maps.list.length===2&&$('#terrainSel').value===maps.current&&$('#mapName').value==='Second map'),'Map library/current choice not kept after reload');
+ console.log('Maps: save/update/copy, selector, model retention, fleet preservation and reload');
+
+ // A fresh browser has no model files: the exported file must supply everything.
+ const fresh=await browser.newContext({viewport:{width:1600,height:1000}}),cold=await fresh.newPage();
+ cold.on('pageerror',e=>errors.push(e.stack));cold.on('dialog',d=>d.accept());
+ await cold.route(/fonts\.google|goatcounter|gc\.zgo/,r=>r.abort());
+ await cold.goto(url,{waitUntil:'networkidle'});await cold.waitForFunction(()=>fleet.ready&&maps.ready);
+ await cold.locator('#worldView').click();
+ await cold.locator('#mapFile').setInputFiles({name:download.suggestedFilename(),mimeType:'application/json',buffer:portable});
+ await cold.waitForFunction(()=>maps.list.length===1&&!maps.busy&&worldObjects.list.length===3&&worldObjects.list.every(o=>o.base&&!o.loading));
+ const coldSnapshot=await cold.evaluate(()=>mapSnapshot());
+ assert.deepStrictEqual({...coldSnapshot,objects:coldSnapshot.objects.map(({fileId,...o})=>o)},{...snapshot,objects:snapshot.objects.map(({fileId,...o})=>o)},'Portable map changed layout or transforms');
+ assert(await cold.evaluate(()=>worldObjects.list.every(o=>!!o.base&&!o.missing)&&terrainRay([worldObjects.list[0].pos[0],0,10],[0,0,-1])<10),'Imported models missing graphics or collision');
+ const unchanged=await cold.evaluate(()=>JSON.stringify(mapSnapshot()));
+ for(const mutate of [d=>{d.version=2;},d=>{d.world.objects[0].boxes[0]='bad';},d=>{d.files[0].files[0].data='@@@@';},d=>{d.world.environment.wind=-1;}]){
+   const invalid=JSON.parse(portable);mutate(invalid);
+   await cold.locator('#mapFile').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(invalid))});
+   await cold.waitForFunction(()=>!maps.busy&&$('#mapSay').textContent.startsWith('Could not complete'));
+   assert.strictEqual(await cold.evaluate(()=>JSON.stringify(mapSnapshot())),unchanged,'Rejected import changed the world');
+   assert(await cold.evaluate(()=>maps.list.length===1),'Rejected import changed map library');
+ }
+ await cold.reload({waitUntil:'networkidle'});await cold.waitForFunction(()=>fleet.ready&&maps.ready&&worldObjects.list.length===3&&worldObjects.list.every(o=>o.base&&!o.loading));
+ assert(await cold.evaluate(()=>maps.list.length===1&&$('#terrainSel').value===maps.current),'Imported map not saved for reload');
+ await cold.locator('#mapDelete').click();await cold.waitForFunction(()=>!maps.busy&&maps.list.length===0);
+ assert.strictEqual(await cold.evaluate(()=>JSON.stringify(mapSnapshot())),unchanged,'Deleting a saved map changed the active world');
+ await cold.setViewportSize({width:390,height:844});await cold.evaluate(()=>{document.documentElement.classList.add('phone');$('.bar').classList.add('open');});
+ assert(await cold.evaluate(()=>$('#terrainSel').offsetParent!==null&&document.documentElement.scrollWidth<=innerWidth+1),'Phone map selector hidden or overflowing');
+ await cold.screenshot({path:'/tmp/liftlab-maps-phone.png'});
+ await page.screenshot({path:'/tmp/liftlab-maps-desktop.png'});
+ await fresh.close();
+ console.log('Maps: portable import in a fresh browser, graphics/collisions, atomic validation, delete and phone layout');
+
+ // Multi-file glTF: buffers and textures travel together, even without any source IndexedDB.
+ const model=glbBox(1,3,1),jsonLength=model.readUInt32LE(12),gltf=JSON.parse(model.subarray(20,20+jsonLength));
+ gltf.buffers[0].uri='mesh.bin';gltf.images=[{uri:'color.png'}];gltf.textures=[{source:0}];
+ gltf.materials=[{pbrMetallicRoughness:{baseColorTexture:{index:0}}}];gltf.meshes[0].primitives[0].material=0;
+ const texturedDoc=JSON.parse(portable),fileId=texturedDoc.world.objects[0].fileId;
+ texturedDoc.files.find(f=>f.id===fileId).files=[
+   {name:'mesh.gltf',data:Buffer.from(JSON.stringify(gltf)).toString('base64')},
+   {name:'mesh.bin',data:model.subarray(20+jsonLength+8).toString('base64')},
+   {name:'color.png',data:''}
+ ];
+ const textureContext=await browser.newContext(),texturePage=await textureContext.newPage();
+ texturePage.on('pageerror',e=>errors.push(e.stack));await texturePage.route(/fonts\.google|goatcounter|gc\.zgo/,r=>r.abort());
+ await texturePage.goto(url,{waitUntil:'networkidle'});await texturePage.waitForFunction(()=>fleet.ready&&maps.ready);
+ texturedDoc.files.find(f=>f.id===fileId).files[2].data=await texturePage.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=1;c.getContext('2d').fillRect(0,0,1,1);return c.toDataURL('image/png').split(',')[1];});
+ assert(await texturePage.evaluate(async d=>mapImport(new File([JSON.stringify(d)],'textured-map.json')),texturedDoc),'Textured map import failed');
+ await texturePage.waitForFunction(()=>worldObjects.list.every(o=>o.base&&!o.loading));
+ assert(await texturePage.evaluate(()=>{let found=false;worldObjects.list[0].base.traverse(o=>{if(o.material?.map?.image?.width===1)found=true;});return found;}),'Multi-file glTF texture missing');
+ const packed=await texturePage.evaluate(async()=>{const m=await mapCollect('Texture check');return m.files.flatMap(f=>f.files.map(a=>({name:a.name,data:mapEncode(a.data)})));});
+ assert.deepStrictEqual(packed.filter(f=>['mesh.gltf','mesh.bin','color.png'].includes(f.name)),texturedDoc.files.find(f=>f.id===fileId).files,'Texture or buffer bytes changed during re-export');
+ const guarded=await texturePage.evaluate(()=>JSON.stringify(mapSnapshot()));
+ await texturePage.evaluate(async()=>{agent.busy=true;try{await mapSelect('open');}finally{agent.busy=false;}});
+ assert.strictEqual(await texturePage.evaluate(()=>JSON.stringify(mapSnapshot())),guarded,'Map switch ignored an active drone operation');
+ // Browser quota failure: import applies but reports that it could not save; saving never pretends to succeed.
+ await texturePage.evaluate(()=>{window.originalMapDbDo=mapDbDo;mapDbDo=async()=>{throw new Error('Quota exceeded');};});
+ const nMaps=await texturePage.evaluate(()=>maps.list.length);
+ assert(!await texturePage.evaluate(()=>mapSave()),'Failed map save reported success');
+ assert.strictEqual(await texturePage.evaluate(()=>maps.list.length),nMaps,'Failed save altered the library');
+ assert(await texturePage.evaluate(async d=>mapImport(new File([JSON.stringify(d)],'map.json')),document),'Import should still apply when saving is unavailable');
+ assert(await texturePage.evaluate(()=>$('#mapSay').textContent.includes('could not save')&&maps.current===null),'Storage failure was not reported');
+ await texturePage.evaluate(()=>{mapDbDo=window.originalMapDbDo;});await textureContext.close();
+ console.log('Maps: multi-file glTF buffers/textures, re-export bytes, active-operation guard and quota-failure reporting');
 
  // Missing file (another browser): drawn as its boxes, can be moved but not turned.
  await page.evaluate(async()=>{for(const o of worldObjects.list){worldObjects.files.delete(o.fileId);await worldFileDelete(o.fileId);}worldObjectsRestore(worldObjectsSnapshot());});
