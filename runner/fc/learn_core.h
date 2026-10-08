@@ -10,7 +10,8 @@
  *
  * What it does, on the flight core's telemetry (LTEL, 200 times a second):
  *   in-flight learning: recursive least squares (identifyEffectiveness) on what each input does to the drone's
- *     acceleration and rotation, with a little excitation (dither) so there is always something to learn from;
+ *     acceleration and rotation from ordinary flight, without persistent excitation. A bounded frozen candidate
+ *     must predict fresh, sufficiently excited data better before it reaches flight; probation can roll it back;
  *   calibration (while hovering): settle; pulse each motor on its own while the others hold (6%, then 16%) and fit
  *     its lag and throttle curve (identifyMotorResponse); step each steering servo while everything else holds
  *     and fit its real speed and lag (identifyServoResponse); sweep the servos; excite everything together; then
@@ -66,6 +67,11 @@ typedef struct {
   float prior[6][LN_IN], B[6][LN_IN], flyB[6][LN_IN];
   int prior_desc, fly_frozen;            /* the prior is the description; flying on flyB while a calibration runs */
   int use_learned, keep, hold_servos, hold_pulses, then_cal;
+  /* B is the estimator, flyB the accepted model. Probe a frozen candidate on fresh ordinary-flight data. */
+  float probe[6][LN_IN], previous[6][LN_IN], transient[3][LN_IN], nuisance[3][LN_IN];
+  float gram[LN_IN][LN_IN], adapt_t, adapt_conf;
+  double adapt_e[2][2], adapt_y[2];
+  int accepted, adapt, adapt_n, adapt_updates, adapt_rollbacks, previous_use, previous_accepted;
   float imu_r[3];                        /* the IMU's offset it uses (the throw measures it) */
   float m_eff[FC_MAX_MOTORS];            /* the supervisor's effectiveness, as last told */
   /* what the tests measured */
@@ -102,7 +108,7 @@ void learn_ltel(learn_state *L, const float *p, int n);
 /* The supervisor's settings (fc_core.h SET): a motor's effectiveness changed, so the learned columns are rescaled. */
 void learn_set(learn_state *L, const float *p, int n);
 /* What to send the flight core after a telemetry frame: an EXC frame (returns its length, 0: nothing), and a
- * MODEL frame when the model changed (or 5 times a second while it learns in flight). */
+ * MODEL frame only when the accepted flight model or measured actuator settings change. */
 int learn_exc_frame(learn_state *L, float *out);
 int learn_model_frame(learn_state *L, float *out);
 /* Commands: calibrate (or stop one), which model to fly on, keep learning in flight, get ready for a throw. */

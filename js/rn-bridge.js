@@ -66,7 +66,7 @@ function rnSourceOf(key) {
 function rnSources() { const s = {}; for (const k of Object.keys(RN_SIGS)) s[k] = rnSourceOf(k); return s; }
 // The constants the formulas read, filled in when a program is compiled: the selected drone's tuning (tuning.js;
 // laws.js TUNE). rnTuneKey says which tuning a program was compiled with; a formula reads it if it names TUNE.
-const rnConsts = () => ({ TUNE: typeof tuneOf === 'function' ? tuneOf() : TUNE_DEFAULTS });
+const rnConsts = () => ({ TUNE: typeof brt !== 'undefined' && brt.tuneTrial ? brt.tuneTrial : typeof tuneOf === 'function' ? tuneOf() : TUNE_DEFAULTS });
 const rnTuneKey = () => JSON.stringify(rnConsts().TUNE);
 const rnReadsTune = src => typeof src === 'string' && /\bTUNE\b/.test(src);
 function rnCompile(srcs, tune = rnTuneKey()) {

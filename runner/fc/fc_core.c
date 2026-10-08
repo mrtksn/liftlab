@@ -480,6 +480,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   frame_from(F1, nd, (float[3]){ cy, sy, 0 }); frame_from(F2, axis_of(F), (float[3]){ 1, 0, 0 }); m3mt(Rd, F1, F2);
   p.n = 0; p_v(&p, F->R, 9); p_v(&p, Rd, 9);
   if (call(F, F->f_err, 0, &p, eR)) return -1;
+  if (exc_live && F->exc_mode == 3 && !F->sup_mode) eR[F->exc_axis] -= F->exc_angle;
   if (c.throttle > 0.15f) for (int k = 0; k < 3; k++) F->iAtt[k] = clampf(F->iAtt[k] + eR[k] * dt, -0.5f, 0.5f);
   p.n = 0; p_v(&p, eR, 3); p_v(&p, F->w, 3); p_v(&p, F->iAtt, 3); p_v(&p, A->J, 9);
   if (call(F, F->f_ctl, 0, &p, tau)) return -1;
@@ -525,6 +526,8 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
 }
 
 static void ltel_add(fc_state *F, const fc_out *o, float dt) {
+  float alpha[3]; m3v(alpha, F->A.Jinv, F->tau_des);
+  for (int k = 0; k < 3; k++) F->lt_alpha[k] += alpha[k];
   if (F->open_loop && F->sub_n < FC_SUB) {             /* open loop: every step, for the throw's fit */
     float *s = F->sub[F->sub_n++]; int k = 0; s[k++] = dt;
     for (int i = 0; i < 3; i++) s[k++] = F->fb[i];
@@ -563,8 +566,14 @@ int fc_exc(fc_state *F, const float *p, int n) {
   int nm = (int)p[4], nj = (int)p[5];
   if (nm != F->A.n_motors || nj != F->A.n_joints || n != 8 + nm + nj) return -1;
   for (int k = 0; k < n; k++) if (!fin(p[k])) return -1;
-  int mode = (int)p[0]; if (mode < 0 || mode > 2) return -1;
+  int mode = (int)p[0]; if (mode < 0 || mode > 3) return -1;
+  if (mode == 3 && (p[6 + nm + nj] != (float)(int)p[6 + nm + nj] || p[6 + nm + nj] < 0 || p[6 + nm + nj] > 2)) return -1;
   F->exc_mode = mode; F->exc_hold_m = p[1] > 0.5f; F->exc_hold_s = p[2] > 0.5f; F->exc_smask = (int)p[3];
+  if (mode == 3) {
+    F->exc_hold_m = F->exc_hold_s = F->exc_smask = 0;
+    F->exc_axis = (int)p[6 + nm + nj]; F->exc_angle = clampf(p[7 + nm + nj], -0.0698132f, 0.0698132f);
+    F->exc_t = F->t; return 0;
+  }
   for (int i = 0; i < nm; i++) F->exc_m[i] = clampf(p[6 + i], -1, 1);
   for (int j = 0; j < nj; j++) F->exc_s[j] = clampf(p[6 + nm + j], -3.2f, 3.2f);
   int id = (int)p[6 + nm + nj];
@@ -631,6 +640,7 @@ int fc_ltel(fc_state *F, float *o) {
   for (int i = 0; i < 4; i++) o[n++] = F->q[i];
   for (int i = 0; i < 3; i++) o[n++] = F->lt_f[i] * k;
   for (int i = 0; i < 3; i++) o[n++] = F->lt_w[i] * k;
+  for (int i = 0; i < 3; i++) F->test_alpha[i] = F->lt_alpha[i] * k;
   o[n++] = F->vbatt; o[n++] = F->alt_e; o[n++] = F->have_alt ? F->vz_e : F->vz_i; o[n++] = (float)F->have_alt;
   o[n++] = (float)A->n_motors; o[n++] = (float)A->n_joints;
   for (int i = 0; i < A->n_motors; i++) o[n++] = F->lt_u[i] * k;
@@ -640,6 +650,12 @@ int fc_ltel(fc_state *F, float *o) {
   o[n++] = (float)F->sub_n;
   for (int s = 0; s < F->sub_n; s++) for (int k = 0; k < 7 + A->n_motors; k++) o[n++] = F->sub[s][k];
   F->sub_n = 0;
+  memset(F->lt_alpha, 0, sizeof F->lt_alpha);
   memset(F->lt_f, 0, sizeof F->lt_f); memset(F->lt_w, 0, sizeof F->lt_w); memset(F->lt_u, 0, sizeof F->lt_u); memset(F->lt_v, 0, sizeof F->lt_v); memset(F->lt_tc, 0, sizeof F->lt_tc); F->lt_n = 0;
   return n;
+}
+int fc_tuning_sample(const fc_state *F, float *out) {
+  out[0] = (float)(F->t - FC_LTEL_WRAP * (double)(long long)(F->t / FC_LTEL_WRAP));
+  for (int k = 0; k < 3; k++) out[k + 1] = F->test_alpha[k];
+  return 4;
 }

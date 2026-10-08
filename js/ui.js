@@ -626,10 +626,11 @@ function renderEst() {
 }
 
 /* ───────── the learning (a task on a board: boards.js) ───────── */
-$('#useDesc').addEventListener('click', () => { pilotLearnCmd('useDesc'); renderLearn(true); });
-$('#useLearned').addEventListener('click', e => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; pilotLearnCmd('useLearned'); renderLearn(true); });
-$('#keepLearn').addEventListener('change', e => { learnPrefs.keep = e.target.checked; pilotLearnCmd(e.target.checked ? 'keepOn' : 'keepOff'); save(); });
+$('#useDesc').addEventListener('click', () => { atStop('Flight model changed; measure again.'); pilotLearnCmd('useDesc'); renderLearn(true); });
+$('#useLearned').addEventListener('click', e => { if (e.currentTarget.getAttribute('aria-disabled') === 'true') return; atStop('Flight model changed; measure again.'); pilotLearnCmd('useLearned'); renderLearn(true); });
+$('#keepLearn').addEventListener('change', e => { const keep=e.target.checked; atStop('Adaptation preference changed; measure again.'); learnPrefs.keep = keep; pilotLearnCmd(keep ? 'keepOn' : 'keepOff'); save(); });
 $('#calBtn').addEventListener('click', () => {
+  if (typeof atStop === 'function') atStop('Starting an airframe calibration; tuning test stopped.');
   const v = learn.view;
   if (v && v.cal) { pilotLearnCmd('stop'); renderLearn(true); return; }
   if (S.crashed) return;
@@ -698,11 +699,12 @@ function renderResponses() {
   if (any) box.append(tbl); else box.append(el('p', { class: 'hint', text: 'Calibrate to measure each motor\'s lag and throttle curve, and each servo\'s real speed and lag. The servos\' are sent to the flight core; the curve is only shown.' }));
 }
 function renderLearn(force) {
+  if (typeof atRender === 'function') atRender();
   const v = learn.view, b = boardOf('learn');
   setText($('#learnWhere'), b ? `On ${b.name}, on the flight core's telemetry (200 times a second). It asks the flight core for test moves and tells it which model to fly on.` : '');
   $('#useDesc').setAttribute('aria-pressed', String(!v || !v.useLearned)); $('#useLearned').setAttribute('aria-pressed', String(!!(v && v.useLearned)));
   {   // Learned needs something learned first
-    const can = !!(v && (v.haveFit || v.useLearned)), ul = $('#useLearned');
+    const can = !!(v && v.accepted), ul = $('#useLearned');
     if (ul.getAttribute('aria-disabled') !== String(!can)) { ul.setAttribute('aria-disabled', String(!can)); ul.title = can ? 'Fly on what the calibration or a throw learned' : 'Nothing learned yet: calibrate (or throw it) first'; $('#learnedWhy').hidden = can; }
   }
   $('#keepLearn').checked = v ? v.keep : learnPrefs.keep;
@@ -720,7 +722,8 @@ function renderLearn(force) {
     setText($('#calStage'), v.held ? 'Paused until the drone settles…' : `${CAL_STAGE[v.segKind] || 'Starting'}${who ? ': ' + who.name : ''} · ${v.left.toFixed(1)} s left`);
   }
   if (learn.msg) setText($('#learnMsg'), learn.msg);
-  setText($('#learnSmall'), !v ? '' : v.useLearned ? (v.keep ? 'learned · learning' : 'learned') : (v.keep ? 'description · learning' : 'description'));
+  setText($('#learnSmall'), !v ? '' : v.useLearned ? (v.keep ? 'accepted · observing' : 'accepted') : (v.keep ? 'description · observing' : 'description'));
+  setText($('#adaptState'), !v || !v.keep ? '' : `${v.adaptation===2?'Checking an applied update':v.adaptation===1?'Validating a candidate on fresh data':'Waiting for informative flight data'} · ${v.updates} updates, ${v.rollbacks} rollbacks${v.confidence>0?' · fit '+Math.round(v.confidence*100)+'%':''}`);
   if (force || performance.now() - matchT > 400) { matchT = performance.now(); matchCache = matchScores(); }
   const box = $('#matchRows'), sig = busy ? 'busy' : matchCache.map(m => m.c.id + m.c.name).join('|');
   if (box._sig !== sig) {   // rows built once per set of parts, the bars and numbers updated in place
@@ -1093,7 +1096,7 @@ function load() {
   if (s.cfg && Array.isArray(s.cfg.comps) && s.cfg.comps.length) {
     cfg.frame.mass = s.cfg.frame.mass; setFrameShape(s.cfg.frame); cfg.comps = s.cfg.comps; cfg.tuning = tuneFix(s.cfg.tuning); if (s.cfg.computers) cfg.computers = fixComputers(s.tlmV ? s.cfg.computers : computersWithRadio(s.cfg.computers)); uid = Math.max(0, ...cfg.comps.map(c => c.id)) + 1; mode = ['level', 'mixed'].includes(s.mode) ? s.mode : 'tilt';
     sensing = s.sensing === 'truth' ? 'truth' : 'sensors';
-    if (s.keepLearning === false) learnPrefs.keep = false;
+    if (typeof s.keepLearning === 'boolean') learnPrefs.keep = s.keepLearning;
     if (s.holdPulses === false) learnPrefs.holdPulses = false;
     if (isFinite(s.mixShare)) steerMix.share = +s.mixShare;
     if (s.allocPrefs) for (const k of ['allowance', 'efficiency', 'servoMove']) if (isFinite(s.allocPrefs[k])) allocPrefs[k] = +s.allocPrefs[k];

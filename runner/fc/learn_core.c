@@ -20,7 +20,6 @@ LN_IMPORT("sin") double ln_js_sin(double); LN_IMPORT("acos") double ln_js_acos(d
 #define LEARN_MAGIC 0x434C4644u   /* 'DFLC' */
 #define MEM_CAL 4.0f              /* forgetting time while calibrating (at least the whole calibration) [s] */
 #define MEM_FLIGHT 30.0f          /* and in flight */
-#define DITHER 0.02f              /* the little excitation while learning in flight */
 #define THROW_AMP 0.5f            /* pulse throttle */
 #define THROW_DW 4.0f             /* a pulse stops once the drone turns this much faster [rad/s] */
 #define REFINE_BUDGET 50000.0f    /* operations the background lag search may spend per frame */
@@ -60,7 +59,7 @@ int learn_init(learn_state *L, rn_host *H) {
     *slot[i] = rn_host_find(H, names[i]);
     if (*slot[i] < 0 || rn_host_in_size(H, *slot[i]) != in_sz[i] || rn_host_out_size(H, *slot[i]) != out_sz[i]) { SAY("formula %s isn't what the learning expects", names[i]); return -1; }
   }
-  L->keep = 1; L->hold_pulses = 1; L->then_cal = 1;
+  L->keep = 0; L->hold_pulses = 1; L->then_cal = 1;
   L->ok = 1; SAY("learning ready");
   return 0;
 }
@@ -80,7 +79,7 @@ int learn_airframe(learn_state *L, const uint8_t *blob, uint32_t len) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) L->j_meas[j] = 0;
   if (n > LN_IN) { SAY("this airframe has %d inputs; the learning takes %d", n, LN_IN); return -1; }
   L->n = n; L->use_learned = 0; L->cal = 0; L->thr = LN_THR_NONE; L->refining = 0; L->have_fit = 0;
-  reset_learning(L); L->model_dirty = 1;
+  reset_learning(L); memcpy(L->flyB, L->B, sizeof L->B); L->accepted = L->adapt = 0; L->adapt_updates = L->adapt_rollbacks = 0; L->model_dirty = 1;
   SAY("Flying on the airframe description%s.", L->keep ? ", learning in flight" : "");
   return 0;
 }
@@ -110,7 +109,7 @@ int learn_config_load(learn_state *L, const uint8_t *blob, uint32_t len) {
 /* The columns as the flight core flies them: the learned model (frozen while a calibration runs), or the
  * description scaled by the supervisor's effectiveness. */
 static float flown(const learn_state *L, int i, int b, int r) {
-  if (L->use_learned) return (L->fly_frozen ? L->flyB : L->B)[r][L->col0[i] + b];
+  if (L->use_learned) return L->flyB[r][L->col0[i] + b];
   return L->FA.A.mot[i].cols[b][r] * L->m_eff[i];
 }
 static void col_now(const learn_state *L, int i, int dm, float *out) {   /* motor i's effect at the believed angles (dm ≥ 0: its change as chain joint dm turns) */
@@ -169,6 +168,7 @@ static int rls_step(learn_state *L, float memory) {
   pk[k++] = 1; k = put_list(pk, k, coll, L->n, LN_IN); k = put_list(pk, k, mm, L->n, LN_IN); k = put_list(pk, k, phi, L->n, LN_IN); k = put_list(pk, k, mv, L->n, LN_IN);
   if (call(L, L->f_rls, res)) return -1;
   for (int r = 0; r < 6; r++) for (int j = 0; j < L->n; j++) L->B[r][j] = res[r * (1 + LN_IN) + 1 + j];
+  for (int r = 0; r < 3; r++) for (int j = 0; j < L->n; j++) L->transient[r][j] = res[6 * (1 + LN_IN) + 2 + r * (1 + LN_IN) + j];
   return 0;
 }
 /* The identification's memory fields e, x, y (for scoring on fresh data). */
@@ -179,15 +179,96 @@ static int rls_field(learn_state *L, const char *name, float *out, int want) {
   memcpy(out, p + 1, (size_t)len * 4); return len;
 }
 
+/* Conservative adaptation: no artificial excitation. A fixed, bounded candidate competes against the
+ * flown model on the NEXT three seconds of data. Require independently excited inputs and good prediction.
+ * Two seconds of probation compare the applied model with its predecessor; degradation rolls it back. */
+static void adapt_reset(learn_state *L) {
+  L->adapt = 0; L->adapt_t = 0; L->adapt_n = 0;
+  memset(L->gram, 0, sizeof L->gram); memset(L->adapt_e, 0, sizeof L->adapt_e); memset(L->adapt_y, 0, sizeof L->adapt_y);
+}
+static void adapt_rollback(learn_state *L) {
+  memcpy(L->flyB, L->previous, sizeof L->flyB); L->use_learned = L->previous_use;
+  L->accepted = L->previous_accepted;
+  L->model_dirty = 1; L->adapt_rollbacks++; adapt_reset(L);
+  SAY("Adaptation rolled back: the previous model performed better. Collecting fresh flight data.");
+}
+static int excited(const learn_state *L) {
+  float chol[LN_IN][LN_IN] = { { 0 } };
+  for (int a = 0; a < L->n; a++) {
+    if (L->gram[a][a] < 0.0001f * L->adapt_n) return 0;
+    for (int b = 0; b <= a; b++) {
+      float v = L->gram[a][b] / sqrtf(L->gram[a][a] * L->gram[b][b]);
+      for (int k = 0; k < b; k++) v -= chol[a][k] * chol[b][k];
+      if (a == b) { if (v < 0.02f) return 0; chol[a][b] = sqrtf(v); }
+      else chol[a][b] = v / chol[b][b];
+    }
+  }
+  return 1;
+}
+static void adapt_step(learn_state *L) {
+  int safe = L->state == FC_ARMED && tilt_of(L) < 0.35f && nrm3(L->w) < 2 && fabsf(L->vz) < 1.5f;
+  for (int i = 0; i < L->FA.A.n_motors; i++) if (L->u[i] > 0.9f || !L->FA.m_on[i] || L->FA.m_cap[i] < 0.99f) safe = 0;
+  if (!safe) { if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L); return; }
+  if (!L->adapt) {
+    adapt_reset(L); L->adapt = 1;
+    memcpy(L->nuisance, L->transient, sizeof L->nuisance);
+    /* Limit each motor's force and rotation column groups to a 5% move, preserving the joint basis. */
+    for (int i = 0; i < L->FA.A.n_motors; i++) {
+      float blend = 1;
+      for (int h = 0; h < 2; h++) {
+        float base = 0, diff = 0;
+        for (int b = 0; b < L->nb[i]; b++) for (int r = h * 3; r < h * 3 + 3; r++) {
+          int j = L->col0[i] + b; float old = L->use_learned ? L->flyB[r][j] : L->prior[r][j];
+          float d = L->B[r][j] - old; base += old * old; diff += d * d;
+        }
+        if (diff > 0) blend = minf(blend, 0.05f * sqrtf(base / diff));
+      }
+      for (int b = 0; b < L->nb[i]; b++) for (int r = 0; r < 6; r++) {
+        int j = L->col0[i] + b; float old = L->use_learned ? L->flyB[r][j] : L->prior[r][j];
+        L->probe[r][j] = old + blend * (L->B[r][j] - old);
+      }
+    }
+  }
+  float x[2 * LN_IN], y[6];
+  if (rls_field(L, "x", x, 2 * LN_IN) != 2 * L->n || rls_field(L, "y", y, 6) != 6) return;
+  L->adapt_t += L->dt; L->adapt_n++;
+  for (int a = 0; a < L->n; a++) for (int b = 0; b < L->n; b++) L->gram[a][b] += x[a] * x[b];
+  for (int r = 0; r < 6; r++) {
+    float next = 0, old = 0;
+    for (int j = 0; j < L->n; j++) {
+      next += (L->adapt == 2 ? L->flyB : L->probe)[r][j] * x[j];
+      old += (L->adapt == 2 ? L->previous[r][j] : L->use_learned ? L->flyB[r][j] : L->prior[r][j]) * x[j];
+      if (r >= 3) { float nuisance = L->nuisance[r - 3][j] * x[L->n + j]; next += nuisance; old += nuisance; }
+    }
+    int h = r / 3; L->adapt_e[0][h] += (y[r] - next) * (y[r] - next); L->adapt_e[1][h] += (y[r] - old) * (y[r] - old); L->adapt_y[h] += y[r] * y[r];
+  }
+  if (L->adapt_t < (L->adapt == 2 ? 2 : 3)) return;
+  int signal = excited(L); float score = 0; int good = signal;
+  if (L->adapt == 2 && !signal) { adapt_rollback(L); return; }
+  for (int h = 0; h < 2; h++) {
+    float fit = L->adapt_y[h] > 1e-6 ? 1 - (float)(L->adapt_e[0][h] / L->adapt_y[h]) : 0;
+    score += clampf(fit, 0, 1) * 0.5f;
+    if (fit < (h ? 0.65f : 0.6f) || L->adapt_e[0][h] > 0.9 * L->adapt_e[1][h]) good = 0;
+    if (L->adapt == 2 && signal && L->adapt_e[0][h] > 1.25 * L->adapt_e[1][h] + 1e-5) { adapt_rollback(L); return; }
+  }
+  L->adapt_conf = signal ? score : 0;
+  if (L->adapt == 1 && good) {
+    memcpy(L->previous, L->use_learned ? L->flyB : L->prior, sizeof L->previous); L->previous_use = L->use_learned; L->previous_accepted = L->accepted;
+    memcpy(L->flyB, L->probe, sizeof L->flyB); L->accepted = L->use_learned = 1; L->model_dirty = 1; L->adapt_updates++;
+    adapt_reset(L); L->adapt = 2; SAY("Validated a bounded model update on fresh flight data; checking it in flight.");
+  } else { if (L->adapt == 2) SAY("Model update verified. Observing ordinary flight without test pulses."); adapt_reset(L); }
+}
+
 /* ── calibration ── */
 static void add_seg(learn_state *L, int kind, int who, float amp, float dur) {
   if (L->nseg >= LN_SEGS) return;
   ln_seg *s = &L->seg[L->nseg++]; s->kind = kind; s->who = who; s->amp = amp; s->dur = dur; s->after = 0;
 }
 static void start_calibration(learn_state *L, int from_throw) {
-  if (L->use_learned) { memcpy(L->flyB, L->B, sizeof L->flyB); L->fly_frozen = 1; } else L->fly_frozen = 0;   /* keep flying on this while the test runs */
+  if (L->adapt == 2) adapt_rollback(L);
+  adapt_reset(L); L->fly_frozen = L->use_learned;   /* keep the accepted model while the test runs */
   /* after a throw there is no description to fall back on: start from, and compete against, the throw model */
-  if (from_throw && L->use_learned) { memcpy(L->prior, L->B, sizeof L->prior); L->prior_desc = 0; rn_host_forget(L->H, L->f_rls); }
+  if (L->use_learned) { memcpy(L->prior, L->flyB, sizeof L->prior); memcpy(L->B, L->flyB, sizeof L->B); L->prior_desc = 0; rn_host_forget(L->H, L->f_rls); }
   else reset_learning(L);
   const fc_airframe *A = &L->FA.A;
   L->nseg = 0; L->nwin = 0; L->win_cur = -1;
@@ -218,15 +299,15 @@ static void finish_calibration(learn_state *L) {
   L->have_fit = 1;
   int better = L->fit_rot + 0.5f * L->fit_force > L->desc_rot + 0.5f * L->desc_force + 0.02f;
   int good = L->fit_force > 0.5f && L->fit_rot > 0.6f && better;
-  const char *base = L->from_throw ? "the model from the throw" : "the airframe description";
-  if (good) { L->use_learned = 1; L->keep = 1; L->hold_servos = 0; }
-  else if (L->from_throw) { memcpy(L->B, L->prior, sizeof L->B); rn_host_forget(L->H, L->f_rls); }   /* keep the throw model */
+  const char *base = !L->prior_desc ? "the accepted model" : "the airframe description";
+  if (good) { memcpy(L->flyB, L->probe, sizeof L->flyB); L->accepted = L->use_learned = 1; L->hold_servos = 0; }
+  else if (L->use_learned) { memcpy(L->B, L->flyB, sizeof L->B); rn_host_forget(L->H, L->f_rls); }
   else L->use_learned = 0;
   end_calibration(L);
-  if (good) SAY("Calibrated. On fresh test moves the learned model explains %d%% of the rotation and %d%% of the force (%s: %d%% and %d%%). Flying on the learned model and still learning.",
+  if (good) SAY("Calibrated. On fresh test moves the learned model explains %d%% of the rotation and %d%% of the force (%s: %d%% and %d%%). Flying on the accepted model.",
     pc(L->fit_rot), pc(L->fit_force), base, pc(L->desc_rot), pc(L->desc_force));
   else SAY("Calibration finished. The learned model explains %d%% of the rotation and %d%% of the force, but %s does %s (%d%%, %d%%), so it keeps flying on %s.",
-    pc(L->fit_rot), pc(L->fit_force), base, better ? "nearly as well" : "as well or better", pc(L->desc_rot), pc(L->desc_force), L->from_throw ? "that" : "the description");
+    pc(L->fit_rot), pc(L->fit_force), base, better ? "nearly as well" : "as well or better", pc(L->desc_rot), pc(L->desc_force), base);
 }
 static void fit_motors(learn_state *L) {
   if (!L->hold_pulses) return;
@@ -311,7 +392,10 @@ static void calibration_tick(learn_state *L, float *e) {
   if (L->cur >= 0 && L->cur != si && L->seg[L->cur].after) { if (L->seg[L->cur].after == 1) fit_motors(L); else fit_servos(L); }   /* a test stage just ended: fit it */
   if (si < 0) { finish_calibration(L); e[0] = 0; return; }
   const ln_seg *s = &L->seg[si];
-  if (L->cur != si) { L->cur = si; L->win_cur = -1; L->gate = (s->kind == 1 || s->kind == 2) ? 0 : -1; }
+  if (L->cur != si) {
+    L->cur = si; L->win_cur = -1; L->gate = (s->kind == 1 || s->kind == 2) ? 0 : -1;
+    if (s->kind == 5) { memcpy(L->probe, L->B, sizeof L->probe); memcpy(L->nuisance, L->transient, sizeof L->nuisance); }
+  }
   if (L->gate >= 0) {                                                /* wait (closed loop) until the drone is calm, at most 1.5 s */
     int calm = nrm3(L->w) < 0.25f && tilt < 0.14f;
     if (!calm && L->gate < 1.5f) { L->gate += L->dt; L->cal_t -= L->dt; L->waiting = 1; e[0] = 0; return; }
@@ -321,12 +405,16 @@ static void calibration_tick(learn_state *L, float *e) {
   float tin = L->cal_t - s->t0, until = seg_now(L, s, tin, e);
   if (until > 0 && tin < until) record(L, s, si);
   if (s->kind == 5 && L->updated) {                                  /* score the learned model and the description on the same fresh data */
-    float ee[6], x[2 * LN_IN], y[8];
-    if (rls_field(L, "e", ee, 6) == 6 && rls_field(L, "x", x, 2 * LN_IN) >= L->n && rls_field(L, "y", y, 6) == 6) {
+    float x[2 * LN_IN], y[8];
+    if (rls_field(L, "x", x, 2 * LN_IN) == 2 * L->n && rls_field(L, "y", y, 6) == 6) {
       L->sums_n++;
       for (int i = 0; i < 6; i++) {
-        float yd = 0; for (int j = 0; j < L->n; j++) yd += L->prior[i][j] * x[j];
-        L->sums_e[i] += ee[i] * ee[i]; L->sums_d[i] += (y[i] - yd) * (y[i] - yd); L->sums_y[i] += y[i]; L->sums_y2[i] += y[i] * y[i];
+        float yd = 0, yn = 0;
+        for (int j = 0; j < L->n; j++) {
+          yd += L->prior[i][j] * x[j]; yn += L->probe[i][j] * x[j];
+          if (i >= 3) { float v = L->nuisance[i - 3][j] * x[L->n + j]; yd += v; yn += v; }
+        }
+        L->sums_e[i] += (y[i] - yn) * (y[i] - yn); L->sums_d[i] += (y[i] - yd) * (y[i] - yd); L->sums_y[i] += y[i]; L->sums_y2[i] += y[i] * y[i];
       }
     }
   }
@@ -433,7 +521,7 @@ static int adopt_throw(learn_state *L) {
     }
   }
   memcpy(L->B, B, sizeof B); memcpy(L->prior, B, sizeof B); L->prior_desc = 0; rn_host_forget(L->H, L->f_rls);
-  L->use_learned = 1; L->keep = 1; for (int k = 0; k < 3; k++) L->imu_r[k] = res_at(k);
+  memcpy(L->flyB, L->B, sizeof L->flyB); L->accepted = L->use_learned = 1; for (int k = 0; k < 3; k++) L->imu_r[k] = res_at(k);
   L->model_dirty = 1;
   return partial;
 }
@@ -535,7 +623,10 @@ void learn_ltel(learn_state *L, const float *p, int n) {
   L->nsub = (int)p[base]; L->sub = p + base + 1;
   if (L->nsub < 0 || L->nsub > FC_SUB || n != base + 1 + L->nsub * (7 + nm)) return;
   for (int k = 0; k < n; k++) if (!fin(p[k])) return;
-  double t = fc_ltel_unwrap(L->t_last, L->got, p[0]); L->dt = L->got ? (float)(t - L->t_last) : 0.005f; L->t_last = t; L->got = 1; L->t = (float)t;
+  double t = fc_ltel_unwrap(L->t_last, L->got, p[0]); L->dt = L->got ? (float)(t - L->t_last) : 0.005f;
+  int cadence_ok = L->dt > 0 && L->dt <= 0.025f;
+  L->t_last = t; L->got = 1; L->t = (float)t;
+  if (!cadence_ok) { if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L); rn_host_forget(L->H, L->f_rls); }
   if (!(L->dt > 0) || L->dt > 0.05f) L->dt = 0.005f;
   L->state = (int)p[1]; L->flags = (int)p[2];
   float qn = 0; for (int k = 0; k < 4; k++) { L->q[k] = p[3 + k]; qn += L->q[k] * L->q[k]; }
@@ -557,6 +648,7 @@ void learn_ltel(learn_state *L, const float *p, int n) {
   float *e = L->exc; for (int k = 0; k < 8 + nm + nj; k++) e[k] = 0;
   e[4] = (float)nm; e[5] = (float)nj;
   int flying = L->flags & 1, crashed = L->state == FC_CRASHED;
+  if (!flying) { if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L); }
   if (crashed && L->cal) { end_calibration(L); SAY("Calibration stopped: the drone crashed."); }
   if (crashed && L->thr) { L->thr = LN_THR_NONE; SAY_MORE(" It crashed."); }
   if (L->thr == LN_THR_HAND || L->thr == LN_THR_FREE || L->thr == LN_THR_EXCITE) {   /* the throw runs open loop, with its own identification */
@@ -565,15 +657,12 @@ void learn_ltel(learn_state *L, const float *p, int n) {
     refine_step(L);
     if (L->thr == LN_THR_RECOVER) { L->thr_t += L->dt; recover_check(L); }
     L->updated = 0;
-    if ((L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* the in-flight learning, on every frame (200 Hz) */
+    if (cadence_ok && (L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* valid telemetry only (200 Hz) */
       float mem = L->cal ? maxf(MEM_CAL, L->total) : MEM_FLIGHT;
       if (!rls_step(L, mem)) L->updated = 1;
     }
-    if (L->cal && flying) calibration_tick(L, e);
-    else if (L->keep && flying && !L->cal && L->thr == LN_THR_NONE) {   /* a little excitation, so there's always something to learn from */
-      for (int i = 0; i < nm; i++) { int c = L->col0[i]; e[6 + i] = DITHER * sinf(2 * PI_ * (2.7f + 1.9f * c) * L->t + c); }
-      e[0] = 1;
-    }
+    if (L->cal && flying && cadence_ok) calibration_tick(L, e);
+    else if (L->keep && flying && L->updated && L->thr == LN_THR_NONE) adapt_step(L);
   }
   if (e[0] > 0) { L->exc_n = 8 + nm + nj; L->exc_was = 1; }
   else if (L->exc_was) { e[0] = 0; L->exc_n = 8 + nm + nj; L->exc_was = 0; }   /* one last frame: excitation over */
@@ -587,7 +676,7 @@ void learn_set(learn_state *L, const float *p, int n) {
     float s = eff / L->m_eff[i]; L->m_eff[i] = eff;
     for (int r = 0; r < 6; r++) for (int k = 0; k < L->nb[i]; k++) { int j = L->col0[i] + k; L->B[r][j] *= s; L->flyB[r][j] *= s; L->prior[r][j] *= s; }
     /* the learning goes on from the rescaled table (its covariance starts again) */
-    L->prior_desc = 0; rn_host_forget(L->H, L->f_rls); if (L->use_learned) L->model_dirty = 1;
+    L->prior_desc = 0; adapt_reset(L); rn_host_forget(L->H, L->f_rls); if (L->use_learned) L->model_dirty = 1;
   }
   fc_set(&L->FA, p, n);
 }
@@ -597,10 +686,9 @@ int learn_exc_frame(learn_state *L, float *out) { if (!L->exc_n) return 0; memcp
 int learn_model_frame(learn_state *L, float *out) {
   const fc_airframe *A = &L->FA.A;
   if (!A->n_motors) return 0;
-  int periodic = L->use_learned && !L->fly_frozen && (L->keep || L->cal) && L->t - L->model_t > 0.2;
-  if (!L->model_dirty && !periodic) return 0;
+  if (!L->model_dirty) return 0;
   L->model_dirty = 0; L->model_t = L->t;
-  int k = 0; float (*M)[LN_IN] = L->fly_frozen ? L->flyB : L->B;
+  int k = 0; float (*M)[LN_IN] = L->flyB;
   out[k++] = (float)L->use_learned; out[k++] = (float)L->hold_servos; out[k++] = (float)A->n_motors; out[k++] = (float)A->n_joints;
   for (int i = 0; i < A->n_motors; i++) { out[k++] = (float)L->nb[i]; for (int b = 0; b < L->nb[i]; b++) for (int r = 0; r < 6; r++) out[k++] = M[r][L->col0[i] + b]; }
   for (int j = 0; j < A->n_joints; j++) { out[k++] = L->j_meas[j] ? L->j_rate[j] : 0; out[k++] = L->j_meas[j] ? L->j_lag[j] : 0; }
@@ -617,11 +705,25 @@ int learn_command(learn_state *L, int cmd) {
       if (L->thr && L->thr != LN_THR_RECOVER) { SAY("It can calibrate once it has caught itself."); return -1; }
       if (!flying) { SAY("It calibrates while hovering: take off first."); return -1; }
       start_calibration(L, 0); return 0;
-    case LN_CMD_STOP: if (L->cal) { end_calibration(L); SAY("Calibration stopped. The model keeps what it learned so far."); } return 0;
-    case LN_CMD_USE_DESC: if (L->use_learned) { L->use_learned = 0; L->model_dirty = 1; } return 0;
-    case LN_CMD_USE_LEARNED: if (!L->use_learned) { L->use_learned = 1; L->model_dirty = 1; } return 0;
-    case LN_CMD_KEEP_ON: L->keep = 1; return 0;
-    case LN_CMD_KEEP_OFF: L->keep = 0; return 0;
+    case LN_CMD_STOP: if (L->cal) { end_calibration(L); SAY("Calibration stopped. Keeping the accepted flight model."); } return 0;
+    case LN_CMD_USE_DESC:
+      if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L);
+      if (L->cal) end_calibration(L);
+      if (L->use_learned) { L->use_learned = 0; L->model_dirty = 1; reset_learning(L); }
+      return 0;
+    case LN_CMD_USE_LEARNED:
+      if (!L->accepted) { SAY("Calibrate and validate a model first."); return -1; }
+      if (L->cal) end_calibration(L);
+      adapt_reset(L);
+      if (!L->use_learned) { L->use_learned = 1; L->model_dirty = 1; memcpy(L->prior, L->flyB, sizeof L->prior); L->prior_desc = 0; rn_host_forget(L->H, L->f_rls); }
+      return 0;
+    case LN_CMD_KEEP_ON:
+      if (!L->keep && !L->cal) {
+        if (L->use_learned) { memcpy(L->prior, L->flyB, sizeof L->prior); L->prior_desc = 0; }
+        memcpy(L->B, L->prior, sizeof L->B); rn_host_forget(L->H, L->f_rls); adapt_reset(L);
+      }
+      L->keep = 1; return 0;
+    case LN_CMD_KEEP_OFF: if (L->adapt == 2) adapt_rollback(L); adapt_reset(L); L->keep = 0; return 0;
     case LN_CMD_HOLD_PULSES_ON: L->hold_pulses = 1; return 0;
     case LN_CMD_HOLD_PULSES_OFF: L->hold_pulses = 0; return 0;
     case LN_CMD_THEN_CAL_ON: L->then_cal = 1; return 0;
@@ -629,6 +731,7 @@ int learn_command(learn_state *L, int cmd) {
     case LN_CMD_THROW:
       if (L->n > LN_THROW_IN) { SAY("The throw start identifies at most %d inputs; this airframe has %d.", LN_THROW_IN, L->n); return -1; }
       if (L->cal) end_calibration(L);
+      adapt_reset(L); L->accepted = 0;
       L->tplan = learn_throw_plan_time(L, 0); L->thr = LN_THR_HAND; L->pi = 0; L->step = 0; L->cut = -1; L->low_t = 0; L->thr_t = 0; L->refining = 0;
       L->use_learned = 0; L->hold_servos = 0; L->model_dirty = 1; L->zmax = L->zmin = L->C.hand_h;
       rn_host_forget(L->H, L->f_thr);
@@ -657,5 +760,6 @@ int learn_status(const learn_state *L, float *o) {
   for (int i = 0; i < A->n_motors; i++) { o[k++] = (float)L->m_meas[i]; o[k++] = L->m_tau[i]; o[k++] = L->m_curve[i]; o[k++] = L->m_fit[i]; }
   for (int j = 0; j < A->n_joints; j++) { o[k++] = (float)L->j_meas[j]; o[k++] = L->j_rate[j]; o[k++] = L->j_lag[j]; o[k++] = L->j_fit[j]; }
   for (int r = 0; r < 6; r++) for (int j = 0; j < L->n; j++) o[k++] = L->B[r][j];
+  o[k++] = (float)L->accepted; o[k++] = (float)L->adapt; o[k++] = L->adapt_conf; o[k++] = (float)L->adapt_updates; o[k++] = (float)L->adapt_rollbacks;
   return k;
 }

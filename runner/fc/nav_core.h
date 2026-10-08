@@ -60,6 +60,7 @@ typedef struct {
   nav_config C; int have_config;
   float home[3]; int have_home, home_from_fix;
   float iPos[3];
+  int test_axis; float test_offset, test_left;
   float p[3], v[3];
   float pa[3]; int have_pa;              /* the estimate as it is (not from home): in the GPS frame once GPS is heard (fleet.h) */
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
@@ -83,6 +84,8 @@ int nav_init(nav_state *N, rn_host *H);
  * a moment, and a gap that lasts ends in its failsafe); or −1 if a formula failed (then out->fly is 0: the caller
  * stops sending commands, and the flight core's failsafe lands it). */
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out);
+/* Bounded reference excitation for measured position tuning; expires after 100 ms without a refresh. */
+int nav_test_target(nav_state *N, int axis, float offset);
 /* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. In the
  * air the mode only steps up; on the ground it is as sent. */
 void nav_set(nav_state *N, const float *p, int n);

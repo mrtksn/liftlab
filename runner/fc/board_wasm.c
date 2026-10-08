@@ -167,6 +167,7 @@ EXPORT("fc_exc") int fc_exc_(int n) { return fc_exc(&F, fr, n); }
 EXPORT("fc_model") int fc_model_(int n) { return fc_model(&F, fr, n); }
 EXPORT("fc_set") int fc_set_(int n) { return fc_set(&F, fr, n); }
 EXPORT("fc_ltel") int fc_ltel_(void) { return fc_ltel(&F, fr); }
+EXPORT("fc_tuning_sample") int fc_tuning_sample_(void) { return fc_tuning_sample(&F, fr); }
 EXPORT("nav_set") void nav_set_(int n) { nav_set(&N, fr, n); }
 
 /* ── the telemetry task and the pilot's radio ── */
@@ -458,6 +459,7 @@ EXPORT("pk_msg_ptr") char *pk_msg_ptr(void) { return PK.msg; }
 
 static int nav_run(nav_sp *sp_radio);
 EXPORT("nav_tick") int nav_tick(void) { return nav_run(0); }
+EXPORT("nav_test_target") int nav_test_target_(int axis, float offset) { return nav_test_target(&N, axis, offset); }
 /* A navigation step on the radio's set point; nio's set point is not used. Then nio's outputs, and after them: the
  * target (from home) x y z, heading, armed by the radio, the radio link up, a new message (rc_msg_ptr). */
 EXPORT("nav_tick_radio") int nav_tick_radio(double t) {

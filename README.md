@@ -118,15 +118,17 @@ The controller commands **throttle fractions (0–1)**, not Newtons, and doesn't
 5. **Excite everything together.**
 6. **Validate** on a fresh signal.
 
-It then scores the learned model and the description on the same validation data, and switches to the learned model only if it predicts better. On the stock presets the description is already near-perfect and is kept. With hidden masses, weak motors or unknown parts, the learned model wins and the drone flies noticeably better.
+It freezes a candidate and scores it against the model already flying on fresh validation data. It switches only if the candidate predicts force and rotation sufficiently well and improves on the baseline. Stopping the test keeps the accepted flight model.
 
-**Keep learning in flight** continues the identification with 30 s of memory and a 2% dither, to track slow changes such as the battery draining. Run Calibrate again after big changes.
+**Adapt from ordinary flight** is off by default. It observes with 30 s of memory without adding test pulses. A candidate can change each motor's model by at most 5%; independent input motion and fresh prediction checks must support it before it reaches the controller. Two seconds of probation compare it with the previous model and roll it back if prediction worsens, signal disappears or motion becomes unsafe. Calibration preserves this preference. Run Calibrate again after big changes.
 
-The learning runs at 200 Hz, on each telemetry frame. Between frames the flight core averages what it sends (the inputs, accelerometer, gyro and motor commands), which is the learning's anti-aliasing filter. The learned model reaches the flight core 5 times a second while it learns in flight.
+The learning runs at 200 Hz, on each telemetry frame. Between frames the flight core averages what it sends (the inputs, accelerometer, gyro and motor commands), which is the learning's anti-aliasing filter. Only accepted model changes reach the flight core; the live estimator does not stream into flight.
 
 While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
 
-On the stock presets in the simulator, a calibration from the description takes 11 to 25 s and ends with the learned model explaining 91 to 99% of the rotation and 69 to 98% of the force on fresh test moves, against 45 to 95% and 53 to 94% for the description (the tilt-rotor quad gains the most); it then flies on the learned model. The main-lifter layout is the exception: its hover already wanders in a slowly growing circle without any learning, and the motor tests push it over.
+**Measured autotune** in Tune adds PID tuning after calibration. Small frequency sweeps measure attitude response from synchronized command/gyro telemetry, then propose response, damping and integral settings. Apply & verify flies provisional gains and repeats the tests before saving one undoable edit. Verified attitude tuning unlocks horizontal position-hold tuning. Initial support is the simulator, fixed motors, tilt mode and the standard control formulas; shared position gains are tested horizontally, not independently on the vertical axis. Details and checks: [Airframe learning and measured tuning](docs/learning-tuning.md).
+
+Earlier simulator measurements, before the covariance and validation changes, found calibration times of 11–25 s on stock presets, with 91–99% rotation and 69–98% force fits against 45–95% and 53–94% for the description. Those figures need remeasurement under the current validation. The main-lifter layout was an exception: its hover already wandered in a slowly growing circle without learning, and the motor tests pushed it over.
 
 ### Actuator response
 
@@ -240,7 +242,7 @@ Measured on the quad over 20 s of hover, with the firmware flying (angle mode, n
 | Defaults (turbulence 0.3, differences 1) | 2.9°/s | 1.0 ± 0.4° | 7 m |
 | Turbulence 1 | 8°/s | 2.0 ± 1.0° | 16 m |
 
-The simulator's own controller looks shakier: about 6°/s even in still air. That's not the world. It holds position on noisy GPS, and with **Keep learning in flight** on it also adds a small deliberate throttle wiggle (2%, a few Hz) so the learner always has something to learn from. The firmware does neither.
+An earlier simulator-controller measurement showed about 6°/s even in still air, while holding position on noisy GPS and using the old learning's 2% throttle dither. Ordinary-flight adaptation now injects no dither. These historical hover numbers have not been remeasured with the new learning and tuning workflow.
 
 ## Servo joints and rods
 
@@ -913,6 +915,8 @@ Memory on that board: the built-in program's arena (65 KB) and one slot for prog
 The tuning has its own checks:
 - **`tools/test_tuning.js`:** the default tuning compiles to the same program as the formulas with their numbers written in, a new tuning changes only constants, missing or misspelt constants are refused by name, and the gains map onto response, damping and integral and back; the step prediction tells a settled loop from one that won't settle.
 - **`tools/test_tuning_browser.cjs`:** in the page, a slider moved in flight reaches every flight computer through its loading steps while the drone keeps flying, a tuning predicted unstable flips the simulated drone, and undo, reset, design files, reload and each drone keeping its own tuning work.
+- **`tools/test_learning.js` and `tools/test_learning_native.c`:** independent full-covariance reference, compiled parity, measured-response fitting, fresh-data acceptance, weak/correlated input rejection, bounded updates and probation rollback.
+- **`tools/test_learning_browser.cjs`:** calibration and measured attitude/position tuning through actual simulated flight, provisional gains, verification, undo, cancellation, board fallback and per-drone ownership.
 
 ## The flight controller firmware
 

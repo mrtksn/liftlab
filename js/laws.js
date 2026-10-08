@@ -462,12 +462,12 @@ function identifyEffectiveness(st, u, f, w, r, dt, init, memory, lags, mot) {
   st.y = y; st.x = x;
   st.th = st.th.map((row, i) => row.map((v, j) => v + K[j] * st.e[i]));
   let trace = 0;
-  for (let a = 0; a < n; a++) {
+  for (let a = 0; a < m; a++) {
     const row = P[a], ka = K[a];
-    for (let b = 0; b < n; b++) row[b] = (row[b] - ka * Px[b]) / lambda;
+    for (let b = 0; b < m; b++) row[b] = (row[b] - ka * Px[b]) / lambda;
     trace += row[a];
   }
-  if (trace > pMax * n) for (const row of P) for (let b = 0; b < n; b++) row[b] *= pMax * n / trace;   // don't blow up without excitation
+  if (trace > pMax * m) for (const row of P) for (let b = 0; b < m; b++) row[b] *= pMax * m / trace;   // don't blow up without excitation
   return out();
 }
 
@@ -1345,7 +1345,7 @@ const LAW_DEFS = [
 
   { key: 'identifyEffectiveness', group: 'learn', fn: identifyEffectiveness, title: 'Effectiveness identification',
     math: [`Δ[${V('f̃')} − ${V('ω̇')}×${V('r')} − ${V('ω')}×(${V('ω')}×${V('r')}); ${V('ω̃̇')}] ≈ <i>B̂</i> Δ${V('u')} + [0; <i>B̂</i><sub>2</sub>] Δ<i>ẋ</i>, &nbsp;both sides band-passed 0.3–12 Hz, <i>x</i> = √thrust (rotor speed)`, `<i>K</i> = <i>P</i>${V('x')} / (λ + ${V('x')}<sup>T</sup><i>P</i>${V('x')}), &nbsp;<i>B̂</i> += ${V('e')}<i>K</i><sup>T</sup>, &nbsp;<i>P</i> = (<i>P</i> − <i>K</i>${V('x')}<sup>T</sup><i>P</i>)/λ`],
-    doc: 'Recursive least squares with forgetting (about 4 s of memory). A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on, so its effect at any joint angles is a fixed sum of learned columns (3 for one joint, 9 for two). It learns, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. Runs during calibration and, if you leave learning on, all through the flight.',
+    doc: 'Recursive least squares with forgetting: short memory during calibration, 30 s during optional ordinary-flight adaptation. A motor on servo joints is several inputs: its thrust times each product of (1, cos θ, sin θ) over the joints it sits on, so its effect at any joint angles is a fixed sum of learned columns (3 for one joint, 9 for two). It estimates, straight from the accelerometer and gyro, how much acceleration and angular acceleration each actuator input produces. That covers mass, inertia, prop thrust, rotor wakes and battery sag without being told any of them. It learns from changes, so steady offsets like drag can\'t leak in, and it removes the accelerometer\'s lever-arm swing using the IMU position the controller knows. The learning task validates frozen candidates before changing the accepted flight model; optional adaptation adds no test pulses.',
     args: [['st', 'identification state'], ['u', 'inputs: thrust fractions, times (1, cos θ, sin θ) for each joint a motor sits on'], ['f', 'accelerometer, body [m/s²]'], ['w', 'gyro, body [rad/s]'], ['r', 'IMU position from the hub [m]'], ['dt', 'control period [s]'], ['init', 'starting guess, 6 rows'], ['memory', 'forgetting time [s]: short while calibrating, long in flight'], ['lags', 'each input\'s motor lag [s], learned by the actuator tests'], ['mot', '{ v, phi, m }: per input, its motor\'s thrust command, basis factor and motor number']],
     returns: '{ B: 6 rows × inputs; B2: 3 rows × inputs (rotation from rotors speeding up) }', shape: { B: 'rows' },
     sample: () => [{}, [0.5, 0.5], [0, 0, 9.81], [0, 0, 0], [0, 0, 0.01], 0.001, [[0, 0], [0, 0], [10, 10], [100, -100], [0, 0], [1, -1]], 4, [0.03, 0.03], { v: [0.5, 0.5], phi: [1, 1], m: [0, 1] }] },

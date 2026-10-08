@@ -14,6 +14,7 @@ const TUNE_LOOPS = [
 const tuneUi = { loops: new Map(), raw: [], refs: [], open: new Set(['rp']), defCache: new Map() };   // open: which loops are unfolded (on any drone)
 
 function setTuning(t, key) {
+  if (typeof atBusy === 'function' && (atBusy() || brt.autotune?.phase === 'review')) atStop('Manual tuning changed; test stopped.');
   if (tuneSame(t, tuneOf())) return;
   cfg.tuning = tuneFix(t); undoKey = 'tune:' + key;   // (a slider drag is one undo step)
   save(); rnRestage(250); refreshTuning();
@@ -101,6 +102,7 @@ function tuneChart(L) {
 
 // Everything on the section from the selected drone's tuning (fields, summaries, charts, notes).
 function refreshTuning() {
+  if (typeof atRender === 'function') atRender();
   if (!tuneUi.loops.size) return;
   const t = tuneOf(), lag = tuneMotorLag(), readers = new Set(tuneReaders()), navOn = typeof boardOf === 'function' && !!boardOf('nav');
   for (const r of tuneUi.refs) r();

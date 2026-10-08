@@ -173,7 +173,15 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   return 0;
 }
 
+int nav_test_target(nav_state *N, int axis, float offset) {
+  if (axis < 0 || axis > 2 || !fin(offset)) return -1;
+  N->test_axis = axis; N->test_offset = clampf(offset, -0.2f, 0.2f); N->test_left = 0.1f; return 0;
+}
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out) {
+  nav_sp test = *sp;
+  if (dt > 0 && fin(dt)) N->test_left = N->test_left > dt ? N->test_left - dt : 0;
+  if (N->test_left > 0 && !N->sup_mode && !N->rc_rth && sp->fly) test.target[N->test_axis] += N->test_offset;
+  sp = &test;
   memset(out, 0, sizeof *out);
   out->heading = sp->heading;
   if (!N->ok || !N->have_config) return 0;

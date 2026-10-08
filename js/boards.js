@@ -210,11 +210,13 @@ function f32Blob(magic, vals) {
 }
 // (Re)start every board: at each reset, as if powered on with the program, the airframe and the configs.
 function boardsStart() {
+  if (typeof atStop === 'function') atStop('Flight reset; measure again before applying a recommendation.');
+  if (brt.autotune) { brt.autotune.phase = 'stopped'; brt.autotune.attVerified = null; }
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
-  brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0;
+  brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
@@ -277,7 +279,7 @@ function groundStart() {
   else if (e) brt.gndErr = `${G.name}: ${cstr(g, g.gnd_why_ptr(), 96)}`;   // (it still sends the raw sticks)
   brt.gnd = g;
 }
-let learnPrefs = { keep: true, holdPulses: true };
+let learnPrefs = { keep: false, holdPulses: true };
 // What a board's program is made of: its formulas, and the tuning when one of them reads it.
 const boardSrcKey = (tasks, srcs) => { const ks = rnTaskFormulas(tasks); return ks.map(k => srcs[k]).join('\u0000') + (ks.some(k => rnReadsTune(srcs[k])) ? '\u0001' + rnTuneKey() : ''); };
 // A formula edited in flight (or a new tuning): every board whose tasks use it stages its new program through its own loading steps.
@@ -371,12 +373,17 @@ function deliverFrames() {
     const w = brt.inst.get(m.to.id); if (!w) continue;
     const n = frIn(w, m.data);
     if (m.kind === 'exc') w.fc_exc(n);
+    else if (m.kind === 'tunealpha') { if (brt.autotune) brt.autotune.alpha = m.data; }
+    else if (m.kind === 'navexc') w.nav_test_target(m.data[0], m.data[1]);
     else if (m.kind === 'tlm') w.tlm_unpack(n, brt.t);
     else if (m.kind === 'rc') w.rc_unpack(n, brt.t);
     else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
     else if (m.kind === 'fleet') w.fleet_in(n);                       // the peer table, for the fleet program (fleet.h)
     else if (m.kind === 'fleetout') w.fleet_apply(n, brt.t);         // what the fleet program publishes and sends
-    else if (m.kind === 'model') { if (coreB && m.to.id === coreB.id) w.fc_model(n); if (superB && m.to.id === superB.id) w.super_model(n); }
+    else if (m.kind === 'model') {
+      if (coreB && m.to.id === coreB.id && !w.fc_model(n)) brt.modelSig = JSON.stringify(Array.from(m.data));
+      if (superB && m.to.id === superB.id) w.super_model(n);
+    }
     else if (m.kind === 'set') {
       if (coreB && m.to.id === coreB.id) { flightRememberSettings(w, m.data); w.fc_set(n); setJointView(m.data); }
       if (navB && m.to.id === navB.id) w.nav_set(n);
@@ -386,6 +393,7 @@ function deliverFrames() {
         w.learn_ltel(n);
         const ne = w.learn_exc(); if (ne) sendFrame(learnB, coreB, 'exc', frOut(w, ne));
         const nm = w.learn_model(); if (nm) { const d = frOut(w, nm); sendFrame(learnB, coreB, 'model', d); if (superB) sendFrame(learnB, superB, 'model', d); }
+        if (typeof atTelemetry === 'function') atTelemetry(m.data);
       }
       if (superB && m.to.id === superB.id) {
         frIn(w, m.data); w.super_ltel(n);
@@ -411,7 +419,7 @@ function boardsReadViews(now) {
     for (let r = 0; r < 6; r++) { const row = []; for (let j = 0; j < ni; j++) row.push(o[k++]); B.push(row); }
     learn.view = { useLearned: o[0] > 0.5, keep: o[1] > 0.5, cal: o[2] > 0.5, calProg: o[3], held: o[4] > 0.5, segKind: o[5], segWho: o[6], left: o[7], thr: o[8], thrProg: o[9], pulseMotor: o[10],
       haveFit: o[11] > 0.5, fit: { rot: o[12], force: o[13], descRot: o[14], descForce: o[15] }, refining: o[16] > 0.5, n: ni, holdPulses: o[18] > 0.5, thenCal: o[19] > 0.5, holdServos: o[20] > 0.5,
-      motors, joints: js, B };
+      accepted: o[k] > 0.5, adaptation: o[k + 1], confidence: o[k + 2], updates: o[k + 3], rollbacks: o[k + 4], motors, joints: js, B };
     learn.msg = brt.learnErr || cstr(lw, lw.learn_msg_ptr(), 480);
   } else learn.view = null;
   const sb = boardOf('super'), sw = sb && brt.inst.get(sb.id);
@@ -485,6 +493,7 @@ function boardsControl(dt) {
   if ((learnB || superB) && brt.t >= brt.nextLtel - 1e-9) {
     brt.nextLtel += 0.005;
     const d = frOut(W, W.fc_ltel());
+    if (learnB && typeof atBusy === 'function' && atBusy() && brt.autotune.loop === 'att') sendFrame(coreB, learnB, 'tunealpha', frOut(W, W.fc_tuning_sample()));
     if (learnB) sendFrame(coreB, learnB, 'ltel', d);
     if (superB && (!learnB || superB.id !== learnB.id)) sendFrame(coreB, superB, 'ltel', d);   // (on one board, one frame serves both)
   }

@@ -97,6 +97,8 @@ typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_ou
  *          Then a pulse number and a rate limit [rad/s] (open loop): when the number changes the flight core notes the
  *          body rates, and once they have changed by more than the limit (after 12 ms) it cuts the motors to 0 until
  *          the next number, so a pulse stops at once rather than a link's round trip later.
+ *          Mode 3 is a small attitude-reference test: the final two values are axis (0–2) and angle [rad],
+ *          bounded to ±4°. Motors remain under closed-loop control; hold flags and motor/servo values are ignored.
  *          It lapses FC_EXC_TIMEOUT after the last one (the Pi stopped): the controller simply flies on.
  *   MODEL  the model it flies on: use learned (1) or the airframe description (0), hold servos (1: fly as a plain
  *          multirotor with the steering servos at rest, until they are measured), nm, nj; per motor its number of
@@ -154,6 +156,7 @@ typedef struct {
   uint32_t steps;
   /* the learning task's excitation and model (see EXC, MODEL above) */
   int exc_mode, exc_hold_m, exc_hold_s, exc_smask; float exc_m[FC_MAX_MOTORS], exc_s[FC_MAX_JOINTS]; double exc_t;
+  int exc_axis; float exc_angle;
   int held_m, held_s; float hold_v[FC_MAX_MOTORS], hold_th[FC_MAX_JOINTS];
   int open_loop; double recover_t;       /* open loop now; until when it is catching itself (no tilt check) */
   int pulse_id, pulse_cut; float pulse_dw, pulse_w0[3]; double pulse_t;
@@ -166,6 +169,7 @@ typedef struct {
   int j_off[FC_MAX_JOINTS]; float j_ang[FC_MAX_JOINTS];
   /* what goes to the learning and the supervisor (LTEL): sums since the last frame */
   float lt_f[3], lt_w[3], lt_u[FC_MAX_MOTORS], lt_v[FC_MAX_MOTORS], lt_tc[FC_MAX_JOINTS]; int lt_n;
+  float lt_alpha[3], test_alpha[3];      /* commanded angular acceleration, averaged with the LTEL gyro */
   float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
 } fc_state;
 
@@ -191,6 +195,9 @@ int fc_model(fc_state *F, const float *p, int n);
 int fc_set(fc_state *F, const float *p, int n);
 /* The LTEL frame since the last call (out: FC_LTEL_MAX floats). Returns its length. */
 int fc_ltel(fc_state *F, float *out);
+/* Companion tuning sample, after fc_ltel: matching timestamp and averaged commanded angular acceleration.
+ * Together with LTEL gyro it identifies actuator dynamics inside the closed loop. Does not change LTEL. */
+int fc_tuning_sample(const fc_state *F, float *out);
 /* The reader's side: an LTEL frame's time, unwrapped, from the last one (got: there was one). */
 static inline double fc_ltel_unwrap(double last, int got, double raw) {
   if (!got) return raw;
