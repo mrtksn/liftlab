@@ -1,5 +1,9 @@
 # Project memory
 
+## Agent/cable publication — 2026-10-08
+- Pushed implementation d62d973 to main. Pages run 37747338850 passed; live HTML and all 12 changed JavaScript assets match the tested revision. Both agent flight-tool/source/bus checks and the full slack-cable regression passed directly on the live site without page errors.
+- Firmware/host CI run 37747340484 was still running at publication; local native/numerical/flight/browser validation passed as recorded below. No physical-flight validation or newly built physical firmware bundles are claimed. Only the existing untracked .claude workspace remains outside this release.
+
 ## Slack cable support — 2026-10-08
 - FIXED the reported 1.83 m / 1.06 kg bag: physical tension was already zero while slack, but the controller/supervisor counted the full known bag as rigid mass and ordered an early landing. Rigid mass/CoG/inertia now exclude hanging bodies; supported known weight and attachment torque are separate inputs, zero before tension. The supervisor checks them as a fixed external wrench. Design feasibility and hardware exports still assume the full carried load.
 - FIXED cable edits forcing a slack ball to full rope length, sometimes underground. Lengthening preserves its position/velocity; shortening limits excess separation and respects the ground radius.
