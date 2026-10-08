@@ -32,7 +32,10 @@ function keepGroundFocus(fn) {
 }
 function buildGs() { keepGroundFocus(buildGsContent); }
 function buildGsContent() {
-  const pane = $('#paneGs'); pane.textContent = ''; const W = GS_UI.w = {};
+  const pane = $('#paneGs');
+  // The real-drone action keeps its bound handlers and focus across telemetry rebuilds.
+  for (const child of [...pane.children]) if (child.id !== 'liveConnectSec') child.remove();
+  const W = GS_UI.w = {};
   const sec = (title, small, src) => { const s = UI.section( { class: 'sec gs-sec' }); s.append(el('h2', { 'data-src': src || 'tlm' }, title, small ? el('small', { text: small }) : '')); pane.append(s); return s; };
   pane.append(srcLegend(['tlm', 'gnd', 'sim', 'you']));
   const grid = (...kids) => el('div', { class: 'gs-grid' }, ...kids);

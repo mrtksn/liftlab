@@ -258,14 +258,20 @@ function worldObjectsFade(c, rays) {
 }
 // The selected object's solid shape, drawn over it (world-edit.js).
 let solidVis = null;
+// Shared collision display for world objects and the drone-part import preview. Boxes are local metres.
+function solidBoxesVisual(boxes) {
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), worldObjMats.solid, boxes.length);
+  const M = new THREE.Matrix4(), q = new THREE.Quaternion();
+  boxes.forEach((b, i) => { M.compose(new THREE.Vector3((b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2), q, new THREE.Vector3(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]).multiplyScalar(1.002)); mesh.setMatrixAt(i, M); });
+  mesh.renderOrder = 18; mesh.userData.noPick = true;
+  return mesh;
+}
 function worldObjShowSolid(o) {
   if (solidVis) { scene.remove(solidVis); solidVis.geometry.dispose(); solidVis = null; }
   if (!o || !o.boxes.length) return;
-  solidVis = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), worldObjMats.solid, o.boxes.length);
-  const M = new THREE.Matrix4(), q = new THREE.Quaternion();
-  o.boxes.forEach((b, i) => { M.compose(new THREE.Vector3((b.lo[0] + b.hi[0]) / 2, (b.lo[1] + b.hi[1]) / 2, (b.lo[2] + b.hi[2]) / 2), q, new THREE.Vector3(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]).multiplyScalar(1.002)); solidVis.setMatrixAt(i, M); });
+  solidVis = solidBoxesVisual(o.boxes);
   solidVis.position.set(...o.pos);   // (moving the object moves this along)
-  solidVis.renderOrder = 18; solidVis.userData.noPick = true; scene.add(solidVis);
+  scene.add(solidVis);
 }
 
 /* ───────── saving ───────── */

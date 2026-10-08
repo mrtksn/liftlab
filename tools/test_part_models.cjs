@@ -43,7 +43,9 @@ try{
  await page.goto(url,{waitUntil:'networkidle'});await page.waitForFunction(()=>typeof fleet!=='undefined' && fleet.ready && brt.ready);
  await page.evaluate(()=>{setTerrain('open',1);running=true;renderRun();});
  const importModel=async(name,buffer)=>{
-   await page.locator('#addPart').click();await page.locator('#partModelImport').click();
+   await page.locator('#addPart').click();
+   assert.strictEqual(await page.locator('#partModelImport').evaluate(e=>!!e.closest('#addPartDlg section')),false,'Import belongs above the categories');
+   await page.locator('#partModelImport').click();
    await page.locator('#partModelFile').setInputFiles({name,mimeType:'application/octet-stream',buffer});
    await page.waitForFunction(()=>partImport.draft&&!partImport.busy);
  };
@@ -51,7 +53,24 @@ try{
  await importModel('camera.glb',glbBox(2,1,1));
  let r=await page.evaluate(()=>({size:partImport.draft.size,mass:partImport.draft.mass,cog:partImport.draft.cog,category:partImport.draft.category,unchanged:designSnap(),paused:!running,locked:!fleetSelect(null),preview:partImport.preview.position.toArray(),reach:cReach}));
  vector(r.size,[.2,.1,.1]);vector(r.cog,[0,0,0],.007);assert(r.mass>0&&r.mass<2&&r.category==='payload'&&r.paused&&r.locked&&r.preview[0]>r.reach);assert.strictEqual(r.unchanged,before);
+ assert(await page.evaluate(()=>partImport.panel.parentElement===$('.view')&&partImport.solid.visible&&partImport.solid.material===worldObjMats.solid));
+ assert(await page.evaluate(()=>{
+   const M=new THREE.Matrix4(),p=new THREE.Vector3(),q=new THREE.Quaternion(),s=new THREE.Vector3();
+   return partBoxes(partImport.draft).every((b,i)=>{partImport.solid.getMatrixAt(i,M);M.decompose(p,q,s);return p.distanceTo(new THREE.Vector3(...partBoxCenter(b)))<1e-6&&s.distanceTo(new THREE.Vector3(...partBoxSize(b)).multiplyScalar(1.002))<1e-6;});
+ }),'Displayed boxes do not match physics');
+ await page.locator('#partImportSolid').uncheck();assert(await page.evaluate(()=>!partImport.solid.visible&&partImport.draft.model.boxes.length>0));await page.locator('#partImportSolid').check();
+ // The shared slider changes geometry live and synchronizes the number.
+ await page.locator('#partImportScale').evaluate(e=>{e.value='.4';e.dispatchEvent(new Event('input',{bubbles:true}));});
+ vector(await page.evaluate(()=>partImport.draft.size),[.4,.2,.2]);near(+await page.locator('#partImportSize').inputValue(),.4);
+ await page.locator('#partImportSize').fill('.2');await page.locator('#partImportSize').dispatchEvent('change');near(+await page.locator('#partImportScale').inputValue(),.2);
+ const geometry=await page.evaluate(()=>({cog:partImport.draft.cog,points:partImport.draft.points}));
+ for(const detail of ['coarse','fine','medium']){
+   await page.locator('.part-import-panel [data-solid-detail="'+detail+'"]').click();await page.waitForFunction(()=>!partImport.busy);
+   assert(await page.evaluate(detail=>partImport.draft.model.detail===detail&&partImport.solid.count===partImport.draft.model.boxes.length,detail));
+   assert.deepStrictEqual(await page.evaluate(()=>({cog:partImport.draft.cog,points:partImport.draft.points})),geometry);
+ }
  await page.locator('#partImportCancel').click();assert(await page.evaluate(()=>running&&!editMode&&fleet.pendingEdits===0&&!$('#airframe').inert));assert.strictEqual(await page.evaluate(()=>designSnap()),before);
+ assert(await page.evaluate(()=>!perspCam.view?.enabled&&!orthoCam.view?.enabled),'Import camera offset survived cancel');
  // A canceled asynchronous read cannot overwrite a newer draft or unlock its owner.
  assert(await page.evaluate(async()=>{
    let finish;const slow=partImportStart([{name:'old.glb',arrayBuffer:()=>new Promise(resolve=>finish=resolve)}]);partImportCancel();
@@ -164,6 +183,21 @@ try{
      await page.setViewportSize({width,height:width===390?844:1000});await page.waitForTimeout(350);
      if(process.env.TEST_SCREENSHOTS)await page.screenshot({path:process.env.TEST_SCREENSHOTS+'-'+name+'-'+width+'.png'});
      const bounds=await page.locator('.part-import-panel').boundingBox();assert(bounds.x>=0&&bounds.x+bounds.width<=width+1&&bounds.y>=0&&bounds.y+bounds.height<=(width===390?844:1000)+1,'Import panel overflow '+JSON.stringify(bounds));
+     assert(await page.evaluate(()=>{
+       for(let i=0;i<60;i++)fleetScene();renderer.render(scene,camera);
+       const view=vpEl.getBoundingClientRect(),panel=partImport.panel.getBoundingClientRect(),bottom=panel.width>view.width*.7;
+       const visible=p=>{const q=drone.localToWorld(new THREE.Vector3(...p)).project(camera),x=view.left+(q.x+1)*view.width/2,y=view.top+(1-q.y)*view.height/2;return x>view.left+4&&x<view.right-4&&y>view.top+4&&y<view.bottom-4&&(bottom?y<panel.top-4:x<panel.left-4)&&document.elementFromPoint(x,y)===renderer.domElement;};
+       return visible([0,0,0])&&visible(partImport.draft.pos);
+     }),'Drone/preview are covered by the overlay '+width);
+     for(const projection of ['ortho','persp']){
+       const delta=await page.evaluate(projection=>{
+         setProjection(projection);fleetScene();renderer.render(scene,camera);const p=cam.target.clone(),before=p.clone().project(camera);
+         panCamera(20,10);updateCamera();camera.updateMatrixWorld();const after=p.clone().project(camera);
+         panCamera(-20,-10);updateCamera();
+         return [(after.x-before.x)*vpEl.clientWidth/2,-(after.y-before.y)*vpEl.clientHeight/2,camera.view?.enabled];
+       },projection);
+       near(delta[0],20,.1);near(delta[1],10,.1);assert(delta[2],'Import projection offset missing');
+     }
    }
    await page.locator('#partImportCancel').click();await page.setViewportSize({width:1600,height:1000});
  }

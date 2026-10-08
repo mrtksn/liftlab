@@ -46,6 +46,10 @@ const MOCK = () => {
     await page.waitForFunction(() => typeof brt !== 'undefined' && brt.ready);
     await page.evaluate(async () => { loadPreset('quadx'); while (!brt.ready) await new Promise(r => setTimeout(r, 20)); radioCfg.bind = 'live-test'; });
     // Connect: the button, the dialog, "Find the drone"
+    assert.strictEqual(await page.locator('.bar #liveBtn').count(),0);
+    await page.click('#tabGs');await page.waitForSelector('#paneGs:not([hidden]) #liveBtn');
+    assert.strictEqual(await page.locator('#liveBtn').count(),1);
+    assert(await page.evaluate(()=>{const button=$('#liveBtn');button.focus();buildGs();return $('#liveBtn')===button&&document.activeElement===button;}),'Ground rebuild replaced the connection action');
     await page.click('#liveBtn'); await page.waitForSelector('#liveDlg[open]');
     assert.strictEqual(await page.textContent('#livePhrase'), 'live-test');
     await page.click('#liveFind');

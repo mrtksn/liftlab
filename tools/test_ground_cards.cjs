@@ -17,7 +17,7 @@ try{
  await page.evaluate(()=>{running=false;setTerrain('open',1);UI_PANELS.editor.select('gs');renderGs(true);});
  const pick=async(selector,value)=>{await page.locator(selector).dispatchEvent('pointerdown');await page.locator(selector).selectOption(String(value));};
  const close=async()=>{await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('dialog[open]'));};
- assert.deepStrictEqual(await page.locator('#paneGs > .sec > h2').evaluateAll(nodes=>nodes.map(n=>{const c=n.cloneNode(true);c.querySelectorAll('.srcs,.src-tag').forEach(e=>e.remove());return c.textContent;})),['Telemetryreceived from the drone','Radio link','Other dronesthe drone\'s own link to them','Cargothe latches','Link loginside the simulated radio','Telemetry messages']);
+ assert.deepStrictEqual(await page.locator('#paneGs > .sec > h2').evaluateAll(nodes=>nodes.map(n=>{const c=n.cloneNode(true);c.querySelectorAll('.srcs,.src-tag').forEach(e=>e.remove());return c.textContent;})),['Real drone','Telemetryreceived from the drone','Radio link','Other dronesthe drone\'s own link to them','Cargothe latches','Link loginside the simulated radio','Telemetry messages']);
  assert.strictEqual(await page.locator('#gsTelemetrySec canvas').count(),3);
  assert.strictEqual(await page.locator('#paneGs input,#paneGs select,#paneGs textarea').count(),0);
  assert.strictEqual(await page.locator('#gsRadioCard .w-bar').count(),2);

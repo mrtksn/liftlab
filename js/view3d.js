@@ -620,12 +620,14 @@ function updateScene(selected = true) {
 // World view keeps its orbit centre instead of following an internal drone context.
 function updateCamera() {
   stepCamAnim();
+  const importFrame = typeof partImportFrame === 'function' ? partImportFrame() : null, dist = cam.dist * (importFrame?.scale || 1);
   const ce = Math.cos(cam.el);
   if (camera.isOrthographicCamera) {   // frame what the perspective camera shows at the orbit's centre
-    const h = cam.dist * Math.tan(perspCam.fov * D2R / 2), w = h * perspCam.aspect;
+    const h = dist * Math.tan(perspCam.fov * D2R / 2), w = h * perspCam.aspect;
     if (orthoCam.top !== h || orthoCam.right !== w) { orthoCam.left = -w; orthoCam.right = w; orthoCam.top = h; orthoCam.bottom = -h; orthoCam.updateProjectionMatrix(); }
   }
-  camera.position.set(cam.target.x + cam.dist * ce * Math.cos(cam.az), cam.target.y + cam.dist * ce * Math.sin(cam.az), cam.target.z + cam.dist * Math.sin(cam.el));
+  if (importFrame) camera.setViewOffset(importFrame.w, importFrame.h, importFrame.dx, importFrame.dy, importFrame.w, importFrame.h);
+  camera.position.set(cam.target.x + dist * ce * Math.cos(cam.az), cam.target.y + dist * ce * Math.sin(cam.az), cam.target.z + dist * Math.sin(cam.el));
   camera.lookAt(cam.target);
   updateEditView(); drawTriad();
 }
@@ -633,7 +635,7 @@ function updateCamera() {
 // Screen-space pan has the same scale in perspective and the matching orthographic view.
 const panDelta = new THREE.Vector3(), panRight = new THREE.Vector3(), panUp = new THREE.Vector3();
 function panCamera(dx,dy) {
-  const scale=2*cam.dist*Math.tan(perspCam.fov*D2R/2)/(Math.max(1,vpEl.clientHeight)*camera.zoom);
+  const scale=2*camera.position.distanceTo(cam.target)*Math.tan(perspCam.fov*D2R/2)/(Math.max(1,vpEl.clientHeight)*camera.zoom);
   camera.updateMatrixWorld();
   panRight.setFromMatrixColumn(camera.matrixWorld,0);panUp.setFromMatrixColumn(camera.matrixWorld,1);
   panDelta.copy(panRight).multiplyScalar(-dx*scale).addScaledVector(panUp,dy*scale);

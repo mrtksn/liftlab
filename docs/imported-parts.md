@@ -1,8 +1,10 @@
 # Imported drone parts
 
-In **Airframe → Add a part → Payloads → Import 3D object…**, choose a GLB, glTF, OBJ or STL. Pick a glTF's buffers and textures together with its main file. OBJ uses the same plain material as the world importer. glTF/OBJ are Y-up and STL is Z-up.
+In **Airframe → Add a part → Import 3D object…**, use the independent button above the part categories to choose a GLB, glTF, OBJ or STL. Pick a glTF's buffers and textures together with its main file. OBJ uses the same plain material as the world importer. glTF/OBJ are Y-up and STL is Z-up.
 
-The simulation pauses. The model appears beside the drone, with the import form in the right panel (below the viewport on a phone). Set its name, category, longest side in metres and weight in kilograms. The default category is Payload; choosing another category labels a rigid mass, without adding a motor, sensor or battery function.
+The simulation pauses. The model appears beside the drone, with its properties in an overlay inside the same 3D view. The camera frames both in the uncovered space; on a phone the overlay sits at the bottom. Set its name, category, size and weight. The shared **Scale (longest side)** slider resizes it live from 5 mm to 2 m; the adjacent numeric field allows up to 10 m. The default category is Payload; choosing another category labels a rigid mass, without adding a motor, sensor or battery function.
+
+**Show the solid shape** starts enabled: translucent blue boxes show the collision geometry, using the same renderer as the world editor. **Coarse / Medium / Fine** chooses the voxel detail using the same controls and algorithm. The dimensions, box count and active detail update with the preview; turning the overlay off only hides these indicators. Changing detail preserves the chosen center of mass and mounting points. Size edits scale those points with the object.
 
 The initial longest side is 20 cm regardless of file units. Starting weight estimates a uniform density of 200 kg/m³ over the voxel solid, bounded to 5 g–20 kg. It is an editable estimate, not a measurement. The initial center of mass is the volume centroid of that solid. Resizing before an explicit weight edit updates this estimate; subsequent size edits keep the chosen weight.
 

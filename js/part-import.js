@@ -1,6 +1,6 @@
 'use strict';
 const partModels = new Map();
-const partImport = { draft: null, preview: null, panel: null, busy: false, active: false, wasEditing: false, owner: null, pick: null, generation: 0 };
+const partImport = { draft: null, preview: null, solid: null, showSolid: true, panel: null, busy: false, active: false, wasEditing: false, owner: null, pick: null, generation: 0 };
 const PART_LIBRARY_LS = 'liftlab-imported-parts-v1';
 let partLibrary = [];
 try {
@@ -110,28 +110,50 @@ function partDraftRefresh() {
   if (partImport.preview) { partImport.preview.parent?.remove(partImport.preview); disposeGroup(partImport.preview); }
   const g = partModelVisual(c); g.userData.noPick = true;
   c.pos = [cReach + c.size[0] / 2 + .1, 0, 0]; g.position.set(...c.pos); drone.add(g); partImport.preview = g;
+  partImport.solid = solidBoxesVisual(partBoxes(c)); partImport.solid.visible = partImport.showSolid; g.add(partImport.solid);
   const mark = (pos, color) => { const m = new THREE.Mesh(new THREE.SphereGeometry(Math.max(.004, Math.max(...c.size) * .02), 12, 8), new THREE.MeshBasicMaterial({ color, depthTest: false })); m.userData.noPick = true; m.position.set(...pos); m.renderOrder = 30; g.add(m); };
   mark(partCog(c), colorOf('--grav')); for (const p of partPoints(c)) mark(p.pos, colorOf('--accent'));
-  $('#partImportDims').textContent = c.size.map(v => v.toFixed(3)).join(' × ') + ' m · ' + c.model.boxes.length + ' solid boxes';
+  $('#partImportDims').textContent = c.size.map(v => v.toFixed(3)).join(' × ') + ' m · ' + c.model.boxes.length + ' solid boxes · ' + WORLD_OBJ_DETAIL[c.model.detail].label;
   $('#partImportMass').value = +c.mass.toFixed(4);
+  partImport.panel.querySelectorAll('[data-solid-detail]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.solidDetail === c.model.detail)));
+}
+async function partImportDetail(detail) {
+  const c = partImport.draft; if (!c || partImport.busy || c.model.detail === detail) return;
+  const generation = partImport.generation;
+  partImport.busy = true; $('#partImportAdd').disabled = true;
+  try {
+    const base = await partModelBase(c);
+    if (!partImport.active || partImport.generation !== generation) return;
+    c.model.detail = detail; partSolidifyDraft(c, base);
+    if (partImport.massAuto) c.mass = clamp(partSolidMass(c).volume * 200, .005, 20);
+    partDraftRefresh();
+  } catch (e) { if (partImport.generation === generation) $('#partImportPick').textContent = 'Could not change the solid shape: ' + (e.message || e); }
+  finally { if (partImport.generation === generation) { partImport.busy = false; $('#partImportAdd').disabled = false; } }
 }
 function partImportPanel() {
   const c = partImport.draft;
-  const panel = partImport.panel = el('aside', { class: 'part-import-panel', 'aria-label': 'Import drone object' });
+  const panel = partImport.panel = el('aside', { class: 'view-overlay part-import-panel', 'aria-label': 'Import drone object' });
   panel.append(el('div', { class: 'dialog-toolbar' }, el('h2', { text: 'Import 3D object' }), UI.button({ class: 'btn btn-sm', id: 'partImportCancel', onclick: partImportCancel }, 'Cancel')));
-  if (!c) { panel.append(el('p', { class: 'hint', text: 'Reading and making the model solid…' })); $('.work').append(panel); return; }
+  if (!c) { panel.append(el('p', { class: 'hint', text: 'Reading and making the model solid…' })); $('.view').append(panel); return; }
   const name = UI.input({ type: 'text', id: 'partImportName', value: c.name, maxlength: 60 }); name.addEventListener('input', () => { c.name = name.value.trim() || 'Object'; });
   const category = UI.select({ id: 'partImportCategory' }, ...Object.entries(PART_CATEGORIES).map(([k, v]) => el('option', { value: k, text: v }))); category.value = c.category; category.addEventListener('change', () => { c.category = category.value; });
-  const size = UI.input({ type: 'number', id: 'partImportSize', min: .005, max: 10, step: .005, value: Math.max(...c.size).toFixed(3) });
-  size.addEventListener('change', () => { const n = Number(size.value); if (n >= .005 && n <= 10) { partScale(c, n); if (partImport.massAuto) c.mass = clamp(partSolidMass(c).volume * 200, .005, 20); partDraftRefresh(); partImportRenderVectors(); } else size.value = Math.max(...c.size); });
+  const size = numField('partImportScale', { label: 'Scale (longest side)', u: 'm', min: .005, max: 2, step: .005, dp: 3, hard: true, hmin: .005, hmax: 10, ends: ['5 mm', '2 m'] }, () => Math.max(...c.size), n => {
+    const span = 2 * cReach + Math.max(...c.size) + .1;
+    partScale(c, n); if (partImport.massAuto) c.mass = clamp(partSolidMass(c).volume * 200, .005, 20);
+    cam.dist *= (2 * cReach + Math.max(...c.size) + .1) / span;
+    partDraftRefresh(); partImportRenderVectors();
+  });
+  size.node.querySelector('input[type=number]').id = 'partImportSize';
   const mass = UI.input({ type: 'number', id: 'partImportMass', min: .0001, step: .01, value: c.mass }); mass.addEventListener('change', () => { const n = Number(mass.value); if (n > 0 && Number.isFinite(n)) { c.mass = n; partImport.massAuto = false; } else mass.value = c.mass; });
   const mount = UI.select({ id: 'partImportMount' }, ...partMountOptions(c).map(([v, t]) => el('option', { value: v, text: t })));
-  panel.append(el('p', { class: 'hint', text: 'The object is shown beside the drone. Choose a size and weight, then attach it. Orange marks its center of mass; blue marks its mounting points. A reusable copy is kept in the chosen Add a part category in this browser.' }),
-    UI.field({ label: 'Name' }, name), UI.field({ label: 'Category' }, category), UI.field({ label: 'Longest side (m)' }, size), el('p', { class: 'hint', id: 'partImportDims' }), UI.field({ label: 'Weight (kg)' }, mass),
-    el('p', { class: 'hint', text: 'Starting weight assumes a uniform density of 200 kg/m³ over the solid shape. Check against the actual object. Its center of mass starts at the solid-volume centroid.' }),
+  panel.append(el('p', { class: 'hint', text: 'Size the object beside the drone, then attach it. Blue boxes show its collision shape; orange marks its center of mass and blue dots its mounting points.' }),
+    UI.field({ label: 'Name' }, name), UI.field({ label: 'Category' }, category), size.node, el('p', { class: 'hint world-obj-dims', id: 'partImportDims' }),
+    solidShapeControls({ detail: c.model.detail, shown: partImport.showSolid, id: 'partImportSolid', onDetail: partImportDetail,
+      onShown: shown => { partImport.showSolid = shown; if (partImport.solid) partImport.solid.visible = shown; } }), UI.field({ label: 'Weight (kg)' }, mass),
+    el('p', { class: 'hint', text: 'Starting weight estimates 200 kg/m³ over the solid shape. Adjust it to match the object.' }),
     el('div', { id: 'partImportVectors' }), UI.field({ label: 'Attach to' }, mount),
     UI.button({ class: 'btn primary', id: 'partImportAdd', onclick: partImportCommit }, 'Attach object'));
-  $('.work').append(panel); partImportRenderVectors();
+  $('.view').append(panel); partImportRenderVectors();
 }
 function partImportRenderVectors() {
   const c = partImport.draft, box = $('#partImportVectors'); if (!c || !box) return;
@@ -150,7 +172,7 @@ async function partImportStart(files) {
   if (partImport.active || !fleet.selected || liveOn() || !fleetCanSelect()) return;
   partImport.active = partImport.busy = true; partImport.owner = fleet.selected;
   const generation = ++partImport.generation;
-  partImport.wasEditing = editMode; partImport.massAuto = true; partImport.pick = null;
+  partImport.wasEditing = editMode; partImport.massAuto = true; partImport.pick = null; partImport.showSolid = true;
   partImport.camera = { dist: cam.dist, pan: cam.pan.clone() };
   setEditMode(true); fleet.pendingEdits++; partImportPanel();
   $('.work').classList.add('part-importing');
@@ -168,7 +190,7 @@ async function partImportStart(files) {
     c.points = [{ id: 'top', name: 'Top mount', pos: [0, 0, c.size[2] / 2] }]; c.selfPoint = 'top';
     worldObjects.files.set(rec.id, rec); partModels.set(rec.id + ':' + up, Promise.resolve(base));
     partImport.draft = c; partImport.panel.remove(); partImportPanel(); partDraftRefresh();
-    cam.dist = Math.max(1.2, (cReach + Math.max(...c.size) + .1) * 3); cam.pan.set(0, 0, 0); edit.focusLocal = null; edit.focusId = null;
+    cam.dist = Math.max(.6, (2 * cReach + Math.max(...c.size) + .1) * 1.2); cam.pan.set(0, 0, 0); edit.focusLocal = null; edit.focusId = null;
   } catch (e) { if (generation === partImport.generation) { partImportCancel(); designNote('Could not import object: ' + (e.message || e)); } }
   finally { if (generation === partImport.generation) partImport.busy = false; }
 }
@@ -176,7 +198,8 @@ function partImportEnd() {
   partImport.panel?.remove(); partImport.panel = null;
   $('.work').classList.remove('part-importing');
   if (partImport.preview) { partImport.preview.parent?.remove(partImport.preview); disposeGroup(partImport.preview); }
-  partImport.preview = null; partImport.draft = null; partImport.pick = null;
+  partImport.preview = null; partImport.solid = null; partImport.draft = null; partImport.pick = null;
+  perspCam.clearViewOffset(); orthoCam.clearViewOffset();
   for (const [e, inert] of partImport.locked || []) e.inert = inert;
   partImport.locked = null; partImport.generation++; partImport.busy = false;
   if (partImport.active) fleet.pendingEdits--; partImport.active = false;
@@ -214,6 +237,14 @@ function partImportPick(e) {
 }
 function partImportView() {
   if (partImport.active && partImport.preview && !partImport.preview.parent) drone.add(partImport.preview);
+}
+// Keep the drone and preview in the uncovered region while the properties remain in the same 3D view.
+function partImportFrame() {
+  if (!partImport.active || !partImport.panel) return null;
+  const view = vpEl.getBoundingClientRect(), panel = partImport.panel.getBoundingClientRect(), w = view.width, h = view.height;
+  const bottom = panel.width > w * .7;
+  const x = 12, y = Math.min(130, h * .2), width = Math.max(100, bottom ? w - 24 : panel.left - view.left - 24), height = Math.max(100, (bottom ? panel.top - view.top : h - 12) - y);
+  return { w, h, dx: w / 2 - (x + width / 2), dy: h / 2 - (y + height / 2), scale: Math.max(1, h / Math.min(width, height)) };
 }
 $('#partModelImport').addEventListener('click', () => { $('#addPartDlg').close(); $('#partModelFile').click(); });
 $('#partModelFile').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) partImportStart(files); });

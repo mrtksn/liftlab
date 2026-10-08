@@ -73,6 +73,19 @@ function worldEditRender() {
   box.replaceChildren(...kids);
   if (keep && document.getElementById(keep)) document.getElementById(keep).focus();
 }
+function solidDetailControl(value, onChange, disabled = false) {
+  return el('div', { class: 'seg', role: 'group', 'aria-label': 'Solid shape detail' }, ...Object.entries(WORLD_OBJ_DETAIL).map(([key, d]) =>
+    UI.button({ 'data-solid-detail': key, 'aria-pressed': String(key === value), disabled: disabled || undefined, onclick: () => onChange(key) }, d.label)));
+}
+// State stays with each editor; this UI block is identical for world and drone solids.
+function solidShapeControls({ detail, shown, id, onDetail, onShown, disabled = false, description }) {
+  const checkbox = UI.input({ type: 'checkbox', id }); checkbox.checked = shown;
+  checkbox.addEventListener('change', () => onShown(checkbox.checked));
+  return el('div', { class: 'solid-shape-controls' },
+    UI.field({ label: 'Solid shape' }, solidDetailControl(detail, onDetail, disabled)),
+    description ? el('p', { class: 'hint', text: description }) : null,
+    el('label', { class: 'world-obj-chk' }, checkbox, ' Show the solid shape'));
+}
 function worldObjFields(o) {
   const can = !!o.base, f2 = x => (+x).toFixed(2), num = (id, label, value, step, set, attrs = {}) => {
     const inp = UI.input({ type: 'number', class: 'num', id, step, value: String(value), 'aria-label': label, ...attrs });
@@ -93,8 +106,7 @@ function worldObjFields(o) {
   const seg = (label, items, cur, pick, dis) => el('div', { class: 'seg', role: 'group', 'aria-label': label }, ...items.map(([k, t]) => {
     const b = UI.button({ 'aria-pressed': String(k === cur), disabled: dis || undefined, text: t }); b.addEventListener('click', () => { if (k !== cur) { pick(k); worldEditChanged(); worldEditRender(); } }); return b;
   }));
-  const dims = o.size.map(x => x * o.scale), solid = el('input', { type: 'checkbox', id: 'worldObjSolid' }); solid.checked = wedit.showSolid;
-  solid.addEventListener('change', () => { wedit.showSolid = solid.checked; worldEditSolidShown(o); });
+  const dims = o.size.map(x => x * o.scale);
   const voxel = o.h ? (o.h < 0.1 ? `${Math.round(o.h * 1000)} mm` : `${o.h.toFixed(2)} m`) : '';
   const notes = [];
   if (o.coarsened) notes.push(`${WORLD_OBJ_DETAIL[o.detail].label} would make more than ${WORLD_OBJ_MAX_BOXES} boxes: it's ${WORLD_OBJ_DETAIL[o.coarsened].label.toLowerCase()}.`);
@@ -107,9 +119,10 @@ function worldObjFields(o) {
     row('File units', units, scale),
     el('p', { class: 'hint world-obj-dims', text: `${dims.map(f2).join(' × ')} m (width × depth × height)` }),
     row('Up in file', seg('Which way is up in the file', [['y', 'Y up'], ['z', 'Z up']], o.up, k => worldObjSetUp(o, k), !can)),
-    row('Solid shape', seg('Solid shape detail', Object.entries(WORLD_OBJ_DETAIL).map(([k, d]) => [k, d.label]), o.detail, k => { o.detail = k; worldObjSolidify(o); worldEditSolidShown(o); }, !can)),
-    el('p', { class: 'hint', text: `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}${voxel ? ` from ${voxel} voxels` : ''}.` }),
-    el('label', { class: 'world-obj-chk' }, solid, ' Show the solid shape'),
+    solidShapeControls({ detail: o.detail, shown: wedit.showSolid, id: 'worldObjSolid', disabled: !can,
+      onDetail: k => { if(k !== o.detail) { o.detail = k; worldObjSolidify(o); worldEditSolidShown(o); worldEditChanged(); worldEditRender(); } },
+      onShown: shown => { wedit.showSolid = shown; worldEditSolidShown(o); },
+      description: `${o.boxes.length} box${o.boxes.length === 1 ? '' : 'es'}${voxel ? ` from ${voxel} voxels` : ''}.` }),
     ...notes.map(t => el('p', { class: 'hint world-obj-note', text: t })),
     el('div', { class: 'hrow world-obj-acts' },
       UI.button({ class: 'btn btn-sm', title: 'Stand it on the ground', onclick: () => { o.pos[2] = -Math.min(0, ...o.boxes.map(b => b.lo[2])); worldEditMoved(o); worldEditChanged(); worldEditRender(); } }, 'Put on the ground'),

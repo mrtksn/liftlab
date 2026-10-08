@@ -1,5 +1,16 @@
 # Project memory
 
+## Real-drone connection in Ground — 2026-10-08
+- Moved the existing Connect to drone action from the header to Ground → Real drone, above telemetry/radio sections. Reuses the section/button UI; Ground rebuilds retain its original node, event handler and keyboard focus. Live flight controls remain over the 3D view.
+- Regression checklist PASSED: tools/test_live_ble.cjs checks Ground placement, a single action, rebuild/focus retention, dialog/connect, live packets/arm/attitude, reconnect and disconnect through mock Bluetooth. Ground-card suite passed desktop/phone themes, telemetry, dialog lifetime and per-drone state; syntax, fingerprints and diff checks passed. Verified locally; not committed/pushed. Real-device validation remains pending.
+- Publication: user authorized pushing the Ground connection relocation together with the import-overlay/shared-UI changes. Syntax, asset fingerprints and diff checks passed again; main matches origin/main before publication. Deployment and remote CI verification are pending.
+
+## Drone object import overlay — 2026-10-08
+- Replaced the separate import panel with properties inside the 3D view; camera framing reserves uncovered space beside/before the overlay for the drone and object. Import 3D object is independent above Add a part categories.
+- Reused the shared slider/number field; both editors share the properties-overlay base, solid-shape UI block (detail selector plus checkbox) and translucent collision-box renderer. Collision indicators start enabled; live scaling carries CoM/points and weight estimation; detail edits preserve chosen CoM/points.
+- Camera reserves overlay-free space in both projections. FIXED pan scale under import framing so it tracks the pointer at the actual displayed distance.
+- Regression checklist PASSED: tools/test_part_models.cjs checks independent action, live slider/number synchronization, exact solid-box matrices/toggle/detail, retained CoM/points, surface picking, cancellation, desktop/phone overlay bounds, uncovered drone/preview and pan in both projections, plus existing physics/assets/library checks. World-object/map, camera and sidebar suites passed; previews inspected; syntax, fingerprints and diff checks passed. Verified locally; not committed or pushed.
+
 ## Intuitive controller layout — 2026-10-08
 - Added Keys → Intuitive: W/S climb/descend, A/D move left/right, ↑/↓ move forward/back, ←/→ turn left/right. Left pad combines altitude and lateral movement; right pad combines forward/back and turning. Help, accessible labels and forward HUD key follow the layout; browser preference keeps the choice. Handset remains the default.
 - Swapping layouts releases held inputs and moves the existing action buttons with their handlers. FIXED phone wrapping in Game/Intuitive: center controls now precede both pads so they stay side by side.

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=4ed9a50804">
+<link rel="stylesheet" href="css/style.css?v=ef507fffa6">
 </head>
 <body>
 <div class="app">
@@ -71,15 +71,6 @@
           <button type="button" data-speed="0.5" aria-pressed="false" title="Half speed">0.5x</button>
           <button type="button" data-speed="1" aria-pressed="true" title="Real time">1x</button>
         </div>
-      </div>
-    </div>
-    <div class="hgroup" role="group" aria-labelledby="grpLive">
-      <span class="lbl" id="grpLive">Real drone</span>
-      <div class="hrow">
-        <button class="btn live-btn" id="liveBtn" type="button" aria-pressed="false" title="Fly the real drone from this page over Bluetooth LE (its ESP32-S3 or C3 set to radio=ble)">
-          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 5 7 6-3.5 3V2l3.5 3-7 6"/></svg>
-          <span class="live-lbl">Connect to drone</span>
-        </button>
       </div>
     </div>
   </header>
@@ -155,7 +146,15 @@
       </section>
       </div>
       <div class="pane" id="paneForm" role="tabpanel" aria-labelledby="tabForm" hidden></div>
-      <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden></div>
+      <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden>
+        <section class="sec gs-sec" id="liveConnectSec">
+          <h2>Real drone</h2>
+          <button class="btn live-btn" id="liveBtn" type="button" aria-pressed="false" title="Fly the real drone from this page over Bluetooth LE (its ESP32-S3 or C3 set to radio=ble)">
+            <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 5 7 6-3.5 3V2l3.5 3-7 6"/></svg>
+            <span class="live-lbl">Connect to drone</span>
+          </button>
+        </section>
+      </div>
       <div class="pane ai" id="paneAi" role="tabpanel" aria-labelledby="tabAi" hidden></div>
       <div class="sidebar-history" id="sidebarHistory" role="group" aria-label="Design history">
         <button class="btn sm" id="undoBtn" type="button" title="Undo (Ctrl+Z or ⌘Z)">↶ Undo</button>
@@ -166,7 +165,7 @@
     <section class="view" aria-label="3D view">
       <div id="viewport"></div>
       <div id="droneHover" class="drone-hover" hidden></div>
-      <aside id="worldPanel" class="world-panel" aria-label="World settings" hidden>
+      <aside id="worldPanel" class="view-overlay world-panel" aria-label="World settings" hidden>
         <button class="btn world-toggle" id="worldSettingsToggle" type="button" aria-expanded="true" aria-controls="worldSettingsBody">World settings <span aria-hidden="true">▾</span></button>
         <div id="worldSettingsBody">
           <section class="sec"><button class="btn" id="worldDefaults" type="button" title="Restore the original map and environment settings">Reset to defaults</button></section>
@@ -465,6 +464,10 @@
       <dialog class="ask parts-dialog" id="addPartDlg" aria-labelledby="addPartTitle">
         <div class="dialog-toolbar"><h2 id="addPartTitle">Add a part</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
         <p>Choose a part, then choose where to attach it.</p>
+        <div class="part-import-action">
+          <button class="btn primary" type="button" id="partModelImport">Import 3D object…</button>
+          <input type="file" id="partModelFile" accept=".glb,.gltf,.obj,.stl,.bin,.png,.jpg,.jpeg,.webp,.ktx2" multiple hidden>
+        </div>
         <section><h3>Propulsion</h3><div class="addrow">
           <button class="btn" type="button" data-add="motor">Motor</button>
           <button class="btn" type="button" data-add="tilt">Motor on servo</button>
@@ -481,8 +484,6 @@
           <button class="btn" type="button" data-add="mass">Rigid mass</button>
           <button class="btn" type="button" data-add="hang">Mass on cable</button>
           <button class="btn" type="button" data-add="latch">Latch / gripper</button>
-          <button class="btn" type="button" id="partModelImport">Import 3D object…</button>
-          <input type="file" id="partModelFile" accept=".glb,.gltf,.obj,.stl,.bin,.png,.jpg,.jpeg,.webp,.ktx2" multiple hidden>
         </div></section>
         <section><h3>Sensors</h3><div class="addrow">
           <button class="btn" type="button" data-add="imu">IMU</button>
@@ -629,7 +630,7 @@
 <script src="js/health.js?v=b1cf776935"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=4139e0373b"></script>
-<script src="js/view3d.js?v=efe098769c"></script>
+<script src="js/view3d.js?v=605afa5154"></script>
 <script src="js/pilot.js?v=12b8fd8abe"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
 <script src="js/ui.js?v=1ff79fced2"></script>
@@ -664,7 +665,7 @@
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
 <script src="js/live.js?v=351bf507a2"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
-<script src="js/gs-ui.js?v=f5317a6c08"></script>
+<script src="js/gs-ui.js?v=979f35d7ed"></script>
 <script src="js/agent.js?v=da1e6999ce"></script>
 <script src="js/agent-tools.js?v=8560e44482"></script>
 <script src="js/agent-tools-more.js?v=31cbc3d6f1"></script>
@@ -678,11 +679,11 @@
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=1a153bcd4f"></script>
 <script src="js/fleet-collisions.js?v=02dc955e6c"></script>
-<script src="js/world-objects.js?v=4edfb4e3c3"></script>
-<script src="js/world-edit.js?v=cb7f36845f"></script>
+<script src="js/world-objects.js?v=ab375f4892"></script>
+<script src="js/world-edit.js?v=b18ac839b4"></script>
 <script src="js/replay.js?v=a0a90ea626"></script>
 <script src="js/maps.js?v=afc69fdbd8"></script>
-<script src="js/part-import.js?v=9b94fdbaf1"></script>
+<script src="js/part-import.js?v=2ff4484721"></script>
 <script src="js/part-edit-ui.js?v=d0ec8b75a9"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>
