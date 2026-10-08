@@ -18,6 +18,9 @@
  * come out in rbuf), gnd_from_radio with what the module hands back, gnd_view for the Ground station.
  * The cargo task (cargo_core.h): cargo_setup, then cargo_tick with the load switches; it takes the radio's LATCH
  * commands from this board's rc_input (the receiver's, or the RN_LINK_RC frames it is sent) and cargo_cmd's.
+ * The data bus (bus.h, docs/topic-bus.md): every board has one; its flight core and navigation publish on it, the page
+ * copies topics between boards with bus_sub_out/bus_sub_in and bus_out/bus_in (the RN_LINK_BUS_SUB and RN_LINK_BUS
+ * frames), and reads it all with bus_list for the Live data view.
  * Built by fc/build_wasm.sh. */
 #include "fc_core.h"
 #include "nav_core.h"
@@ -33,6 +36,8 @@
 #include "fleet.h"
 #include "ground/ground_core.h"
 #include "cargo_core.h"
+#include "bus.h"
+#include "prog_core.h"
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -43,6 +48,10 @@ static float arenas_[3][ARENA_CAP], pools_[3][POOL_CAP];
 static int32_t codes_[3][CODE_CAP];
 static uint8_t img[IMG_CAP], blob[BLOB_CAP], ncfg[256], lcfg[512];
 static rn_host H; static int host_ok;
+static bus BUS;                        /* this board's data bus */
+static float busv[BUS_TOPICS * (5 + BUS_VALS)];
+static prog_state PG;                  /* this board's programs */
+static int app_host(void *ctx, int app, const float *in, int n_in, float *out, int n_out);   /* (its apps: below) */
 static fc_state F;
 static nav_state N;
 static learn_state LS;
@@ -80,17 +89,19 @@ static void set_why(char *w, const char *s) { int i = 0; for (; s[i] && i < 63; 
 /* The board's step runner with the flight program as its built-in program. */
 EXPORT("host_setup") int host_setup(uint32_t img_len) {
   static fc_state zf; static nav_state zn; static learn_state zl; static super_state zs; F = zf; N = zn; LS = zl; SS = zs; host_ok = 0;
+  bus_init(&BUS);
   float *arenas[3] = { arenas_[0], arenas_[1], arenas_[2] }, *pools[3] = { pools_[0], pools_[1], pools_[2] };
   int32_t *codes[3] = { codes_[0], codes_[1], codes_[2] };
   int e = rn_host_init(&H, img, img_len, arenas, ARENA_CAP, codes, CODE_CAP, pools, POOL_CAP);
   if (e) { set_why(F.why, "the flight program didn't load"); set_why(N.why, F.why); return 100 + e; }
-  host_ok = 1; return 0;
+  host_ok = 1; prog_init(&PG, &H, &BUS); prog_apps(&PG, app_host, 0); return 0;
 }
 /* The flight core, with an airframe. */
 EXPORT("fc_setup") int fc_setup(uint32_t blob_len) {
   if (!host_ok) return 3;
   if (fc_init(&F, &H)) return 1;
   if (fc_airframe_load(&F, blob, blob_len)) return 2;
+  fc_bus_attach(&F, &BUS);
   return 0;
 }
 static fleet_state FL;                    /* the fleet program, beside the navigation (fleet.h) */
@@ -99,9 +110,67 @@ EXPORT("nav_setup") int nav_setup(uint32_t cfg_len) {
   if (!host_ok) return 3;
   if (nav_init(&N, &H)) return 1;
   if (nav_config_load(&N, ncfg, cfg_len)) return 2;
+  nav_bus_attach(&N, &BUS);
   fleet_init(&FL, &H);                            /* (no fleet program in it: the fleet is off, the rest flies) */
   return 0;
 }
+/* ── the data bus ── */
+EXPORT("bus_time") void bus_time(double t) { bus_clock(&BUS, t); }
+EXPORT("bus_reset") void bus_reset(void) { bus_init(&BUS); }   /* (a board with no flight program: host_setup does it for the others) */
+/* every topic, into busv: kind (0 this board's, 1 a mirror), floats n, updates here (mod 2^24: publishes, or copies taken),
+ * age [s] (−1 never), copies refused, then its n values. Returns how many topics; their names from bus_name_ptr. */
+EXPORT("bus_list_ptr") float *bus_list_ptr(void) { return busv; }
+EXPORT("bus_list") int bus_list(void) {
+  int k = 0;
+  for (int i = 0; i < BUS.nt; i++) {
+    const bus_entry *T = &BUS.T[i];
+    busv[k++] = T->kind; busv[k++] = T->n; busv[k++] = (float)(T->got % 16777216u); busv[k++] = (float)bus_age(&BUS, i); busv[k++] = (float)T->bad;
+    const float *v = BUS.pool + T->off; for (int j = 0; j < T->n; j++) busv[k++] = T->has ? v[j] : 0;
+  }
+  return BUS.nt;
+}
+EXPORT("bus_name_ptr") const char *bus_name_ptr(int i) { return i >= 0 && i < BUS.nt ? BUS.T[i].name : ""; }
+EXPORT("bus_layout_ptr") const char *bus_layout_ptr(int i) { return i >= 0 && i < BUS.nt ? BUS.T[i].layout : ""; }
+/* txt holds a topic's name, a 0, then its layout (may be empty) */
+static const char *txt_layout(void) { int i = 0; while (i < (int)sizeof txt - 1 && txt[i]) i++; return txt + i + 1; }
+static int starts(const char *s, const char *p) { for (int i = 0; p[i]; i++) if (s[i] != p[i]) return 0; return 1; }
+/* its counts, into fr: publishes, topics sent, taken, refused, unknown; subscriptions served, asked for */
+EXPORT("bus_stats") int bus_stats(void) { fr[0] = (float)BUS.n_pub; fr[1] = (float)BUS.n_sent; fr[2] = (float)BUS.n_got; fr[3] = (float)BUS.n_bad; fr[4] = (float)BUS.n_unknown; fr[5] = (float)BUS.ns; fr[6] = (float)BUS.nw; return 7; }
+/* ask for another board's topic (txt: its name, 0, its layout): n floats, every period [s] (0: on change). Its index
+ * here, or −1. */
+EXPORT("bus_want") int bus_want(int n, float period) { return bus_want_topic(&BUS, txt, n, txt_layout(), period); }
+/* publish a topic of this board's (txt: its name, 0, its layout; the values in fr): a program's own, so its name starts
+ * with "user." (the flight code's topics have their one writer). 0, or −1. */
+EXPORT("bus_put") int bus_put(int n) {
+  if (!starts(txt, "user.")) return -1;
+  int id = bus_topic(&BUS, txt, n, txt_layout()); return id < 0 ? -1 : bus_pub(&BUS, id, fr, n);
+}
+/* the sensor drivers' side (the page plays the drivers): declare a sensor's topic (sensor.…), then publish its readings */
+EXPORT("bus_declare") int bus_declare(int n) { return starts(txt, "sensor.") ? bus_topic(&BUS, txt, n, txt_layout()) : -1; }
+EXPORT("bus_driver_put") int bus_driver_put(int id, int n) { return id >= 0 && id < BUS.nt && starts(BUS.T[id].name, "sensor.") ? bus_pub(&BUS, id, fr, n) : -1; }   /* (values in fr) */
+/* ── programs (prog_core.h) ── */
+/* Apps (docs/apps.md): the page runs each WebAssembly app in an instance of its own; prog_core calls it through this
+ * (the app's index on this board, its inputs, dt last; its result), as a board's app host calls its runtime. */
+__attribute__((import_module("env"), import_name("app_call"))) int app_call(int app, const float *in, int n_in, float *out, int n_out);
+static int app_host(void *ctx, int app, const float *in, int n_in, float *out, int n_out) { (void)ctx; return app_call(app, in, n_in, out, n_out); }
+EXPORT("prog_reset") void prog_reset(void) { prog_init(&PG, host_ok ? &H : 0, &BUS); prog_apps(&PG, app_host, 0); }
+/* a program: txt = its formula's name, 0, the topic it writes, 0, that topic's layout; it writes n floats; it runs
+ * every period [s], or (0) on a change of the read prog_on names. Its index, or −1 (prog_why_ptr) */
+EXPORT("prog_add") int prog_add_(int n, float period) { const char *t = txt_layout(), *l = t; while (*l) l++; return prog_add(&PG, txt, t, n, l + 1, period); }
+/* an app: txt as prog_add (its name); it takes n_in floats (its reads, then dt) */
+EXPORT("prog_add_app") int prog_add_app_(int n, float period, int n_in) { const char *t = txt_layout(), *l = t; while (*l) l++; return prog_add_app(&PG, txt, t, n, l + 1, period, n_in); }
+EXPORT("prog_read") int prog_read_(int i) { return prog_read(&PG, i, txt); }      /* a topic it reads: txt */
+EXPORT("prog_on") int prog_on(int i) { return prog_trigger(&PG, i, txt); }         /* the read whose change runs it: txt */
+EXPORT("prog_check") int prog_check_(int i) { return prog_check(&PG, i); }
+EXPORT("prog_why_ptr") char *prog_why_ptr(void) { return PG.why; }
+EXPORT("prog_tick") void prog_tick(void) { prog_step(&PG); }
+/* into fr, per program: checked, runs, failed runs, runs skipped waiting for inputs, the last error */
+EXPORT("prog_list") int prog_list(void) { int k = 0; for (int i = 0; i < PG.n; i++) { fr[k++] = (float)PG.P[i].ok; fr[k++] = (float)PG.P[i].runs; fr[k++] = (float)PG.P[i].fails; fr[k++] = (float)PG.P[i].waits; fr[k++] = (float)PG.P[i].err; } return PG.n; }
+EXPORT("bus_sub_out") int bus_sub_out(void) { return bus_sub_pack(&BUS, fr, 1024); }              /* RN_LINK_BUS_SUB, into fr */
+EXPORT("bus_sub_in") int bus_sub_in(int peer, int n) { return bus_sub_take(&BUS, peer, fr, n); }   /* one that came, in fr */
+EXPORT("bus_out") int bus_out(int peer) { return bus_pack(&BUS, peer, fr, 1024); }                /* RN_LINK_BUS due for peer, into fr */
+EXPORT("bus_in") int bus_in(int n) { return bus_unpack(&BUS, fr, n); }                             /* one that came, in fr */
+
 /* A new program while flying: through the host's loading steps, as on the drone. */
 EXPORT("stage") int stage(uint32_t img_len) { return rn_host_stage(&H, img, img_len); }
 EXPORT("host_event") int host_event(void) { int e = H.last_event; H.last_event = 0; return e; }

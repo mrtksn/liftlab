@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the runner and runs every check: the compiled formulas against the originals (JavaScript runner and C
+# Builds the runner and runs every check: the data bus (fc/bus.c), the compiled formulas against the originals (JavaScript runner and C
 # runner as WebAssembly), the drone's loading steps (rn_host.c), the link framing (C and the Pi's Python) and the
 # flight code (fc/, flying airframes exported from the simulator), the navigation, the telemetry and radio (CRSF), and
 # the Pi program end to end behind pseudo-terminals, the cargo task's latches, and the command module (runner/ground)
@@ -17,6 +17,11 @@ python3 -c "import sys; sys.path.insert(0, 'pi'); from send_program import frame
 cc -O2 -Wall -Wextra -o "$T/test_link" rn.c rn_link.c test_link.c -lm
 "$T/test_link" "$T/pyframe.bin"
 fc/build_wasm.sh
+cc -O2 -Wall -Wextra -I. -o "$T/test_bus" fc/test_bus.c fc/bus.c
+"$T/test_bus"
+node ../tools/prog_test_data.js "$T"
+cc -O2 -Wall -Wextra -I. -o "$T/test_prog" fc/test_prog.c fc/prog_core.c fc/bus.c rn_host.c rn.c -lm
+"$T/test_prog" "$T/prog.rnp"
 cc -O2 -Wall -Wextra -I. -o "$T/test_fc" fc/test_fc.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_fc" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm

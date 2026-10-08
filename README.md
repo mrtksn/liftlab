@@ -892,6 +892,29 @@ Nothing that flies changes before step 4. The Computers tab shows where an edit 
 - **Memory:** three slots take about 250 KB. That's comfortable on an ESP32-S3, and tight on a plain ESP32 without PSRAM; there, put the loaded slots in PSRAM or build for fewer inputs.
 - **`tools/export_program.js`** makes a program image from `js/laws.js` (with `--edit key=file.js` for edits). `--c runner/rn_builtin.c` writes it as the firmware's built-in program.
 
+### The data bus
+
+Each board also keeps a **data bus** (`runner/fc/bus.h`): named topics its programs publish and read (`fc.attitude`,
+`fc.state`, `cmd.pilot`, `nav.estimate`, …), each with one writer, a sequence number and an age. Boards copy the topics
+they ask each other for over their link (`RN_LINK_BUS_SUB`, `RN_LINK_BUS`), at a rate or on change. In the simulator
+the flight core and the navigation publish on it and the Pi follows the flight core's topics; **Computers → Live
+data…** shows every board's topics live. Sensors publish their readings (`sensor.baro`, …) on the board they're wired
+to, and topics reach boards that aren't linked to their writer through the flight controller.
+
+**Programs** are your own formulas on a board of your choice (Formula editor → **+ New program**): a header (when it
+runs, the topics it reads, the `user.` topic it writes) and code, `function name(st, inp, dt) { … return { … }; }`.
+They're compiled into that board's flight program, run on the bus (`runner/fc/prog_core.c`), reload in flight when
+their code changes and are part of the design.
+
+**Apps** are code of your own in C or Python (Computers → **App manager…**), on a board whose settings say it runs
+apps: an ESP32 runs formulas *or* WebAssembly apps, a Pi any of formulas, WebAssembly apps and native apps together.
+C is compiled in the browser into WebAssembly (clang as WebAssembly, fetched once), with a limit on every loop, and run
+by the board's app host through the same `prog_core.c`: a crash or an endless loop stops that run, not the board. See
+[docs/apps.md](docs/apps.md). For now programs and apps run in the simulator; the boards' app hosts, the bus on real
+boards and command arbitration are the next steps. The design, the rules (the flight loop never
+waits on the bus; one writer per topic; stale is missing; a link budget) and the plan are in
+[docs/topic-bus.md](docs/topic-bus.md).
+
 ### Cost
 
 **Measured on an ESP32-D0WDQ6** (ESP32-WROOM-32, 240 MHz, no PSRAM) with the bench firmware (`runner/bench`), which runs the default program's formulas on their self-test inputs:

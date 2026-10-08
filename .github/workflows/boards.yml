@@ -49,6 +49,7 @@ jobs:
         run: |
           cc -O1 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=undefined -Irunner -Irunner/fc tools/test_learning_native.c runner/fc/fc_core.c runner/fc/nav_core.c runner/rn_host.c runner/rn.c runner/pi/rn_builtin_pi.c -lm -o /tmp/test-learning
           /tmp/test-learning
+      - run: node tools/test_wasm_meter.js
       - run: python3 tools/sync_driver_presets.py --check
       - name: Sensor driver register tests
         run: |
@@ -72,6 +73,11 @@ jobs:
           /tmp/test-fleet
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
           /tmp/test-esp-radio
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_bus.c runner/fc/bus.c -o /tmp/test-bus
+          /tmp/test-bus
+          node tools/prog_test_data.js /tmp/prog
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner runner/fc/test_prog.c runner/fc/prog_core.c runner/fc/bus.c runner/rn_host.c runner/rn.c -lm -o /tmp/test-prog
+          /tmp/test-prog /tmp/prog/prog.rnp
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do

@@ -47,6 +47,11 @@ enum { RN_LINK_TLM = 10, RN_LINK_RC = 11 };
  *                     second while the Pi asks (RN_LINK_WANT bit 4)
  *   RN_LINK_PEER_OUT  Pi → drone: what the program publishes, and its messages to send (fleet_out) */
 enum { RN_LINK_PEER_OUT = 12, RN_LINK_PEER = 0x86 };
+/* The data bus (fc/bus.h, docs/topic-bus.md), either way between any two boards:
+ *   RN_LINK_BUS_SUB  the topics this board wants from the other, and how often (renewed every 0.5 s; lapses after 2 s)
+ *   RN_LINK_BUS      the other's topics, as they fall due
+ * Boards that don't know them drop them, so they can be added beside the frames above. */
+enum { RN_LINK_BUS_SUB = 13, RN_LINK_BUS = 0x87 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

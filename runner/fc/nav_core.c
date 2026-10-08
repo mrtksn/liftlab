@@ -190,7 +190,22 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
   if (!in->have_att || !(dt > 0) || !(qn > 0.5f)) { *out = N->last; return 1; }
   int e = step(N, in, sp, dt, qn, out);
   N->last = *out;
+  if (N->bus) {
+    float v[9];
+    for (int i = 0; i < 3; i++) { v[i] = out->p[i]; v[3 + i] = out->v[i]; }
+    v[6] = (float)out->have_home; v[7] = (float)out->ready; v[8] = (float)out->landed; bus_pub(N->bus, N->bt[0], v, 9);
+    for (int i = 0; i < 3; i++) { v[i] = sp->target[i]; v[3 + i] = sp->vref[i]; }
+    v[6] = sp->heading; v[7] = (float)sp->fly; bus_pub(N->bus, N->bt[1], v, 8);
+    for (int i = 0; i < 3; i++) v[i] = out->acc[i];
+    v[3] = out->heading; v[4] = (float)out->fly; bus_pub(N->bus, N->bt[2], v, 5);
+  }
   return e;
+}
+int nav_bus_attach(nav_state *N, bus *B) {
+  N->bus = 0; if (!B) return 0;
+  if ((N->bt[0] = bus_topic(B, "nav.estimate", 9, "p[3] v[3] hasHome ready landed")) < 0 || (N->bt[1] = bus_topic(B, "nav.setpoint", 8, "target[3] vref[3] heading fly")) < 0
+      || (N->bt[2] = bus_topic(B, "nav.command", 5, "acc[3] heading fly")) < 0) return -1;
+  N->bus = B; return 0;
 }
 
 void nav_set(nav_state *N, const float *p, int n) {

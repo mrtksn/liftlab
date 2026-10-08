@@ -307,7 +307,8 @@ class RnWasm {
   }
   // Another runner with its own memory, from a compiled module.
   static async fromModule(m) { return new RnWasm(await WebAssembly.instantiate(m, { env: RnWasm.env() })); }
-  static env() { return { sin: Math.sin, cos: Math.cos, tan: Math.tan, asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2, exp: Math.exp, log: Math.log, pow: Math.pow }; }
+  // (app_call: a board's apps, apps.js; an instance that runs none says so to any)
+  static env() { return { sin: Math.sin, cos: Math.cos, tan: Math.tan, asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2, exp: Math.exp, log: Math.log, pow: Math.pow, app_call: () => -1 }; }
   constructor(inst) { this.x = inst.exports; this.P = null; this.index = {}; }
   // Load a compiled program. Returns null or the loader's reason for rejecting it.
   // With tests, the runner's self-tests run too (tol: largest relative difference); this.selfWorst holds the

@@ -57,9 +57,19 @@ TASKS.tlm = { label: 'Telemetry & radio', hz: 200, formulas: [],
   what: 'The pilot\'s radio is on this board: an ExpressLRS receiver wired to it, or its own ESP-NOW or Wi-Fi (the Ground tab picks the link). Its channels fly the drone; the other tasks\' telemetry comes here and goes down the radio, as much as the link has room for. About 16 KB of an ESP32\'s memory.' };
 TASKS.cargo = { label: 'Cargo', hz: 50, formulas: [],
   what: 'The latches are wired to this board: it opens and closes them on the pilot\'s command (the radio, or the buttons on the view) and reports what they hold. Any board will do: the flight controller, the Pi, or an ESP32 of its own.' };
+// What a board runs (its settings; docs/apps.md): formulas (its duties and formula programs, on the step runner),
+// WebAssembly apps (apps.js, on its app host), native apps (Pi only: C built on the Pi, Python). A microcontroller runs
+// one of the first two (it decides its firmware); a Linux computer any of them together.
+const RUNTIMES = {
+  formulas: { label: 'Formulas', what: 'its duties (flight core, navigation, …) and formula programs' },
+  wasm: { label: 'WebAssembly apps', what: 'C apps compiled here, on the board\'s WebAssembly runtime' },
+  native: { label: 'Native apps', what: 'C built on the Pi, and Python', linuxOnly: true },
+};
+const boardRuns = b => b && Array.isArray(b.runs) && b.runs.length ? b.runs : ['formulas'];
+const runsFormulas = b => boardRuns(b).includes('formulas');
 // Tasks that are plain code, without formulas: a board that runs only these loads no flight program.
 const NO_PROGRAM = new Set(['tlm', 'cargo']);
-const needsProgram = b => b.tasks.some(t => !NO_PROGRAM.has(t));
+const needsProgram = b => b.tasks.some(t => !NO_PROGRAM.has(t)) || (typeof programsOn === 'function' && programsOn(b).length > 0);   // (and a board with programs: they are in its flight program)
 const BOARD_MAX = 4, LINK_DELAY = 0.006;   // serial link (921600 baud): frame time plus scheduling, each way [s]
 
 /* ───────── the configuration (part of the design) ───────── */
@@ -80,8 +90,17 @@ function fixComputers(C) {
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));
+  const placed = new Set();
+  for (const b of C.boards) {                                      // what it runs, and its apps (each on one board)
+    const mcu = BOARD_KINDS[b.kind].mcu, r = Object.keys(RUNTIMES).filter(k => (b.runs || []).includes(k) && !(mcu && RUNTIMES[k].linuxOnly));
+    b.runs = mcu ? [r.includes('formulas') || !r.length ? 'formulas' : 'wasm'] : r.length ? r : ['formulas'];
+    if (!b.runs.includes('formulas')) b.tasks = [];
+    b.apps = (Array.isArray(b.apps) ? b.apps : []).filter(id => typeof id === 'string' && !placed.has(id)).slice(0, 16); for (const id of b.apps) placed.add(id);
+    if (b.runs.length === 1 && b.runs[0] === 'formulas') delete b.runs;   // (the default: designs stay as they were)
+    if (!b.apps.length) delete b.apps;
+  }
   for (const t of Object.keys(TASKS)) { let seen = false; for (const b of C.boards) if (b.tasks.includes(t)) { if (seen || (TASKS[t].mcuOnly && !BOARD_KINDS[b.kind].mcu) || (TASKS[t].piOnly && BOARD_KINDS[b.kind].mcu)) b.tasks = b.tasks.filter(x => x !== t); else seen = true; } }
-  if (!C.unassignedCore && !C.boards.some(b => b.tasks.includes('core'))) C.boards.find(b => BOARD_KINDS[b.kind].mcu).tasks.unshift('core');
+  if (!C.unassignedCore && !C.boards.some(b => b.tasks.includes('core'))) { const fc = C.boards.find(b => BOARD_KINDS[b.kind].mcu && runsFormulas(b)); if (fc) fc.tasks.unshift('core'); }
   C.radio = 1;
   return C;
 }
@@ -129,13 +148,14 @@ function groundBudget() {
   let memKB = 0; try { const P = boardProgram(['ground']); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
   return { ops, load: ops / (K.mops * 1e6) * (K.mcu ? 1 : 1.5), memKB, ramKB: K.ramKB };
 }
-// A board's program: the formulas of its tasks (sizes from the compiled image, cached by task set).
+// A board's program: the formulas of its tasks, and its programs (programs.js: extra = { srcs, sigs }); sizes from the
+// compiled image, cached by what's in it.
 const boardProgCache = new Map();
-function boardProgram(tasks, srcs = rnSources()) {
-  const keys = rnTaskFormulas(tasks), tune = rnTuneKey(), key = tasks.join(',') + '|' + keys.map(k => srcs[k]).join('\u0000') + '|' + tune;
+function boardProgram(tasks, srcs = rnSources(), extra = null) {
+  const keys = rnTaskFormulas(tasks), tune = rnTuneKey(), key = tasks.join(',') + '|' + keys.map(k => srcs[k]).join('\u0000') + '|' + tune + (extra ? '|' + JSON.stringify(extra) : '');
   let P = boardProgCache.get(key);
   if (!P) {
-    P = rnCompileAll(Object.fromEntries(keys.map(k => [k, srcs[k]])), RN_SIGS, { consts: { TUNE: JSON.parse(tune) } });
+    P = rnCompileAll({ ...Object.fromEntries(keys.map(k => [k, srcs[k]])), ...(extra ? extra.srcs : {}) }, extra ? { ...RN_SIGS, ...extra.sigs } : RN_SIGS, { consts: { TUNE: JSON.parse(tune) } });
     const bad = Object.entries(P.errors); if (bad.length) throw new Error(`${bad[0][0]}: ${bad[0][1]}`);
     rnVerify(P);
     if (boardProgCache.size > 12) boardProgCache.clear();
@@ -148,7 +168,7 @@ function boardBudget(b) {
   const K = BOARD_KINDS[b.kind];
   const ops = b.tasks.reduce((s, t) => s + taskCost(t) * boardTaskHz(b, t), 0);
   const load = ops / (K.mops * 1e6) * (K.mcu ? 1 : 1.5);   // a Linux board loses some to the system
-  let memKB = 0; if (needsProgram(b)) try { const P = boardProgram(b.tasks); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
+  let memKB = 0; if (needsProgram(b)) try { const P = boardProgram(b.tasks, undefined, b.id != null && typeof progSources === 'function' ? progSources(b) : null); memKB = (P.arenaSize * 4 + P.code.length * 4) / 1024; } catch (e) { }
   return { ops, load, memKB, ramKB: K.ramKB };
 }
 
@@ -179,9 +199,11 @@ const frOut = (w, n) => Float32Array.from(new Float32Array(w.memory.buffer, w.fr
 // A board's program as it loads it: its tasks' formulas, compiled here, with self-tests from this session's calls.
 function boardImage(b, srcs) {
   if (!RN.P && !srcs) throw new Error('the flight formulas don\'t compile' + (RN.buildErr ? ': ' + RN.buildErr : ''));
-  const P = boardProgram(b.tasks, srcs);
+  const extra = b.id != null && typeof progSources === 'function' ? progSources(b) : null;   // (its programs: not the command module's)
+  const P = boardProgram(b.tasks, srcs, extra && Object.keys(extra.srcs).length ? extra : null);
   const samples = []; for (const k of Object.keys(RN.samples || {})) if (P.fns[k]) for (const s of RN.samples[k]) samples.push(s);
   for (const k of Object.keys(P.fns)) if (!(RN.samples || {})[k]) { const d = LAW_DEFS.find(d => d.key === k); if (d && d.sample) samples.push({ key: k, args: d.sample() }); }   // (not called here yet: its own sample)
+  if (extra) for (const [k, sig] of Object.entries(extra.sigs)) samples.push({ key: k, args: [{}, zeroOf(sig.args[1]), 0.01] });   // (a program: its inputs at zero)
   return rnImage(P, { tests: rnMakeTests(P, samples, 600) });
 }
 // The navigation's config (nav_core.h): mass, where the barometer, GPS antenna and flow camera sit, which it has.
@@ -226,7 +248,7 @@ function boardsStart() {
   try { af = fcAirframeBlob({ imuBody: true }); } catch (x) { afErr = x.message; }
   for (const b of C.boards) {
     let w = brt.inst.get(b.id);
-    if (!w) { w = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports; brt.inst.set(b.id, w); }
+    if (!w) { const id = b.id; w = new WebAssembly.Instance(brt.module, { env: { ...RnWasm.env(), app_call: (i, inP, nIn, outP, nOut) => appCall(id, i, inP, nIn, outP, nOut) } }).exports; brt.inst.set(b.id, w); }
     w.tlm_setup(b.tasks.includes('tlm') ? 1 : 0); w.radio_link(...radioModel().wasm(radioCfg));
     if (b.tasks.includes('cargo')) {                                // the latches, as they were set up: closed or open
       const ls = latches().slice(0, 8); frIn(w, ls.map(l => l.travel ?? 0.15));
@@ -234,7 +256,7 @@ function boardsStart() {
     }
     if (!needsProgram(b)) continue;                                 // (the radio and the latches need no flight program)
     let img; try { img = boardImage(b); } catch (e) { brt.err = `${b.name}: ${e.message}`; return; }
-    brt.srcs.set(b.id, boardSrcKey(b.tasks, rnSources()));
+    brt.srcs.set(b.id, boardSrcKey(b.tasks, rnSources()) + '\u0002' + progKey(b));
     if (img.length > w.img_cap()) { brt.err = `${b.name}: the flight program is too big for the board`; return; }
     new Uint8Array(w.memory.buffer, w.img_ptr(), img.length).set(img);
     const e = w.host_setup(img.length); if (e) { brt.err = `${b.name}: ${cstr(w, w.why_ptr())}`; return; }
@@ -256,7 +278,73 @@ function boardsStart() {
   groundStart();
   radioLinkSetup();                                                  // (a packet link: both ends' packet layers, with the binding phrase)
   if (typeof peerSetup === 'function') peerSetup();                  // (the drone's own link to the others in the fleet: peer-air.js)
+  busSetup();
   brt.ready = true;
+}
+
+/* ───────── the data bus between boards (docs/topic-bus.md) ───────── */
+// Each board's flight code publishes on its own bus (runner/fc/bus.h), and so do the sensors wired to it (sensor.…, as
+// its drivers would). The boards are linked to the flight core's board (a star); over each link they copy what the
+// other asks for, in RN_LINK_BUS_SUB and RN_LINK_BUS frames with the link's delay. A board reading a topic written on
+// another board that isn't the flight core's gets it relayed by the flight core's board, which asks for it too.
+// What is read where (busReads): the navigation's board follows the flight core's state, attitude, height and the
+// commands it takes; the flight core's board follows the navigation's estimate and command.
+const BUS_READS = [   // [the reader: a task's board, the topic, period (s; 0 on change)]
+  ['nav', 'fc.state', 0], ['nav', 'fc.attitude', 0.02], ['nav', 'fc.height', 0.05], ['nav', 'cmd.pilot', 0],
+  ['core', 'nav.estimate', 0.05], ['core', 'nav.command', 0.05],
+];
+// What each sensor publishes: its raw readings, in the sensor's own axes (the drivers' output).
+const BUS_SENSOR = { imu: [6, 'gyro[3] accel[3]', L => [...L.gyro, ...L.accel]], mag: [3, 'field[3]', L => L], baro: [1, 'height', L => [L]],
+  fix: [6, 'p[3] v[3]', L => [...L.p, ...L.v]], flow: [4, 'flow[2] range quality', L => [...L.flow, L.range, L.q]] };
+const busSensorName = c => { const same = cfg.comps.filter(x => x.type === 'sensor' && x.kind === c.kind), k = same.indexOf(c); return 'sensor.' + c.kind + (k > 0 ? k + 1 : ''); };
+const busTopics = w => { const n = w.bus_list(), v = new Float32Array(w.memory.buffer, w.bus_list_ptr(), n * (5 + 32)), out = []; let k = 0;
+  for (let i = 0; i < n; i++) { const m = v[k + 1]; out.push({ name: cstr(w, w.bus_name_ptr(i), 24), layout: cstr(w, w.bus_layout_ptr(i), 64), mirror: v[k] > 0.5, n: m, got: v[k + 2], age: v[k + 3], bad: v[k + 4], vals: Array.from(v.subarray(k + 5, k + 5 + m)) }); k += 5 + m; }
+  return out; };
+const busTxt = (w, name, layout) => { const b = new TextEncoder().encode(name + '\0' + (layout || '') + '\0'); new Uint8Array(w.memory.buffer, w.txt_ptr(), b.length).set(b); };
+function busWant(w, name, n, period, layout) { busTxt(w, name, layout); return w.bus_want(n, period); }
+// Every board but the flight core's is linked to it (the boards' serial links).
+const busLinked = () => { const core = boardOf('core'); return core ? computers().boards.filter(b => b !== core && brt.inst.get(b.id)) : []; };
+// board reads name (written on whichever board publishes it): the subscriptions that bring it there, relayed if need be.
+// Returns '' or why it can't.
+function busRead(reader, name, period) {
+  const core = boardOf('core'), w = reader && brt.inst.get(reader.id); if (!w || !core) return 'no such board';
+  const writer = computers().boards.find(b => { const x = brt.inst.get(b.id); return x && busTopics(x).some(t => t.name === name && !t.mirror); });
+  if (!writer) return 'no board publishes ' + name;
+  if (writer === reader) return '';
+  const t = busTopics(brt.inst.get(writer.id)).find(t => t.name === name && !t.mirror);
+  if (writer !== core && reader !== core && busWant(brt.inst.get(core.id), name, t.n, period, t.layout) < 0) return 'the flight core\'s board can\'t relay it';
+  return busWant(w, name, t.n, period, t.layout) < 0 ? reader.name + ' has no room for it' : '';
+}
+function busSetup() {
+  brt.nextBusSub = 0; brt.busSensors = [];
+  const C = computers();
+  for (const b of C.boards) { const w = brt.inst.get(b.id); if (w && !needsProgram(b)) w.bus_reset(); }
+  for (const c of cfg.comps.filter(c => c.type === 'sensor')) {      // each sensor's topic, on the board it's wired to
+    const b = wiredTo(c), w = b && brt.inst.get(b.id), S = BUS_SENSOR[c.kind]; if (!w || !S) continue;
+    busTxt(w, busSensorName(c), S[1]); const id = w.bus_declare(S[0]); if (id >= 0) brt.busSensors.push({ c, w, id, S });
+  }
+  progRegister();                                                   // (programs.js: their topics, before anyone routes to them)
+  appRegister();                                                    // (apps.js: the apps', on the boards that run them)
+  for (const [task, name, period] of BUS_READS) { const b = boardOf(task); if (b) busRead(b, name, period); }
+  for (const [list, at, err] of [[programs(), brt.progAt, brt.progErr], [apps(), brt.appAt, brt.appErr]])
+    for (const p of list) { const a = at.get(p.id); if (a) for (const r of p.reads) { const why = busRead(a.b, r, p.every > 0 ? p.every : 0); if (why) err.set(p.id, why); } }
+  progConnect(programs(), brt.progAt, brt.progErr); progConnect(apps(), brt.appAt, brt.appErr);
+  brt.progBoards = [...new Set([...brt.progAt.values(), ...brt.appAt.values()].map(a => a.w))];
+}
+// Each control step: the sensors' fresh readings onto their boards' buses; renew the subscriptions twice a second; and
+// send what has fallen due, both ways on each link.
+function busStep() {
+  for (const s of brt.busSensors || []) { const rt = sens.get(s.c.id); if (rt && rt.fresh && rt.latest != null && onBoard(s.c)) { frIn(s.w, s.S[2](rt.latest)); s.w.bus_driver_put(s.id, s.S[0]); } }
+  for (const w of brt.progBoards || []) w.prog_tick();               // the programs that are due (prog_core.c)
+  const core = boardOf('core'), cw = core && brt.inst.get(core.id), links = busLinked(); if (!cw || !links.length) return;
+  const renew = brt.t >= brt.nextBusSub - 1e-9; if (renew) brt.nextBusSub = brt.t + 0.5;
+  for (const b of links) {
+    const w = brt.inst.get(b.id);
+    for (const [from, fw, to, tw] of [[core, cw, b, w], [b, w, core, cw]]) {
+      if (renew) { const n = tw.bus_sub_out(); if (n) sendFrame(to, from, 'bussub', frOut(tw, n)); }
+      const n = fw.bus_out(to.id); if (n) sendFrame(from, to, 'bus', frOut(fw, n));
+    }
+  }
 }
 // The command module: its own instance with the ground program, started with the boards (when the drone has a radio).
 // A program that doesn't compile, fit or load leaves it with none (not the last run's): it sends the raw sticks
@@ -288,7 +376,7 @@ function boardsStageProgram() {
   const srcs = rnSources();
   for (const b of computers().boards) {
     const w = brt.inst.get(b.id); if (!w || !needsProgram(b)) continue;
-    const key = boardSrcKey(b.tasks, srcs); if (brt.srcs.get(b.id) === key) continue;   // none of its formulas changed
+    const key = boardSrcKey(b.tasks, srcs) + '\u0002' + progKey(b); if (brt.srcs.get(b.id) === key) continue;   // none of its formulas (or programs) changed
     let img; try { img = boardImage(b, srcs); } catch (e) { rnEvent(`${b.name}: the edit didn't compile for it: ${e.message}`, 'bad'); continue; }
     brt.srcs.set(b.id, key);
     if (img.length > w.img_cap()) { rnEvent(`${b.name}: the edited program is too big for the board`, 'bad'); continue; }
@@ -364,7 +452,7 @@ function pilotCargoCmd(latch, action) {
 
 /* ───────── frames between the tasks ───────── */
 // Each goes over the serial link (LINK_DELAY) unless both tasks are on the same board.
-function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + (fromB && toB.id === fromB.id ? 0 : LINK_DELAY), to: toB, kind, data }); }
+function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + (fromB && toB.id === fromB.id ? 0 : LINK_DELAY), from: fromB, to: toB, kind, data }); }
 function deliverFrames() {
   const coreB = boardOf('core'), navB = boardOf('nav'), learnB = boardOf('learn'), superB = boardOf('super');
   for (let k = 0; k < brt.q.length;) {
@@ -380,6 +468,8 @@ function deliverFrames() {
     else if (m.kind === 'cargo') w.cargo_cmd(m.data[0], m.data[1]);   // a pickup's request: close the latch
     else if (m.kind === 'fleet') w.fleet_in(n);                       // the peer table, for the fleet program (fleet.h)
     else if (m.kind === 'fleetout') w.fleet_apply(n, brt.t);         // what the fleet program publishes and sends
+    else if (m.kind === 'bussub') w.bus_sub_in(m.from ? m.from.id : 0, n);   // the data bus (docs/topic-bus.md): what the other board wants
+    else if (m.kind === 'bus') w.bus_in(n);                           // … and its topics
     else if (m.kind === 'model') {
       if (coreB && m.to.id === coreB.id && !w.fc_model(n)) brt.modelSig = JSON.stringify(Array.from(m.data));
       if (superB && m.to.id === superB.id) w.super_model(n);
@@ -446,6 +536,7 @@ function boardsControl(dt) {
   const idle = () => { for (const c of acts) { const st = act.get(c.id); if (st) setThrottle(c, st, 0, 0); } };
   if (!brt.ready || !coreB) { idle(); return; }
   brt.t += dt;
+  for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w) w.bus_time(brt.t); }   // (each board's clock: the bus stamps its topics with it)
   if (!cargo.power) {                                               // no battery connected on board: every board is dark (cargo.js)
     idle(); brt.fcState = 0; brt.fcWhy = 'no power: ' + powerWhy(); brt.navOut = null;
     const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
@@ -461,6 +552,7 @@ function boardsControl(dt) {
   const tlmB = boardOf('tlm'), tw = tlmB && brt.inst.get(tlmB.id);
   if (tw) radioTick(dt, tlmB, tw, coreB, navB);
   cargoTick();
+  busStep();
 
   // The flight core: commands that have arrived, then a step on the newest IMU sample.
   while (brt.toCore.length && brt.toCore[0].at <= brt.t + 1e-9) {
