@@ -36,10 +36,11 @@
  */
 #ifndef FC_CORE_H
 #define FC_CORE_H
-#include <stdint.h>
-#include <stdarg.h>
-#include "rn_host.h"
 #include "bus.h"
+#include "pid_tuning.h"
+#include "rn_host.h"
+#include <stdarg.h>
+#include <stdint.h>
 
 #define FC_MAX_MOTORS 12
 #define FC_MAX_JOINTS 8
@@ -130,7 +131,9 @@ typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_ou
 enum { FC_DISARMED = 0, FC_ARMED, FC_FAILSAFE, FC_CRASHED, FC_TESTING };
 
 typedef struct {
-  fc_airframe A; int have_airframe;
+  fc_airframe A;
+  int have_airframe;
+  uint32_t airframe_crc;
   rn_host *H; int f_att, f_srv, f_ta, f_err, f_ctl, f_fd, f_pref, f_alloc, f_lin, f_vc; int sizes_ok;
   int state; char why[64];
   double t, cmd_t;                       /* time since start, when the last command came [s] (double: exact for years) */
@@ -156,6 +159,7 @@ typedef struct {
   int trap;                              /* last formula error */
   float tau_des[3];                      /* the torque the attitude control last asked for (body) [N·m] */
   uint32_t steps;
+  pid_tuning tuning; /* leased hardware PID trials; bundled standard program only */
   /* the learning task's excitation and model (see EXC, MODEL above) */
   int exc_mode, exc_hold_m, exc_hold_s, exc_smask; float exc_m[FC_MAX_MOTORS], exc_s[FC_MAX_JOINTS]; double exc_t;
   int exc_axis; float exc_angle;
@@ -206,6 +210,9 @@ int fc_ltel(fc_state *F, float *out);
 /* Companion tuning sample, after fc_ltel: matching timestamp and averaged commanded angular acceleration.
  * Together with LTEL gyro it identifies actuator dynamics inside the closed loop. Does not change LTEL. */
 int fc_tuning_sample(const fc_state *F, float *out);
+int fc_tune_supported(const fc_state *F);
+int fc_tune(fc_state *F, const float *p, int n);
+int fc_tune_status(const fc_state *F, float *out);
 /* The reader's side: an LTEL frame's time, unwrapped, from the last one (got: there was one). */
 static inline double fc_ltel_unwrap(double last, int got, double raw) {
   if (!got) return raw;

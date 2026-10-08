@@ -45,11 +45,14 @@ int nav_config_load(nav_state *N, const uint8_t *blob, uint32_t len) {
   C.speed_max = f[k++];
   C.refs = (int)(f[k++] + 0.5f) & 7;
   if (!(C.m > 0)) { say(N, "nav config: no mass"); return -1; }
+  memset(&N->tuning, 0, sizeof N->tuning);
+  pid_defaults(N->tuning.accepted, 1);
   N->C = C; N->have_config = 1; say(N, "nav config loaded");
   return 0;
 }
 
 int nav_init(nav_state *N, rn_host *H) {
+  pid_defaults(N->tuning.accepted, 1);
   N->H = H; N->ok = 0;
   const char *names[] = { "positionEstimator", "flowVelocity", "positionControl" };
   int *slot[] = { &N->f_pe, &N->f_fv, &N->f_pc };
@@ -167,6 +170,30 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   b[k++] = 1; b[k++] = N->lim_accel > 0 ? N->lim_accel : 6; b[k++] = 1; b[k++] = N->lim_lean > 0 ? N->lim_lean : 35; b[k++] = N->lim_speed > 0; b[k++] = N->lim_speed;
   float Fd[3];
   if ((e = call(N, N->f_pc, b, Fd))) return -1;
+  if (N->H->act == 0 && N->H->phase == RN_PH_FLYING && N->H->pending == 0 &&
+      (N->tuning.enabled || N->tuning.pending)) {
+    const float *g = pid_gains(&N->tuning);
+    float want[3], a[3], k = g[0] / g[3];
+    for (int i = 0; i < 3; i++)
+      want[i] = k * ep[i];
+    float xy = sqrtf(want[0] * want[0] + want[1] * want[1]), vh = N->lim_speed > 0 ? N->lim_speed : 6;
+    if (xy > vh) {
+      want[0] *= vh / xy;
+      want[1] *= vh / xy;
+    }
+    want[2] = clampf(want[2], -1.5f, 3);
+    for (int i = 0; i < 3; i++)
+      a[i] = g[3] * (want[i] - ev[i]) + g[6] * N->iPos[i];
+    xy = sqrtf(a[0] * a[0] + a[1] * a[1]);
+    float max = N->lim_accel > 0 ? N->lim_accel : 6;
+    if (xy > max) {
+      a[0] *= max / xy;
+      a[1] *= max / xy;
+    }
+    a[2] = clampf(a[2], -6, 8);
+    for (int i = 0; i < 3; i++)
+      Fd[i] = C->m * (a[i] + (i == 2 ? G_ : 0));
+  }
   for (int i = 0; i < 3; i++) out->acc[i] = Fd[i] / C->m;
   out->acc[2] -= G_;
   out->heading = sp->heading; out->fly = 1;
@@ -178,6 +205,8 @@ int nav_test_target(nav_state *N, int axis, float offset) {
   N->test_axis = axis; N->test_offset = clampf(offset, -0.2f, 0.2f); N->test_left = 0.1f; return 0;
 }
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out) {
+  pid_tick(&N->tuning, dt, N->H && N->H->act == 0 && N->H->phase == RN_PH_FLYING && N->H->pending == 0,
+           sp->fly && !N->sup_mode && !N->rc_rth, 1);
   nav_sp test = *sp;
   if (dt > 0 && fin(dt)) N->test_left = N->test_left > dt ? N->test_left - dt : 0;
   if (N->test_left > 0 && !N->sup_mode && !N->rc_rth && sp->fly) test.target[N->test_axis] += N->test_offset;
@@ -214,4 +243,10 @@ void nav_set(nav_state *N, const float *p, int n) {
   int mode = (int)p[0]; if (mode < 0 || mode > 3) return;
   if (mode > N->sup_mode || (!N->last.fly && !N->landed)) N->sup_mode = mode;   /* in the air it only steps up */
   N->lim_lean = p[1]; N->lim_accel = p[2]; N->lim_speed = p[3];
+}
+
+int nav_tune(nav_state *N, const float *p, int n) {
+  return pid_frame(&N->tuning, p, n, 1,
+                   N->H && N->H->act == 0 && N->H->phase == RN_PH_FLYING && N->H->pending == 0,
+                   N->last.fly && !N->sup_mode && !N->rc_rth, !N->last.fly);
 }

@@ -158,8 +158,13 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len) {
   if (r.bad || r.at != r.n || !(A.m > 0)) { fc_say(F, "airframe: wrong size or values"); return -1; }
   int inputs = A.n_motors + A.n_joints;
   if (inputs > FC_RN_IN) { fc_say(F, "airframe: %d inputs, the formulas hold %d", inputs, FC_RN_IN); return -1; }
+  memset(&F->tuning, 0, sizeof F->tuning);
+  pid_defaults(F->tuning.accepted, 0);
   memset(F->payload, 0, sizeof F->payload);
-  F->A = A; F->have_airframe = 1; F->state = FC_DISARMED;
+  F->A = A;
+  F->airframe_crc = crc;
+  F->have_airframe = 1;
+  F->state = FC_DISARMED;
   for (int j = 0; j < A.n_joints; j++) F->th_cmd[j] = F->th_hat[j] = A.jnt[j].manual;
   /* a new airframe: the description, nothing learned, every part working */
   F->use_learned = F->hold_servos = 0; F->exc_mode = 0; F->sup_mode = 0; F->lim_lean = 0; F->lim_accel = 0;
@@ -200,6 +205,7 @@ int fc_init(fc_state *F, rn_host *H) {
       F->sizes_ok = 0; fc_say(F, "formula %s isn't what this firmware expects", names[i]); return -1;
     }
   }
+  pid_defaults(F->tuning.accepted, 0);
   F->vref = 16.0f; F->rho = 1; F->cmd.test_motor = -1; F->test_released = 1;
   F->q[0] = 1; qmat(F->R, F->q);
   return 0;
@@ -337,6 +343,11 @@ static void start_descent(fc_state *F) {
 static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   const fc_airframe *A = &F->A; pk p; float r[8];
   F->t += dt; F->steps++; F->vbatt = vbatt;
+  pid_tick(&F->tuning, dt, fc_tune_supported(F),
+           F->state == FC_ARMED && F->att_ok && imu->have_gyro && !F->sup_mode && F->cmd.guided &&
+               F->t - F->cmd_t < FC_CMD_TIMEOUT,
+           0);
+
   memset(o, 0, sizeof *o);
   /* disarmed, the servos go back to their set angles: a helicopter's swashplate is levelled while its rotor runs
    * down (left tilted on the ground, the spinning disc can roll it over), a tilt-rotor's motors point as built */
@@ -516,6 +527,19 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   if (c.throttle > 0.15f) for (int k = 0; k < 3; k++) F->iAtt[k] = clampf(F->iAtt[k] + eR[k] * dt, -0.5f, 0.5f);
   p.n = 0; p_v(&p, eR, 3); p_v(&p, F->w, 3); p_v(&p, F->iAtt, 3); p_v(&p, A->J, 9);
   if (call(F, F->f_ctl, 0, &p, tau)) return -1;
+  if (fc_tune_supported(F) && (F->tuning.enabled || F->tuning.pending)) {
+    const float *g = pid_gains(&F->tuning);
+    float alpha[3], Jw[3], gy[3];
+    for (int k = 0; k < 3; k++)
+      alpha[k] = -g[k] * eR[k] - g[3 + k] * F->w[k] - g[6 + k] * F->iAtt[k];
+    m3v(tau, A->J, alpha);
+    m3v(Jw, A->J, F->w);
+    gy[0] = F->w[1] * Jw[2] - F->w[2] * Jw[1];
+    gy[1] = F->w[2] * Jw[0] - F->w[0] * Jw[2];
+    gy[2] = F->w[0] * Jw[1] - F->w[1] * Jw[0];
+    for (int k = 0; k < 3; k++)
+      tau[k] += gy[k];
+  }
   for (int k = 0; k < 3; k++) tau[k] -= F->payload[3 + k];
   memcpy(F->tau_des, tau, sizeof F->tau_des);
   m3tv(Fb, F->R, Fd);
@@ -698,4 +722,30 @@ int fc_tuning_sample(const fc_state *F, float *out) {
   out[0] = (float)(F->t - FC_LTEL_WRAP * (double)(long long)(F->t / FC_LTEL_WRAP));
   for (int k = 0; k < 3; k++) out[k + 1] = F->test_alpha[k];
   return 4;
+}
+
+int fc_tune_supported(const fc_state *F) {
+  if (!F->H || F->H->act != 0 || F->H->phase != RN_PH_FLYING || F->H->pending != 0 || !F->have_airframe ||
+      F->A.mode != 0)
+    return 0;
+  for (int i = 0; i < F->A.n_motors; i++)
+    if (F->A.mot[i].n_chain)
+      return 0;
+  for (int j = 0; j < F->A.n_joints; j++)
+    if (F->A.jnt[j].steer)
+      return 0;
+  return 1;
+}
+int fc_tune(fc_state *F, const float *p, int n) {
+  return pid_frame(&F->tuning, p, n, 0, fc_tune_supported(F),
+                   F->state == FC_ARMED && F->att_ok && F->have_imu && F->cmd.guided && !F->sup_mode &&
+                       F->t - F->cmd_t < FC_CMD_TIMEOUT,
+                   F->state == FC_DISARMED);
+}
+int fc_tune_status(const fc_state *F, float *out) {
+  pid_status(&F->tuning, fc_tune_supported(F), out);
+  out[13] = (float)(F->airframe_crc & 0xffffu);
+  out[14] = (float)(F->airframe_crc >> 16);
+  out[15] = (float)!!F->cmd.guided;
+  return PID_STATUS;
 }

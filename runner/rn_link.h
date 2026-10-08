@@ -52,6 +52,11 @@ enum { RN_LINK_PEER_OUT = 12, RN_LINK_PEER = 0x86 };
  *   RN_LINK_BUS      the other's topics, as they fall due
  * Boards that don't know them drop them, so they can be added beside the frames above. */
 enum { RN_LINK_BUS_SUB = 13, RN_LINK_BUS = 0x87 };
+/* Hardware tuning: TUNE = 12 floats (pid_tuning.h); WANT bit 8 requests
+ * TUNE_LTEL instead of LTEL, with matching command sample[4] + tuning status[16]
+ * (airframe CRC halves and guided-mode readback).
+ * The flight loop snapshots the whole payload atomically. Older firmware ignores bit 8. */
+enum { RN_LINK_TUNE = 14, RN_LINK_TUNE_LTEL = 0x88 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

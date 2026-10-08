@@ -1,9 +1,9 @@
 name: Board firmware and host programs
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -86,6 +86,8 @@ jobs:
         run: |
           cc -O1 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=undefined -Irunner -Irunner/fc tools/test_learning_native.c runner/fc/fc_core.c runner/fc/nav_core.c runner/rn_host.c runner/rn.c runner/pi/rn_builtin_pi.c -lm -o /tmp/test-learning
           /tmp/test-learning
+      - name: Hardware measured tuning, transactions and Pi command client
+        run: sh tools/test_hardware_tuning.sh
       - run: node tools/test_wasm_meter.js
       - run: python3 tools/sync_driver_presets.py --check
       - name: Sensor driver register tests

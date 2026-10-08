@@ -47,11 +47,12 @@ attitude verification belong to the accepted flight model; changing it requires 
 measurement and provisional state, so switching selection does not apply a result to another drone.
 
 Initial support is fixed-motor aircraft in tilt mode with the standard control formulas, Learning and Navigation
-tasks. Custom/vectoring controllers need a matching identification model. The workflow is simulator-only;
-it does not claim real-flight validation or automatically upload firmware. Native core attitude test frames
+tasks. Custom/vectoring controllers need a matching identification model. The browser workflow controls
+the simulator; the Pi + ESP32 path now has a native coordinator and command interface documented in
+[hardware-tuning.md](hardware-tuning.md). Neither path claims real-flight validation or automatically uploads firmware. Native core attitude test frames
 (EXC mode 3, at most 4°) and navigation test targets (at most 0.2 m) expire after 100 ms without refresh and
-yield to supervision/failsafe. The browser performs analysis and recommendation; this is not an onboard PID
-autotuner in the Pi firmware. Existing Tune plots remain simplified predictions.
+yield to supervision/failsafe. The browser performs simulator analysis; `autotune_core.c` performs hardware analysis on the Pi,
+using matching command/gyro samples and leased native gain transactions. Existing Tune plots remain simplified predictions.
 
 ## Regression commands
 

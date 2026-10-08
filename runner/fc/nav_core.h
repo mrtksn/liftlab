@@ -19,9 +19,10 @@
  */
 #ifndef NAV_CORE_H
 #define NAV_CORE_H
-#include <stdint.h>
-#include "rn_host.h"
 #include "bus.h"
+#include "pid_tuning.h"
+#include "rn_host.h"
+#include <stdint.h>
 
 /* What the navigation needs to know about the drone (exported by the simulator with the airframe). */
 typedef struct {
@@ -61,6 +62,7 @@ typedef struct {
   nav_config C; int have_config;
   float home[3]; int have_home, home_from_fix;
   float iPos[3];
+  pid_tuning tuning;
   int test_axis; float test_offset, test_left;
   float p[3], v[3];
   float pa[3]; int have_pa;              /* the estimate as it is (not from home): in the GPS frame once GPS is heard (fleet.h) */
@@ -88,6 +90,7 @@ int nav_init(nav_state *N, rn_host *H);
 int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out *out);
 /* Bounded reference excitation for measured position tuning; expires after 100 ms without a refresh. */
 int nav_test_target(nav_state *N, int axis, float offset);
+int nav_tune(nav_state *N, const float *p, int n);
 /* Publish on the board's data bus (docs/topic-bus.md) after each step: nav.estimate, nav.setpoint, nav.command.
  * Without a bus (B NULL) nothing is published. 0, or −1 if the bus has no room. */
 int nav_bus_attach(nav_state *N, bus *B);

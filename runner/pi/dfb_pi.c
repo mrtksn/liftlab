@@ -69,19 +69,21 @@
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
 #define _DEFAULT_SOURCE
-#include "nav_core.h"
+#include "autotune_core.h"
+#include "autotune_worker.h"
 #include "fleet.h"
-#include "super_core.h"
-#include "tlm_sources.h"
-#include "tlm_crsf.h"
+#include "latch_hw.h"
+#include "nav_core.h"
 #include "radio_link.h"
-#include "radio_serial.h"
-#include "radio_udp.h"
-#include "radio_pserial.h"
 #include "radio_mux.h"
 #include "radio_nrf24.h"
+#include "radio_pserial.h"
+#include "radio_serial.h"
+#include "radio_udp.h"
 #include "rn_link.h"
-#include "latch_hw.h"
+#include "super_core.h"
+#include "tlm_crsf.h"
+#include "tlm_sources.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -246,10 +248,7 @@ static uint8_t *read_file(const char *path, uint32_t *n) {
   static uint8_t bufs[3][16384]; static int k; uint8_t *b = bufs[k++ % 3];
   *n = (uint32_t)fread(b, 1, sizeof bufs[0], f); fclose(f); return b;
 }
-static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
-  static uint8_t fr[FC_MODEL_MAX * 4 + 32]; uint32_t len = rn_link_frame(fr, sizeof fr, type, (const uint8_t *)p, n);
-  if (len && write(fd, fr, len) < 0 && errno != EAGAIN) perror("link");
-}
+#include "serial_tx.h"
 
 /* One link's end here (radio_io.h), as set; dev: its port (a serial line, an ExpressLRS receiver). 0: it didn't
  * open (said why). said: what it is, for the start line. */
@@ -262,7 +261,13 @@ static radio_io *open_link(const rlink_cfg *L, const char *dev, const char *nrf_
   snprintf(said, (size_t)sn, "an ExpressLRS receiver on %s", dev); return radio_serial_open(dev, CRSF_BAUD, "ExpressLRS receiver (serial)");
 }
 
+static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
+  send_frame(*(int *)ctx, type, p, (uint32_t)n * 4);
+}
+#include "tuning_store.h"
+
 int main(int argc, char **argv) {
+  const char *tuning_path = 0;
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
   rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   double origin[2] = { 0, 0 }; int have_origin = 0;
@@ -273,6 +278,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "--tuning"))
+      tuning_path = argv[++i];
     else if (!strcmp(argv[i], "--airframe")) af_path = argv[++i]; else if (!strcmp(argv[i], "--pi")) pi_path = argv[++i];
     else if (!strcmp(argv[i], "--crsf") || !strcmp(argv[i], "--radio-dev")) crsf_dev = argv[++i]; else if (!strcmp(argv[i], "--radio") || !strcmp(argv[i], "--elrs")) { char err[120]; if (rlink_parse(&RL, argv[++i], err, sizeof err)) { fprintf(stderr, "%s: %s\n", argv[i - 1], err); return 2; } }
     else if (!strcmp(argv[i], "--radio2")) { char err[120]; if (rlink_parse(&RL2, argv[++i], err, sizeof err)) { fprintf(stderr, "--radio2: %s\n", err); return 2; } two = 1; }
@@ -337,6 +344,39 @@ int main(int argc, char **argv) {
     cargo_init(&CG, n, (1u << n) - 1, 0); cg_drive = cargo_drive(&CG); cg_said = CG.nmsg;
   }
   int link = open_serial(link_dev, baud); if (link < 0) return 1;
+  static autotune_state AT;
+  static autotune_worker AW;
+  autotune_init(&AT, &N, &LS, &SS, tuning_send, &link);
+  uint32_t tune_airframe = 0, tune_nav = 0;
+  float saved_gains[12];
+  int restore_tuning = 0;
+  double restore_at = 0;
+  if (af_path) {
+    uint32_t k;
+    uint8_t *a = read_file(af_path, &k);
+    if (a) {
+      tune_airframe = k >= 4 ? rn_crc32(a, k - 4) : 0;
+    }
+  }
+  {
+    uint32_t k;
+    uint8_t *a = read_file(cfg_path, &k);
+    if (a) {
+      tune_nav = k >= 4 ? rn_crc32(a, k - 4) : 0;
+    }
+  }
+  if (tuning_path && (!have_learn || !have_super || baud < 460800)) {
+    fprintf(stderr, "--tuning requires learning/supervisor and a flight UART at 460800 baud or faster\n");
+    return 2;
+  }
+  if (tuning_path && access(tuning_path, F_OK) == 0) {
+    if (tuning_file(tuning_path, saved_gains, tune_airframe, tune_nav, 0)) {
+      fprintf(stderr, "tuning file invalid or belongs to another design\n");
+      return 1;
+    }
+    restore_tuning = 1;
+  }
+
   int crsf = -1;
   radio_io *R = 0;                                  /* the pilot's radio link's bytes (radio_io.h) */
   int packets = rlink_packets(&RL) || rlink_compact(&RL) || two;          /* a packet link (or two links): R does the receiver's part, read() every pass drives it */
@@ -373,6 +413,30 @@ int main(int argc, char **argv) {
     struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
+    flush_link(link);
+    if (tx_failed) {
+      fprintf(stderr, "flight UART stalled; stopping companion\n");
+      return 1;
+    }
+    if (have_learn && have_super)
+      autotune_guard(&AT, t, P.arm, &P.sp, &o, last_nav,
+                     pickup_active(&PKt) || pickup_active(&RP.pk) || FL.engaged || baud < 460800 || !G.fix || t-G.t>2);
+    if (restore_tuning) {
+      if (!restore_at)
+        restore_at = t;
+      if (t - restore_at > 3) {
+        fprintf(stderr, "saved tuning restore timed out; refusing to fly with "
+                        "unconfirmed gains\n");
+        return 1;
+      }
+    }
+    autotune_work_poll(&AW, &AT);
+    static unsigned at_events;
+    if (AT.events != at_events) {
+      at_events = AT.events;
+      printf("autotune: %s\n", AT.message);
+    }
+
     if (R && (packets || (pf[4].revents & POLLIN))) for (int more = 1; more;) {   /* (a packet link: every pass, it sends its packets from there) */
       uint8_t b[512]; int n = R->read(R, b, sizeof b, 0); for (int i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t);
       more = n == (int)sizeof b;
@@ -391,7 +455,28 @@ int main(int argc, char **argv) {
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
           char reply[600]; float px, py, pz; int pl = 1;
-          if (!strncmp(s, "fleet", 5) && (!s[5] || s[5] == ' ')) {                   /* the fleet program: on, off, or what it does */
+          if (strncmp(s, "autotune", 8) && strcmp(s, "status") && strcmp(s, "learning") &&
+              strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet"))
+            autotune_stop(&AT, "stopped: another pilot/learning command; "
+                               "previous gains restored");
+          if (restore_tuning &&
+              (!strncmp(s, "arm", 3) || !strncmp(s, "takeoff", 7) || !strncmp(s, "autotune", 8)))
+            snprintf(reply, sizeof reply, "wait for saved tuning restoration; inspect the service log");
+          else if (!strcmp(s, "autotune save")) {
+            if (!tuning_path)
+              snprintf(reply, sizeof reply,
+                       "start dfb_pi with --tuning drone.dft to save verified "
+                       "gains");
+            else if (!autotune_save_ready(&AT))
+              snprintf(reply, sizeof reply, "verify gains before saving");
+            else
+              snprintf(reply, sizeof reply,
+                       tuning_file(tuning_path, AT.current, tune_airframe, tune_nav, 1)
+                           ? "could not save tuning; previous file retained"
+                           : "verified tuning saved for this design");
+          } else if (autotune_command(&AT, s, reply, sizeof reply)) {
+          } else if (!strncmp(s, "fleet", 5) && (!s[5] || s[5] == ' ')) { /* the fleet program: on, off, or
+                                                                             what it does */
             const char *a = s + 5; while (*a == ' ') a++;
             if (!strcmp(a, "on") || !strcmp(a, "off")) {
               if (rc_link_ok(&RCI, t)) snprintf(reply, sizeof reply, "fleet: the radio has it: its FLEET command (the ground station's)");
@@ -404,7 +489,15 @@ int main(int argc, char **argv) {
             else if (pickup_start(&PKt, spot, hd, pl - 1, &o, t)) snprintf(reply, sizeof reply, "%s", PKt.msg);
             else { PKt.said = 0; snprintf(reply, sizeof reply, "pickup: flying over it, then down onto it; any other command stops it"); }
             in_control = 1;
-          } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) && !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) { pilot_line(&P, &N, &o, s, reply, sizeof reply); in_control = 1; pickup_cancel(&PKt, "another command"); PKt.said = 0; if (strncmp(s, "status", 6)) fleet_engage(&FL, 0, &N, &o, "another command"); }
+          } else if (!cargo_line(&CG, LO, s, reply, sizeof reply) &&
+                     !task_line(&LS, have_learn, &SS, have_super, &P, &o, s, reply, sizeof reply)) {
+            pilot_line(&P, &N, &o, s, reply, sizeof reply);
+            in_control = 1;
+            pickup_cancel(&PKt, "another command");
+            PKt.said = 0;
+            if (strncmp(s, "status", 6))
+              fleet_engage(&FL, 0, &N, &o, "another command");
+          }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
         }
@@ -420,14 +513,24 @@ int main(int argc, char **argv) {
       if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */
       if (type == RN_LINK_TLM && radio_here) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
       if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
-      if ((type == RN_LINK_TELEM && L.len == 144) || (type == RN_LINK_LTEL && L.len >= 8)) { memcpy(&fc_state, L.buf + 4, 4); fc_state_t = t; }   /* the flight core's state */
-      if (type == RN_LINK_LTEL && (have_learn || have_super)) {   /* the learning and the supervisor, on every frame */
-        static float lt[FC_LTEL_MAX], fo[FC_MODEL_MAX]; int n = (int)(L.len / 4); if (n > FC_LTEL_MAX) continue;
-        memcpy(lt, L.buf, (size_t)n * 4);
+      if ((type == RN_LINK_TELEM && L.len == 144) ||
+          ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len >= 8)) {
+        memcpy(&fc_state, L.buf + 4, 4);
+        fc_state_t = t;
+      } /* the flight core's state */
+      if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) &&
+          (have_learn || have_super)) { /* the learning and the supervisor, on every frame */
+        static float lt[AT_LTEL_MAX], fo[FC_MODEL_MAX];
+        int total = (int)(L.len / 4), n = total - (type == RN_LINK_TUNE_LTEL ? AT_TAIL : 0);
+        if (L.len % 4 || n < 19 || n > FC_LTEL_MAX || total > AT_LTEL_MAX)
+          continue;
+        memcpy(lt, L.buf, (size_t)total * 4);
         if (have_learn) {
           static char was[sizeof LS.msg]; memcpy(was, LS.msg, sizeof was);
           learn_ltel(&LS, lt, n);
-          int k = learn_exc_frame(&LS, fo); if (k) send_frame(link, RN_LINK_EXC, fo, (uint32_t)k * 4);
+          int k = learn_exc_frame(&LS, fo);
+          if (k && !autotune_busy(&AT) && AT.phase != AT_REVIEW)
+            send_frame(link, RN_LINK_EXC, fo, (uint32_t)k * 4);
           k = learn_model_frame(&LS, fo); if (k) { send_frame(link, RN_LINK_MODEL, fo, (uint32_t)k * 4); if (have_super) super_model(&SS, fo, k); }
           if (strcmp(was, LS.msg) && LS.msg[0]) printf("learning: %s\n", LS.msg);
           static double said; if (LS.cal && t - said > 10) { if (said > 0) printf("learning: calibrating, %.0f%% done\n", (double)(LS.total > 0 ? 100 * LS.cal_t / LS.total : 0)); said = t; }
@@ -440,6 +543,38 @@ int main(int argc, char **argv) {
           int k = super_set_frame(&SS, fo);
           if (k) { send_frame(link, RN_LINK_SET, fo, (uint32_t)k * 4); nav_set(&N, fo, k); if (have_learn) learn_set(&LS, fo, k); }
           for (; seen_log < SS.log_seq; seen_log++) { uint32_t back = SS.log_seq - 1 - seen_log; if (back < SP_LOG) printf("supervisor: %.1f s %s\n", SS.log[back].t, SS.log[back].text); }
+        }
+        if (type == RN_LINK_TUNE_LTEL && have_learn && have_super) {
+          autotune_sample(&AT, lt, total, t);
+          if (restore_tuning && AT.have_status) {
+            float b[PID_FRAME] = {PID_VERSION, 3, 16777215};
+            for (int j = 0; j < 9; j++)
+              b[j + 3] = saved_gains[j];
+            const float *st = lt + n + 4;
+            int ack = st[0] == PID_VERSION && st[1] == 16777215 && st[2] == 2 && st[3] == 1;
+            for (int j = 0; j < 9; j++)
+              if (st[4 + j] != saved_gains[j])
+                ack = 0;
+            if (ack) {
+              for (int j = 0; j < 9; j++)
+                b[j + 3] = saved_gains[9 + j / 3];
+              if (!nav_tune(&N, b, PID_FRAME)) {
+                printf("saved tuning restored on flight controller and "
+                       "navigation\n");
+                memcpy(AT.current, saved_gains, sizeof saved_gains);
+              } else {
+                fprintf(stderr, "navigation refused saved tuning\n");
+                return 1;
+              }
+              restore_tuning = 0;
+            } else if (fc_state == FC_DISARMED && st[3] == 1) {
+              send_frame(link, RN_LINK_TUNE, b, sizeof b);
+            }
+            if (restore_at && t - restore_at > 2) {
+              fprintf(stderr, "saved tuning not acknowledged; refusing to fly\n");
+              return 1;
+            }
+          }
         }
         continue;
       }
@@ -465,7 +600,16 @@ int main(int argc, char **argv) {
         if (fleet_was && !RP.mis_on) fleet_engage(&FL, 0, &N, &o, RP.mis_why);
         if (RP.fleet_req) { fleet_engage(&FL, RP.fleet_req == 1, &N, &o, "the pilot's radio"); RP.fleet_req = 0; }
         if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
-        if (RP.learn_req) { int c = RP.learn_req; RP.learn_req = 0; if (have_learn) { learn_command(&LS, c); printf("radio: learning command %d\n", c); } } }
+        if (RP.learn_req) {
+          autotune_stop(&AT, "stopped: radio learning command");
+          int c = RP.learn_req;
+          RP.learn_req = 0;
+          if (have_learn) {
+            learn_command(&LS, c);
+            printf("radio: learning command %d\n", c);
+          }
+        }
+      }
       if (radio) { P.arm = radio_arm; P.fly = rsp.fly; P.sp = rsp; pickup_cancel(&PKt, "the radio has it"); PKt.said = 0; }
       else if (pickup_active(&PKt)) { if (!P.fly) pickup_cancel(&PKt, "not flying"); else pickup_step(&PKt, &o, t, dt, &P.sp); }
       else fleet_sp(&FL, &P.sp);                                        /* (the text commands' pilot: engaged, the program's target) */
@@ -474,6 +618,13 @@ int main(int argc, char **argv) {
         const pickup_state *K = w ? &PKt : &RP.pk; if (K->nreq == pk_seen[w]) continue; pk_seen[w] = K->nreq;
         if (CG.n) cargo_command(&CG, K->req_latch, K->req_act, "pickup"); else printf("pickup: no latches here (--latch): it can't close one\n");
       }
+      if (restore_tuning) {
+        P.arm = P.fly = P.sp.fly = 0;
+        RP.arm = 0;
+      }
+      if (have_learn && have_super)
+        autotune_guard(&AT, t, P.arm, &P.sp, &o, last_nav,
+                       pickup_active(&PKt) || pickup_active(&RP.pk) || FL.engaged || baud < 460800 || !G.fix || t-G.t>2);
       int e = nav_step(&N, &in, &P.sp, dt, &o);
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
@@ -510,8 +661,14 @@ int main(int argc, char **argv) {
       cg_drive = d;
       if (CG.nmsg != cg_said) { cg_said = CG.nmsg; printf("cargo: %s\n", CG.msg); }
     }
-    if ((have_learn || have_super || radio_here || have_fleet) && t - last_want > 0.5) { float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0) | (have_fleet ? 4 : 0)); send_frame(link, RN_LINK_WANT, &w, 4); last_want = t; }   /* LTEL, the ESP32's telemetry for our radio, the peer table, please */
-    /* the telemetry: our tasks' items, then down our radio, or to the ESP32's when it asks */
+    if ((have_learn || have_super || radio_here || have_fleet) && t - last_want > 0.5) {
+      float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0) | (have_fleet ? 4 : 0) |
+                        (have_learn && have_super && baud >= 460800 ? 8 : 0));
+      send_frame(link, RN_LINK_WANT, &w, 4);
+      last_want = t;
+    } /* LTEL, the ESP32's telemetry for our radio, the peer table, please */
+    /* the telemetry: our tasks' items, then down our radio, or to the ESP32's
+     * when it asks */
     if (t >= next_pub) {
       next_pub = t + 0.01;
       tlm_from_nav(&TS, &TW, &N, &o, &last_sp, RP.level, t);

@@ -186,7 +186,12 @@ static volatile float vbatt;
 /* the learning's and the supervisor's frames (link task → control loop), and LTEL (control loop → link task) */
 static float exc_box[8 + FC_MAX_MOTORS + FC_MAX_JOINTS], set_box[6 + 3 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS], model_box[FC_MODEL_MAX];
 static volatile int exc_n, set_n, model_n;
-static float ltel_box[FC_LTEL_MAX]; static volatile int ltel_n; static volatile int64_t want_us = -10000000;
+static float tune_box[PID_FRAME];
+static volatile int tune_n;
+static volatile int64_t tune_want_us = -10000000;
+static float ltel_box[FC_LTEL_MAX + 4 + PID_STATUS];
+static volatile int ltel_n, ltel_tune;
+static volatile int64_t want_us = -10000000;
 /* the telemetry task's store (the radio task and the link task), and the radio's input */
 static tlm_store TS; static tlm_watch TW; static rc_input RCI; static volatile int64_t tlm_want_us = -10000000;
 static portMUX_TYPE tlm_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -249,13 +254,35 @@ static void flight_task(void *arg) {
       if ((n = model_n)) { portENTER_CRITICAL(&mux); memcpy(b, model_box, (size_t)n * 4); model_n = 0; portEXIT_CRITICAL(&mux); if (fc_model(&F, b, n)) post("the learning's model doesn't fit this airframe"); }
       if ((n = set_n)) { portENTER_CRITICAL(&mux); memcpy(b, set_box, (size_t)n * 4); set_n = 0; portEXIT_CRITICAL(&mux); fc_set(&F, b, n); }
     }
+    if (tune_n) {
+      float b[PID_FRAME];
+      int n;
+      portENTER_CRITICAL(&mux);
+      n = tune_n;
+      memcpy(b, tune_box, sizeof b);
+      tune_n = 0;
+      portEXIT_CRITICAL(&mux);
+      if (fc_tune(&F, b, n))
+        post("tuning transaction rejected");
+    }
     rn_host_tick(&H, dt);
     fc_step(&F, &m, dt, vbatt, &OUT);
     static int lt_k = 0;                               /* LTEL: 200 Hz at 921600 baud, 100 at 460800, 50 slower */
     lt_k += HW.link_baud >= 921600 ? 200 : HW.link_baud >= 460800 ? 100 : 50;
     int lt_due = lt_k >= HW.rate_hz; if (lt_due) lt_k -= HW.rate_hz;
-    if (lt_due && F.have_airframe && esp_timer_get_time() - want_us < 1000000) { static float lt[FC_LTEL_MAX]; int n = fc_ltel(&F, lt);
-      portENTER_CRITICAL(&mux); memcpy(ltel_box, lt, (size_t)n * 4); ltel_n = n; portEXIT_CRITICAL(&mux);
+    if (lt_due && F.have_airframe && esp_timer_get_time() - want_us < 1000000) {
+      static float lt[FC_LTEL_MAX + 4 + PID_STATUS];
+      int n = fc_ltel(&F, lt);
+      int enhanced = esp_timer_get_time() - tune_want_us < 1000000;
+      if (enhanced) {
+        n += fc_tuning_sample(&F, lt + n);
+        n += fc_tune_status(&F, lt + n);
+      }
+      portENTER_CRITICAL(&mux);
+      memcpy(ltel_box, lt, (size_t)n * 4);
+      ltel_n = n;
+      ltel_tune = enhanced;
+      portEXIT_CRITICAL(&mux);
     }
     static int nav_n = 0; nav_n += 100;
     int nav_due = nav_n >= HW.rate_hz; if (nav_due) nav_n -= HW.rate_hz;
@@ -342,7 +369,16 @@ static void setting(const char *line) {
 static uint32_t frame_limit(uint8_t type) {
   switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
     case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP;
-    case RN_LINK_EXC: return sizeof exc_box; case RN_LINK_SET: return sizeof set_box; case RN_LINK_MODEL: return sizeof model_box; case RN_LINK_WANT: return 4;
+    case RN_LINK_TUNE:
+      return sizeof tune_box;
+    case RN_LINK_EXC:
+      return sizeof exc_box;
+    case RN_LINK_SET:
+      return sizeof set_box;
+    case RN_LINK_MODEL:
+      return sizeof model_box;
+    case RN_LINK_WANT:
+      return 4;
     case RN_LINK_TLM: return sizeof tlm_in; case RN_LINK_PEER_OUT: return sizeof peer_out_box; }
   return 0;
 }
@@ -396,23 +432,43 @@ static void link_task(void *arg) {
       } else if (type == RN_LINK_EXC || type == RN_LINK_SET || type == RN_LINK_MODEL) {   /* the learning and the supervisor: to the control loop */
         float *box = type == RN_LINK_EXC ? exc_box : type == RN_LINK_SET ? set_box : model_box; volatile int *cnt = type == RN_LINK_EXC ? &exc_n : type == RN_LINK_SET ? &set_n : &model_n;
         portENTER_CRITICAL(&mux); memcpy(box, L.buf, L.len & ~3u); *cnt = (int)(L.len / 4); portEXIT_CRITICAL(&mux);
+      } else if (type == RN_LINK_TUNE && L.len == sizeof tune_box) {
+        portENTER_CRITICAL(&mux);
+        memcpy(tune_box, L.buf, sizeof tune_box);
+        tune_n = PID_FRAME;
+        portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_WANT) {
         float w = 1; if (L.len == 4) memcpy(&w, L.buf, 4);
+        if (!isfinite(w) || w < 0 || w > 15)
+          continue;
         if ((int)w & 1) want_us = now;
         if ((int)w & 2) tlm_want_us = now;
         if ((int)w & 4) peer_want_us = now;
-      } else if (type == RN_LINK_PEER_OUT) {              /* the Pi's fleet program: what to publish and send */
+        if (isfinite(w) && (int)w & 8)
+          tune_want_us = now;
+      } else if (type == RN_LINK_PEER_OUT) { /* the Pi's fleet program: what to
+                                                publish and send */
         portENTER_CRITICAL(&tlm_mux); memcpy(peer_out_box, L.buf, L.len & ~3u); peer_out_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
-      } else if (type == RN_LINK_TLM) {                   /* the Pi's tasks' telemetry, for the radio */
+      } else if (type == RN_LINK_TLM) { /* the Pi's tasks' telemetry, for the radio */
         portENTER_CRITICAL(&tlm_mux); memcpy(tlm_in, L.buf, L.len & ~3u); tlm_in_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
-      }
-      else if (type < 0) say("dropped a damaged or oversized frame");
+      } else if (type < 0)
+        say("dropped a damaged or oversized frame");
     }
     now = esp_timer_get_time();
     if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); }
     int guided = now - guided_us < 1000000;
     if (guided && nav_new) { float nb[16]; portENTER_CRITICAL(&mux); memcpy(nb, nav_box, sizeof nb); nav_new = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_NAV, nb, sizeof nb); }
-    if (ltel_n) { static float lt[FC_LTEL_MAX]; int k; portENTER_CRITICAL(&mux); k = ltel_n; memcpy(lt, ltel_box, (size_t)k * 4); ltel_n = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_LTEL, lt, (uint32_t)k * 4); }
+    if (ltel_n) {
+      static float lt[FC_LTEL_MAX + 4 + PID_STATUS];
+      int k, tt;
+      portENTER_CRITICAL(&mux);
+      k = ltel_n;
+      tt = ltel_tune;
+      memcpy(lt, ltel_box, (size_t)k * 4);
+      ltel_n = 0;
+      portEXIT_CRITICAL(&mux);
+      link_send(tt ? RN_LINK_TUNE_LTEL : RN_LINK_LTEL, lt, (uint32_t)k * 4);
+    }
     /* the full telemetry: at its rate, or twice a second while the Pi navigates (the link's room goes to RN_LINK_NAV) */
     if (telem_us && now >= next_t) { next_t = now + (guided ? 500000 : telem_us); telemetry(); }
   }
