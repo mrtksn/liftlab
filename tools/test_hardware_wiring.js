@@ -1,8 +1,8 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const ctx=vm.createContext({console,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},Map,Set});
-for(const file of ['board-hardware','hardware','driver-presets','boards','designs']) vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
-vm.runInContext('this.api={hardwareOverview,hardwareOwner,hardwarePart,hardwarePlan,hardwareSettings,fixComputers,readDesignFile,DRIVER_PRESETS};',ctx);
+const ctx=vm.createContext({console,atob,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},Map,Set});
+for(const file of ['board-hardware','hardware','driver-presets','boards','part-geometry','designs']) vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
+vm.runInContext('this.api={hardwareOverview,hardwareOwner,hardwarePart,hardwarePlan,hardwareSettings,fixComputers,readDesignFile,partAssetsDecode,DRIVER_PRESETS};',ctx);
 const A=ctx.api;
 const C={boards:[{id:1,kind:'s3',name:'FC',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi',tasks:['nav']}]};
 const parts=[...Array.from({length:4},(_,i)=>({id:i+1,type:'motor',name:'M'+i,pos:[0,0,0]})),...['imu','baro','mag','fix'].map((kind,i)=>({id:i+5,type:'sensor',kind,name:kind,pos:[0,0,0]}))];
@@ -20,6 +20,10 @@ C.wiring.parts[5].driver='custom';C.wiring.parts[5].address=0x77;assert.ok(A.har
 const roundtrip=JSON.parse(JSON.stringify(C));assert.equal(A.hardwarePlan(roundtrip,parts,roundtrip.boards[0]).errors.length,0);
 const design=A.readDesignFile(JSON.stringify({frame:0.45,comps:parts,computers:C})).design;
 assert.equal(design.computers.wiring.boards[1].driverCode,C.wiring.boards[1].driverCode);
+assert.throws(()=>A.readDesignFile(JSON.stringify({frame:.45,comps:[{...parts[0],cog:[0,null,0]}]})),/Invalid center of mass/);
+const assets={comps:[{model:{fileId:'test-model'}}],modelFiles:[{id:'test-model',files:[{name:'part.glb',data:Buffer.from([1,2,3]).toString('base64')}]}]};
+assert.deepEqual(Array.from(new Uint8Array(A.partAssetsDecode(assets)[0].files[0].data)),[1,2,3]);
+assets.modelFiles[0].files[0].name='part.txt';assert.throws(()=>A.partAssetsDecode(assets),/Missing part model/);
 // Deleting a board keeps other IDs stable: explicit wiring never points at a different board.
 const changed=JSON.parse(JSON.stringify(C));changed.boards.push({id:3,kind:'pizero2',tasks:[]});changed.boards=changed.boards.filter(b=>b.id!==2);
 const fixed=A.fixComputers(changed);assert.equal(fixed.boards[1].id,3);assert.equal(A.hardwareOwner(fixed,{id:99,type:'sensor',kind:'imu'}).id,1);

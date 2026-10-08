@@ -62,23 +62,6 @@ function partModelVisual(c) {
   }).catch(() => { group.userData.missingModel = true; });
   return group;
 }
-function partAssetsDecode(design) {
-  const files = design.modelFiles; if (!files) return [];
-  if (!Array.isArray(files) || files.length > design.comps.length) throw new Error('Invalid part model files');
-  const ids = new Set(); let bytes = 0;
-  return files.map(f => {
-    if (!f || typeof f.id !== 'string' || ids.has(f.id) || !design.comps.some(c => c.model?.fileId === f.id) || !Array.isArray(f.files) || !f.files.length || f.files.length > 500) throw new Error('Invalid part model file group');
-    ids.add(f.id);
-    const names = new Set(), parts = f.files.map(p => {
-      if (!p || typeof p.name !== 'string' || !p.name || p.name.length > 256 || names.has(p.name) || typeof p.data !== 'string' || p.data.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(p.data) || (bytes += p.data.length * .75) > 128 * 1024 * 1024) throw new Error('Invalid part model data');
-      names.add(p.name); const text = atob(p.data), data = new Uint8Array(text.length);
-      for (let i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
-      return { name: p.name, data: data.buffer };
-    });
-    if (!parts.some(p => WORLD_OBJ_FORMATS[extOf(p.name)])) throw new Error('Missing part model');
-    return { id: f.id, name: String(f.name || parts[0].name), files: parts };
-  });
-}
 function partAssetsRestore(design) {
   for (const f of partAssetsDecode(design)) { worldObjects.files.set(f.id, f); worldFilePut(f).then(ok => { if (!ok) designNote('Model files could not be kept in this browser. Keep the design file.'); }); }
 }

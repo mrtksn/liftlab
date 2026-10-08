@@ -2,13 +2,13 @@
 // Exercise registered agent tools against the actual design/planning/persistence functions.
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 let saves=0,resets=0,renders=0,stored;
-const ctx=vm.createContext({console,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},PRESETS:{},Map,Set,
+const ctx=vm.createContext({console,atob,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},PRESETS:{},Map,Set,
   agent:{cfg:{askFormulas:false}},brt:{sig:'old'},undoKey:'',HW_UI:{drafts:new Map()},
   doReset(){resets++;},save(){saves++;stored=JSON.stringify(ctx.cfg);},renderComputers(){renders++;},syncFlightUi(){},
   structural(){ctx.save();},SENSOR_KINDS:{imu:'IMU',baro:'Baro',mag:'Compass'},
   sensorsOf:kind=>ctx.cfg.comps.filter(c=>c.type==='sensor'&&c.kind===kind),
   mkSensor:(kind,name,x,y,z)=>({id:Math.max(...ctx.cfg.comps.map(c=>c.id),0)+1,type:'sensor',kind,name,pos:[x,y,z]})});
-for(const file of ['board-hardware','hardware','driver-presets','boards','designs','agent-tools','agent-hardware'])vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
+for(const file of ['board-hardware','hardware','driver-presets','boards','part-geometry','designs','agent-tools','agent-hardware'])vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
 vm.runInContext('this.api={AGENT_TOOLS,hardwareOwner,hardwarePart,fixComputers,DRIVER_PRESETS,readDesignFile};',ctx);
 const A=ctx.api,T=A.AGENT_TOOLS,clone=x=>JSON.parse(JSON.stringify(x));
 const base=()=>({boards:[{id:7,kind:'s3',name:'FC',tasks:['core','tlm']},{id:12,kind:'pizero',name:'Pi',tasks:['nav','learn','super','cargo']}],ground:{kind:'s3',name:'Pilot'},radio:1,

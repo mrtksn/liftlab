@@ -99,3 +99,22 @@ function validatePartGeometry(c) {
     for (const b of m.boxes) if (!Array.isArray(b) || b.length !== 6 || !b.every(Number.isFinite) || b.some(v => Math.abs(v) > 5000) || [0, 1, 2].some(k => b[k] >= b[k + 3])) throw new Error('Invalid imported solid shape');
   }
 }
+
+// Portable design validation is independent of the browser import UI and model readers.
+function partAssetsDecode(design) {
+  const files = design.modelFiles; if (!files) return [];
+  if (!Array.isArray(files) || files.length > design.comps.length) throw new Error('Invalid part model files');
+  const ids = new Set(); let bytes = 0;
+  return files.map(f => {
+    if (!f || typeof f.id !== 'string' || ids.has(f.id) || !design.comps.some(c => c.model?.fileId === f.id) || !Array.isArray(f.files) || !f.files.length || f.files.length > 500) throw new Error('Invalid part model file group');
+    ids.add(f.id);
+    const names = new Set(), parts = f.files.map(p => {
+      if (!p || typeof p.name !== 'string' || !p.name || p.name.length > 256 || names.has(p.name) || typeof p.data !== 'string' || p.data.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(p.data) || (bytes += p.data.length * .75) > 128 * 1024 * 1024) throw new Error('Invalid part model data');
+      names.add(p.name); const text = atob(p.data), data = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) data[i] = text.charCodeAt(i);
+      return { name: p.name, data: data.buffer };
+    });
+    if (!parts.some(p => ['glb', 'gltf', 'obj', 'stl'].includes(p.name.split('.').pop().toLowerCase()))) throw new Error('Missing part model');
+    return { id: f.id, name: String(f.name || parts[0].name), files: parts };
+  });
+}

@@ -1,15 +1,21 @@
 # Project memory
 
+## Host design-validation dependency repair — 2026-10-08
+- FIXED CI run 37789356535: hardware/agent host fixtures did not load part geometry after the design reader gained geometry/asset validation. Loaded the real module in both fixtures and moved portable asset decoding out of the browser import UI into the pure geometry/data module.
+- Regression checklist PASSED locally: hardware/agent wiring persistence, invalid CoM rejection, real base64/model-format validation, board installation, driver-preset compilation, flight-physics equations, learning math and WASM metering. Full imported-part browser suite including portable export/cold-browser share/texture bytes/reload passed with the relocated decoder. Syntax, fingerprints and diff checks passed. Six ESP firmware builds passed in the earlier run; macOS failed at the missing dependency and Linux was canceled by matrix fail-fast. Follow-up remote CI remains pending.
+
 ## Real-drone connection in Ground — 2026-10-08
 - Moved the existing Connect to drone action from the header to Ground → Real drone, above telemetry/radio sections. Reuses the section/button UI; Ground rebuilds retain its original node, event handler and keyboard focus. Live flight controls remain over the 3D view.
 - Regression checklist PASSED: tools/test_live_ble.cjs checks Ground placement, a single action, rebuild/focus retention, dialog/connect, live packets/arm/attitude, reconnect and disconnect through mock Bluetooth. Ground-card suite passed desktop/phone themes, telemetry, dialog lifetime and per-drone state; syntax, fingerprints and diff checks passed. Verified locally; not committed/pushed. Real-device validation remains pending.
 - Publication: user authorized pushing the Ground connection relocation together with the import-overlay/shared-UI changes. Syntax, asset fingerprints and diff checks passed again; main matches origin/main before publication. Deployment and remote CI verification are pending.
+- Published Ground relocation and shared import overlay as 9fd371e to origin/main; Pages run 37793925069 completed successfully. Follow-up validation dependency repair is covered above.
 
 ## Drone object import overlay — 2026-10-08
 - Replaced the separate import panel with properties inside the 3D view; camera framing reserves uncovered space beside/before the overlay for the drone and object. Import 3D object is independent above Add a part categories.
 - Reused the shared slider/number field; both editors share the properties-overlay base, solid-shape UI block (detail selector plus checkbox) and translucent collision-box renderer. Collision indicators start enabled; live scaling carries CoM/points and weight estimation; detail edits preserve chosen CoM/points.
 - Camera reserves overlay-free space in both projections. FIXED pan scale under import framing so it tracks the pointer at the actual displayed distance.
 - Regression checklist PASSED: tools/test_part_models.cjs checks independent action, live slider/number synchronization, exact solid-box matrices/toggle/detail, retained CoM/points, surface picking, cancellation, desktop/phone overlay bounds, uncovered drone/preview and pan in both projections, plus existing physics/assets/library checks. World-object/map, camera and sidebar suites passed; previews inspected; syntax, fingerprints and diff checks passed. Verified locally; not committed or pushed.
+- Shape-fidelity discussion: rendering preserves the original mesh; collision shapes remain voxel boxes. More faithful contacts would require a physics extension (mesh contacts for static scenery, fitted convex pieces for moving parts are candidates); no mesh-collider implementation is included in this publication.
 
 ## Intuitive controller layout — 2026-10-08
 - Added Keys → Intuitive: W/S climb/descend, A/D move left/right, ↑/↓ move forward/back, ←/→ turn left/right. Left pad combines altitude and lateral movement; right pad combines forward/back and turning. Help, accessible labels and forward HUD key follow the layout; browser preference keeps the choice. Handset remains the default.
