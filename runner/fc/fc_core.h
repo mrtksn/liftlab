@@ -137,6 +137,7 @@ typedef struct {
   fc_cmd cmd;
   float q[4], R[9], w[3]; int att_ok; float att_t;
   float yaw_sp, iAtt[3];
+  float payload[6];                     /* known external load: world force [N], body torque [N m]; zero by default */
   double fs_t, test_t;                   /* when the failsafe or the motor test began */
   float fs_land_t, err_t, fs_vz, fs_alt_ref;   /* how long it has looked landed; how long formulas have failed; failsafe speed, height */
   double fs_alt_t, fs_bump_t, calm_t;   /* failsafe landing: when the height last moved; the touchdown bump; last calm hover */
@@ -197,6 +198,7 @@ void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *out)
 const char *fc_state_name(int s);
 /* The learning and supervisor frames (above). Each returns 0, or −1 if the frame doesn't fit this airframe. */
 int fc_exc(fc_state *F, const float *p, int n);
+int fc_payload(fc_state *F, const float *p, int n); /* simulator support input; no physical transport */
 int fc_model(fc_state *F, const float *p, int n);
 int fc_set(fc_state *F, const float *p, int n);
 /* The LTEL frame since the last call (out: FC_LTEL_MAX floats). Returns its length. */

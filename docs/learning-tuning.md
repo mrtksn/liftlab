@@ -64,3 +64,17 @@ autotuner in the Pi firmware. Existing Tune plots remain simplified predictions.
 `tools/rebaseline_learning.js` updates only RLS expected output/state for the corrected covariance recurrence;
 it preserves recorded inputs and other formula fixtures. Run the independent numerical test before accepting
 that fixture update.
+
+## Agent integration and cable loads
+
+The in-app agent reads/edits PID gains with `get_tuning`/`set_tuning`, and uses `autotune` for status,
+attitude/position measurement, apply-and-verify and Stop. These use the same staging, rollback and undo
+paths as Tune. `get_learning` distinguishes accepted/candidate models and passive adaptation from tuning.
+`get_runtime` inspects board runtimes, custom programs/apps and source/interface chunks; `get_bus` reads
+topic layouts, values and freshness. Native/Python apps are not simulated; their managers handle editing.
+
+A cable under tension is an external disturbance outside the current identification/autotune models.
+The simulator pauses passive learning, stops calibration/throw identification while retaining the accepted
+model, and rejects/stops measured autotune until the cable is unloaded. Supervisor actuator-effectiveness
+inference also waits under cable tension; explicit RPM/current/temperature fault checks and lift checks
+continue. Cable swing identification and inference with a changing external load remain future work.

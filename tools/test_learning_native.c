@@ -61,6 +61,20 @@ int main(void) {
   setup(); L.model_dirty = 0; float out[FC_MODEL_MAX]; assert(!learn_model_frame(&L, out));
   for (int r = 0; r < 6; r++) for (int j = 0; j < L.n; j++) L.B[r][j] *= 1.5f;
   assert(!learn_model_frame(&L, out)); /* Changing the estimator never streams an unaccepted model. */
+  /* Tension must invalidate probation, stop calibration and never learn a cable as a weak motor. */
+  setup(); observations(610, 0, 0.96f); assert(L.adapt == 2);
+  L.external_load = 1; assert(learn_command(&L, LN_CMD_CALIBRATE) == -1);
+  L.FA.state = FC_ARMED; L.FA.att_ok = 1; L.FA.q[0] = 1; L.FA.t = 4;
+  float cable_tel[FC_LTEL_MAX]; int cable_n = fc_ltel(&L.FA, cable_tel);
+  learn_ltel(&L, cable_tel, cable_n);
+  assert(!L.updated && !L.adapt && L.adapt_rollbacks == 1 && !L.accepted && L.keep);
+  assert(!L.exc_n && strstr(L.msg, "Cable under tension"));
+  setup(); L.accepted = 1; L.use_learned = 1; assert(!learn_command(&L, LN_CMD_CALIBRATE));
+  L.external_load = 1; L.FA.state = FC_ARMED; L.FA.att_ok = 1; L.FA.q[0] = 1; L.FA.t = 4;
+  cable_n = fc_ltel(&L.FA, cable_tel); learn_ltel(&L, cable_tel, cable_n);
+  assert(!L.cal && L.accepted && L.use_learned && L.keep && !L.updated);
+  L.external_load = 0; L.FA.t += .005; cable_n = fc_ltel(&L.FA, cable_tel); learn_ltel(&L, cable_tel, cable_n);
+  assert(!L.external_was && strstr(L.msg, "Cable slack"));
   fc_state F = { 0 }; F.A.n_motors = 4; float exc[12] = { 3, 1, 1, 255, 4, 0, 0, 0, 0, 0, 1, 1 };
   assert(!fc_exc(&F, exc, 12) && F.exc_mode == 3 && F.exc_angle < 0.07f && !F.exc_hold_m && !F.exc_hold_s);
   exc[10] = 3; assert(fc_exc(&F, exc, 12) == -1);

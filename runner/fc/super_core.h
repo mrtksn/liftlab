@@ -26,6 +26,7 @@ typedef struct { float phi[FC_MAX_MOTORS][6], psi[FC_MAX_JOINTS][6], y[6], cmd[F
 
 typedef struct {
   rn_host *H; int f_ah, f_fd, f_fp, f_lm, f_th, ok;
+  int external_load;                    /* simulator: avoid attributing cable forces to failed actuators */
   fc_state FA;                           /* the airframe, and the table as the flight core flies it (MODEL, SET) */
   learn_config C; int have_config;
   /* telemetry */

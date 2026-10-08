@@ -39,7 +39,7 @@ int super_init(super_state *S, rn_host *H) {
   S->H = H; S->ok = 0;
   const char *names[] = { "actuatorHealth", "faultDecision", "flightPolicy", "liftMargin", "thermalModel" };
   int *slot[] = { &S->f_ah, &S->f_fd, &S->f_fp, &S->f_lm, &S->f_th };
-  const int NM = FC_MAX_MOTORS, NJ = FC_MAX_JOINTS, NI = NM + NJ;
+  const int NM = FC_MAX_MOTORS, NJ = FC_MAX_JOINTS, NI = NM + NJ + 1;
   const int in_sz[] = { 1 + SP_BATCH * ((1 + 6 * NM) + (1 + 6 * NJ) + 6) + 2, (1 + 10 * NM) + (1 + 5 * NJ) + 1, 15 + 5, (1 + 6 * NI) + 2 * (1 + NI), 6 };
   const int out_sz[] = { 2 * (1 + NM) + 2 * (1 + NJ), (1 + 6 * NM) + (1 + 4 * NJ), 7, 3, 1 };
   for (int i = 0; i < 5; i++) {
@@ -106,7 +106,7 @@ void super_ltel(super_state *S, const float *p, int n) {
     float ar[3], wr[3], wwr[3]; cross(ar, S->mf_a, r); cross(wr, S->mf_w, r); cross(wwr, S->mf_w, wr);
     for (int i = 0; i < 3; i++) S->mf_f[i] += k * (S->f[i] - ar[i] - wwr[i] - S->mf_f[i]); }
   /* the stream: 50 times a second while flying (clear of the ground, and not just after a throw or take-off) */
-  if (++S->nframe % 4 == 0 && flying && t - S->fly_t0 > 1.5 && t - S->open_t > 3 && (!S->have_alt || S->alt - S->alt0 > 0.35f) && S->nb < SP_BATCH) {
+  if (++S->nframe % 4 == 0 && !S->external_load && flying && t - S->fly_t0 > 1.5 && t - S->open_t > 3 && (!S->have_alt || S->alt - S->alt0 > 0.35f) && S->nb < SP_BATCH) {
     sp_sample *s = &S->batch[S->nb++]; int sj[FC_MAX_JOINTS], ns = steer_list(S, sj);
     for (int i = 0; i < nm; i++) { float c[6]; col_now(S, i, -1, c); for (int r = 0; r < 6; r++) s->phi[i][r] = c[r] * S->v[i]; s->cmd[i] = S->v[i]; }
     for (int k = 0; k < ns; k++) {
@@ -234,7 +234,7 @@ static void tick(super_state *S) {
     }
   }
   /* 3. how to fly on what's left: the lift and control margin with the table as flown now */
-  k = 0; int ni = 0; float cols[FC_MAX_MOTORS + FC_MAX_JOINTS][6], lo[FC_MAX_MOTORS + FC_MAX_JOINTS], hi[FC_MAX_MOTORS + FC_MAX_JOINTS];
+  k = 0; int ni = 0; float cols[FC_MAX_MOTORS + FC_MAX_JOINTS + 1][6], lo[FC_MAX_MOTORS + FC_MAX_JOINTS + 1], hi[FC_MAX_MOTORS + FC_MAX_JOINTS + 1];
   for (int i = 0; i < nm; i++) if (S->m_on[i]) { col_now(S, i, -1, cols[ni]); lo[ni] = 0; hi[ni] = S->m_cap[i]; ni++; }
   for (int q = 0; q < ns; q++) {   /* steering servos count too: each can turn its rotors across what's left of its travel */
     int j = sj[q]; if (S->j_off[j]) continue;
@@ -244,12 +244,26 @@ static void tick(super_state *S) {
     float th = S->thh[j], R = A->jnt[j].range;
     memcpy(cols[ni], d, sizeof d); lo[ni] = minf(0, -R - th); hi[ni] = maxf(0, R - th); ni++;
   }
-  const int NI = FC_MAX_MOTORS + FC_MAX_JOINTS;
+  /* A fixed input represents the known external cable wrench. It contributes force/torque,
+   * cannot be allocated away, and consumes no actuator slot or control authority. */
+  float load = 0;
+  for (int r = 0; r < 6; r++) load += fabsf(S->FA.payload[r]);
+  if (load > 0) {
+    for (int r = 0; r < 3; r++) {
+      float f = 0, a = 0;
+      for (int q = 0; q < 3; q++) { f += S->R[3*q+r] * S->FA.payload[q]; a += A->Jinv[3*r+q] * S->FA.payload[3+q]; }
+      cols[ni][r] = f / A->m; cols[ni][3+r] = a;
+    }
+    lo[ni] = hi[ni] = 1; ni++;
+  }
+  const int NI = FC_MAX_MOTORS + FC_MAX_JOINTS + 1;
   pk[k++] = (float)ni; for (int c = 0; c < NI; c++) for (int r = 0; r < 6; r++) pk[k++] = c < ni ? cols[c][r] : 0;
   pk[k++] = (float)ni; for (int c = 0; c < NI; c++) pk[k++] = c < ni ? lo[c] : 0;
   pk[k++] = (float)ni; for (int c = 0; c < NI; c++) pk[k++] = c < ni ? hi[c] : 0;
   float mg[3] = { 0, 0, 0 };
-  if (!call(S, S->f_lm, mg)) { S->margin = mg[0]; S->rp_ok = mg[1] > 0.5f; S->yaw_ok = mg[2] > 0.5f; }
+  if (!call(S, S->f_lm, mg)) { /* Report thrust-to-total-supported-weight rather than net acceleration / rigid weight. */
+    float support = maxf(0, -S->FA.payload[2]) / (A->m * G_);
+    S->margin = (mg[0] + support) / (1 + support); S->rp_ok = mg[1] > 0.5f; S->yaw_ok = mg[2] > 0.5f; }
   /* the battery: its resting voltage (measured, plus the sag its current causes) per working cell gives the charge; a
    * drop of about a cell's worth within two seconds means a cell has failed: count one fewer */
   float soc = -1, vcell = -1;

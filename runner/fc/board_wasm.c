@@ -203,6 +203,7 @@ EXPORT("learn_setup") int learn_setup(uint32_t af_len, uint32_t cfg_len) {
   if (learn_airframe(&LS, blob, af_len)) return 4;
   return 0;
 }
+EXPORT("learn_external_load") void learn_external_load(int on) { LS.external_load = !!on; }
 EXPORT("learn_msg_ptr") char *learn_msg_ptr(void) { return LS.msg; }
 EXPORT("learn_ltel") void learn_ltel_(int n) { learn_ltel(&LS, fr, n); }
 EXPORT("learn_set") void learn_set_(int n) { learn_set(&LS, fr, n); }
@@ -219,8 +220,10 @@ EXPORT("super_setup") int super_setup(uint32_t af_len, uint32_t cfg_len) {
   if (super_airframe(&SS, blob, af_len)) return 4;
   return 0;
 }
+EXPORT("super_external_load") void super_external_load(int on) { SS.external_load = !!on; if (on) SS.nb = 0; }
 EXPORT("super_why_ptr") char *super_why_ptr(void) { return SS.why_text; }
 EXPORT("super_ltel") void super_ltel_(int n) { super_ltel(&SS, fr, n); }
+EXPORT("super_payload") int super_payload_(int n) { return fc_payload(&SS.FA, fr, n); }
 EXPORT("super_model") void super_model_(int n) { super_model(&SS, fr, n); }
 EXPORT("super_health") void super_health_(int n) { super_health(&SS, fr, n); }
 EXPORT("super_set") int super_set(void) { return super_set_frame(&SS, fr); }
@@ -233,6 +236,7 @@ EXPORT("super_motor_why") char *super_motor_why(int i) { super_why_motor(&SS, i,
 EXPORT("super_mode_why") char *super_mode_why(void) { super_why_mode(&SS, txt, (int)sizeof txt); return txt; }
 /* The flight core's side of those frames. */
 EXPORT("fc_exc") int fc_exc_(int n) { return fc_exc(&F, fr, n); }
+EXPORT("fc_payload") int fc_payload_(int n) { return fc_payload(&F, fr, n); }
 EXPORT("fc_model") int fc_model_(int n) { return fc_model(&F, fr, n); }
 EXPORT("fc_set") int fc_set_(int n) { return fc_set(&F, fr, n); }
 EXPORT("fc_ltel") int fc_ltel_(void) { return fc_ltel(&F, fr); }

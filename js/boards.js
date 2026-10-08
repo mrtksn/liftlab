@@ -245,7 +245,7 @@ function boardsStart() {
   const C = computers();
   for (const id of [...brt.inst.keys()]) if (!C.boards.some(b => b.id === id)) brt.inst.delete(id);
   let af = null, afErr = '';
-  try { af = fcAirframeBlob({ imuBody: true }); } catch (x) { afErr = x.message; }
+  try { af = fcAirframeBlob({ imuBody: true, cableLoads: true }); } catch (x) { afErr = x.message; }
   for (const b of C.boards) {
     let w = brt.inst.get(b.id);
     if (!w) { const id = b.id; w = new WebAssembly.Instance(brt.module, { env: { ...RnWasm.env(), app_call: (i, inP, nIn, outP, nOut) => appCall(id, i, inP, nIn, outP, nOut) } }).exports; brt.inst.set(b.id, w); }
@@ -530,6 +530,24 @@ function boardsReadViews(now) {
 const io = w => new Float32Array(w.memory.buffer, w.io_ptr(), 15 + 12 + 8 + 19);
 const IO_OUT = 15, IO_STATE = 15 + 12 + 8;
 function fcSend(cmd, delay) { brt.toCore.push({ at: brt.t + delay, cmd }); }
+// World force [N], body torque about the believed rigid CoG [N m]. The known flag gives the
+// simulator ideal knowledge of cable support; it is not a new physical tension sensor/transport.
+const cableUnderLoad = () => !!pend.size && liveComps().some(c => c.type === 'hang' && (pend.get(c.id)?.Tn || 0) > .01);
+function knownCableLoad() {
+  const out = [0,0,0,0,0,0]; if (!pend.size) return out;
+  const R = qmat(S.q), RT = m3T(R);
+  for (const c of liveComps()) {
+    if (c.type !== 'hang' || !c.known) continue;
+    const st = pend.get(c.id); if (!st || st.Tn <= 0) continue;
+    const pos = posNow(c), anchor = add(S.p,m3v(R,pos)), d = sub(st.p,anchor), L = nrm(d);
+    if (L < c.length || L < 1e-9 || d[2] >= 0) continue;
+    const weight = c.mass * G, supported = Math.min(weight, st.Tn * -d[2] / L);
+    const f = [0,0,-supported], torque = crs(sub(pos,model.c),m3v(RT,f));
+    out[2] -= supported; for (let k=0;k<3;k++) out[3+k] += torque[k];
+  }
+  return out;
+}
+
 function boardsControl(dt) {
   const coreB = boardOf('core'), navB = boardOf('nav'), learnB = boardOf('learn'), superB = boardOf('super');
   const acts = actuators();
@@ -544,6 +562,14 @@ function boardsControl(dt) {
     return;
   }
   const W = brt.inst.get(coreB.id), nav = navB && brt.inst.get(navB.id), same = navB && navB.id === coreB.id;
+  // Simulator-only known static cable load: no carried weight while slack or supported by the ground.
+  if (pend.size || brt.hadCableLoad) {
+    const load = knownCableLoad(), external = cableUnderLoad() ? 1 : 0;
+    if (learnB) brt.inst.get(learnB.id).learn_external_load(external);
+    frIn(W, load); W.fc_payload(6);
+    if (superB) { const sw = brt.inst.get(superB.id); frIn(sw, load); sw.super_payload(6); sw.super_external_load(external); }
+    brt.hadCableLoad = !!pend.size;
+  }
   throwHandTick(dt);
   autoPilot(dt, !!navB);
   for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && needsProgram(b)) w.host_tick(dt); }   // the loaders' steps, on every board

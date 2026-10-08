@@ -46,14 +46,16 @@ Object.assign(AGENT_TOOLS, {
         sensors: allSensors().map(c => { const rt = sens.get(c.id), L = rt && rt.latest; const o = { id: c.id, kind: c.kind, name: c.name };
           if (L) for (const [k, v] of Object.entries(L)) if (typeof v === 'number' || Array.isArray(v)) o[k] = Array.isArray(v) ? rndA(v) : rnd(v); return o; }) };
     } },
-  get_learning: { desc: 'The learning task: what the flight core flies on (description or learned), the calibration\'s progress, what it learned against the truth, the settings (keep learning in flight, freeze other motors during pulses) and the throw start\'s settings.',
+  get_learning: { desc: 'Actuator-model learning, separate from PID tuning: calibration progress, accepted and candidate models, confidence, passive adaptation stage/updates/rollbacks, settings and throw start. Keep learning adds no dither and accepts only bounded, validated changes.',
     params: obj({}),
     run: () => { const v = learn.view; if (!v) return { learning: hasTask('learn') ? 'not running yet' : 'no board runs the learning task', throw: throwCfg };
       const { B, motors, joints: js, ...rest } = v;
-      return { ...rest, message: learn.msg, motors: (motors || []).slice(0, 12), servos: (js || []).slice(0, 8), throw: throwCfg, launch: launchMode }; } },
-  set_learning: { desc: 'Learning settings: fly_on ("description" or "learned"), keep_learning (in flight), freeze_pulses (other motors during the tests), and the throw start: throw_height [m], throw_spin [rad/s], calibrate_after_throw.',
+      return { ...rest, paused_for_cable: cableUnderLoad(), message: learn.msg, motors: (motors || []).slice(0, 12), servos: (js || []).slice(0, 8), throw: throwCfg, launch: launchMode }; } },
+  set_learning: { desc: 'Learning settings: fly_on ("description" or "learned"), keep_learning (opt-in passive actuator-model adaptation; does not tune PID), freeze_pulses (other motors during the tests), and the throw start: throw_height [m], throw_spin [rad/s], calibrate_after_throw.',
     params: obj({ fly_on: { type: 'string', enum: ['description', 'learned'] }, keep_learning: { type: 'boolean' }, freeze_pulses: { type: 'boolean' }, throw_height: { type: 'number' }, throw_spin: { type: 'number' }, calibrate_after_throw: { type: 'boolean' } }),
     run: a => {
+      if (a.fly_on === 'learned' && !learn.view?.accepted) throw Error('Finish and accept an airframe calibration before flying learned.');
+      if (a.fly_on || a.keep_learning != null || a.freeze_pulses != null) atStop('Learning settings changed; test stopped.');
       if (a.fly_on) pilotLearnCmd(a.fly_on === 'learned' ? 'useLearned' : 'useDesc');
       if (a.keep_learning != null) { learnPrefs.keep = a.keep_learning; pilotLearnCmd(a.keep_learning ? 'keepOn' : 'keepOff'); }
       if (a.freeze_pulses != null) { learnPrefs.holdPulses = a.freeze_pulses; pilotLearnCmd(a.freeze_pulses ? 'holdOn' : 'holdOff'); }
@@ -65,7 +67,7 @@ Object.assign(AGENT_TOOLS, {
     } },
   get_boards: { desc: 'The flight computers running: each board\'s load (share of its processor), memory, its tasks; the flight core\'s state; the program being loaded (staged) and the boards\' messages; errors.',
     params: obj({}),
-    run: () => ({ boards: computers().boards.map(b => { const B = boardBudget(b); return { name: b.name, kind: b.kind, tasks: b.tasks, load_pct: rnd(B.load * 100, 1), memory_KB: rnd(B.memKB, 1), ram_KB: B.ramKB }; }),
+    run: () => ({ boards: computers().boards.map(b => { const B = boardBudget(b); return { id:b.id, name: b.name, kind: b.kind, tasks: b.tasks, runtimes:boardRuns(b), apps:b.apps||[], load_pct: rnd(B.load * 100, 1), memory_KB: rnd(B.memKB, 1), ram_KB: B.ramKB }; }),
       running: brt.ready, error: brt.err || undefined, flight_core: FC_STATES[brt.fcState] || brt.fcState, why: brt.fcWhy || undefined, navigation: brt.navWhy || undefined, learning_error: brt.learnErr || undefined,
       program: RN.stage ? rnStageText(RN.stage) : 'flying the loaded program', messages: (RN.log || []).slice(0, 12).map(l => `${rnd(l.t, 1)} s: ${l.msg}`) }) },
   get_envelope: { desc: 'The airframe check in full: the verdict and why, the control headroom beyond hover on each axis (both sides), and the mass properties (true mass, mass on cables, thrust to weight, centre of mass, what the controller believes, inertia).',
@@ -73,8 +75,8 @@ Object.assign(AGENT_TOOLS, {
     run: () => {
       const r = envRes || {}, mp = cfg.comps.filter(c => c.type === 'hang').reduce((s, c) => s + c.mass, 0);
       return { verdict: r.verdict, title: r.title, why: r.why, axes: r.k, headroom: r.head && r.labels ? Object.fromEntries(r.labels.map((l, i) => [l, { minus: rnd(r.head[i][0]), plus: rnd(r.head[i][1]) }])) : null, weak: r.weak,
-        mass: { rigid_kg: rnd(truth.m), on_cables_kg: rnd(mp), thrust_to_weight: rnd(actuators().reduce((s, c) => s + c.tmax * motorEff(c), 0) / ((truth.m + mp) * G), 2),
-          cog_from_hub_m: rndA(truth.c), controller_cog_error_mm: rnd(nrm(sub(truth.c, model.c)) * 1000, 0), controller_mass_error_g: rnd((model.m - truth.m - mp) * 1000, 0), inertia_kgm2: [truth.J[0], truth.J[4], truth.J[8]].map(x => rnd(x, 5)) } };
+        mass: { check_assumes_all_cables_carried: true, rigid_kg: rnd(truth.m), on_cables_kg: rnd(mp), thrust_to_weight: rnd(actuators().reduce((s, c) => s + c.tmax * motorEff(c), 0) / ((truth.m + mp) * G), 2),
+          cog_from_hub_m: rndA(truth.c), controller_cog_error_mm: rnd(nrm(sub(truth.c, model.c)) * 1000, 0), controller_rigid_mass_error_g: rnd((model.m - truth.m) * 1000, 0), known_cable_load: knownCableLoad(), inertia_kgm2: [truth.J[0], truth.J[4], truth.J[8]].map(x => rnd(x, 5)) } };
     } },
   get_radio: { desc: 'The radio and the command module: whether the drone has a radio, the link (kind: elrs ExpressLRS 2.4 GHz, espnow ESP-NOW ESP32 to ESP32, wifi Wi-Fi UDP) and its settings, the link statistics of the last 5 s, the telemetry the command module decoded, its alert, and its log.',
     params: obj({}),

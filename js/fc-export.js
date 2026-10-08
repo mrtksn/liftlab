@@ -11,14 +11,15 @@ function fcAirframe(opts = {}) {
   if (acts.length > FC_MAX_MOTORS) problems.push(`${acts.length} motors: the firmware takes at most ${FC_MAX_MOTORS}`);
   if (js.length > FC_MAX_JOINTS) problems.push(`${js.length} joints: the firmware takes at most ${FC_MAX_JOINTS}`);
   if (acts.length + js.length > RN_IN) problems.push(`${acts.length + js.length} inputs: the formulas hold ${RN_IN}`);
-  const cm = ctlModel();
+  // Hardware exports retain the fully carried static load; the simulator supplies cable support separately.
+  const cm = opts.cableLoads ? ctlModel() : massProps('model', cfg.comps, angleSeen, true);
   // The IMU's mount (the first known IMU, its joints at rest), so the firmware turns its readings into body axes.
   const imu = sensorsOf('imu').find(c => c.known);
   const imuR = opts.imuBody || !imu ? [1, 0, 0, 0, 1, 0, 0, 0, 1] : m3m(poseOf(imu, restAngle).R, eulerR(imu.mount[0], imu.mount[1], imu.mount[2]));
   const motors = acts.map(c => {
     const ch = chainOf(c);
     if (ch.length > FC_MAX_CHAIN) problems.push(`${c.name} rides on ${ch.length} joints: the firmware takes ${FC_MAX_CHAIN}`);
-    return { name: c.name, chain: ch.map(j => js.indexOf(j)), cols: colsFor(c).map(col => col.slice()), bend: curveHat(c), lag: motorLagHat(c), power: powerFull(c) };
+    return { name: c.name, chain: ch.map(j => js.indexOf(j)), cols: describedCols(c, cm).map(col => col.slice()), bend: curveHat(c), lag: motorLagHat(c), power: powerFull(c) };
   });
   const jnt = js.map(j => { const m = servoModelHat(j); return { name: j.name, steer: steer.has(j), manual: restAngle(j), range: j.range * D2R, rate: m.rate, lag: m.lag }; });
   return {

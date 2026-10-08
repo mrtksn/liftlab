@@ -66,6 +66,7 @@ typedef struct {
   /* the models: rows ax ay az αx αy αz × inputs, acceleration per full thrust */
   float prior[6][LN_IN], B[6][LN_IN], flyB[6][LN_IN];
   int prior_desc, fly_frozen;            /* the prior is the description; flying on flyB while a calibration runs */
+  int external_load, external_was;                    /* simulator: a cable is under tension; actuator-only identification waits */
   int use_learned, keep, hold_servos, hold_pulses, then_cal;
   /* B is the estimator, flyB the accepted model. Probe a frozen candidate on fresh ordinary-flight data. */
   float probe[6][LN_IN], previous[6][LN_IN], transient[3][LN_IN], nuisance[3][LN_IN];

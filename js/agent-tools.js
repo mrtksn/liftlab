@@ -118,7 +118,7 @@ const AGENT_TOOLS = {
 
   get_computers: { desc: 'The flight computers: each board, its kind and the tasks it runs; what each task and board kind is.',
     params: obj({}),
-    run: () => ({ boards: computers().boards.map(b => ({ id:b.id,name: b.name, kind: b.kind, tasks: b.tasks, ...(b.tasks.includes('core')?{flight_loop_hz:boardTaskHz(b,'core')}:{}) })), ground:computers().ground,
+    run: () => ({ boards: computers().boards.map(b => ({ id:b.id,name: b.name, kind: b.kind, tasks: b.tasks, runtimes: boardRuns(b), apps: b.apps || [], ...(b.tasks.includes('core')?{flight_loop_hz:boardTaskHz(b,'core')}:{}) })), ground:computers().ground,
       tasks: Object.fromEntries(Object.entries(TASKS).map(([k, T]) => [k, `${T.label}, ${T.hz} Hz${T.mcuOnly ? ', microcontroller only' : ''}${T.piOnly ? ', Linux only' : ''}: ${T.what}`])),
       board_kinds: Object.fromEntries(Object.entries(BOARD_KINDS).filter(([, k]) => !k.groundOnly).map(([k, B]) => [k, `${B.label}: ${B.note}`])),
       ground_board_kinds:Object.fromEntries(Object.entries(BOARD_KINDS).map(([k,B])=>[k,B.label])) }) },
@@ -165,8 +165,8 @@ const AGENT_TOOLS = {
         case 'speed': setSpeed([0.25, 0.5, 1].includes(a.speed) ? a.speed : 1); break;
         case 'throw': if (!hasTask('learn')) throw new Error('the throw start needs a board running the learning task'); setLaunch('throw'); break;
         case 'hover': setLaunch('hover'); break;
-        case 'calibrate': if (!hasTask('learn')) throw new Error('calibration needs a board running the learning task'); if (S.crashed) throw new Error('crashed: reset first'); pilotLearnCmd('calibrate'); renderLearn(true); break;
-        case 'stop_calibration': pilotLearnCmd('stop'); renderLearn(true); break;
+        case 'calibrate': if (!hasTask('learn')) throw new Error('calibration needs a board running the learning task'); if (S.crashed) throw new Error('crashed: reset first'); atStop('Calibration started; test stopped.'); pilotLearnCmd('calibrate'); renderLearn(true); break;
+        case 'stop_calibration': atStop('Calibration stopped; test stopped.'); pilotLearnCmd('stop'); renderLearn(true); break;
       }
       return { done: a.action, time: r2(S.t), simulation: running ? 'running' : 'paused', speed };
     } },

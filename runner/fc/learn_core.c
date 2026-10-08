@@ -647,6 +647,17 @@ void learn_ltel(learn_state *L, const float *p, int n) {
 
   float *e = L->exc; for (int k = 0; k < 8 + nm + nj; k++) e[k] = 0;
   e[4] = (float)nm; e[5] = (float)nj;
+  if (L->external_load) {
+    if (L->cal) end_calibration(L);
+    if (L->thr) L->thr = LN_THR_NONE;
+    if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L);
+    if (!L->external_was) rn_host_forget(L->H, L->f_rls);
+    L->external_was = 1; L->updated = 0;
+    SAY("Cable under tension: actuator-model learning waits for an unloaded flight.");
+  } else if (L->external_was) {
+    L->external_was = 0; L->mf_ok = 0;
+    SAY("Cable slack: actuator-model learning can observe again.");
+  }
   int flying = L->flags & 1, crashed = L->state == FC_CRASHED;
   if (!flying) { if (L->adapt == 2) adapt_rollback(L); else adapt_reset(L); }
   if (crashed && L->cal) { end_calibration(L); SAY("Calibration stopped: the drone crashed."); }
@@ -654,15 +665,15 @@ void learn_ltel(learn_state *L, const float *p, int n) {
   if (L->thr == LN_THR_HAND || L->thr == LN_THR_FREE || L->thr == LN_THR_EXCITE) {   /* the throw runs open loop, with its own identification */
     if (L->state == FC_ARMED) throw_tick(L, e); else e[0] = 0;
   } else {
-    refine_step(L);
+    if (!L->external_load) refine_step(L);
     if (L->thr == LN_THR_RECOVER) { L->thr_t += L->dt; recover_check(L); }
     L->updated = 0;
-    if (cadence_ok && (L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* valid telemetry only (200 Hz) */
+    if (!L->external_load && cadence_ok && (L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* valid telemetry only (200 Hz) */
       float mem = L->cal ? maxf(MEM_CAL, L->total) : MEM_FLIGHT;
       if (!rls_step(L, mem)) L->updated = 1;
     }
     if (L->cal && flying && cadence_ok) calibration_tick(L, e);
-    else if (L->keep && flying && L->updated && L->thr == LN_THR_NONE) adapt_step(L);
+    else if (!L->external_load && L->keep && flying && L->updated && L->thr == LN_THR_NONE) adapt_step(L);
   }
   if (e[0] > 0) { L->exc_n = 8 + nm + nj; L->exc_was = 1; }
   else if (L->exc_was) { e[0] = 0; L->exc_n = 8 + nm + nj; L->exc_was = 0; }   /* one last frame: excitation over */
@@ -701,6 +712,7 @@ int learn_command(learn_state *L, int cmd) {
   int flying = L->flags & 1;
   switch (cmd) {
     case LN_CMD_CALIBRATE:
+      if (L->external_load) { SAY("Unload the cable before calibrating its actuators."); return -1; }
       if (!L->n) return -1;
       if (L->thr && L->thr != LN_THR_RECOVER) { SAY("It can calibrate once it has caught itself."); return -1; }
       if (!flying) { SAY("It calibrates while hovering: take off first."); return -1; }
@@ -729,6 +741,7 @@ int learn_command(learn_state *L, int cmd) {
     case LN_CMD_THEN_CAL_ON: L->then_cal = 1; return 0;
     case LN_CMD_THEN_CAL_OFF: L->then_cal = 0; return 0;
     case LN_CMD_THROW:
+      if (L->external_load) { SAY("Unload the cable before a learning throw."); return -1; }
       if (L->n > LN_THROW_IN) { SAY("The throw start identifies at most %d inputs; this airframe has %d.", LN_THROW_IN, L->n); return -1; }
       if (L->cal) end_calibration(L);
       adapt_reset(L); L->accepted = 0;

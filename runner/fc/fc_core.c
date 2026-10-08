@@ -158,6 +158,7 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len) {
   if (r.bad || r.at != r.n || !(A.m > 0)) { fc_say(F, "airframe: wrong size or values"); return -1; }
   int inputs = A.n_motors + A.n_joints;
   if (inputs > FC_RN_IN) { fc_say(F, "airframe: %d inputs, the formulas hold %d", inputs, FC_RN_IN); return -1; }
+  memset(F->payload, 0, sizeof F->payload);
   F->A = A; F->have_airframe = 1; F->state = FC_DISARMED;
   for (int j = 0; j < A.n_joints; j++) F->th_cmd[j] = F->th_hat[j] = A.jnt[j].manual;
   /* a new airframe: the description, nothing learned, every part working */
@@ -497,6 +498,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     float cy0 = cosf(F->yaw_sp), sy0 = sinf(F->yaw_sp);
     Fd[0] = A->m * (fwd * cy0 - left * sy0); Fd[1] = A->m * (fwd * sy0 + left * cy0); Fd[2] = A->m * lift;
   }
+  for (int k = 0; k < 3; k++) Fd[k] -= F->payload[k];
   if (F->yaw_sp > 3.14159265f) F->yaw_sp -= 6.2831853f; else if (F->yaw_sp < -3.14159265f) F->yaw_sp += 6.2831853f;
   float cy = cosf(F->yaw_sp), sy = sinf(F->yaw_sp);
 
@@ -514,6 +516,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   if (c.throttle > 0.15f) for (int k = 0; k < 3; k++) F->iAtt[k] = clampf(F->iAtt[k] + eR[k] * dt, -0.5f, 0.5f);
   p.n = 0; p_v(&p, eR, 3); p_v(&p, F->w, 3); p_v(&p, F->iAtt, 3); p_v(&p, A->J, 9);
   if (call(F, F->f_ctl, 0, &p, tau)) return -1;
+  for (int k = 0; k < 3; k++) tau[k] -= F->payload[3 + k];
   memcpy(F->tau_des, tau, sizeof F->tau_des);
   m3tv(Fb, F->R, Fd);
   p.n = 0; p_v(&p, Fb, 3); p_v(&p, axis_of(F), 3); p_f(&p, (float)mode);
@@ -627,6 +630,12 @@ static void learned_axis(fc_state *F) {
   }
   float l = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
   if (l > 1e-6f) for (int k = 0; k < 3; k++) F->laxis[k] = s[k] / l; else memcpy(F->laxis, F->A.axis, sizeof F->laxis);
+}
+int fc_payload(fc_state *F, const float *p, int n) {
+  if (n != 6) return -1;
+  for (int k = 0; k < 6; k++) if (!fin(p[k]) || fabsf_(p[k]) > 100000) return -1;
+  memcpy(F->payload, p, sizeof F->payload);
+  return 0;
 }
 int fc_model(fc_state *F, const float *p, int n) {
   const fc_airframe *A = &F->A;

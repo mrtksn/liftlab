@@ -96,6 +96,7 @@ function atAvailable() {
   if(!brt.ready || !boardOf('learn') || !boardOf('nav') || !brt.navOut?.ready) return 'Needs Learning and Navigation tasks with a position estimate.';
   if(computers().boards.some(b=>brt.inst.get(b.id)?.host_phase()%10)) return 'Wait for the boards to finish the program change.';
   if(brt.pilot.phase!=='flying' || brt.fcState!==1) return 'Take off and hold still first.';
+  if(typeof cableUnderLoad === 'function' && cableUnderLoad()) return 'Unload the cable before measured autotune; payload swing is outside its response model.';
   if(learn.view?.cal || learn.view?.thr || !learn.view?.haveFit) return 'Finish an airframe calibration first.';
   if(!rnReadsTune(rnSourceOf('attitudeControl')) || !rnReadsTune(rnSourceOf('positionControl'))) return 'The flight formulas must read the tuning gains.';
   // The fit assumes these control laws; a custom formula requires a matching identification model.

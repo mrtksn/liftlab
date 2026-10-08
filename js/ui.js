@@ -479,7 +479,7 @@ function renderMass() {
   const tw = actuators().reduce((s, c) => s + flightAvailable(c) * motorEff(c), 0) / ((truth.m + mp) * G);
   const cm = truth.c.map(x => (x * 1000).toFixed(0)).join(', '); const dc = nrm(sub(truth.c, model.c)) * 1000;
   const rows = [['Rigid mass', truth.m.toFixed(3) + ' kg'], ['On cables', mp.toFixed(3) + ' kg'], ['Thrust / weight', tw.toFixed(2)], ['True CoG from hub', `(${cm}) mm`],
-    ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller mass error', ((model.m - truth.m - mp) * 1000).toFixed(0) + ' g'],
+    ["Controller's CoG error", dc.toFixed(0) + ' mm'], ['Controller rigid mass error', ((model.m - truth.m) * 1000).toFixed(0) + ' g'],
     ['Inertia Ixx / Iyy / Izz', `${(truth.J[0] * 1000).toFixed(1)} / ${(truth.J[4] * 1000).toFixed(1)} / ${(truth.J[8] * 1000).toFixed(1)} g·m²`]];
   syncKv($('#massKv'), rows);
   if (typeof renderBattSmall === 'function') renderBattSmall();

@@ -59,7 +59,7 @@ const RN_SIGS = (() => {
     flightPolicy: S(['sum', 'prev'],
       [rec({ dt: num, margin: num, rpOk: num, yawOk: num, anyFailed: num, cellLost: num, hot: opt(num), soc: opt(num), vCell: opt(num), battT: opt(num), battMax: num }), opt(rec({ mode: POLICY, why: num, rpBad: num, vBad: num }))],
       rec({ mode: POLICY, lim: rec({ speed: num, lean: num, accel: num }), why: num, rpBad: num, vBad: num })),
-    liftMargin: S(['cols', 'lo', 'hi'], [list(V6, RN_MOT + RN_JNT), list(num, RN_MOT + RN_JNT), list(num, RN_MOT + RN_JNT)], rec({ margin: num, rpOk: num, yawOk: num })),
+    liftMargin: S(['cols', 'lo', 'hi'], [list(V6, RN_MOT + RN_JNT + 1), list(num, RN_MOT + RN_JNT + 1), list(num, RN_MOT + RN_JNT + 1)], rec({ margin: num, rpOk: num, yawOk: num })),
     thermalModel: S(['T', 'P', 'G', 'C', 'Tamb', 'dt'], [num, num, num, num, num, num], num),
     // The command module (on the ground: runner/ground).
     stickInput: S(['st', 'axis', 'analog', 'digital', 'dt'], [state(), num, opt(num), num, num], num),

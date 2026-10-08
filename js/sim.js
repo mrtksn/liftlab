@@ -156,13 +156,13 @@ const frameI = () => boxI(cfg.frame.mass, ...frameDims());
 // A thin rod's inertia about its middle: m L²/12 across it, nothing along it.
 function rodI(l) { const d = linkDir(l), k = l.mass * l.length * l.length / 12; return [0, 1, 2].flatMap(i => [0, 1, 2].map(j => k * ((i === j ? 1 : 0) - d[i] * d[j]))); }
 // The truth is what's on the drone now (a load dropped or picked up, cargo.js); the model is the design.
-function massProps(which, comps = which === 'truth' ? liveComps() : cfg.comps, ang = which === 'truth' ? angleTrue : angleSeen) {
+function massProps(which, comps = which === 'truth' ? liveComps() : cfg.comps, ang = which === 'truth' ? angleTrue : angleSeen, includeCables = false) {
   const items = [{ m: cfg.frame.mass, r: [0, 0, 0], I: frameI() }];
   for (const c of comps) {
     const pose = () => poseOf(c, ang);
     if (c.type === 'motor' || c.type === 'joint' || c.type === 'sensor' || c.type === 'latch') items.push({ m: c.mass, r: pose().p, I: null });
     else if (c.type === 'mass') { if (which === 'truth' || c.known) { const P = pose(); items.push({ m: c.mass, r: P.p, I: m3m(m3m(P.R, shapeI(c)), m3T(P.R)) }); } }
-    else if (c.type === 'hang') { if (which === 'model' && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
+    else if (c.type === 'hang') { if (which === 'model' && includeCables && c.known) items.push({ m: c.mass, r: pose().p, I: null }); }
     else if (c.type === 'link') { if (which === 'truth' || c.known) { const P = poseOf(c, ang); items.push({ m: c.mass, r: posePoint(c, add(c.pos, scl(linkDir(c), c.length / 2)), ang).p, I: m3m(m3m(P.R, rodI(c)), m3T(P.R)) }); } }
   }
   let m = 0, cm = [0, 0, 0]; for (const it of items) { m += it.m; cm = add(cm, scl(it.r, it.m)); } cm = scl(cm, 1 / m);
@@ -199,8 +199,9 @@ function syncRuntime() {
 function reseatPend(c) {
   const st = pend.get(c.id); if (!st) return;
   const R = qmat(S.q); const a = add(S.p, m3v(R, posNow(c)));
-  let d = sub(st.p, a); if (nrm(d) < 1e-6) d = [0, 0, -1];
-  st.p = add(a, scl(unit(d), c.length)); st.v = S.v.slice();
+  const d = sub(st.p, a), L = nrm(d);
+  if (L > c.length && L > 1e-6) st.p = add(a, scl(d, c.length / L));
+  st.p[2] = Math.max(payloadR(c), st.p[2]); st.Tn = 0;
 }
 let designRevision = 0;
 function recomputeProps() {

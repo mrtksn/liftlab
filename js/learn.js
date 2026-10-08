@@ -47,17 +47,17 @@ function buildIndex() {
 const seenAngles = c => chainOf(c).map(angleSeen);
 
 /* ───────── the description's columns (acceleration per full thrust, body frame) ───────── */
-const cfgToAccel = col => { const f = scl([col[0], col[1], col[2]], 1 / model.m); const a = m3v(model.Jinv, [col[3], col[4], col[5]]); return [...f, ...a]; };
-function describedAt(c, angles) {   // from the airframe description, with the motor's joints at the given angles
+const cfgToAccel = (col, cm = model) => { const f = scl([col[0], col[1], col[2]], 1 / cm.m); const a = m3v(cm.Jinv, [col[3], col[4], col[5]]); return [...f, ...a]; };
+function describedAt(c, angles, cm = model) {   // from the airframe description, with the motor's joints at the given angles
   const ch = chainOf(c), n = rotorNow(c, j => angles[ch.indexOf(j)]);
-  return cfgToAccel(scl6(wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), model.c), c.tmax * hModel(c)));
+  return cfgToAccel(scl6(wrenchCol(n.p, n.d, spinOf(c), kappaOf(c), cm.c), c.tmax * hModel(c)), cm);
 }
 // Cached per model: the description only changes when the believed mass properties do (a new `model`).
 let descCache = new WeakMap();
 const invalidateDesc = () => { descCache = new WeakMap(); };
-function describedCols(c) {
-  let m = descCache.get(model); if (!m) { m = new Map(); descCache.set(model, m); }
-  let cols = m.get(c.id); if (!cols) { cols = decompose(a => describedAt(c, a), chainOf(c).length); m.set(c.id, cols); }
+function describedCols(c, cm = model) {
+  let m = descCache.get(cm); if (!m) { m = new Map(); descCache.set(cm, m); }
+  let cols = m.get(c.id); if (!cols) { cols = decompose(a => describedAt(c, a, cm), chainOf(c).length); m.set(c.id, cols); }
   return cols;
 }
 // The flight code is told the description; what it learns stays on its board.
