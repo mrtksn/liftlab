@@ -129,8 +129,10 @@ function startThrow() { thr = { phase: 'hand', t: 0 }; }   // called right after
 function releaseThrow() {   // the hand swings it up to speed and spin over a moment (the IMU feels it), then lets go
   const dur = 0.12, h = Math.max(0.3, throwCfg.height - S.p[2]);   // apex = release height + v0·dur/2 + v0²/2g
   const v0 = G * (-dur / 2 + Math.sqrt(dur * dur / 4 + 2 * h / G));
-  let ax = [randn(), randn(), randn()]; if (nrm(ax) < 1e-6) ax = [1, 0, 0];
-  thr.phase = 'toss'; thr.toss = { t: 0, dur, dv: [0.3 * randn(), 0.3 * randn(), v0], dw: scl(unit(ax), throwCfg.spin) };
+  withRng(seedHash(worldSeeds.air, 'throw', S.steps), () => {   // (the hand's own wobble, from the world's seed)
+    let ax = [randn(), randn(), randn()]; if (nrm(ax) < 1e-6) ax = [1, 0, 0];
+    thr.phase = 'toss'; thr.toss = { t: 0, dur, dv: [0.3 * randn(), 0.3 * randn(), v0], dw: scl(unit(ax), throwCfg.spin) };
+  });
 }
 const throwBusy = () => !!thr;
 function throwHandTick(dt) {   // after the toss, the drone is on its own (the physics' crash checks wait until it has caught itself)

@@ -45,7 +45,7 @@ function cargoFetch(l, i, L) {
   const spot = [top[0] - (c * hk[0] - s * hk[1]), top[1] - (s * hk[0] + c * hk[1]), top[2] - hk[2] + 0.03];
   return w.pickup_cmd(spot[0], spot[1], spot[2], h, i) ? cstr(w, w.pk_msg_ptr()) : '';
 }
-const cargoKey = () => { if (latches().length) cargoAct(Math.min(cargoUi.cur, latches().length - 1)); };
+const cargoKey = () => { if (latches().length) userAction('cargo', Math.min(cargoUi.cur, latches().length - 1)); };
 
 // The buttons on the view: one per latch, rebuilt when the latches change.
 function cargoBarBuild() {
@@ -56,7 +56,7 @@ function cargoBarBuild() {
       el('span', { class: 'cg-name', text: l.name }), el('span', { class: 'cg-state' }),
       el('span', { class: 'cg-meter', 'aria-hidden': 'true' }, el('i')), el('kbd', { text: 'G' }));
     b.addEventListener('mousedown', e => e.preventDefault());   // (the keyboard stays with the view)
-    b.addEventListener('click', () => cargoAct(i));
+    b.addEventListener('click', () => userAction('cargo', i));
     box.append(b);
   });
   box.append(el('span', { class: 'cargo-say', id: 'cargoSay', role: 'status' }));

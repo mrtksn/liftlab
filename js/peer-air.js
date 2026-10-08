@@ -11,7 +11,8 @@
 //     packets don't check: peer.c drops them).
 // The air is the world's (peerAir, not any drone's); each drone's step (boardsControl) sends what its end has due
 // and takes what reached it. Its own state (radio.peer: who it's heard, for the link log) is the drone's.
-const peerAir = { q: [], n: 0, seed: 0x6A09E667, starts: 0 };
+const peerAir = { q: [], n: 0, seed: seedHash(worldSeeds.radio, 'peer'), starts: 0 };
+function peerAirReset() { Object.assign(peerAir, { q: [], n: 0, seed: seedHash(worldSeeds.radio, 'peer'), starts: 0 }); }   // (the whole world starting again)
 const peerRand = () => { let s = peerAir.seed; s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; peerAir.seed = s; return s / 4294967296; };   // (its own: the drones' radio models keep theirs)
 const PEER_SENS = -98, PEER_TX = 20;
 const peerOn = () => !!radioCfg.peers;

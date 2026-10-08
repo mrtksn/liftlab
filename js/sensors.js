@@ -48,10 +48,10 @@ function syncSensors() {
   const ids = new Set(cfg.comps.map(c => c.id));
   for (const k of [...sens.keys()]) if (!ids.has(k)) sens.delete(k);
   for (const k of [...vib.keys()]) if (!ids.has(k)) vib.delete(k);
-  for (const c of allSensors()) if (!sens.has(c.id)) sens.set(c.id, { st: {}, acc: 0, queue: [], latest: null, fresh: false });
+  for (const c of allSensors()) if (!sens.has(c.id)) sens.set(c.id, { st: {}, acc: 0, queue: [], latest: null, fresh: false, n: 0 });
   for (const c of actuators()) if (!vib.has(c.id)) {
     const a = c.id * 2.39996;                                  // each motor shakes in its own direction
-    vib.set(c.id, { ph: rand() * 6.283, u: unit([Math.cos(a), Math.sin(a), 0.35]), um: unit([Math.sin(a), Math.cos(a), 0.5]) });
+    vib.set(c.id, { ph: withRng(seedHash(worldSeeds.noise, 'vib', c.id), rand) * 6.283, u: unit([Math.cos(a), Math.sin(a), 0.35]), um: unit([Math.sin(a), Math.cos(a), 0.5]) });
   }
 }
 
@@ -127,6 +127,12 @@ function measure(c, rt, dt) {
   }
   return run('posFixModel', ps, vs, { noise: c.noise, wander: c.wander, velNoise: c.velNoise }, rt.st, dt);
 }
+// Each sensor's noise is its own: from the noise seed, which sensor it is (its kind and its place among them, so a
+// part swapped for another keeps its noise) and which sample. Readings skipped (no fix, out of range) skip nothing else.
+function noisyMeasure(c, rt, dt) {
+  const k = sensorsOf(c.kind).indexOf(c);
+  return withRng(seedHash(worldSeeds.noise, c.kind, k, rt.n++), () => measure(c, rt, dt));
+}
 function sampleSensors(dt) {
   advanceVibration(dt);
   for (const c of allSensors()) {
@@ -142,7 +148,7 @@ function sampleSensors(dt) {
     rt.acc += dt; if (rt.acc + 1e-9 < period) continue;
     rt.acc = rt.acc % period;
     if (c.kind === 'fix' && c.dropout) continue;              // no fix while dropped out
-    const measured = measure(c, rt, period);
+    const measured = noisyMeasure(c, rt, period);
     if (measured != null) rt.queue.push({ t: S.t + c.latency / 1000, ts: S.t, m: measured });
     if (rt.queue.length > 400) rt.queue.shift();
   }
@@ -150,7 +156,7 @@ function sampleSensors(dt) {
 function primeSensors() { // one immediate reading from every sensor, so the estimators can align at reset
   for (const c of allSensors()) {
     const rt = sens.get(c.id); if (!rt || (c.kind === 'fix' && c.dropout)) continue;
-    rt.latest = measure(c, rt, 1 / Math.max(1, c.rate)); rt.ts = S.t; rt.fresh = true;
+    rt.latest = noisyMeasure(c, rt, 1 / Math.max(1, c.rate)); rt.ts = S.t; rt.fresh = true;
   }
 }
 
@@ -190,7 +196,7 @@ function senseAndEstimate(dt) {
 }
 function sensorsDone() { for (const rt of sens.values()) rt.fresh = false; }
 function resetEstimation() {
-  seedRng(12345);
+  seedRng(seedHash(worldSeeds.noise, 'reset'));
   sens.clear(); vib.clear(); syncSensors();
   const R = qmat(S.q); const hub = S.p.slice();
   est.q = S.q.slice(); est.R = R; est.w = [0, 0, 0]; est.p = hub.slice(); est.v = [0, 0, 0]; est.havePos = false; est.drv = {};

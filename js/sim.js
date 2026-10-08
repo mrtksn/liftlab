@@ -77,12 +77,12 @@ let setpoint = { x: 0, y: 0, z: 1.5, yaw: 0 };
 const DEFAULT_ENVIRONMENT = Object.freeze({ wind: 0, windDir: 0, turb: 0.3, spread: 1, texture: 0.8, light: 1, ambient: 25, pressure: 101325, sensorEffects: false, rotorSamples: 5 });
 const envr = { ...DEFAULT_ENVIRONMENT };   // texture and light matter to optical flow
 // No two motors and props are quite alike: each one's thrust, drag and spin-up differ a little from its card
-// (a few percent, its own every time, fixed by its id). The controller and supervisor aren't told.
+// (a few percent, its own every time, fixed by its id and the world's parts seed). The controller and supervisor aren't told.
 let spreadCache = new Map();
 function spreadOf(c) {
-  const k = envr.spread ?? 1, hit = spreadCache.get(c.id); if (hit && hit.k === k) return hit;
-  const R = mulberry32(c.id * 7919 + 104729), n = () => clamp(Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()), -2.5, 2.5);
-  const sp = { k, kT: 1 + 0.03 * k * n(), kQ: 1 + 0.05 * k * n(), J: 1 + 0.1 * k * n() }; spreadCache.set(c.id, sp); return sp;
+  const k = envr.spread ?? 1, hit = spreadCache.get(c.id); if (hit && hit.k === k && hit.seed === worldSeeds.parts) return hit;
+  const R = mulberry32(seedHash(worldSeeds.parts, c.id)), n = () => clamp(Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()), -2.5, 2.5);
+  const sp = { k, seed: worldSeeds.parts, kT: 1 + 0.03 * k * n(), kQ: 1 + 0.05 * k * n(), J: 1 + 0.1 * k * n() }; spreadCache.set(c.id, sp); return sp;
 }
 
 /* ───────── state ───────── */
@@ -321,7 +321,7 @@ function windVec() { const g = S.gust || [0, 0, 0]; return [envr.wind * cosd(env
 // weaker vertically).
 function stepGusts(dt) {
   const tg = 2, sg = (envr.turb ?? 0) * (0.5 + 0.15 * envr.wind), k = sg * Math.sqrt(2 * dt / tg);
-  S.gust = (S.gust || [0, 0, 0]).map((g, i) => g - g * dt / tg + k * (i === 2 ? 0.4 : 1) * randn());
+  S.gust = withRng(seedHash(worldSeeds.air, 'gust', S.steps), () => (S.gust || [0, 0, 0]).map((g, i) => g - g * dt / tg + k * (i === 2 ? 0.4 : 1) * randn()));
 }
 
 /* ───────── motors ───────── */
@@ -369,12 +369,12 @@ function rotorStep(c, st, mp, V, dt) {
 function rotorAir(rotors, K, R, RT, wv, dt) {
   const rho = flightAtmosphere().rho;
   for (const ro of rotors) ro.va = sub(m3v(RT, wv), mbPointVel(K, ro.b, ro.p));   // oncoming air at each disc
-  for (const ro of rotors) {
-    const u = add(ro.va, flightRotorWake(ro, rotors, rho));   // plus the other rotors' wash, averaged over overlapping disks
+  for (let ri = 0; ri < rotors.length; ri++) {
+    const ro = rotors[ri], u = add(ro.va, flightRotorWake(ro, rotors, rho));   // plus the other rotors' wash, averaged over overlapping disks
     const pw = add(S.p, m3v(R, ro.p)), h = pw[2] - (terrain.boxes.length ? surfaceBelow(pw) : 0);   // height above the ground or the roof below
     if (dt) {
       const tr = 0.1, sr = (0.15 + (envr.turb ?? 0)) * 1.3 * (1 + 2.5 * Math.exp(-Math.max(0, h) / (6 * ro.R))) * Math.min(1, ro.T / 0.2);
-      ro.st.gz = (ro.st.gz || 0) * (1 - dt / tr) + sr * Math.sqrt(2 * dt / tr) * randn();
+      ro.st.gz = (ro.st.gz || 0) * (1 - dt / tr) + sr * Math.sqrt(2 * dt / tr) * withRng(seedHash(worldSeeds.air, 'eddy', ri, S.steps), randn);
     }
     const ua = dot(u, ro.d) + (ro.st.gz || 0);
     ro.st.airAx = ua; ro.st.airPlane = nrm(sub(u, scl(ro.d, dot(u, ro.d))));

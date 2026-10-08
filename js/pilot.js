@@ -17,6 +17,7 @@ const PILOT_LEVELS = {
   sport: { label: 'Sport', h: 6, v: 3, yaw: 150 },
 };
 const PILOT_ACCEL = 3;                  // how fast the commanded velocity ramps [m/s²]
+const PILOT_TICK = 20;                  // the target moves every 20 physics steps (10 ms), whatever the frame rate
 const PILOT_BOX = { xy: 25, zMin: 0.15, zMax: 15 };   // (as the drone's own box, rc_core.c: low enough to reach a parcel)
 // Two layouts. Handset: as a Mode 2 radio, the left hand climbs and turns (W A S D, the left stick), the right moves
 // (the arrows, the right stick); the command module's keys and most drone simulators do this. Game: W A S D move, as
@@ -48,10 +49,16 @@ document.querySelectorAll('[data-keys]').forEach(b => b.addEventListener('click'
 let pilot = { held: new Map(), level: 'normal', vref: [0, 0, 0] };   // held: control -> set of sources
 
 const isHeld = c => pilot.held.has(c);
-function markPad(c) { const b = document.querySelector(`[data-ctrl="${c}"]`); if (b) b.setAttribute('aria-pressed', String(isHeld(c))); }
-function press(c, src) { if (!pilot.held.has(c)) pilot.held.set(c, new Set()); pilot.held.get(c).add(src); markPad(c); }
-function release(c, src) { const s = pilot.held.get(c); if (s) { s.delete(src); if (!s.size) pilot.held.delete(c); } markPad(c); }
-function releaseAll() { const cs = [...pilot.held.keys()]; pilot.held.clear(); cs.forEach(markPad); }
+function markPad(c) { if (typeof droneUiActive === 'function' && !droneUiActive()) return; const b = document.querySelector(`[data-ctrl="${c}"]`); if (b) b.setAttribute('aria-pressed', String(isHeld(c))); }
+// Every change to what's held is an input (replay.js records it, and a person pressing takes over from a replay).
+const inputHook = src => { if (typeof replayInput === 'function') replayInput(src); };
+function press(c, src) { if (!pilot.held.has(c)) pilot.held.set(c, new Set()); pilot.held.get(c).add(src); markPad(c); inputHook(src); }
+function release(c, src) { const s = pilot.held.get(c); if (!s || !s.delete(src)) return; if (!s.size) pilot.held.delete(c); markPad(c); inputHook(src); }
+function releaseAll() {   // (a replay's own keys stay: the replay lets go of them itself)
+  let changed = false;
+  for (const [c, s] of [...pilot.held]) { for (const src of [...s]) if (src !== 'replay') s.delete(src); if (!s.size) { pilot.held.delete(c); changed = true; } markPad(c); }
+  if (changed) inputHook('release');
+}
 
 function pilotStep(dt) {
   if (S.crashed || dt <= 0) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; return; }
@@ -91,6 +98,7 @@ function pilotHold() {   // hold where the flight software believes it is
 function pilotHome() { if (!hasTask("nav")) return; if (typeof liveOn === 'function' && liveOn()) { radioHome(); flashCtl('home'); return; } if (radioActive()) { radioHome(); flashCtl('home'); return; } const h = brt.home || spawnAt; setpoint.x = h[0]; setpoint.y = h[1]; setpoint.z = h[2] + 1.5; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; flashCtl('home'); }
 function setPilotLevel(k) {
   pilot.level = k;
+  if (typeof droneUiActive === 'function' && !droneUiActive()) return;
   document.querySelectorAll('[data-level]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.level === k)));
 }
 function flashCtl(id) { const b = document.querySelector(`[data-act="${id}"]`); if (!b) return; b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); }
@@ -120,7 +128,7 @@ window.addEventListener('keydown',e=>{
   if(typeof fleet==='undefined' || !fleet.ready || liveOn())return;
   e.preventDefault();if(e.repeat || resetHold)return;
   const hold=resetHold={owner:fleet.selected,fired:false,timer:null};
-  hold.timer=setTimeout(()=>{if(resetHold!==hold)return;hold.fired=true;fleetResetAll();},RESET_HOLD_MS);
+  hold.timer=setTimeout(()=>{if(resetHold!==hold)return;hold.fired=true;userWorldReset();},RESET_HOLD_MS);
 });
 window.addEventListener('keyup',e=>{
   if(e.code!=='KeyR' || !resetHold)return;
@@ -137,16 +145,16 @@ window.addEventListener('keydown', e => {
   const c = KEYMAP[e.code];
   if (c) { e.preventDefault(); if (!e.repeat) press(c, 'key:' + e.code); return; }
   if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
-  if (e.code === 'Space') { e.preventDefault(); spaceHold = true; pilotHold(); }
-  else if (e.code === 'KeyH') pilotHome();
+  if (e.code === 'Space') { e.preventDefault(); spaceHold = true; userAction('hold'); }
+  else if (e.code === 'KeyH') userAction('home');
   else if (e.code === 'KeyG' && typeof cargoKey === 'function') cargoKey();   // the chosen latch: drop, or grab
   else if (e.code === 'KeyC') document.getElementById('tChase').click();
   else if (e.code === 'KeyQ' && typeof toggleTorque === 'function') toggleTorque();
-  else if (e.code === 'KeyT' && typeof setLaunch === 'function' && hasTask('learn')) setLaunch('throw');   // the throw start needs the learning task
+  else if (e.code === 'KeyT' && typeof setLaunch === 'function' && hasTask('learn')) userAction('launch', 'throw');   // the throw start needs the learning task
   else if (e.code === 'KeyK') document.getElementById('runBtn').click();
-  else if (e.code === 'Digit1') setPilotLevel('gentle');
-  else if (e.code === 'Digit2') setPilotLevel('normal');
-  else if (e.code === 'Digit3') setPilotLevel('sport');
+  else if (e.code === 'Digit1') userAction('level', 'gentle');
+  else if (e.code === 'Digit2') userAction('level', 'normal');
+  else if (e.code === 'Digit3') userAction('level', 'sport');
 });
 window.addEventListener('keyup', e => {
   const c = KEYMAP[e.code]; if (c) release(c, 'key:' + e.code);
@@ -172,8 +180,8 @@ function bindPads() {
   });
   // A mouse click on the flight buttons leaves the keyboard where it was (Space still holds, not presses them again).
   document.querySelectorAll('.pilot-mid button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));
-  document.querySelector('[data-act="hold"]').addEventListener('click', pilotHold);
-  document.querySelector('[data-act="home"]').addEventListener('click', pilotHome);
-  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => setPilotLevel(b.dataset.level)));
+  document.querySelector('[data-act="hold"]').addEventListener('click', () => userAction('hold'));
+  document.querySelector('[data-act="home"]').addEventListener('click', () => userAction('home'));
+  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => userAction('level', b.dataset.level)));
   setPilotLevel(pilot.level);
 }

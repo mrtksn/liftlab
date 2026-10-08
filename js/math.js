@@ -144,7 +144,26 @@ function eulerR(roll, pitch, yaw) {
   return [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr, sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr, -sp, cp * sr, cp * cr];
 }
 
-// Seeded random numbers, so a run replays the same sensor noise after every reset.
+// Seeded random numbers, so a run replays the same noise after every reset.
+// The world's seeds (the city's is terrain.seed): each random thing draws from its own, so a run with the same
+// seeds is the same run, and changing one thing (a sensor fitted, a gust stronger) doesn't reshuffle the others.
+const SEED_KEYS = ['noise', 'air', 'parts', 'radio'];
+const DEFAULT_SEEDS = { noise: 12345, air: 1, parts: 1, radio: 1 };
+const worldSeeds = { ...DEFAULT_SEEDS };
+// A number from the seed and a key (strings and numbers): the same key always gives the same number.
+function seedHash(...key) {
+  let h = 0x811C9DC5;
+  for (const k of key) {
+    const s = String(k);
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    h ^= 0x1F; h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 16; h = Math.imul(h, 0x85EBCA6B); h ^= h >>> 13; h = Math.imul(h, 0xC2B2AE35); h ^= h >>> 16;
+  return (h >>> 0) || 1;
+}
+// Runs fn on its own stream: rand() and randn() inside it draw from the given seed. Each sample of each source
+// gets its own (seed, source, sample number), so a skipped draw can't shift anything after it.
+function withRng(seed, fn) { const was = rngState; rngState = seed >>> 0 || 1; try { return fn(); } finally { rngState = was; } }
 let rngState = 1;
 function seedRng(s) { rngState = s >>> 0 || 1; }
 function rand() { // mulberry32

@@ -2,7 +2,7 @@
 // One shared world/clock/renderer. Each drone keeps its own mutable runtime and
 // WASM instances; legacy feature modules operate on the synchronously bound drone.
 const FLEET_LS = 'liftlab-world-v1';
-const fleet = { drones: [], selected: null, active: null, visual: null, nextId: 1, time: 0, ready: false, restoring: false, pendingEdits:0 };
+const fleet = { drones: [], selected: null, active: null, visual: null, nextId: 1, time: 0, steps: 0, ready: false, restoring: false, pendingEdits:0 };   // steps: the shared clock in physics steps, since the world last started
 function droneCopy(x, seen = new Map()) {
   if (!x || typeof x !== 'object') return x;
   if (seen.has(x)) return seen.get(x);
@@ -158,21 +158,25 @@ function fleetRemove(id = fleet.selected?.id) {
 function fleetResetAll() {
   if (!fleet.ready || !fleetCanSelect()) return false;
   fleetReleaseControls();
+  peerAirReset(); fleet.time=0; fleet.steps=0;
   for (const d of fleet.drones) withDrone(d,()=>{releaseAll();pilot.vref=[0,0,0];resetSim();d.contacts=0;});
-  fleet.time=0; sndSelectScope(); GS_UI.next=0; launchUi.key='';
+  sndSelectScope(); GS_UI.next=0; launchUi.key='';
   $('#crash').hidden=true;$('#liftoff').hidden=true;updateLive();
   if (fleet.selected) {drawChart();renderHealth();cargoBarSync();cargoSecSync();}
   fleetSave(); return true;
 }
-$('#fleetReset').addEventListener('click',fleetResetAll);
+$('#fleetReset').addEventListener('click',()=>userWorldReset());
+// Every step is the same whatever the frame rate: the pilot's target moves on a fixed tick, and a replay's inputs
+// land on the steps they were made on (replay.js). That's what makes a run repeatable.
 function fleetStep(steps) {
-  if (!fleet.ready) { pilotStep(steps*PDT); for(let n=0;n<steps;n++)physStep(); return; }
+  if (!fleet.ready) { for(let n=0;n<steps;n++){ if(S.steps%PILOT_TICK===0)pilotStep(PILOT_TICK*PDT); physStep(); } return; }
   // Equal steps for every craft; if CPU-limited the shared clock slows together.
-  for (const d of fleet.drones) withDrone(d,()=>pilotStep(steps*PDT));
-  const payloadContacts=fleet.drones.some(fleetHasPayloads);
   for (let n=0;n<steps;n++) {
+    if (replayStep()) break;
+    if (fleet.steps%PILOT_TICK===0) for (const d of fleet.drones) withDrone(d,()=>pilotStep(PILOT_TICK*PDT));
+    const payloadContacts=fleet.drones.some(fleetHasPayloads);
     for (const d of fleet.drones) withDrone(d,()=>physStep(payloadContacts));
-    fleetCollisions(); fleet.time += PDT;
+    fleetCollisions(); fleet.time += PDT; fleet.steps++;
     if(payloadContacts)for(const d of fleet.drones)withDrone(d,finishPhysStep);
   }
 }
@@ -199,7 +203,7 @@ function fleetTheme() {
 }
 function fleetSnapshot() {
   if (fleet.active) captureDroneState(fleet.active.state);
-  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},environment:{...envr},drones:fleet.drones.map(d=>{
+  return {v:1,selected:fleet.selected?.id || null,nextId:fleet.nextId,terrain:{kind:terrain.kind,seed:terrain.seed},seeds:{...worldSeeds},environment:{...envr},drones:fleet.drones.map(d=>{
     const s=d.state;
     return {id:d.id,name:d.name,setpoint:{...s.setpoint},design:{frame:s.cfg.frame.mass,frameShape:{...s.cfg.frame},comps:s.cfg.comps,mode:s.mode,battery:s.cfg.battery,computers:s.cfg.computers,tuning:s.cfg.tuning,programs:s.cfg.programs||[],apps:s.cfg.apps||[],laws:Object.fromEntries(Object.entries(s.LAWS).filter(([,L])=>L.src!==L.defSrc).map(([k,L])=>[k,L.src]))},radio:{...s.radioCfg},radio2:{...s.radioCfg2},allocPrefs:{...s.allocPrefs},throwCfg:{...s.throwCfg},learnPrefs:{...s.learnPrefs},launch:s.launchMode,mixShare:s.steerMix.share,designId:s.designs.cur,designName:s.designs.name,preset:s.designs.preset,triggers:s.agentTriggers.map(({fired,last,was,...t})=>t),chat:s.agentChat};
   })};
@@ -219,6 +223,7 @@ function fleetInit() {
     try {
       d.id='boot-placeholder'; d.graphics.drone.userData.droneId=d.id;
       if (TERRAINS[saved.terrain?.kind]) setTerrain(saved.terrain.kind,saved.terrain.seed);
+      setWorldSeeds(saved.seeds || {});
       for (const rec of saved.drones) fleetCreate('quadx',rec);
       fleetRemove(d.id); fleet.nextId=Math.max(fleet.nextId,saved.nextId || 1); Object.assign(envr,saved.environment || {});
       fleetSelect(saved.selected === null ? null : saved.selected || fleet.drones[0].id);

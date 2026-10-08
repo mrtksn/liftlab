@@ -85,7 +85,7 @@ const radioModel = () => (typeof liveModel === 'function' && liveModel()) || RAD
 let radio = {};
 function radioReset() {
   Object.assign(radio, {
-    t: 0, seed: 0x2545F491,
+    t: 0, seed: seedHash(worldSeeds.radio, 'radio'),
     downFrames: 0, fromGround: crsfParser(), fromDrone: crsfParser(),
     txCh: null, txChT: 0, toBoard: [], toGround: [],
     holdUntil: -1, homeUntil: -1,

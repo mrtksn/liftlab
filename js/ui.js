@@ -646,7 +646,7 @@ function setLaunch(m, go = true) {
   $('#crashResetLbl').textContent = m === 'throw' ? 'Throw again' : 'Reset';
   if (go) { if (!running) { running = true; renderRun(); } doReset(); renderLearn(true); save(); }
 }
-$('#launchHover').addEventListener('click', () => setLaunch('hover')); $('#launchThrow').addEventListener('click', () => setLaunch('throw'));
+$('#launchHover').addEventListener('click', () => userAction('launch', 'hover')); $('#launchThrow').addEventListener('click', () => userAction('launch', 'throw'));
 // What's on screen follows the flight computers: learning and the throw start need a learning task, Hold and Home
 // need navigation, the supervisor's parts of the Health panel need a supervisor task.
 function syncFlightUi() {
@@ -778,12 +778,15 @@ function drawChart() {
 /* ───────── target & environment ───────── */
 const spRefs = [];
 function spSlider(key, label, min, max, step, u, obj, ends) {
-  const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? (step < 0.1 ? 2 : 1) : 0, ends }, () => obj[key], v => {
-    obj[key] = v; if (obj === setpoint) { pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; if (typeof fleetSave === 'function') fleetSave(); }
-    else if (obj === envr) { refreshEnvelope(); renderMass(); save(); }
-  });
+  // (a change in flight is an input: recorded, and replayed on the same step)
+  const f = numField('sp-' + key, { label, min, max, step, u, dp: step < 1 ? (step < 0.1 ? 2 : 1) : 0, ends }, () => obj[key], v => userAction('set', [obj === setpoint ? 'sp' : 'env', key, v]));
   spRefs.push(f.refresh);
   return f.node;
+}
+function setTargetOrWorld([which, key, v]) {
+  if (which === 'sp') { setpoint[key] = v; pilot.vref = [0, 0, 0]; ctl.vRef = [0, 0, 0]; if (typeof fleetSave === 'function') fleetSave(); }
+  else { envr[key] = v; refreshEnvelope(); renderMass(); save(); }
+  if (droneUiActive()) syncSp();
 }
 function syncSp() { for (const r of spRefs) r(); }  // keep the target fields in step with flying
 function buildSp() {
@@ -862,7 +865,7 @@ $('#runBtn').addEventListener('click', () => {
   running = !running; renderRun();
 });
 function doReset() { if (typeof liveOn === 'function' && liveOn()) return; pilot.vref = [0, 0, 0]; resetSim(); $('#crash').hidden = true; }
-$('#resetBtn').addEventListener('click', doReset); $('#crashReset').addEventListener('click', doReset);
+$('#resetBtn').addEventListener('click', () => userAction('reset')); $('#crashReset').addEventListener('click', () => userAction('reset'));
 /* Poke: hold to charge, release to hit. Strength grows with hold time up to POKE_FULL seconds. */
 const POKE_FULL = 1.5;
 const poke = { t0: 0, src: null, raf: 0 };
@@ -887,12 +890,19 @@ function pokeEnd(src, fire) {
   pokeBtn.classList.remove('charging', 'full'); pokeBtn.style.setProperty('--charge', '0%');
   pokeLbl.textContent = 'Poke';
   if (!fire || S.crashed) return;
-  const spin = 1.5 + 10.5 * c, push = 0.3 + 2.7 * c;          // rad/s and m/s added to the current motion
-  const a = Math.random() * Math.PI * 2, b = Math.random() * Math.PI * 2;
-  S.w = add(S.w, [Math.cos(a) * spin, Math.sin(a) * spin, (Math.random() - 0.5) * spin * 0.5]);
-  S.v = add(S.v, [Math.cos(b) * push, Math.sin(b) * push, 0]);
-  pokeBtn.title = `Last poke: ${Math.round(c * 100)}% · ${spin.toFixed(1)} rad/s spin, ${push.toFixed(1)} m/s shove. Hold to charge (P).`;
+  userAction('poke', Math.round(c * 1000) / 1000);             // (recorded on this step, to replay the same hit)
   void pokeBtn.offsetWidth; pokeBtn.classList.add('fired');
+}
+// The hit itself: its direction from the world's seed and the moment, so the same poke at the same time is the same.
+function pokeHit(c) {
+  const spin = 1.5 + 10.5 * c, push = 0.3 + 2.7 * c;          // rad/s and m/s added to the current motion
+  withRng(seedHash(worldSeeds.air, 'poke', S.steps), () => {
+    const a = rand() * Math.PI * 2, b = rand() * Math.PI * 2;
+    S.w = add(S.w, [Math.cos(a) * spin, Math.sin(a) * spin, (rand() - 0.5) * spin * 0.5]);
+    S.v = add(S.v, [Math.cos(b) * push, Math.sin(b) * push, 0]);
+  });
+  if (droneUiActive()) pokeBtn.title = `Last poke: ${Math.round(c * 100)}% · ${spin.toFixed(1)} rad/s spin, ${push.toFixed(1)} m/s shove. Hold to charge (P).`;
+  return { spin, push };
 }
 pokeBtn.addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); try { pokeBtn.setPointerCapture(e.pointerId); } catch (x) {} pokeStart('ptr:' + e.pointerId); });
 pokeBtn.addEventListener('pointerup', e => pokeEnd('ptr:' + e.pointerId, true));
@@ -914,7 +924,8 @@ window.addEventListener('keyup', e => { if (e.code === 'KeyP') pokeEnd('key:P', 
 window.addEventListener('blur', () => { if (poke.src) pokeEnd(poke.src, false); });
 // The world: open ground or a city (terrain.js). Changing it starts the flight again in the open plaza.
 function applyTerrain(kind, seed) {
-  setTerrain(kind, seed); syncTerrainUi();
+  if (typeof replayWorldChanged === 'function') replayWorldChanged();   // (a recording or a replay was of the old world)
+  setTerrain(kind, seed); syncTerrainUi(); if (typeof seedsUiSync === 'function') seedsUiSync();
   if (typeof fleet !== 'undefined' && fleet.ready) for(const d of fleet.drones)withDrone(d,resetSim);
   else { cPts = contactPoints(); doReset(); }
   syncSp();save();
@@ -922,10 +933,10 @@ function applyTerrain(kind, seed) {
 function syncTerrainUi() { $('#terrainSel').value = terrain.kind; $('#terrainNew').disabled = terrain.kind === 'open'; }
 $('#worldDefaults').addEventListener('click', () => {
   if (liveOn()) return;
-  Object.assign(envr, DEFAULT_ENVIRONMENT);
+  Object.assign(envr, DEFAULT_ENVIRONMENT); setWorldSeeds(DEFAULT_SEEDS);
   // Terrain changes use the normal fleet respawn; environment-only resets keep flights in place.
   if (terrain.kind !== 'parkour' || terrain.seed !== 1) applyTerrain('parkour', 1);
-  syncTerrainUi(); syncSp(); refreshEnvelope(); renderMass(); save();
+  syncTerrainUi(); syncSp(); seedsUiSync(); refreshEnvelope(); renderMass(); save(); fleetSave();
 });
 commitSelect($('#terrainSel'), v => { if (v !== terrain.kind) applyTerrain(v, terrain.seed); }, 'Press Enter to switch: it starts the flight again');
 $('#terrainNew').addEventListener('click', () => applyTerrain(terrain.kind, 1 + Math.floor(Math.random() * 1e9)));
@@ -1141,7 +1152,7 @@ function boot() {
       // Keep the 0.5 ms integration/control step. Bound work per rendered frame
       // instead of letting a late frame request still more catch-up work.
       const requested = Math.round(dt * speed / PDT), budgeted = Math.max(1, Math.floor(11 / physicsCostPerStep));
-      const steps = Math.min(200, requested, budgeted);
+      const steps = replaySeekSteps(Math.max(1, Math.floor(30 / physicsCostPerStep))) ?? Math.min(200, requested, budgeted);   // (a replay seeking: as fast as it can)
       fleetStep(steps);
       if (steps > 0) physicsCostPerStep = .9 * physicsCostPerStep + .1 * Math.max(.001, (performance.now() - cpuStart) / steps);
     }
@@ -1150,6 +1161,7 @@ function boot() {
     if (fleet.selected) renderGs();
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); if (fleet.selected) { drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); } }
     if (fleet.selected) renderLaunch();
+    replayUi();
     fleetScene(); renderer.render(scene, camera);
     flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, fleet.time - simStart)); requestAnimationFrame(frame);
   }

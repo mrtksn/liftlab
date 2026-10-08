@@ -156,7 +156,7 @@ function healthReadings() {
 }
 function resetHealth() {
   hs.clear(); Object.assign(hb, { T: ambient(), fade: 0, cellsLost: 0, cut: false, cause: '', failT: null, P: 0, lvc: false, lvcT: 0 });
-  hread.m.clear(); hread.b = {}; hread.next = {}; hSeed = 0x9e3779b9;
+  hread.m.clear(); hread.b = {}; hread.next = {}; hSeed = seedHash(worldSeeds.noise, 'health') | 0;
   fc.jAng.clear(); sup.log = [];
   if (typeof invalidateDesc === 'function') invalidateDesc();
 }

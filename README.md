@@ -33,6 +33,14 @@ A design is the whole drone: the airframe, its flight computers (the boards and 
 
 **Poke** is with the flight controls on the 3D view, beside Hold and Home.
 
+**Record and Replay** sit under the flight buttons. **Record** starts every flight again and records your inputs: the keys and pads held, speed, Hold, Home, Poke, the latches, resets, launch mode, and the target and environment fields. Each input is stored with the physics step it happened on. Press it again to stop; the take is kept in this browser. **Replay** puts the world back as it was recorded and starts it again: the seeds, terrain, environment, and each drone's target, speed and launch mode. It then makes the same inputs on the same steps, at any playback speed. The drone design and its code are whatever is loaded now, so you can change a design and fly the same flight through the same gusts and sensor noise. A replay with nothing changed matches the recording exactly. While it plays, a bar replaces the speed and action buttons:
+- restart, play/pause, and a timeline (dragging it jumps there by playing again from the start as fast as possible);
+- **Inputs at**: when the first input comes after the start, as recorded unless you change it;
+- **Flown by** (with two or more drones): the drone that was recorded, the selected drone, or every drone at once;
+- the recordings menu: pick, rename, save as a file, open a file, delete.
+
+A replay pauses at the end of the recording. Pressing any flight control yourself ends the replay, and you fly on from there.
+
 A **crash** shows as a small banner above the flight controls, with the reason and a Reset button (or **R**). Nothing covers the view: the flight controller cuts the motors, and the physics keeps running, so the drone tumbles and falls until you reset. You can still orbit the camera to look at the wreck.
 
 ## The world
@@ -42,7 +50,16 @@ A **crash** shows as a small banner above the flight controls, with the reason a
 - **Parkour city** (the default): a compact city about 1:8 around an open plaza at the start point. Next to the plaza are low obstacles: rows of gates to fly through, platforms on stilts to fly under or land on, tunnels, steps and low walls. Further out are towers, stepped and L-shaped buildings, some joined by bridges. Streets are 1.3 to 2.5 m wide and towers reach about 10 m.
 - **Full-scale city:** the same layout at real size (×8): streets 10 to 20 m wide, towers up to 80 m.
 
-The dice button builds another city from a new random seed. The same seed always gives the same city, and the choice is remembered. Changing the world restarts all drones at their targets (or the plaza if blocked). Reset starts the drone at its target, unless the target is inside or against a building (say, after crashing into one): then it starts again at the start point. Everything is a plain box, with no textures (`js/terrain.js`).
+The dice button builds another city from a new random seed. The same seed always gives the same city, and the choice is remembered.
+
+<a id="seeds"></a>**Seeds.** Everything random in a flight comes from the world's seeds, so starting the world again with the same seeds gives the same flight, down to the last bit. World settings → **Seeds** shows them:
+- **City layout:** the buildings;
+- **Sensor noise:** noise, bias and drift of the flight sensors, the health sensors, and motor vibration;
+- **Gusts, eddies and pokes:** turbulence, the air churned at each rotor, the hand's wobble in a throw, and which way a poke hits;
+- **Motor and prop differences:** each motor and prop's small differences from its card;
+- **Radio links:** lost packets, and their timing.
+
+Each seed drives only its own part. Gusts don't change when a sensor is fitted, and the noise of one sensor doesn't change when another is added. Type a seed to change it; a city seed rebuilds the city and restarts the flights, the others take effect straight away. **Random world** gives every seed a new value and restarts the flights. **Save** keeps the seeds with the terrain and environment under a name; **Load** brings them back and restarts every flight. Recordings carry their seeds, and **Reset to defaults** restores the default seeds as well. Changing the world restarts all drones at their targets (or the plaza if blocked). Reset starts the drone at its target, unless the target is inside or against a building (say, after crashing into one): then it starts again at the start point. Everything is a plain box, with no textures (`js/terrain.js`).
 
 **Collisions.** Drones collide with each other through their bodies, arms and attached components, with spinning-prop strikes causing damage; see [collision approximations](docs/multi-drone.md#collisions). The airframe touches terrain through small spheres: the hub, each motor and servo, points along the arms, every box mass, rods along their length, and the sensors. A small box is its corners; a bigger one (a wing, a long battery, the frame shaped as a wing) is spread over its whole surface, no more than about 5 cm apart (a thin plate as spheres as thick as it), so a building's edge can't slip between its corners. Any of them inside the ground or a building gets the ground-contact spring, turned to face that surface. A part that hits a thin wall or slab hard is pushed back out the side it came in by, so it never tunnels through. Landing on anything (the ground, a roof, a bridge) faster than 3 m/s is a crash. Bumping into a wall isn't, but the props usually won't survive it.
 
@@ -430,7 +447,7 @@ The camera sees the ground slide by at flow ≈ ω − v/d: rotation makes the i
 
 The **State estimate** panel shows the boards' estimate minus the truth, and warns about missing references. The dashed outline in the 3D view is where the flight software thinks the drone is. (There is no flying on ground truth any more: the boards only ever see their sensors, as on the drone.)
 
-Sensor noise comes from a seeded generator, so every reset replays the same noise.
+Sensor noise comes from seeds, so every reset replays the same noise. Each sensor gets its own noise, worked out from the noise seed, its kind, its place among sensors of that kind, and the sample number. Adding a sensor, or a reading that doesn't happen (out of range, no fix), leaves the other sensors' noise unchanged. Swapping a part for another of the same kind keeps its noise. See [Seeds](#seeds).
 
 ## Heat, failures and the supervisor
 
@@ -459,7 +476,7 @@ The Health panel (right column) lists every part with its true temperature and s
 
 ### What the drone can sense
 
-The health sensors run on their own random stream, so switching them on doesn't change the flight's other noise.
+The health sensors run on their own random stream (from the noise seed), so switching them on doesn't change the flight's other noise.
 
 | Sensor | Where it's set | Rate, delay, noise |
 |---|---|---|
@@ -761,6 +778,7 @@ A serial line costs next to nothing: no Wi-Fi driver, one UART (the receiver's),
 | `js/budget.js` | Flight computer budget: counts what the flight code costs per control step and keeps in memory, for an ESP32 |
 | `js/math.js` | Vector, matrix and quaternion helpers and the bounded least-squares solver. Everything here can be used inside formulas |
 | `js/terrain.js` | The world: the city generator (seeded), and the contact, ray and surface-below queries the physics and sensors use |
+| `js/replay.js` | Repeatable runs: the world's seeds and saved snapshots of them; recording the pilot's inputs step by step and replaying them over the same world |
 | `js/sim.js` | Airframe presets, mass properties, controller plumbing, physics stepping and the flight-envelope check |
 | `js/multibody.js` | Articulated-body dynamics: the frame and every servo joint solved together (recursive Newton–Euler) |
 | `js/joints.js` | Servo joints and rods: the attachment tree, poses from the joint angles (true and believed), carrying parts along, servo state |
