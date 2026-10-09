@@ -1151,7 +1151,7 @@ function boot() {
   UI_PANELS.editor.select(tab);
   UI_PANELS.readouts.restore();
   fleetInit();
-  mapsInit();
+  mapsInit();worldSoundInit();
   let lastT = performance.now(), envT = 0, uiT = 0, physicsCostPerStep = .1;
   function frame(now) {
     const cpuStart = performance.now(), simStart = fleet.time, rawDt = Math.max(0, (now - lastT) / 1000);

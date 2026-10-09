@@ -49,6 +49,7 @@ const moveStep = fine => (bigWorld() ? 0.5 : 0.05) / (fine ? 10 : 1);
 
 /* ───────── the panel: World settings → Objects ───────── */
 function worldEditRender() {
+  if(typeof worldSoundCapture==='function')worldSoundCapture();
   const box = $('#worldObjBody'); if (!box) return;
   const n = worldObjects.list.length;
   $('#worldObjCount').textContent = n ? String(n) : '';

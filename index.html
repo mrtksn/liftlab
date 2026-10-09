@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=817724d600">
+<link rel="stylesheet" href="css/style.css?v=d8e821c8d2">
 </head>
 <body>
 <div class="app">
@@ -232,7 +232,7 @@
         <button class="btn tog edit-btn" type="button" id="tEdit" aria-pressed="false" title="Select parts and move or rotate them in the view (E)">Edit</button>
         <button class="btn tog" type="button" id="tFollow" aria-pressed="true" title="Keep the camera on the drone as it flies. Off: it looks at the target">Follow</button>
         <button class="btn tog" type="button" id="tChase" aria-pressed="false" title="Keep the camera behind the drone (C)">Chase</button>
-        <button class="btn snd-btn" type="button" id="tSound" aria-pressed="false" aria-label="Sound" title="Sound is off: turn it on to hear the motors, servos, latches and crashes (M)"><svg class="snd-off" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="m10.5 6 3.5 4m0-4-3.5 4"/></svg><svg class="snd-on" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4"/></svg></button>
+        <button class="btn snd-btn" type="button" id="tSound" aria-pressed="false" aria-label="Sound" title="Sound is off: turn it on to hear drone and world sounds (M)"><svg class="snd-off" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="m10.5 6 3.5 4m0-4-3.5 4"/></svg><svg class="snd-on" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4"/></svg></button>
         <div class="show-wrap">
           <button class="btn" type="button" id="tShow" aria-expanded="false" aria-controls="showMenu" title="Choose what the view draws: forces, torque, trail, grid… (Q toggles torque)">Show <span aria-hidden="true">▾</span></button>
           <div class="show-menu" id="showMenu" role="group" aria-label="What the view shows" hidden></div>
@@ -634,7 +634,7 @@
 <script src="js/view3d.js?v=03e71dd4f0"></script>
 <script src="js/pilot.js?v=12b8fd8abe"></script>
 <script src="js/computers-ui.js?v=f85533adc1"></script>
-<script src="js/ui.js?v=fd68e1a0e6"></script>
+<script src="js/ui.js?v=55b1931d7e"></script>
 <script src="js/place-ui.js?v=0b90a86d58"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=3152ba01b2"></script>
@@ -676,15 +676,16 @@
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
-<script src="js/audio.js?v=82fc0795cb"></script>
+<script src="js/audio.js?v=5bb422df87"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=5d1f0fa38b"></script>
 <script src="js/fleet-collisions.js?v=0f07b736ea"></script>
-<script src="js/world-objects.js?v=5e0b9d2af1"></script>
-<script src="js/world-animation.js?v=77c0afb684"></script>
-<script src="js/world-edit.js?v=ce252c3055"></script>
+<script src="js/world-objects.js?v=536f416b65"></script>
+<script src="js/world-animation.js?v=fd5b55b7bc"></script>
+<script src="js/world-animation-audio.js?v=6f68161671"></script>
+<script src="js/world-edit.js?v=d84bfec745"></script>
 <script src="js/replay.js?v=d52f007fcb"></script>
-<script src="js/maps.js?v=f6db0b97a8"></script>
+<script src="js/maps.js?v=af04a6fb74"></script>
 <script src="js/part-import.js?v=762a7d5ba3"></script>
 <script src="js/object-library.js?v=2cf0d07c67"></script>
 <script src="js/part-edit-ui.js?v=3bf10977ce"></script>

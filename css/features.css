@@ -1244,3 +1244,9 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .world-panel.animation-panel .world-maps,.world-panel.animation-panel #worldObjSec>h2{display:none}
 .world-panel.animation-panel .world-obj-fields{border:0;padding-top:0}
 .world-panel.animation-panel .world-motion-editor{border:0;padding-top:0}
+
+/* Sound cue editors reuse the shared details, select and slider fields. */
+.world-sound-fields,.world-sound-cue{min-width:0}
+.world-sound-cue .field,.world-sound-cue .world-sound-actions{margin:8px 0}
+.world-sound-cue .btn{margin-bottom:6px}
+.world-sound-cue select{min-width:0;max-width:100%}

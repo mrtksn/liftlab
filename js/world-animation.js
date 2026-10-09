@@ -6,7 +6,8 @@ function worldMotionValidate(a) {
   if(a==null)return null;
   const vec=v=>Array.isArray(v)&&v.length===3&&v.every(x=>Number.isFinite(x)&&Math.abs(x)<=100);
   if(!a||!['hinge','slide'].includes(a.type)||![0,1,2].includes(a.axis)||!vec(a.pivot)||!vec(a.offset)||!vec(a.zone)||!Number.isFinite(a.angle)||Math.abs(a.angle)>360||!Number.isFinite(a.duration)||a.duration<.1||a.duration>120||!['linear','smooth'].includes(a.ease)||!['loop','button','proximity'].includes(a.mode)||!['stop','reverse','push'].includes(a.blocked)||!['waitOpen','waitClosed','delay'].every(k=>Number.isFinite(a[k])&&a[k]>=0&&a[k]<=120)||!Number.isFinite(a.radius)||a.radius<.05||a.radius>100)throw new Error('Invalid world animation');
-  return Object.fromEntries(Object.keys(WORLD_MOTION_DEFAULT).map(k=>[k,Array.isArray(a[k])?a[k].slice():a[k]]));
+  const out=Object.fromEntries(Object.keys(WORLD_MOTION_DEFAULT).map(k=>[k,Array.isArray(a[k])?a[k].slice():a[k]]));
+  const sounds=worldSoundValidate(a.sounds);if(sounds)out.sounds=sounds;return out;
 }
 function worldMotionState(o){return o.motionState||(o.motionState={t:0,target:0,wait:0,empty:0,blocked:false});}
 function worldMotionPose(o,t,oldT=t,dt=0){
@@ -31,6 +32,7 @@ function worldMotionDraw(o){
 }
 function worldMotionApply(o,t,dt=0){const st=worldMotionState(o),prev=o.motionPose||worldMotionPose(o,st.t);o.motionPrevious=prev;o.motionPose=worldMotionPose(o,t,st.t,dt);st.t=t;worldMotionDraw(o);}
 function worldMotionReset(){
+  worldSoundReset();
   for(const o of worldObjects.list){delete o.motionState;delete o.motionPose;delete o.motionPrevious;if(o.animation)worldMotionApply(o,0);else placeGroup(o);}worldObjectsChanged(false);worldMotionControls();
 }
 // The same articulated contact points used by the drone solver; proximity zones instead use each hub.
@@ -77,12 +79,13 @@ function worldMotionStep(dt){
       const center=add(o.pos,m3v(eulerR(0,0,o.yaw),a.zone)),inside=fleet.drones.some(d=>nrm(sub(d.state.S.p,center))<=a.radius+(s.target?.1:0));
       if(!s.reversing&&!(s.cooldown>0)){if(inside){s.empty=0;s.target=1;}else{s.empty+=dt;if(s.empty>=a.delay)s.target=0;}}
     }
-    const next=s.t+clamp(s.target-s.t,-dt/a.duration,dt/a.duration);
+    const from=s.t,next=s.t+clamp(s.target-s.t,-dt/a.duration,dt/a.duration);
     if(Math.abs(next-s.t)>1e-12&&a.blocked!=='push'){
-      points ||=worldMotionObstacles();if(worldMotionBlocked(o,next,points)){s.blocked=true;if(a.blocked==='reverse'){s.target=1-s.target;s.reversing=true;s.wait=0;}worldMotionApply(o,s.t);moved=true;continue;}
+      points ||=worldMotionObstacles();if(worldMotionBlocked(o,next,points)){s.blocked=true;if(a.blocked==='reverse'){s.target=1-s.target;s.reversing=true;s.wait=0;}worldMotionApply(o,s.t);worldSoundObserve(o,from,s.t,dt,true);moved=true;continue;}
     }
     if(s.reversing&&Math.abs(next-s.target)<1e-9){s.reversing=false;s.cooldown=1;s.empty=0;}
     if(next!==s.t){worldMotionApply(o,next,dt);moved=true;}else if(o.motionPose&&(nrm(o.motionPose.v)||nrm(o.motionPose.w))){worldMotionApply(o,s.t);moved=true;}
+    worldSoundObserve(o,from,s.t,dt);
   }
   if(moved){worldObjectsChanged(false);terrain.motionVer=(terrain.motionVer||0)+1;}
 }
@@ -94,12 +97,13 @@ function worldMotionOpen(o){
   worldMotionApply(o,0);worldObjectsChanged(false);worldEditChanged();worldEditRender();worldMotionGuides();worldMotionFit(o);worldEditMsg();
 }
 function worldMotionClose(){
+  worldSoundStopObject(worldMotionEditor.id);worldSounds.previewUntil=0;
   $('#worldPanel').classList.remove('animation-panel');
   if(worldMotionEditor.camera){cam.target.copy(worldMotionEditor.camera.target);cam.pan.copy(worldMotionEditor.camera.pan);cam.dist=worldMotionEditor.camera.dist;worldMotionEditor.camera=null;}
   const o=worldObj(worldMotionEditor.id);worldMotionEditor.id=null;worldMotionEditor.playing=false;worldMotionEditor.pick=false;
   if(o){worldMotionApply(o,0);delete o.motionState;}worldObjectsChanged(false);worldMotionGuides();worldEditMsg();
 }
-function worldMotionEdit(o){worldMotionEditor.playing=false;worldMotionApply(o,worldMotionState(o).t);worldObjectsChanged();worldEditChanged();worldMotionGuides();worldMotionFit(o);}
+function worldMotionEdit(o){worldSoundStopObject(o.id);worldMotionEditor.playing=false;worldMotionApply(o,worldMotionState(o).t);worldObjectsChanged();worldEditChanged();worldMotionGuides();worldMotionFit(o);}
 function worldMotionFit(o){
   if(!o?.animation)return;const body={lo:[Infinity,Infinity,Infinity],hi:[-Infinity,-Infinity,-Infinity]},bounds={lo:[Infinity,Infinity,Infinity],hi:[-Infinity,-Infinity,-Infinity]};
   for(const b of o.boxes)for(let k=0;k<3;k++){body.lo[k]=Math.min(body.lo[k],b.lo[k]);body.hi[k]=Math.max(body.hi[k],b.hi[k]);}
@@ -121,7 +125,7 @@ function worldMotionGuides(){
   if(a.mode==='proximity'){const zone=new THREE.Mesh(new THREE.SphereGeometry(a.radius,20,12),new THREE.MeshBasicMaterial({color:0x24a86b,wireframe:true,transparent:true,opacity:.3,depthWrite:false}));zone.position.set(...add(o.pos,m3v(Y,a.zone)));g.add(zone);}
 }
 function worldMotionFrame(dt){
-  const o=worldObj(worldMotionEditor.id);if(o&&wedit.on&&worldMotionEditor.playing){const t=worldMotionState(o).t+dt/o.animation.duration;worldMotionApply(o,Math.min(1,t));worldObjectsChanged(false);if(t>=1)worldMotionEditor.playing=false;const n=$('#worldMotionTimeline');if(n)n.value=String(worldMotionState(o).t);const l=$('#worldMotionTime');if(l)l.textContent=(worldMotionState(o).t*o.animation.duration).toFixed(2)+' s';}
+  const o=worldObj(worldMotionEditor.id);if(o&&wedit.on&&worldMotionEditor.playing){const from=worldMotionState(o).t,t=from+dt/o.animation.duration;worldMotionApply(o,Math.min(1,t));worldSoundObserve(o,from,worldMotionState(o).t,dt,false,true);worldObjectsChanged(false);if(t>=1)worldMotionEditor.playing=false;const n=$('#worldMotionTimeline');if(n)n.value=String(worldMotionState(o).t);const l=$('#worldMotionTime');if(l)l.textContent=(worldMotionState(o).t*o.animation.duration).toFixed(2)+' s';}
   const play=$('#worldMotionPlay');if(play)play.setAttribute('aria-pressed',String(worldMotionEditor.playing));
   worldMotionControls();
 }
@@ -137,7 +141,7 @@ function worldMotionFields(o){
   const field=(key,label,min,max,step,u='',set)=>numField('worldMotion-'+key,{label,min,max,step,u,dp:step<1?2:0,hard:true},()=>a[key],v=>{a[key]=v;(set||(()=>worldMotionEdit(o)))();}).node;
   const select=(key,label,opts)=>{const n=UI.select({id:'worldMotion-'+key,'aria-label':label},...opts.map(([v,t])=>el('option',{value:v,text:t})));n.value=String(a[key]);n.onchange=()=>{a[key]=key==='axis'?Number(n.value):n.value;worldMotionEdit(o);worldEditRender();};return UI.field({label},n);};
   const vector=(key,label)=>UI.field({label},el('div',{class:'hrow world-motion-vector'},...[0,1,2].map(i=>{const n=UI.input({type:'number',class:'num',id:`worldMotion-${key}-${i}`,step:.01,min:-100,max:100,value:+a[key][i].toFixed(3),'aria-label':label+' '+'XYZ'[i]+' in metres'});n.onchange=()=>{const v=Number(n.value);if(n.value!==''&&Number.isFinite(v)){a[key][i]=clamp(v,-100,100);worldMotionEdit(o);}else n.value=a[key][i];};return el('label',{},'XYZ'[i],n);})),el('span',{class:'hint',text:'Local metres from the object’s base.'}));
-  const timeline=UI.input({type:'range',id:'worldMotionTimeline',min:0,max:1,step:.001,value:worldMotionState(o).t,'aria-label':'Animation preview timeline'});timeline.oninput=()=>{worldMotionEditor.playing=false;worldMotionApply(o,+timeline.value);worldObjectsChanged(false);$('#worldMotionTime').textContent=(+timeline.value*a.duration).toFixed(2)+' s';};
+  const timeline=UI.input({type:'range',id:'worldMotionTimeline',min:0,max:1,step:.001,value:worldMotionState(o).t,'aria-label':'Animation preview timeline'});timeline.oninput=()=>{worldSoundStopObject(o.id);worldMotionEditor.playing=false;worldMotionApply(o,+timeline.value);worldObjectsChanged(false);$('#worldMotionTime').textContent=(+timeline.value*a.duration).toFixed(2)+' s';};
   return el('section',{class:'world-motion-editor','aria-label':'World animation editor'},
     el('div',{class:'hrow'},el('strong',{text:o.name+' · Animation'}),UI.button({class:'btn btn-sm',id:'worldMotionDone',onclick:()=>{worldMotionClose();worldEditRender();}},'Done')),
     el('p',{class:'hint',text:'The placed object is the closed pose. Open defines a relative second keyframe. Motion affects this world copy and its collision shape.'}),
@@ -145,9 +149,10 @@ function worldMotionFields(o){
     ...(a.type==='hinge'?[select('axis','Hinge axis',[[0,'X'],[1,'Y'],[2,'Z']]),vector('pivot','Hinge point'),UI.button({class:'btn btn-sm',id:'worldMotionPick',onclick:()=>{worldMotionApply(o,0);worldObjectsChanged(false);worldMotionEditor.pick=!worldMotionEditor.pick;worldEditRender();}},worldMotionEditor.pick?'Click the hinge on the object…':'Pick hinge on object'),field('angle','Open angle',-360,360,1,'°')]:[vector('offset','Open slide offset')]),
     field('duration','Travel time',.1,120,.1,'s'),select('ease','Speed',[['smooth','Smooth start / stop'],['linear','Constant']]),
     UI.field({label:'Timeline: Closed → Open'},timeline),el('span',{id:'worldMotionTime',class:'hint',text:(worldMotionState(o).t*a.duration).toFixed(2)+' s'}),
-    el('div',{class:'hrow'},UI.button({class:'btn btn-sm',id:'worldMotionPlay',onclick:()=>{if(worldMotionState(o).t>=1)worldMotionApply(o,0);worldMotionEditor.playing=!worldMotionEditor.playing;}},'Play / pause'),UI.button({class:'btn btn-sm',id:'worldMotionFit',onclick:()=>worldMotionFit(o)},'Frame motion'),UI.button({class:'btn btn-sm',id:'worldMotionClosed',onclick:()=>{worldMotionEditor.playing=false;worldMotionApply(o,0);worldObjectsChanged(false);worldEditRender();}},'Closed'),UI.button({class:'btn btn-sm',id:'worldMotionOpen',onclick:()=>{worldMotionEditor.playing=false;worldMotionApply(o,1);worldObjectsChanged(false);worldEditRender();}},'Open')),
+    el('div',{class:'hrow'},UI.button({class:'btn btn-sm',id:'worldMotionPlay',onclick:()=>{worldSoundStopObject(o.id);if(worldMotionState(o).t>=1)worldMotionApply(o,0);worldMotionEditor.playing=!worldMotionEditor.playing;}},'Play / pause'),UI.button({class:'btn btn-sm',id:'worldMotionFit',onclick:()=>worldMotionFit(o)},'Frame motion'),UI.button({class:'btn btn-sm',id:'worldMotionClosed',onclick:()=>{worldSoundStopObject(o.id);worldMotionEditor.playing=false;worldMotionApply(o,0);worldObjectsChanged(false);worldEditRender();}},'Closed'),UI.button({class:'btn btn-sm',id:'worldMotionOpen',onclick:()=>{worldSoundStopObject(o.id);worldMotionEditor.playing=false;worldMotionApply(o,1);worldObjectsChanged(false);worldEditRender();}},'Open')),
     select('mode','Activate',[['button','Button'],['loop','Loop'],['proximity','Drone proximity']]),
     ...(a.mode==='loop'?[field('waitOpen','Wait open',0,120,.1,'s'),field('waitClosed','Wait closed',0,120,.1,'s')]:a.mode==='proximity'?[vector('zone','Detection zone center'),field('radius','Detection radius',.05,100,.05,'m'),field('delay','Close after zone empty',0,120,.1,'s')]:[el('p',{class:'hint',text:'An Open / Close button appears over the simulation view.'})]),
     select('blocked','When blocked',[['stop','Stop until clear'],['reverse','Reverse'],['push','Continue and push']]),
+    worldSoundFields(o),
     UI.button({class:'btn btn-sm',id:'worldMotionRemove',onclick:()=>{worldMotionClose();delete o.animation;delete o.motionPose;delete o.motionPrevious;placeGroup(o);worldObjectsChanged();worldEditChanged();worldEditRender();}},'Remove animation'));
 }

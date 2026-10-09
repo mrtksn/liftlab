@@ -1,11 +1,20 @@
 # Project memory
 
+## World animation sounds — 2026-10-09
+- Added per-copy cues for motion start, moving loop, stop, Open, Closed and obstruction. Reuses the shared details/select/slider controls, spatial audio output, speaker mute and simulation playback speed. Procedural motor/clunk/click/beep/whoosh presets and uploaded audio share the cue editor.
+- Audio originals live in IndexedDB and accompany saved/portable maps; duplicate cue settings are independent and source files remain reusable. Uploads validate native browser decoding before assignment; limits 16 MB and 120 s. Preview has a separate output bus so listening while paused does not unmute drone motors.
+- Runtime pause/mute/reset and copy/editor removal cancel voices and deferred playback. Silent timeline scrubbing preserves physics; continuous loops resume from simulated motion time. Failed loop clips stop retrying storage each frame. Uploaded clips retain their natural volume with short edge fades.
+- FIXED during validation: rebuilding a cue could lose native disclosure state; deferred file loads could suppress a resumed loop or play after cancellation. Regression checklist PASSED: source/preset rebuild retention, pause/reset cancellation, file-loop restart, generated/uploaded PCM and uploaded volume sustain.
+- Local suites PASSED: new animation sound suite (real audio graphs/PCM, transitions, loop/rate, quota/invalid files, map byte round trip/cold import, saved-map audio restoration, reload and v2 object-library migration); existing animation, world/map, world-view/drone-audio and object-library suites. Desktop/phone sound controls inspected; syntax, fingerprints and diff checks passed. Publication pending. Codec support depends on the browser; unused originals are retained for saved maps/reuse (audio cleanup is a follow-up).
+
 ## World animation editor — 2026-10-09
 - Added two-pose hinge/slide editor using the existing world properties UI, sliders and solid indicators. Animation belongs to world copies only; loop, button and proximity activation share simulation-step playback.
 - Moving mesh/box collision queries share rigid transforms with graphics and include surface velocity; stop/reverse checks use drone/cable/cargo contacts and moving surface samples against scenery/ground. Shared overlay framing fits the motion beside controls on desktop and above them on phones. Map copies preserve independently validated motion definitions; reset returns to closed.
 - FIXED during validation: world buttons recorded under a drone rather than globally; lifted previews could leave the camera frame; proximity could immediately retry a reversed movement. Regression checklist PASSED: global replay events, full-motion framing, multi-drone zone/empty delay, moving force response, nearby cargo wake/distant sleep and blocked retreat.
 - Moving voxel copies retain the existing per-object collision index; direct segment queries fix missed narrow gates while preserving mesh hits after a surface at the ray origin.
 - Regression suites PASSED locally: new world animation editor/runtime/physics/replay/maps/phone suite; existing world/map, imported-part (compiled mesh flight/portable assets), object-library, camera, world-view and payload suites. Desktop/phone previews inspected; syntax, fingerprints and diff checks passed. User authorized pushing when done; deployment verification pending. Usage/limits: docs/world-animation.md. Limits: sampled impacts/obstruction; no deforming glTF clips or scripting/multi-keyframe paths in this first two-keyframe editor.
+
+- Publication follow-up: world animation editor b0a8820 deployed successfully via Pages run 37890288870.
 
 ## Unified object library and collision choices — 2026-10-08
 - Added shared model library and one import overlay for world/drone objects; imported assets keep source/name/units/orientation/default size, while placed copies own physical settings. Migrates old part templates and adopts placed model assets; removing a library entry retains source files for existing copies.

@@ -178,6 +178,7 @@ function objGroup(o) {
   const g = new THREE.Group(); g.userData.worldObjId = o.id; worldObjG.add(g); o.g = g; placeGroup(o); return g;
 }
 function disposeObj(o) {
+  if(typeof worldSoundStopObject==='function')worldSoundStopObject(o.id);
   if(typeof worldMotionEditor!=='undefined'&&worldMotionEditor.id===o.id)worldMotionClose();
   if (!o.g) return;
   o.g.traverse(m => {
@@ -301,14 +302,19 @@ const WORLD_DB = 'liftlab-world-objects';
 let worldDb = null;
 function worldDbOpen() {
   if (!worldDb) worldDb = new Promise((ok, no) => {
-    try { const r = indexedDB.open(WORLD_DB, 2); r.onupgradeneeded = () => { for(const name of ['files','library'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'}); }; r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }
+    try {
+      let blocked=false;const r=indexedDB.open(WORLD_DB,3);
+      r.onupgradeneeded=()=>{for(const name of ['files','library','audio'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name,{keyPath:'id'});};
+      r.onblocked=()=>{blocked=true;no(new Error('Close other simulator tabs and reload to update object storage'));};
+      r.onsuccess=()=>{if(blocked){r.result.close();return;}r.result.onversionchange=()=>{r.result.close();worldDb=null;};ok(r.result);};r.onerror=()=>no(r.error);
+    }
     catch (e) { no(e); }
   }).catch(e => { worldDb = null; throw e; });
   return worldDb;
 }
-async function worldDbDo(mode, fn) {
+async function worldDbDo(mode, fn, store = 'files') {
   const db = await worldDbOpen();
-  return new Promise((ok, no) => { const t = db.transaction('files', mode), r = fn(t.objectStore('files')); t.oncomplete = () => ok(r && r.result); t.onerror = () => no(t.error); t.onabort = () => no(t.error); });
+  return new Promise((ok, no) => { const t = db.transaction(store, mode), r = fn(t.objectStore(store)); t.oncomplete = () => ok(r && r.result); t.onerror = () => no(t.error); t.onabort = () => no(t.error); });
 }
 const worldFilePut = rec => worldDbDo('readwrite', s => s.put(rec)).then(() => true, () => false);
 const worldFileGet = id => worldDbDo('readonly', s => s.get(id)).catch(() => null);

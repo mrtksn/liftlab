@@ -36,14 +36,14 @@ function mapUiSync() {
     sel.dataset.maps = signature;
   }
   sel.value = current ? current.id : terrain.kind;
-  const busy = maps.busy || wedit.busy;
+  const busy = maps.busy || wedit.busy || worldSounds.uploads>0;
   sel.disabled = busy || !maps.ready;
   $('#terrainNew').disabled = busy || terrain.kind === 'open';
   for (const id of ['mapSave', 'mapExport', 'mapImport', 'mapDelete']) $('#' + id).disabled = busy || !maps.ready || (id === 'mapDelete' && !current);
   if (current && !$('#mapName').value) $('#mapName').value = current.name;
 }
 async function mapTask(fn) {
-  if (maps.busy || wedit.busy || edit.drag || !maps.ready) { mapUiSync(); return false; }
+  if (maps.busy || wedit.busy || worldSounds.uploads>0 || edit.drag || !maps.ready) { mapUiSync(); return false; }
   if (liveOn() || usbViewOn()) { mapSay('Stop the real-board view before changing maps.'); mapUiSync(); return false; }
   maps.busy = true; mapUiSync(); worldEditRender();
   try { await fn(); return true; }
@@ -56,7 +56,8 @@ async function mapCollect(name) {
     const rec = worldObjects.files.get(id) || await worldFileGet(id);
     if (rec) files.push(rec);
   }
-  return { name, world, files };
+  const sounds=[];for(const id of worldSoundRefs(world.objects)){const a=await worldSoundAsset(id);if(!a)throw new Error('A sound file is missing; upload a replacement before saving or exporting');sounds.push(a);}
+  return { name, world, files, sounds };
 }
 const mapMissing = m => new Set(m.world.objects.filter(o => !m.files.some(f => f.id === o.fileId)).map(o => o.fileId)).size;
 const mapModelNote = m => mapMissing(m) ? ' Some original model files are missing; those objects keep their solid shapes but cannot be turned or resized.' : '';
@@ -75,6 +76,7 @@ async function mapApply(m, id) {
   // Copies in each map outlive deletion of objects from the active world.
   let kept = true;
   for (const f of m.files) { worldObjects.files.set(f.id, f); if (!await worldFilePut(f)) kept = false; }
+  for(const a of m.sounds||[]){worldSoundAssetValidate(a);worldSounds.files.set(a.id,a);worldSounds.failed.delete(a.id);worldSounds.assets.set(a.id,{id:a.id,name:a.name,type:a.type,duration:a.duration});try{await worldDbDo('readwrite',s=>s.put(a),'audio');}catch{kept=false;}}
   worldEditSelect(null); wedit.hover = null;
   worldObjectsRestore(m.world.objects);
   if(typeof objectLibraryAdoptPlaced === "function")await objectLibraryAdoptPlaced();
@@ -84,7 +86,8 @@ async function mapApply(m, id) {
   userWorldReset(); fleetSave();
   if (wedit.on) wedit.changed = false;
   $('#mapName').value = m.name || ''; worldEditRender(); worldEditMsg();
-  mapSay(`Loaded “${m.name || TERRAINS[m.world.map.kind].label}”: every flight started again.` + mapModelNote(m) + (kept ? '' : ' Model files could not be kept for reload; save or export the map.'));
+  mapSay(`Loaded “${m.name || TERRAINS[m.world.map.kind].label}”: every flight started again.` + mapModelNote(m) + (kept ? '' : ' Model or sound files could not be kept for reload; save or export the map.'));
+  return kept;
 }
 async function mapSelect(value) {
   return mapTask(async () => {
@@ -105,7 +108,7 @@ function mapEncode(buffer) {
 async function mapExport() {
   return mapTask(async () => {
     const m = await mapCollect(mapName());
-    const json = JSON.stringify({ format: MAP_FORMAT, version: 1, ...m, files: m.files.map(f => ({ id: f.id, name: f.name, files: f.files.map(a => ({ name: a.name, data: mapEncode(a.data) })) })) });
+    const json = JSON.stringify({ format: MAP_FORMAT, version: 1, ...m, sounds:m.sounds.map(a=>({...a,data:mapEncode(a.data)})), files: m.files.map(f => ({ id: f.id, name: f.name, files: f.files.map(a => ({ name: a.name, data: mapEncode(a.data) })) })) });
     const blob = new Blob([json], { type: 'application/json' });
     if (blob.size > MAP_MAX_BYTES) throw new Error('The map file exceeds the 128 MB import limit');
     const url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -157,18 +160,28 @@ function mapDecode(doc) {
     const id = newObjId('f'); for (const o of objects) if (o.fileId === f.id) o.fileId = id;
     return { id, name: String(f.name || parts[0].name).slice(0, 256), files: parts };
   });
-  return { name: String(doc.name || 'Imported map').trim().slice(0, 60) || 'Imported map', world: { map: { kind: w.map.kind, seed: w.map.seed }, seeds: Object.fromEntries(SEED_KEYS.map(k => [k, w.seeds[k]])), environment, objects }, files };
+  const refs=new Set(worldSoundRefs(objects)),soundIds=new Set();if(!Array.isArray(doc.sounds??[])||(doc.sounds??[]).length>refs.size)bad('sound file list');
+  const sounds=(doc.sounds??[]).map(a=>{
+    if(!a||soundIds.has(a.id)||!refs.has(a.id)||typeof a.data!=='string'||a.data.length%4||!a.data.length||a.data.length>Math.ceil(WORLD_SOUND_MAX_BYTES/3)*4||!/^[A-Za-z0-9+/]*={0,2}$/.test(a.data))bad('embedded sound data');
+    soundIds.add(a.id);bytes+=a.data.length*3/4;if(bytes>MAP_MAX_BYTES)bad('embedded files exceed 128 MB');
+    const raw=atob(a.data),data=Uint8Array.from(raw,c=>c.charCodeAt(0)).buffer;worldSoundAssetValidate({...a,data});
+    const id=newObjId('snd-');for(const o of objects)for(const cue of Object.values(o.animation?.sounds||{}))if(cue.fileId===a.id)cue.fileId=id;
+    return {id,name:a.name,type:a.type,duration:a.duration,data};
+  });
+  if(soundIds.size!==refs.size)bad('missing sound files');
+  return { name: String(doc.name || 'Imported map').trim().slice(0, 60) || 'Imported map', world: { map: { kind: w.map.kind, seed: w.map.seed }, seeds: Object.fromEntries(SEED_KEYS.map(k => [k, w.seeds[k]])), environment, objects }, files, sounds };
 }
 async function mapImport(file) {
   return mapTask(async () => {
     if (file.size > MAP_MAX_BYTES) throw new Error('The map file exceeds 128 MB');
     const m = { ...mapDecode(JSON.parse(await file.text())), id: newObjId('map-'), at: Date.now() };
+    await worldSoundPrepare(m.sounds);
     // Import still works when browser storage is unavailable; report that saving failed.
     let saved = true;
     try { await mapDbDo('readwrite', s => s.put(m)); maps.list.unshift(m); }
     catch (e) { saved = false; }
-    await mapApply(m, saved ? m.id : null);
-    mapSay(`Imported “${m.name}”. ` + (saved ? 'Saved in this browser and available in the World selector.' : 'This browser could not save the map; keep the imported file.') + mapModelNote(m));
+    const kept=await mapApply(m, saved ? m.id : null);
+    mapSay(`Imported “${m.name}”. ` + (saved ? 'Saved in this browser and available in the World selector.' : 'This browser could not save the map; keep the imported file.') + mapModelNote(m) + (kept?'':' Original model or sound files could not be kept separately for reload; keep the saved or exported map.'));
   });
 }
 $('#mapSave').addEventListener('click', mapSave);

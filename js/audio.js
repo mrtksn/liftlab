@@ -24,6 +24,7 @@ function sndStart() {
   const ctx = snd.ctx = new (window.AudioContext || window.webkitAudioContext)();
   const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 4; comp.connect(ctx.destination);
   snd.master = ctx.createGain(); snd.master.gain.value = 0; snd.master.connect(comp);
+  snd.previewMaster = ctx.createGain(); snd.previewMaster.gain.value = 0; snd.previewMaster.connect(comp);
   snd.noise = sndNoiseBuffer(ctx);
   // a prop's tone: the blade-pass fundamental and its harmonics, falling off (a buzzy hum, not a pure whistle)
   const n = 12, re = new Float32Array(n), im = new Float32Array(n); for (let k = 1; k < n; k++) im[k] = 1 / Math.pow(k, 1.3);
@@ -89,6 +90,7 @@ function sndTick() {
   if (!snd.on || !snd.ctx) return;
   const live = running && !editMode && !document.hidden;
   snd.master.gain.setTargetAtTime(live ? .9 : 0,snd.ctx.currentTime,.05);
+  if(typeof worldSoundTick==='function')worldSoundTick(live&&!wedit.on&&!liveOn()&&!usbViewOn());
   const seen=new Set(), sj=new Set();
   if (typeof fleet !== 'undefined' && fleet.ready) {
     const drones=fleet.selected ? [fleet.selected] : fleet.drones;
@@ -168,8 +170,8 @@ function sndDroneTick(owner,live,seen,sj) {
 function setSound(on) {
   snd.on = !!on;
   if (snd.on) { sndStart(); sndResetScope(); }
-  else if (snd.ctx) { snd.master.gain.setTargetAtTime(0, snd.ctx.currentTime, 0.03); setTimeout(() => { if (!snd.on && snd.ctx) snd.ctx.suspend(); }, 200); }
-  const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.classList.toggle('on', snd.on); b.title = snd.on ? 'Sound is on: click to mute (M)' : 'Sound is off: turn it on to hear the motors, servos, latches and crashes (M)';
+  else if (snd.ctx) { worldSoundSilence(); snd.previewMaster.gain.setTargetAtTime(0,snd.ctx.currentTime,.03); snd.master.gain.setTargetAtTime(0, snd.ctx.currentTime, 0.03); setTimeout(() => { if (!snd.on && snd.ctx) snd.ctx.suspend(); }, 200); }
+  const b = $('#tSound'); b.setAttribute('aria-pressed', String(snd.on)); b.classList.toggle('on', snd.on); b.title = snd.on ? 'Sound is on: click to mute (M)' : 'Sound is off: turn it on to hear drone and world sounds (M)';
 }
 $('#tSound').addEventListener('click', () => setSound(!snd.on));
 window.addEventListener('keydown', e => { if (e.code === 'KeyM' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !typingIn(e.target) && !document.querySelector('dialog[open]')) setSound(!snd.on); });
