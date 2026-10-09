@@ -154,26 +154,31 @@ const newObjId = p => p + Date.now().toString(36) + Math.random().toString(36).s
 const worldObj = id => worldObjects.list.find(o => o.id === id) || null;
 function worldObjBounds(o) {   // in the world, from its boxes
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  if(o.animation&&typeof worldMotionShapes==='function'){for(const b of worldMotionShapes(o))for(let k=0;k<3;k++){lo[k]=Math.min(lo[k],b.lo[k]);hi[k]=Math.max(hi[k],b.hi[k]);}return {lo,hi};}
   for (const b of o.boxes) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], o.pos[k] + b.lo[k]); hi[k] = Math.max(hi[k], o.pos[k] + b.hi[k]); }
   return lo[0] <= hi[0] ? { lo, hi } : { lo: o.pos.slice(), hi: o.pos.slice() };
 }
 // The objects' boxes into the terrain, in the world. Called whenever an object moves, turns or comes or goes.
-function worldObjectsChanged() {
+function worldObjectsChanged(structural = true) {
   const out = [];
   for (const o of worldObjects.list) {
     const what = o.name;
-    if (o.collision === 'mesh' && o.triangles?.length) {const mesh=collisionMesh(o.triangles);out.push({lo:add(o.pos,mesh.lo),hi:add(o.pos,mesh.hi),mesh,origin:o.pos.slice(),what,obj:o.id});}
+    if(o.animation&&structural){worldMotionApply(o,worldMotionState(o).t);}
+    if(o.animation)worldMotionDraw(o);
+    if(o.animation&&typeof worldMotionShapes==='function')out.push(...worldMotionShapes(o));
+    else if (o.collision === 'mesh' && o.triangles?.length) {const mesh=collisionMesh(o.triangles);out.push({lo:add(o.pos,mesh.lo),hi:add(o.pos,mesh.hi),mesh,origin:o.pos.slice(),what,obj:o.id});}
     else for (const b of o.boxes) out.push({ lo: add(o.pos, b.lo), hi: add(o.pos, b.hi), what, obj: o.id });
     o.wb = null;   // (the fade's cached world boxes)
   }
   terrainSetObjectBoxes(out); worldObjects.ver++;
-  if (typeof replayWorldChanged === 'function') replayWorldChanged();   // a recording or a replay was of the world before
+  if (structural && typeof replayWorldChanged === 'function') replayWorldChanged();   // a recording or a replay was of the world before
 }
 function placeGroup(o) { o.g.position.set(...o.pos); o.g.rotation.set(0, 0, o.yaw * D2R); o.g.scale.setScalar(o.scale); o.g.updateMatrixWorld(true); }
 function objGroup(o) {
   const g = new THREE.Group(); g.userData.worldObjId = o.id; worldObjG.add(g); o.g = g; placeGroup(o); return g;
 }
 function disposeObj(o) {
+  if(typeof worldMotionEditor!=='undefined'&&worldMotionEditor.id===o.id)worldMotionClose();
   if (!o.g) return;
   o.g.traverse(m => {
     if (m.geometry) m.geometry.dispose();
@@ -202,7 +207,7 @@ async function readModel(o) {
   return standModel(await parseModel(rec), o.up).base;
 }
 function worldObjDuplicate(src) {
-  const o = { ...src, id: newObjId('o'), name: (src.name + ' copy').slice(0, 60), pos: add(src.pos, [Math.max(0.5, (src.size[0] * src.scale) * 1.2), 0, 0]), boxes: src.boxes.map(b => ({ lo: b.lo.slice(), hi: b.hi.slice() })), g: null, base: null, wb: null };
+  const o = { ...src, id: newObjId('o'), name: (src.name + ' copy').slice(0, 60), pos: add(src.pos, [Math.max(0.5, (src.size[0] * src.scale) * 1.2), 0, 0]), boxes: src.boxes.map(b => ({ lo: b.lo.slice(), hi: b.hi.slice() })), g: null, base: null, wb: null, animation:src.animation?worldMotionValidate(src.animation):undefined, motionState:null, motionPose:null, motionPrevious:null };
   objGroup(o); worldObjects.list.push(o);
   if (src.base) showModel(o, src.base.clone(true)); else showModel(o, null);
   worldObjectsChanged();
@@ -238,7 +243,7 @@ function worldObjectsTheme() {
 function worldObjectsFade(c, rays) {
   for (const o of worldObjects.list) {
     if (!o.g) continue;
-    if (!o.wb) { o.wb = worldObjBounds(o); o.wb.boxes = o.boxes.map(b => ({ lo: add(o.pos, b.lo), hi: add(o.pos, b.hi) })); }
+    if (!o.wb) { o.wb = worldObjBounds(o); o.wb.boxes = o.animation ? worldMotionShapes(o) : o.boxes.map(b => ({ lo: add(o.pos, b.lo), hi: add(o.pos, b.hi) })); }
     const fade = !(typeof worldEditOn === 'function' && worldEditOn()) && rays.some(r => segHitsBox(c, r.d, r.L, o.wb) && o.wb.boxes.some(b => segHitsBox(c, r.d, r.L, b)));
     if (fade === !!o.faded) continue;
     o.faded = fade;
@@ -266,12 +271,13 @@ function worldObjShowSolid(o) {
   solidVis = collisionVisual(o.collision, o.triangles, o.boxes);
   solidVis.position.set(...o.pos);   // (moving the object moves this along)
   scene.add(solidVis);
+  if(o.animation)worldMotionDraw(o);
 }
 
 /* ───────── saving ───────── */
 function worldObjectsSnapshot() {
   return worldObjects.list.map(o => ({ id: o.id, name: o.name, fileId: o.fileId, pos: o.pos.map(x => +x.toFixed(4)), yaw: o.yaw, scale: o.scale, units: o.units, up: o.up, detail: o.detail, size: o.size.map(x => +x.toFixed(5)), h: +(o.h || 0).toFixed(5), collision:o.collision || "boxes", ...(o.collision === "mesh" ? {triangles:o.triangles} : {}),
-    boxes: o.boxes.flatMap(b => [...b.lo, ...b.hi]).map(x => +x.toFixed(4)) }));
+    ...(o.animation?{animation:worldMotionValidate(o.animation)}:{}), boxes: o.boxes.flatMap(b => [...b.lo, ...b.hi]).map(x => +x.toFixed(4)) }));
 }
 // Objects from a saved world: solid at once, drawn when their files have been read.
 function worldObjectsRestore(list) {
@@ -279,12 +285,12 @@ function worldObjectsRestore(list) {
   worldObjects.list = [];
   for (const s of Array.isArray(list) ? list : []) {
     if (!s || typeof s.id !== 'string' || !Array.isArray(s.pos) || s.pos.length !== 3 || !s.pos.every(Number.isFinite) || !Array.isArray(s.boxes) || s.boxes.length % 6) continue;
-    try { validateCollisionGeometry(s.collision,s.triangles); } catch (_) { continue; }
+    try { validateCollisionGeometry(s.collision,s.triangles);worldMotionValidate(s.animation); } catch (_) { continue; }
     const boxes = []; for (let i = 0; i < s.boxes.length; i += 6) boxes.push({ lo: s.boxes.slice(i, i + 3).map(Number), hi: s.boxes.slice(i + 3, i + 6).map(Number) });
     const o = { id: s.id, name: String(s.name || 'Object').slice(0, 60), fileId: String(s.fileId || ''), pos: s.pos.map(Number), yaw: +s.yaw || 0, scale: +s.scale > 0 ? +s.scale : 1,
-      units: WORLD_OBJ_UNITS[s.units] ? s.units : 'custom', up: s.up === 'z' ? 'z' : 'y', detail: WORLD_OBJ_DETAIL[s.detail] ? s.detail : 'medium', size: Array.isArray(s.size) && s.size.length === 3 ? s.size.map(Number) : [1, 1, 1], h: +s.h || 0, boxes, collision:s.collision || "boxes", triangles:s.triangles?.slice() };
+      units: WORLD_OBJ_UNITS[s.units] ? s.units : 'custom', up: s.up === 'z' ? 'z' : 'y', detail: WORLD_OBJ_DETAIL[s.detail] ? s.detail : 'medium', size: Array.isArray(s.size) && s.size.length === 3 ? s.size.map(Number) : [1, 1, 1], h: +s.h || 0, boxes, collision:s.collision || "boxes", triangles:s.triangles?.slice(), animation:worldMotionValidate(s.animation) };
     objGroup(o); showModel(o, null); o.missing = false; o.loading = true; worldObjects.list.push(o);
-    readModel(o).then(base => { if (worldObj(o.id) !== o) return; o.loading = false; if (base) showModel(o, base); else o.missing = true; o.faded = false; if (typeof worldEditRender === 'function') worldEditRender(); })
+    readModel(o).then(base => { if (worldObj(o.id) !== o) return; o.loading = false; if (base) showModel(o, base); else o.missing = true;if(o.animation)worldMotionDraw(o); o.faded = false; if (typeof worldEditRender === 'function') worldEditRender(); })
       .catch(() => { o.loading = false; o.missing = true; if (typeof worldEditRender === 'function') worldEditRender(); });
   }
   worldObjectsChanged();

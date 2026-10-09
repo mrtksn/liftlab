@@ -130,9 +130,9 @@ function terrainIndex() {
   if (tIndex.src === terrain.boxes) return tIndex.items;
   const items = [], groups = new Map();
   for (const b of terrain.boxes) {
-    if (b.obj == null || b.mesh) { items.push(b); continue; }
+    if (b.obj == null || b.mesh || b.body?.mesh) { items.push(b); continue; }
     let g = groups.get(b.obj);
-    if (!g) { g = { lo: b.lo.slice(), hi: b.hi.slice(), boxes: [] }; groups.set(b.obj, g); items.push(g); }
+    if (!g) { g = { lo: b.lo.slice(), hi: b.hi.slice(), boxes: [], obj:b.obj }; groups.set(b.obj, g); items.push(g); }
     for (let i = 0; i < 3; i++) { g.lo[i] = Math.min(g.lo[i], b.lo[i]); g.hi[i] = Math.max(g.hi[i], b.hi[i]); }
     g.boxes.push(b);
   }
@@ -148,18 +148,23 @@ function terrainNear(p, r) {
 // How many walls the straight line a→b passes through (sampled at n points): a building or an object counts once.
 function terrainWalls(a, b, n) {
   const hit = new Set(), d = sub(b, a), items = terrainIndex(),length=nrm(d);
-  if(length>1e-9)items.forEach((x,i)=>{if(x.mesh&&meshRayHits(x.mesh,sub(a,x.origin),scl(d,1/length),length).some(h=>h.distance>1e-8&&h.distance<length-1e-8))hit.add(i);});
+  if(length>1e-9)items.forEach((x,i)=>{if((x.boxes||[x]).some(b=>(b.mesh||b.body)&&terrainSegmentHit(b,a,scl(d,1/length),length)))hit.add(i);});
   for (let s = 1; s < n; s++) {
     const q = add(a, scl(d, s / n));
     items.forEach((x, i) => { if (nearBox(q, 0, x) && (!x.boxes ? insideBox(q,x) : x.boxes.some(y => insideBox(q,y)))) hit.add(i); });
   }
   return hit.size;
 }
-const insideBox = (p, b) => b.mesh ? meshInside(b.mesh,sub(p,b.origin)) : p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && p[2] > b.lo[2] && p[2] < b.hi[2];
+const insideBox = (p, b) => b.body ? insideBox(m3v(b.pose.RT,sub(p,b.pose.origin)),b.body) : b.mesh ? meshInside(b.mesh,sub(p,b.origin)) : p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1] && p[2] > b.lo[2] && p[2] < b.hi[2];
 // A sphere of radius r at p against box b: how deep it is and which way is out. Inside the box, the way out
 // is back through the face it came in by (from `prev`, where it was a moment ago), so a fast part pushed
 // deep into a thin slab still comes out the side it hit, never through the far side.
 function boxContact(p, r, b, prev) {
+  if(b.body){
+    const local=m3v(b.pose.RT,sub(p,b.pose.origin)),old=b.previousPose||b.pose;
+    const c=boxContact(local,r,b.body,prev&&m3v(old.RT,sub(prev,old.origin)));
+    if(c){c.n=m3v(b.pose.R,c.n);c.velocity=add(b.pose.v,crs(b.pose.w,sub(p,b.pose.pivot)));c.obj=b.obj;}return c;
+  }
   if (b.mesh) return meshContact(sub(p,b.origin), r, b.mesh, prev && sub(prev,b.origin));
   const q = [clamp(p[0], b.lo[0], b.hi[0]), clamp(p[1], b.lo[1], b.hi[1]), clamp(p[2], b.lo[2], b.hi[2])];
   const d = sub(p, q), dl = nrm(d);
@@ -187,20 +192,9 @@ const solidAt = (p, near) => p[2] < 0 ? 'the ground' : (near.find(b => insideBox
 // groundMinDown: the ground counts only for rays pointing at least this steeply down.
 function terrainRay(o, d, maxD = 1e4, groundMinDown = 0) {
   let t = d[2] < -Math.max(1e-6, groundMinDown) ? o[2] / -d[2] : Infinity;
-  const enter = (b, far) => {   // where the ray enters box b, or Infinity if it misses it before `far`
-    let t0 = 0, t1 = far;
-    for (let i = 0; i < 3; i++) {
-      if (Math.abs(d[i]) < 1e-12) { if (o[i] < b.lo[i] || o[i] > b.hi[i]) return Infinity; continue; }
-      let a = (b.lo[i] - o[i]) / d[i], c = (b.hi[i] - o[i]) / d[i]; if (a > c) [a, c] = [c, a];
-      t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) return Infinity;
-    }
-    return t0;
-  };
-  for (const b of terrainIndex()) {
-    if (enter(b, Math.min(t, maxD)) >= t) continue;
-    if (b.mesh) { const hit=meshRayHits(b.mesh,sub(o,b.origin),d,Math.min(t,maxD))[0]; if(hit)t=Math.min(t,hit.distance); continue; }
-    if (!b.boxes) { t = enter(b, Math.min(t, maxD)); continue; }
-    for (const x of b.boxes) t = Math.min(t, enter(x, Math.min(t, maxD)));
+  for(const b of terrainIndex()) {
+    if(terrainShapeRay({lo:b.lo,hi:b.hi},o,d,Math.min(t,maxD))>=t)continue;
+    for(const x of b.boxes||[b])t=Math.min(t,terrainShapeRay(x,o,d,Math.min(t,maxD)));
   }
   return t <= maxD ? t : Infinity;
 }
@@ -210,8 +204,25 @@ function surfaceBelow(p) {
   const under = b => p[0] > b.lo[0] && p[0] < b.hi[0] && p[1] > b.lo[1] && p[1] < b.hi[1];
   for (const b of terrainIndex()) {
     if (!under(b) || b.lo[2] > p[2] + 0.01) continue;
-    if(b.mesh){const hit=meshRayHits(b.mesh,sub(p,b.origin),[0,0,-1],p[2])[0];if(hit)h=Math.max(h,p[2]-hit.distance);continue;}
-    for (const x of b.boxes || [b]) if (under(x) && x.hi[2] <= p[2] + 0.01 && x.hi[2] > h) h = x.hi[2];
+    if(b.mesh||b.body){const distance=terrainShapeRay(b,p,[0,0,-1],p[2]);if(Number.isFinite(distance))h=Math.max(h,p[2]-distance);continue;}
+    for (const x of b.boxes || [b]) if (under(x)) {if(x.body){const distance=terrainShapeRay(x,p,[0,0,-1],p[2]);if(Number.isFinite(distance))h=Math.max(h,p[2]-distance);}else if(x.hi[2]<=p[2]+.01&&x.hi[2]>h)h=x.hi[2];}
   }
   return h;
+}
+
+// Ray and surface queries share the same rigid transform as contact resolution.
+function terrainShapeRay(b,o,d,far=1e4){
+  if(b.body)return terrainShapeRay(b.body,m3v(b.pose.RT,sub(o,b.pose.origin)),m3v(b.pose.RT,d),far);
+  if(b.mesh)return meshRayHits(b.mesh,sub(o,b.origin),d,far)[0]?.distance??Infinity;
+  let t0=0,t1=far;
+  for(let i=0;i<3;i++){
+    if(Math.abs(d[i])<1e-12){if(o[i]<b.lo[i]||o[i]>b.hi[i])return Infinity;continue;}
+    let a=(b.lo[i]-o[i])/d[i],c=(b.hi[i]-o[i])/d[i];if(a>c)[a,c]=[c,a];t0=Math.max(t0,a);t1=Math.min(t1,c);if(t0>t1)return Infinity;
+  }return t0;
+}
+
+function terrainSegmentHit(b,o,d,length){
+  if(b.body)return terrainSegmentHit(b.body,m3v(b.pose.RT,sub(o,b.pose.origin)),m3v(b.pose.RT,d),length);
+  if(b.mesh)return meshRayHits(b.mesh,sub(o,b.origin),d,length).some(h=>h.distance>1e-8&&h.distance<length-1e-8);
+  const t=terrainShapeRay(b,o,d,length);return t>1e-8&&t<length-1e-8;
 }

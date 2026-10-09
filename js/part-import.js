@@ -182,10 +182,7 @@ function partImportView() {
 // Keep the drone and preview in the uncovered region while the properties remain in the same 3D view.
 function partImportFrame() {
   if (!partImport.active || !partImport.panel) return null;
-  const view = vpEl.getBoundingClientRect(), panel = partImport.panel.getBoundingClientRect(), w = view.width, h = view.height;
-  const bottom = panel.width > w * .7;
-  const x = 12, y = Math.min(130, h * .2), width = Math.max(100, bottom ? w - 24 : panel.left - view.left - 24), height = Math.max(100, (bottom ? panel.top - view.top : h - 12) - y);
-  return { w, h, dx: w / 2 - (x + width / 2), dy: h / 2 - (y + height / 2), scale: Math.max(1, h / Math.min(width, height)) };
+  return viewOverlayFrame(partImport.panel);
 }
 $('#partModelImport').addEventListener('click', () => { $('#addPartDlg').close(); $('#partModelFile').click(); });
 $('#partModelFile').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) objectImportStart(files,objectImportContext); });

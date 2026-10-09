@@ -1173,7 +1173,7 @@ function boot() {
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); if (fleet.selected) { drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); } }
     if (fleet.selected) renderLaunch();
     replayUi();
-    fleetScene(); renderer.render(scene, camera);
+    worldMotionFrame(dt);fleetScene(); renderer.render(scene, camera);
     flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, fleet.time - simStart)); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

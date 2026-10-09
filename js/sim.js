@@ -502,7 +502,7 @@ function dynamics(dt) {
     st.v = add(st.v, scl(Fp, dt / c.mass)); st.p = add(st.p, scl(st.v, dt));
     if (st.p[2] < payloadR(c)) { st.p[2] = payloadR(c); if (st.v[2] < 0) st.v[2] = 0; st.v[0] *= 0.995; st.v[1] *= 0.995; }
     if (terrain.boxes.length) for (const h of terrainContacts(st.p, payloadR(c), terrainNear(st.p, payloadR(c) + 0.05), st.prev)) {   // a payload swung into a building
-      st.p = add(st.p, scl(h.n, h.depth)); const vn = dot(st.v, h.n); if (vn < 0) st.v = sub(st.v, scl(h.n, vn)); st.v = scl(st.v, 0.995);
+      st.p = add(st.p, scl(h.n, h.depth)); const vn = dot(sub(st.v,h.velocity||[0,0,0]), h.n); if (vn < 0) st.v = sub(st.v, scl(h.n, vn)); st.v = scl(st.v, 0.995);
     }
     st.prev = st.p.slice();
   }
@@ -518,7 +518,7 @@ function dynamics(dt) {
     const vel = velW(pt.b, P);
     for (const h of hits) {
       const n = h.n, t1 = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : unit(crs([0, 0, 1], n)), t2 = crs(n, t1);   // the surface's own axes: on the ground, x, y, z
-      const vl = [dot(vel, t1), dot(vel, t2), dot(vel, n)];
+      const relative=sub(vel,h.velocity||[0,0,0]),vl = [dot(relative, t1), dot(relative, t2), dot(relative, n)];
       if (n[2] > 0.7 && vl[2] < -3 && !S.crashed) crash(`Hit ${h.ground ? 'the ground' : 'the top of ' + h.what} at ${(-vl[2]).toFixed(1)} m/s.`);
       const f = run('groundContact', h.depth, vl);
       push(pt.b, m3v(RT, add(add(scl(t1, f[0]), scl(t2, f[1])), scl(n, f[2]))), P);

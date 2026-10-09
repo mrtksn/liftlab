@@ -619,14 +619,21 @@ function updateScene(selected = true) {
   updateCamera();
 }
 // World view keeps its orbit centre instead of following an internal drone context.
+// Shared preview framing for import properties and the world animation editor.
+function viewOverlayFrame(node) {
+  const view=vpEl.getBoundingClientRect(),panel=node.getBoundingClientRect(),w=view.width,h=view.height,bottom=panel.width>w*.7;
+  const x=12,y=Math.min(130,h*.2),width=Math.max(100,bottom?w-24:panel.left-view.left-24),height=Math.max(100,(bottom?panel.top-view.top:h-12)-y);
+  return {w,h,dx:w/2-(x+width/2),dy:h/2-(y+height/2),scale:Math.max(1,h/Math.min(width,height))};
+}
 function updateCamera() {
   stepCamAnim();
-  const importFrame = typeof partImportFrame === 'function' ? partImportFrame() : null, dist = cam.dist * (importFrame?.scale || 1);
+  const importFrame = (typeof partImportFrame === 'function' ? partImportFrame() : null)||(typeof worldMotionEditor!=='undefined'&&worldMotionEditor.id?viewOverlayFrame($('#worldPanel')):null), dist = cam.dist * (importFrame?.scale || 1);
   const ce = Math.cos(cam.el);
   if (camera.isOrthographicCamera) {   // frame what the perspective camera shows at the orbit's centre
     const h = dist * Math.tan(perspCam.fov * D2R / 2), w = h * perspCam.aspect;
     if (orthoCam.top !== h || orthoCam.right !== w) { orthoCam.left = -w; orthoCam.right = w; orthoCam.top = h; orthoCam.bottom = -h; orthoCam.updateProjectionMatrix(); }
   }
+  if(!importFrame&&camera.view?.enabled)camera.clearViewOffset();
   if (importFrame) camera.setViewOffset(importFrame.w, importFrame.h, importFrame.dx, importFrame.dy, importFrame.w, importFrame.h);
   camera.position.set(cam.target.x + dist * ce * Math.cos(cam.az), cam.target.y + dist * ce * Math.sin(cam.az), cam.target.z + dist * Math.sin(cam.el));
   camera.lookAt(cam.target);

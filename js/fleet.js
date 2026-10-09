@@ -159,7 +159,7 @@ function fleetRemove(id = fleet.selected?.id) {
 function fleetResetAll() {
   if (!fleet.ready || !fleetCanSelect()) return false;
   fleetReleaseControls();
-  peerAirReset(); fleet.time=0; fleet.steps=0;
+  peerAirReset(); fleet.time=0; fleet.steps=0;worldMotionReset();
   for (const d of fleet.drones) withDrone(d,()=>{releaseAll();pilot.vref=[0,0,0];resetSim();d.contacts=0;});
   sndSelectScope(); GS_UI.next=0; launchUi.key='';
   $('#crash').hidden=true;$('#liftoff').hidden=true;updateLive();
@@ -175,6 +175,7 @@ function fleetStep(steps) {
   for (let n=0;n<steps;n++) {
     if (replayStep()) break;
     if (fleet.steps%PILOT_TICK===0) for (const d of fleet.drones) withDrone(d,()=>pilotStep(PILOT_TICK*PDT));
+    worldMotionStep(PDT);
     const payloadContacts=fleet.drones.some(fleetHasPayloads);
     for (const d of fleet.drones) withDrone(d,()=>physStep(payloadContacts));
     fleetCollisions(); fleet.time += PDT; fleet.steps++;

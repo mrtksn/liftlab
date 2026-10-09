@@ -21,9 +21,11 @@ const fmtT = s => { const m = Math.floor(s / 60); return (m ? m + ':' + String(M
 function setWorldSeeds(s) {
   for (const k of SEED_KEYS) { const v = Math.floor(Number(s[k])); worldSeeds[k] = Number.isFinite(v) && v > 0 && v <= 0xFFFFFFFF ? v : DEFAULT_SEEDS[k]; }
 }
-function worldSnapshot() { return { terrain: { kind: terrain.kind, seed: terrain.seed }, seeds: { ...worldSeeds }, environment: { ...envr } }; }
+function worldSnapshot() { return { terrain: { kind: terrain.kind, seed: terrain.seed }, seeds: { ...worldSeeds }, environment: { ...envr },motions:worldObjects.list.map(o=>({id:o.id,animation:o.animation?worldMotionValidate(o.animation):null})) }; }
 // The world as a snapshot had it. (Starting the flights again is the caller's.)
 function applyWorld(w) {
+  if(w.motions)for(const o of worldObjects.list){const saved=w.motions.find(x=>x.id===o.id);o.animation=worldMotionValidate(saved?.animation);}
+  worldMotionReset();
   setWorldSeeds(w.seeds || {});
   if (w.environment) Object.assign(envr, w.environment);
   if (w.terrain && TERRAINS[w.terrain.kind] && (w.terrain.kind !== terrain.kind || w.terrain.seed !== terrain.seed)) { setTerrain(w.terrain.kind, w.terrain.seed); for (const d of fleet.drones) withDrone(d, () => { cPts = contactPoints(); }); }
@@ -84,6 +86,7 @@ const replay = { rec: null, play: false, open: false, ended: false, applying: fa
 let recordings = loadList(REC_LS);
 replay.rec = recordings[0] || null;
 const USER_ACTIONS = {
+  worldMotion: arg=>worldMotionCommand(arg),
   hold: () => pilotHold(), home: () => pilotHome(), level: k => setPilotLevel(k), cargo: i => cargoAct(i),
   poke: c => { if (!S.crashed) pokeHit(c); }, reset: () => doReset(), launch: m => setLaunch(m), set: a => setTargetOrWorld(a),
 };
@@ -91,7 +94,7 @@ const USER_ACTIONS = {
 function userAction(kind, arg) {
   if (!USER_ACTIONS[kind]) return;
   if (replay.play && !replay.applying) replayStop(true);
-  if (rec.on && !liveOn()) rec.take.ev.push([fleet.steps, fleet.selected ? fleet.selected.id : null, kind, arg ?? null]);
+  if (rec.on && !liveOn()) rec.take.ev.push([fleet.steps, kind==='worldMotion'?null:fleet.selected ? fleet.selected.id : null, kind, arg ?? null]);
   return USER_ACTIONS[kind](arg);
 }
 const heldMask = () => REPLAY_CTRLS.reduce((m, c, i) => isHeld(c) ? m | 1 << i : m, 0);

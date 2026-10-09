@@ -248,10 +248,11 @@ function cargoSolids(p, r, except = null, excludeCableBalls = false) {
 // A rigid body under gravity and air drag, resting on the ground, the buildings and things already at rest through
 // contact springs at its corners (stiff enough that a drop from 10 m doesn't sink in). It falls asleep once it has stopped.
 function looseStep(L, dt) {
+  if(L.asleep&&L.motionVer!==(terrain.motionVer||0)){L.motionVer=terrain.motionVer||0;if(terrainNear(L.p,L.reach+.05).some(b=>b.pose&&(nrm(b.pose.v)||nrm(b.pose.w)))){L.asleep=false;L.still=0;L.nearT=0;}}
   if (L.asleep) return;
   const R = looseR(L), m = L.m;
   let F = add([0, 0, -m * G], scl(sub(windVec(), L.v), 0.03)), T = scl(L.w, -0.0005);
-  if (--L.nearT <= 0) { const r = L.reach + 0.3 + nrm(L.v) * 0.05; L.near = (terrain.boxes.length ? terrainNear(L.p, r) : []).concat(cargoSolids(L.p, r, L)); L.nearT = 20; }
+  if (--L.nearT <= 0||L.motionVer!==(terrain.motionVer||0)) { const r = L.reach + 0.3 + nrm(L.v) * 0.05; L.near = (terrain.boxes.length ? terrainNear(L.p, r) : []).concat(cargoSolids(L.p, r, L)); L.nearT = 20;L.motionVer=terrain.motionVer||0; }
   const k = 15000 * m, c = 120 * m, mu = 60 * m;
   let touching = false;
   for (const pt of L.pts) {
@@ -261,7 +262,7 @@ function looseStep(L, dt) {
     touching = true;
     const vel = add(L.v, crs(L.w, rw));
     for (const h of hits) {
-      const n = h.n, vn = dot(vel, n), vt = sub(vel, scl(n, vn)), fn = Math.max(0, k * h.depth - c * vn);
+      const n = h.n, relative=sub(vel,h.velocity||[0,0,0]),vn = dot(relative, n), vt = sub(relative, scl(n, vn)), fn = Math.max(0, k * h.depth - c * vn);
       const vtn = nrm(vt), ft = vtn > 1e-6 ? scl(vt, -Math.min(mu * vtn, 0.6 * fn) / vtn) : [0, 0, 0];
       const f = add(scl(n, fn), ft); F = add(F, f); T = add(T, crs(rw, f));
     }

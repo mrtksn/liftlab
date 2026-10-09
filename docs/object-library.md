@@ -6,7 +6,7 @@ Import sets the asset's name, file units, up axis and default size with a live s
 
 **Use on drone** opens an independent copy beside the selected drone. Choose Payload (default), Battery or Wing, a category, size, rotation, weight, center of mass, any number of named mounting points, and its parent/own mounting points. Physical model reuses the existing drag/polar editor. Battery copies participate in the existing power model when wired in **Computers → Power**; capacity/cell settings remain in the drone's battery controls. Wing copies use the existing chord-X/span-Y airfoil model on their bounding dimensions; the imported drawing and collider stay intact. Cancel leaves the design unchanged. **Edit object copy** opens this same overlay for existing imported parts.
 
-**Place in world** places an independent fixed copy and opens its existing in-view world editor. Set its name, position, turn, scale and collision geometry. File units and up axis belong to the library import settings. Both editors share the actual scale field, collision controls, collision renderer and overlay styling.
+**Place in world** places an independent fixed copy and opens its existing in-view world editor. Set its name, position, turn, scale and collision geometry. World copies can add a two-pose hinge/slide animation with loop, button or proximity activation; see [World animation editor](world-animation.md). Animation is exclusive to world copies. File units and up axis belong to the library import settings. Both editors share the actual scale field, collision controls, collision renderer and overlay styling.
 
 ## Collision choices
 

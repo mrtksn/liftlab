@@ -1219,8 +1219,8 @@ html.phone .rp-sub .rp-opt:first-of-type{display:none}
 @media(max-width:1100px){
   .work.part-importing .view{height:calc(100svh - 100px);min-height:400px}
 }
-@media(max-width:640px){.part-import-panel{top:auto;max-height:44%;width:calc(100% - 24px)}}
-html.phone .part-import-panel{top:auto;max-height:44%;width:calc(100% - 24px)}
+@media(max-width:640px){.part-import-panel,.world-panel.animation-panel{top:auto;max-height:44%;width:calc(100% - 24px)}}
+html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;max-height:44%;width:calc(100% - 24px)}
 
 /* The same asset library and import overlay serve both placement contexts. */
 .object-library-list{display:flex;flex-direction:column;gap:var(--space-12)}
@@ -1228,3 +1228,19 @@ html.phone .part-import-panel{top:auto;max-height:44%;width:calc(100% - 24px)}
 .object-library-entry .hrow{flex-wrap:wrap}
 .work.part-importing #worldPanel,.work.part-importing #worldEditBar{display:none}
 .part-import-action{display:flex;flex-wrap:wrap;gap:var(--space-8)}
+
+/* Animation edits reuse world properties, numeric sliders and the in-view panel. */
+.world-motion-editor{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.world-motion-editor>.hrow{flex-wrap:wrap;justify-content:space-between}
+.world-motion-vector{flex-wrap:wrap}
+.world-motion-vector label{display:flex;align-items:center;gap:4px;flex:1;min-width:70px}
+.world-motion-vector .num{min-width:0;width:100%}
+.world-motion-controls{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:6px;max-width:80%;max-height:120px;overflow:auto;z-index:20}
+.world-motion-controls[hidden]{display:none}
+.view:has(.pilot:not([hidden])) .world-motion-controls{bottom:210px}
+.world-motion-summary .hint{margin:4px 0}
+
+.world-panel.animation-panel{bottom:12px;min-height:0}
+.world-panel.animation-panel .world-maps,.world-panel.animation-panel #worldObjSec>h2{display:none}
+.world-panel.animation-panel .world-obj-fields{border:0;padding-top:0}
+.world-panel.animation-panel .world-motion-editor{border:0;padding-top:0}
