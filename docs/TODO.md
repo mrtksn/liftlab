@@ -1,5 +1,10 @@
 # Project memory
 
+## ESC signal sniffer for the salvaged A13 — 2026-10-16
+- User tore down an AirVolt A13 toy drone: flight/RX board CY-BC821D-RX, four arm brushless ESCs (unmarked IC, 4-pin `LMGV` lead), KL-908 camera/Wi-Fi board, IR obstacle board CY-CDY4A-BZ, 1S 1800 mAh pack with JN-107 USB-C charger. The ESC command signal is unknown, so nothing in LiftLab can drive those ESCs yet.
+- Added runner/escsniff (ESP32-S3, listen-only): four inputs on GPIO4–7 through 4.7 kΩ, captured by polling dedicated GPIO on core 1 with interrupts masked (~0.1 µs). It classifies servo PWM/OneShot/duty PWM/DShot (decoded, CRC)/UART (decoded), and has raw/csv dumps plus a GPIO8 test-signal generator for self-check. Guide: docs/esc-sniffer.md.
+- Validation: tools/test_escsniff.c host tests pass locally (all signal kinds, counter wrap, bad CRC rejected). Chip firmware is built only by the new CI `escsniff` job and has not been compiled locally (no ESP-IDF here) or run on hardware. Pending: CI build, GPIO8→GPIO4 self-check on the S3, then the A13 capture.
+
 ## World animation sounds — 2026-10-09
 - Added per-copy cues for motion start, moving loop, stop, Open, Closed and obstruction. Reuses the shared details/select/slider controls, spatial audio output, speaker mute and simulation playback speed. Procedural motor/clunk/click/beep/whoosh presets and uploaded audio share the cue editor.
 - Audio originals live in IndexedDB and accompany saved/portable maps; duplicate cue settings are independent and source files remain reusable. Uploads validate native browser decoding before assignment; limits 16 MB and 120 s. Preview has a separate output bus so listening while paused does not unmute drone motors.

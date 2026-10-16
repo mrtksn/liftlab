@@ -6,7 +6,7 @@ An interactive 3D simulator for a drone frame you can change while it flies. You
 
 Every physical law and control law is a plain function in `js/laws.js`, and you can read and edit each one live in the **Computers** tab.
 
-Guides: [board support](docs/boards.md), [hardware wiring and custom drivers](docs/hardware-wiring.md), [flight physics and physical profiles](docs/simulation-physics.md), [simulation performance](docs/simulation-performance.md), [multi-drone architecture](docs/multi-drone.md), [GitHub Pages deployment](docs/deployment.md), and [review findings and validation](docs/review-2026-10-06.md).
+Guides: [board support](docs/boards.md), [hardware wiring and custom drivers](docs/hardware-wiring.md), [ESC signal sniffer](docs/esc-sniffer.md), [flight physics and physical profiles](docs/simulation-physics.md), [simulation performance](docs/simulation-performance.md), [multi-drone architecture](docs/multi-drone.md), [GitHub Pages deployment](docs/deployment.md), and [review findings and validation](docs/review-2026-10-06.md).
 
 ## Run it
 
