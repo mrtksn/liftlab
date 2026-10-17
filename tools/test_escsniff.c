@@ -6,6 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include "sniff_core.h"
+#include "sniff_console.h"
 
 #define TPU 240.f
 #define MAXE 40000
@@ -64,6 +65,16 @@ static void uart_bytes(int ch, double at, int baud, const uint8_t *b, int n) {
   }
 }
 
+static void console_case(const char *input, const char *const *expected, int count) {
+  sniff_console console = { 0 }; char out[SNIFF_LINE_SIZE]; int got = 0;
+  for (const char *p = input; *p; p++) {
+    if (!sniff_console_feed(&console, (unsigned char)*p, out)) continue;
+    CHECK(got < count && !strcmp(out, expected[got]), "console line %d: unexpected [%s]", got, out);
+    got++;
+  }
+  CHECK(got == count, "console expected %d lines, got %d", count, got);
+}
+
 int main(void) {
   srand(1);
   uint32_t t0 = 0xfffff000u;                     /* the cycle counter wraps inside the window */
@@ -90,6 +101,11 @@ int main(void) {
   c = merge(t0);
   r = analyze(&c, 0); CHECK(r.kind == SN_DUTY && fabsf(r.hz - 8000) < 40 && fabsf(r.duty - 0.25f) < 0.01f, "8 kHz duty: kind %d hz %.1f duty %.3f", r.kind, r.hz, r.duty);
   r = analyze(&c, 1); CHECK(r.kind == SN_DUTY && fabsf(r.hz - 32000) < 300 && fabsf(r.duty - 0.6f) < 0.02f, "32 kHz duty: kind %d hz %.1f duty %.3f", r.kind, r.hz, r.duty);
+  /* This waveform also decodes as a repeated UART byte: the reading stays duty PWM, with the LiftLab guidance, and
+   * the UART fit is a note after it. */
+  CHECK(r.pwm_uart_ambiguous, "32 kHz duty also admits a UART interpretation");
+  { char line[300]; sniff_line(&r, line, sizeof line);
+    CHECK(strstr(line, "-> duty PWM (LiftLab: brushed MOSFET signal)") && strstr(line, "[also fits UART"), "duty PWM stays the main reading: %s", line); }
   r = analyze(&c, 2); CHECK(r.kind == SN_DUTY && fabsf(r.high_us - 180) < 1, "2 kHz 180 us: kind %d", r.kind);
   r = analyze(&c, 3); CHECK(r.kind == SN_ONESHOT42 && fabsf(r.high_us - 60) < 1, "OneShot42: kind %d", r.kind);
 
@@ -125,6 +141,40 @@ int main(void) {
   r = analyze(&c, 1);
   CHECK(r.kind == SN_SERIAL && r.baud == 19200 && r.nbytes == 3 && !memcmp(r.bytes, msg, 3), "UART 19200: kind %d baud %d n %d", r.kind, r.baud, r.nbytes);
   r = analyze(&c, 2); CHECK(r.kind != SN_DSHOT, "bad-CRC DShot must not decode: kind %d", r.kind);
+
+  printf("a repeated UART byte reads as a pulse train, with the UART fit noted\n");
+  const uint8_t repeated[] = { 0x00, 0xff, 0x33 };
+  for (unsigned i = 0; i < sizeof repeated; i++) {
+    uint8_t bytes[20]; memset(bytes, repeated[i], sizeof bytes);
+    clear(10000); W[0].lv0 = 1;
+    uart_bytes(0, 200, 115200, bytes, sizeof bytes);
+    c = merge(t0); r = analyze(&c, 0);
+    CHECK(r.pwm_uart_ambiguous && r.baud == 115200 && r.nbytes == 20 && !r.bad_bytes && !memcmp(r.bytes, bytes, 16),
+          "repeated %02x: ambiguity %d baud %d n %d bad %d", repeated[i], r.pwm_uart_ambiguous, r.baud, r.nbytes, r.bad_bytes);
+    char line[300]; sniff_line(&r, line, sizeof line);
+    CHECK(strstr(line, "Hz  high") && strstr(line, "[also fits UART ~115200 baud"), "PWM reading with a UART note: %s", line);
+  }
+  uint8_t sync[20]; memset(sync, 0x55, sizeof sync);
+  clear(10000); W[0].lv0 = 1;
+  uart_bytes(0, 200, 115200, sync, sizeof sync);
+  c = merge(t0); r = analyze(&c, 0);
+  CHECK(r.kind == SN_SERIAL && r.baud == 115200 && r.nbytes == 20 && !memcmp(r.bytes, sync, 16),
+        "UART sync must not pick a faster harmonic: baud %d n %d", r.baud, r.nbytes);
+
+  printf("LF, CR and CRLF Enter events, consecutive Enter, and independent USB readers\n");
+  const char *one_enter[] = { "" }, *two_enters[] = { "", "" }, *commands[] = { "w", "", "s" };
+  console_case("\n", one_enter, 1);
+  console_case("\r", one_enter, 1);
+  console_case("\r\n", one_enter, 1);
+  console_case("\n\n", two_enters, 2);
+  console_case("\r\r", two_enters, 2);
+  console_case("w\r\n\r\ns\r\n", commands, 3);
+  console_case("w\n\ns\n", commands, 3);
+  sniff_console uart = { 0 }, usb = { 0 }; char line[SNIFF_LINE_SIZE];
+  CHECK(!sniff_console_feed(&uart, 's', line), "partial UART command");
+  CHECK(sniff_console_feed(&usb, '\n', line) && !*line, "native USB blank Enter");
+  CHECK(sniff_console_feed(&uart, '\r', line) && !strcmp(line, "s"), "UART command retained");
+  CHECK(!sniff_console_feed(&uart, '\n', line), "split CRLF must not emit a second capture");
 
   if (fails) { printf("%d FAILED\n", fails); return 1; }
   printf("escsniff analysis: all passed\n");

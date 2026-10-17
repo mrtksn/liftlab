@@ -71,22 +71,11 @@ static int try_dshot(const line_t *L, int A, uint32_t *tmp, sniff_res *r) {
   return 1;
 }
 
-/* UART 8N1, idle high: the bit time is the typical shortest stretch. Returns 1 when it decodes. */
+/* UART 8N1, idle high. The shortest stretch may contain multiple bits
+ * (e.g. repeated 00 bytes with several stop/idle bits between them). */
 static const int BAUDS[] = { 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 100000, 115200, 230400, 250000, 400000, 460800, 500000, 921600, 1000000, 2000000 };
-static int try_serial(const line_t *L, uint32_t *tmp, sniff_res *r) {
-  if (L->E < 4) return 0;
-  uint32_t smin = 0xffffffffu, longest = 0; int longest_lv = 0, ns = 0;
-  for (int k = 1; k <= L->E - 1; k++) { uint32_t d = L->e[k] - L->e[k - 1]; if (d < smin) smin = d; }
-  for (int k = 0; k <= L->E; k++) {                /* every stretch, the cut ones too, for the idle level */
-    uint32_t a = k ? L->e[k - 1] : 0, b = k < L->E ? L->e[k] : L->end;
-    if (b - a > longest) { longest = b - a; longest_lv = L->L0 ^ (k & 1); }
-  }
-  if (longest_lv != 1) return 0;
-  for (int k = 1; k <= L->E - 1; k++) { uint32_t d = L->e[k] - L->e[k - 1]; if (d * 2 <= smin * 3) tmp[ns++] = d; }
-  float bit = (float)median(tmp, ns), baud = 1e6f * L->tpu / bit;
-  if (baud < 1100.f || baud > 2.2e6f) return 0;
-  for (int i = 0; i < (int)(sizeof BAUDS / sizeof *BAUDS); i++)
-    if (baud > BAUDS[i] * 0.94f && baud < BAUDS[i] * 1.06f) { baud = (float)BAUDS[i]; bit = 1e6f * L->tpu / baud; break; }
+static int serial_at(const line_t *L, float baud, sniff_res *r) {
+  float bit = 1e6f * L->tpu / baud;
   int nb = 0, bad = 0, j = 0;
   while (j < L->E) {
     if ((L->L0 ^ ((j + 1) & 1)) != 0) { j++; continue; }   /* a falling edge: a start bit */
@@ -95,7 +84,15 @@ static int try_serial(const line_t *L, uint32_t *tmp, sniff_res *r) {
     if (level_at(L, f + (uint32_t)(0.5f * bit)) != 0) { j++; continue; }  /* a glitch, not a start bit */
     int byte = 0;
     for (int i = 0; i < 8; i++) byte |= level_at(L, f + (uint32_t)((1.5f + i) * bit)) << i;
-    if (level_at(L, f + (uint32_t)(9.5f * bit)) != 1) bad++;
+    int framing_bad = level_at(L, f + (uint32_t)(9.5f * bit)) != 1;
+    /* Sampling plausible bits is insufficient: transitions within a UART
+     * frame must also lie near integer bit boundaries. */
+    for (int p = j + 1; p < L->E && L->e[p] - f < 10.f * bit; p++) {
+      float at = (L->e[p] - f) / bit;
+      int boundary = (int)(at + 0.5f);
+      if (at < boundary - 0.2f || at > boundary + 0.2f) framing_bad = 1;
+    }
+    if (framing_bad) bad++;
     if (nb < 16) r->bytes[nb] = (uint8_t)byte;
     nb++;
     uint32_t next = f + (uint32_t)(9.5f * bit);
@@ -104,6 +101,43 @@ static int try_serial(const line_t *L, uint32_t *tmp, sniff_res *r) {
   if (nb < 2 || bad * 4 > nb) return 0;
   r->kind = SN_SERIAL; r->baud = (int)(baud + 0.5f); r->nbytes = nb; r->bad_bytes = bad;
   return 1;
+}
+
+static int try_serial(const line_t *L, uint32_t *tmp, sniff_res *r) {
+  if (L->E < 4) return 0;
+  uint32_t smin = 0xffffffffu, longest = 0; int longest_lv = 0, ns = 0;
+  for (int k = 1; k <= L->E - 1; k++) { uint32_t d = L->e[k] - L->e[k - 1]; if (d < smin) smin = d; }
+  for (int k = 0; k <= L->E; k++) {
+    uint32_t a = k ? L->e[k - 1] : 0, b = k < L->E ? L->e[k] : L->end;
+    if (b - a > longest) { longest = b - a; longest_lv = L->L0 ^ (k & 1); }
+  }
+  if (longest_lv != 1) return 0;
+  for (int k = 1; k <= L->E - 1; k++) { uint32_t d = L->e[k] - L->e[k - 1]; if (d * 2 <= smin * 3) tmp[ns++] = d; }
+  float shortest = (float)median(tmp, ns), inferred = 1e6f * L->tpu / shortest;
+  int found = 0;
+  sniff_res best = *r;
+  /* Try the inferred rate first, then standard rates for which the shortest
+   * stretch is approximately 1..9 bit times. Keep the first clean decode:
+   * higher harmonics can also parse a repeating waveform as extra bytes. */
+  for (int i = -1; i < (int)(sizeof BAUDS / sizeof *BAUDS); i++) {
+    float baud = i < 0 ? inferred : (float)BAUDS[i];
+    if (baud < 1100.f || baud > 2.2e6f) continue;
+    if (i < 0) {
+      for (int j = 0; j < (int)(sizeof BAUDS / sizeof *BAUDS); j++)
+        if (baud > BAUDS[j] * 0.94f && baud < BAUDS[j] * 1.06f) { baud = (float)BAUDS[j]; break; }
+    } else {
+      float bits = shortest * baud / (1e6f * L->tpu);
+      int count = (int)(bits + 0.5f);
+      if (count < 1 || count > 9 || bits < count - 0.15f || bits > count + 0.15f) continue;
+    }
+    sniff_res candidate = *r;
+    if (!serial_at(L, baud, &candidate)) continue;
+    if (!candidate.bad_bytes) { *r = candidate; return 1; }
+    int cmp = found ? candidate.bad_bytes * best.nbytes - best.bad_bytes * candidate.nbytes : -1;
+    if (!found || cmp < 0 || (cmp == 0 && candidate.nbytes > best.nbytes)) { best = candidate; found = 1; }
+  }
+  if (found) *r = best;
+  return found;
 }
 
 void sniff_analyze(const sniff_cap *c, int ch, uint32_t *a, uint32_t *b, sniff_res *r) {
@@ -132,6 +166,7 @@ void sniff_analyze(const sniff_cap *c, int ch, uint32_t *a, uint32_t *b, sniff_r
     r->high_us = median(b, np) / tpu; r->high_min = mn / tpu; r->high_max = mx / tpu;
   }
   for (int k = k1; k + 1 <= L.E - 1; k += 2) b[nper++] = a[k + 1] - a[k - 1];
+  int periodic = 0;
   if (nper >= 2) {
     uint32_t P = median(b, nper), mn = b[0], mx = b[nper - 1];
     r->period_us = P / tpu; r->hz = 1e6f / r->period_us; r->duty = r->high_us / r->period_us;
@@ -143,10 +178,19 @@ void sniff_analyze(const sniff_cap *c, int ch, uint32_t *a, uint32_t *b, sniff_r
       else if (H >= 30.f && H < 100.f) r->kind = SN_ONESHOT42;
       else if (H < 30.f) r->kind = SN_SHORT;
       else r->kind = SN_PERIODIC;
-      return;
+      periodic = 1;
     }
   }
-  if (try_dshot(&L, 1, b, r) || try_dshot(&L, 0, b, r) || try_serial(&L, b, r)) return;
+  /* CRC-checked frames are stronger evidence than periodic timing. Repeating
+   * UART bytes can look exactly like PWM, so try both before choosing a label. */
+  if (try_dshot(&L, 1, b, r) || try_dshot(&L, 0, b, r)) return;
+  sniff_res serial = *r;
+  if (try_serial(&L, b, &serial)) {
+    if (periodic) { serial.kind = r->kind; serial.pwm_uart_ambiguous = 1; }
+    *r = serial;
+    return;
+  }
+  if (periodic) return;
   r->kind = L.E < 6 ? SN_FEW : SN_IRREGULAR;
 }
 
@@ -173,6 +217,13 @@ int sniff_line(const sniff_res *r, char *buf, int size) {
       "periodic pulses";
     int n = snprintf(buf, (size_t)size, "%8.1f Hz  high %7.1f us (%.1f-%.1f)  duty %5.1f%%  -> %s",
                      r->hz, r->high_us, r->high_min, r->high_max, r->duty * 100.f, what);
+    /* a steady pulse train can also be one UART byte sent over and over: say so, but PWM is the likelier reading.
+     * Changing the throttle tells them apart: PWM keeps its period, UART keeps its edges on bit boundaries. */
+    if (r->pwm_uart_ambiguous && n < size - 4) {
+      n += snprintf(buf + n, (size_t)(size - n), "  [also fits UART ~%d baud, repeated", r->baud);
+      for (int i = 0; i < r->nbytes && i < 2 && n < size - 4; i++) n += snprintf(buf + n, (size_t)(size - n), " %02x", r->bytes[i]);
+      if (n < size - 2) n += snprintf(buf + n, (size_t)(size - n), "]");
+    }
     return n;
   }
   case SN_DSHOT:
@@ -180,7 +231,7 @@ int sniff_line(const sniff_res *r, char *buf, int size) {
                     r->dshot_rate, r->dshot_inverted ? " bidirectional (inverted)" : "", r->throttle, r->thr_min, r->thr_max,
                     r->frames, r->bad_crc, r->frame_hz, r->telem_req ? ", telemetry requested" : "");
   case SN_SERIAL: {
-    int n = snprintf(buf, (size_t)size, "serial 8N1 ~%d baud, idle high, %d bytes (%d bad stop bits):", r->baud, r->nbytes, r->bad_bytes);
+    int n = snprintf(buf, (size_t)size, "serial 8N1 ~%d baud, idle high, %d bytes (%d framing errors):", r->baud, r->nbytes, r->bad_bytes);
     for (int i = 0; i < r->nbytes && i < 16 && n < size - 4; i++) n += snprintf(buf + n, (size_t)(size - n), " %02x", r->bytes[i]);
     return n;
   }

@@ -4,11 +4,11 @@
  * Tap a drone's motor-signal lines (e.g. the toy flight board's wire to each arm ESC) and it tells you what they
  * carry: servo-style PWM, OneShot, duty PWM, DShot (decoded) or UART serial (decoded), with the numbers.
  *
- *   CH1 = GPIO4   CH2 = GPIO5   CH3 = GPIO6   CH4 = GPIO7    each through a 4.7 kOhm resistor; GND to the drone's GND
+ *   CH1 = GPIO4   CH2 = GPIO5   CH3 = GPIO6   CH4 = GPIO7    protected 3.3 V inputs; GND to the drone's GND
  *   GEN = GPIO8   a test signal of your choosing (gen), to wire to a CH input and check the sniffer itself
  *
- * Lines take 3.3 V logic; the 4.7 kOhm keeps a 1S (4.2 V) signal's current into the pin's protection tiny. Never
- * connect the drone's battery (+) line here. Power the S3 from USB only.
+ * A series resistor alone does NOT make a 4.2 V signal safe. Use the 3.3 V-powered, overvoltage-tolerant input
+ * buffer described in docs/esc-sniffer.md. Never connect battery (+) to a GPIO. Power the S3 from USB only.
  *
  * Commands (serial, 115200 baud, either USB port; end each with Enter):
  *   Enter (or s)       one capture of all four lines, described
@@ -40,6 +40,7 @@
 #include "esp_cpu.h"
 #include "esp_err.h"
 #include "sniff_core.h"
+#include "sniff_console.h"
 
 /* replies go to both USB ports (the UART bridge and the native USB), whichever one you're on */
 static int out_ready;
@@ -182,21 +183,20 @@ static void command(char *s) {
 
 /* lines from either USB port: the UART bridge ("UART"/"COM" port) and the native USB ("USB" port) */
 static QueueHandle_t lines;
-typedef struct { char t[64]; } line_t;
-static void feed(char *buf, int *n, const uint8_t *in, int k) {
+typedef struct { char t[SNIFF_LINE_SIZE]; } line_t;
+static void feed(sniff_console *console, const uint8_t *in, int k) {
   for (int i = 0; i < k; i++) {
-    char c = (char)in[i];
-    if (c == '\r' || c == '\n') { if (*n > 0 || c == '\r') { line_t l; buf[*n] = 0; strncpy(l.t, buf, sizeof l.t - 1); l.t[sizeof l.t - 1] = 0; xQueueSend(lines, &l, 0); } *n = 0; }
-    else if (*n < 62) buf[(*n)++] = c;
+    line_t l;
+    if (sniff_console_feed(console, in[i], l.t)) xQueueSend(lines, &l, 0);
   }
 }
 static void uart_task(void *arg) {
-  char buf[64]; int n = 0; uint8_t in[64];
-  for (;;) { int k = uart_read_bytes(UART_NUM_0, in, sizeof in, pdMS_TO_TICKS(50)); if (k > 0) feed(buf, &n, in, k); }
+  sniff_console console = { 0 }; uint8_t in[64];
+  for (;;) { int k = uart_read_bytes(UART_NUM_0, in, sizeof in, pdMS_TO_TICKS(50)); if (k > 0) feed(&console, in, k); }
 }
 static void usb_task(void *arg) {
-  char buf[64]; int n = 0; uint8_t in[64];
-  for (;;) { int k = usb_serial_jtag_read_bytes(in, sizeof in, pdMS_TO_TICKS(50)); if (k > 0) feed(buf, &n, in, k); }
+  sniff_console console = { 0 }; uint8_t in[64];
+  for (;;) { int k = usb_serial_jtag_read_bytes(in, sizeof in, pdMS_TO_TICKS(50)); if (k > 0) feed(&console, in, k); }
 }
 
 void app_main(void) {
@@ -210,7 +210,8 @@ void app_main(void) {
   xTaskCreate(usb_task, "usb", 3072, NULL, 5, NULL);
   xTaskCreatePinnedToCore(cap_task, "capture", 4096, NULL, 10, &cap_h, 1);
   say("\n\nLiftLab ESC signal sniffer (ESP32-S3) - listens only, drives nothing but the GPIO8 test signal\n"
-      "CH1 GPIO4, CH2 GPIO5, CH3 GPIO6, CH4 GPIO7: each through 4.7 kOhm; drone GND to S3 GND; never the battery + line.\n"
+      "CH1 GPIO4, CH2 GPIO5, CH3 GPIO6, CH4 GPIO7: protected 3.3 V inputs; see docs/esc-sniffer.md.\n"
+      "A series resistor alone is NOT 4.2 V protection. Drone GND to S3 GND; never battery + to a GPIO.\n"
       "Enter: capture | w: watch | raw <ch> | csv | win <ms> | gen <hz> <high_us> | ? help\n");
   for (;;) {
     line_t l;

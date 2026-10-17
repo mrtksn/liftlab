@@ -34,6 +34,7 @@ typedef struct {
   int dshot_rate, dshot_inverted, frames, bad_crc, throttle, thr_min, thr_max, telem_req;
   float frame_hz;
   /* serial */
+  int pwm_uart_ambiguous;        /* the pulse train also decodes as a repeated UART byte (reported as a note) */
   int baud, nbytes, bad_bytes;
   uint8_t bytes[16];
 } sniff_res;
