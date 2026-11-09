@@ -21,7 +21,7 @@
 static mq_client *MQ;
 static SemaphoreHandle_t mu;                     /* (link_task and the radio task send; this file's task polls) */
 static StreamBufferHandle_t rxq;
-static char to_fc[112], from_fc[112], net[33];
+static char *to_fc, *from_fc, *net;           /* (on the heap: static DRAM is short on the ESP32) */
 static esp_radio_say SAY;
 static volatile int joined, resync;
 
@@ -61,12 +61,13 @@ int link_mqtt_start(const char *ssid, const char *pass, const char *host, int po
   SAY = say;
   if (!ssid || !ssid[0]) { sayf("link=mqtt: which network? set wifi=SSID,PASSWORD (the broker's network)"); return -1; }
   MQ = calloc(1, sizeof *MQ); uint8_t *tx = malloc(TXCAP); rxq = xStreamBufferCreate(8192, 1); mu = xSemaphoreCreateMutex();
-  if (!MQ || !tx || !rxq || !mu) { sayf("link=mqtt: no memory"); return -1; }
+  to_fc = malloc(112); from_fc = malloc(112); net = malloc(33);
+  if (!MQ || !tx || !rxq || !mu || !to_fc || !from_fc || !net) { sayf("link=mqtt: no memory"); return -1; }
   uint8_t mac[6] = { 0 }; esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char id[24]; snprintf(id, sizeof id, "liftlab-fc-%02x%02x%02x", mac[3], mac[4], mac[5]);
-  mq_link_topics(prefix, to_fc, sizeof to_fc, from_fc, sizeof from_fc);
+  mq_link_topics(prefix, to_fc, 112, from_fc, 112);
   mq_init(MQ, host, port, id, to_fc, tx, TXCAP); MQ->on_bytes = on_bytes; MQ->on_say = on_say;
-  snprintf(net, sizeof net, "%s", ssid);
+  snprintf(net, 33, "%s", ssid);
   wifi_config_t c; memset(&c, 0, sizeof c);
   memcpy(c.sta.ssid, net, strlen(net)); memcpy(c.sta.password, pass, strnlen(pass, sizeof c.sta.password - 1));
   c.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;   /* (an empty password: an open network, as a toy camera board's) */

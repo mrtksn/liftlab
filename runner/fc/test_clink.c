@@ -81,7 +81,7 @@ static void run(world *W, double secs, int with_cmds, int with_text) {
 static int cmds_in_order(const reader *R, int want) { if (R->ncmd < want - 2 || R->ncmd > want) return 0; for (int i = 0; i < R->ncmd; i++) if (R->cmd_seq[i] != (i % 255) + 1) return 0; return 1; }
 static int texts_in_order(const reader *R, int want) {
   if (R->ntext < want - 1 || R->ntext > want) return 0;
-  for (int i = 0; i < R->ntext; i++) { char s[64]; snprintf(s, sizeof s, "message %d: the quick brown fox jumps over the lazy dog", i + 1); if (strncmp(R->texts[i], s, 54)) return 0; }
+  for (int i = 0; i < R->ntext; i++) { char s[80]; snprintf(s, sizeof s, "message %d: the quick brown fox jumps over the lazy dog", i + 1); if (strncmp(R->texts[i], s, 54)) return 0; }
   return 1;
 }
 

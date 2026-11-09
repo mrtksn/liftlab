@@ -353,9 +353,10 @@ static void setting(const char *line) {
     report(s); return;
   }
   if (!strcmp(line, "peers")) {                       /* the other drones: a line each */
-    static char ps[1400]; radio_peer_status(ps, sizeof ps);
+    char *ps = malloc(1400); if (!ps) { report("no memory for the peer table"); return; }   /* (on the heap: static DRAM is short on the ESP32) */
+    radio_peer_status(ps, 1400);
     for (char *a = ps, *b; a && *a; a = b) { b = strchr(a, '\n'); if (b) *b++ = 0; report(a); }
-    return;
+    free(ps); return;
   }
   if (!strncmp(line, "ping ", 5)) {                   /* ping NODE (its number as "peers" shows it) */
     uint32_t id = (uint32_t)strtoul(line + 5, 0, 16);
@@ -399,8 +400,13 @@ static uint32_t frame_limit(uint8_t type) {
 static void link_task(void *arg) {
   static rn_link L; rn_link_init(&L, img_buf, IMG_CAP); L.limit = frame_limit;
   /* The link over MQTT too (link=mqtt): its own parser beside the UART's; programs and airframes still come by UART. */
-  static rn_link L2; static uint8_t l2buf[4096], rx2[512]; rn_link_init(&L2, l2buf, sizeof l2buf); L2.limit = frame_limit;
-  if (HW.link_mqtt && link_mqtt_start(HW.wifi_ssid, HW.wifi_pass, HW.link_host, HW.link_port, HW.link_prefix, post)) say("link=mqtt didn't start: the UART only");
+  static rn_link L2; uint8_t *l2buf = 0, *rx2 = 0; int mqtt = 0;   /* (its buffers on the heap, only when it's on: static DRAM is short on the ESP32) */
+  if (HW.link_mqtt) {
+    l2buf = malloc(4096); rx2 = malloc(512);
+    if (!l2buf || !rx2) say("link=mqtt: no memory; the UART only");
+    else if (link_mqtt_start(HW.wifi_ssid, HW.wifi_pass, HW.link_host, HW.link_port, HW.link_prefix, post)) say("link=mqtt didn't start: the UART only");
+    else { rn_link_init(&L2, l2buf, 4096); L2.limit = frame_limit; mqtt = 1; }
+  }
   static uint8_t rx[256];
   int64_t next_t = 0, next_b = 0, telem_us = HW.telem_hz ? 1000000 / HW.telem_hz : 0, last_rx = 0, keep = 0, frame_t0 = 0;
   int prev_state = 0;
@@ -419,8 +425,8 @@ static void link_task(void *arg) {
     if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 50000 && now - frame_t0 < (int64_t)L.len * 10 * 1000000 / HW.link_baud + 500000 && now - keep > 100000) {
       keep = now; keep_new = 1;
     }
-    int n2 = HW.link_mqtt ? link_mqtt_read(rx2, sizeof rx2) : 0;
-    if (HW.link_mqtt && link_mqtt_resync() && L2.state) rn_link_reset(&L2);   /* (reconnected: no half frame from before) */
+    int n2 = mqtt ? link_mqtt_read(rx2, 512) : 0;
+    if (mqtt && link_mqtt_resync() && L2.state) rn_link_reset(&L2);   /* (reconnected: no half frame from before) */
     for (int i = 0; i < n + n2; i++) {
       int src = i >= n; rn_link *Lp = src ? &L2 : &L;
       int type = rn_link_feed(Lp, src ? rx2[i - n] : rx[i]);
