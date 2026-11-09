@@ -11,6 +11,24 @@ function hardwareNumber(label,value,change,min,max) {
 function hardwareText(label,value,change){const inp=UI.input({type:'text','aria-label':label,value});inp.addEventListener('change',()=>change(inp.value.trim()));return hardwareField(label,inp);}
 function hardwareDetails(key,title,...children){const d=UI.details({title,class:'hw-advanced',open:HW_UI.open.has(key),onToggle:open=>{if(open)HW_UI.open.add(key);else HW_UI.open.delete(key);}},...children);const board=/^(?:timing|driver)(\d+)$/.exec(key);if(board)d.dataset.hwBoard=board[1];return d;}
 function hardwareCard(name,kind,connection,board,...children){return UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:name}),el('span',{class:'hw-kind',text:kind})),board,hardwareField('Connection',el('span',{class:'hw-connection',text:connection})),...children);}
+// The flight board's ESC configuration: what its PWM ESC outputs send. A preset fills the fields; editing one makes
+// it custom. The readout gives each pulse as a duty cycle too, as a scope or a logic analyser shows it.
+function escConfigCard(C,b,editBoard){
+  const bus=hardwareBus(C,b),key=escPresetOf(bus),P=ESC_PRESETS[key];
+  const set=(patch,k)=>editBoard(b,patch,k);
+  const type=hardwareField('ESC type',hardwareSelect('ESC type','hw-esc-type-'+b.id,[...Object.entries(ESC_PRESETS).map(([k,p])=>[k,p.label]),['custom','Custom']],key,v=>{if(ESC_PRESETS[v]){set(Object.fromEntries(ESC_FIELDS.map(f=>[f,ESC_PRESETS[v][f]])),'escType');}}));
+  const num=(k,label,min,max)=>hardwareNumber(label.charAt(0).toUpperCase()+label.slice(1),bus[k],v=>set({[k]:v},k),min,max);
+  const duty=us=>escDutyPct(us,bus.escHz).toFixed(1)+'%',cells=bus.escCellsMin===bus.escCellsMax?bus.escCellsMin+'S':bus.escCellsMin+'–'+bus.escCellsMax+'S';
+  const volts=(3.0*bus.escCellsMin).toFixed(1)+'–'+(4.2*bus.escCellsMax).toFixed(1)+' V',batt=typeof battCfg==='function'?battCfg().cells:null;
+  const card=UI.card({class:'hw-device hw-esc'},el('div',{class:'hw-device-title'},el('b',{text:'ESC configuration'}),el('span',{class:'hw-kind',text:b.name})),
+    el('p',{class:'hint',text:'Every motor on '+b.name+' with the PWM ESC driver gets this signal: one timer drives them all.'}),type,
+    el('div',{class:'hw-fields'},num('escHz','signal frequency (Hz)',50,490),num('escStop','stop pulse (µs, 0: none)',0,2000),num('escMin','start pulse at zero throttle (µs)',800,2200),num('escMax','full-throttle pulse (µs)',800,2200),
+      num('escCellsMin','fewest cells (S)',1,14),num('escCellsMax','most cells (S)',1,14)),
+    el('p',{class:'hint',text:'Period '+(1e6/bus.escHz).toFixed(0)+' µs. '+(bus.escStop>0?'Stopped: '+bus.escStop+' µs ('+duty(bus.escStop)+' duty). ':'Stopped: the start pulse. ')+'Throttle 0→100%: '+bus.escMin+'→'+bus.escMax+' µs ('+duty(bus.escMin)+'→'+duty(bus.escMax)+'). Pulses longer than the period minus 100 µs are refused.'}),
+    el('p',{class:'hint',text:'Power: '+cells+' ('+volts+')'+(batt?' · the battery is '+batt+'S'+(batt<bus.escCellsMin||batt>bus.escCellsMax?', outside this range':''):'')+'. The signal is 3.3 V logic; check the ESC accepts it, and share ground.'}));
+  if(P&&P.note)card.append(el('p',{class:'hint',text:P.note}));
+  card.dataset.hwBoard=b.id;return card;
+}
 function hardwareBoardCard(b,...args){const card=hardwareCard(...args);card.dataset.hwBoard=b.id;return card;}
 function renderWiringOverview(C){
   const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
@@ -42,6 +60,7 @@ function renderHardware() {
   const outputs=group('Motors & servos','Choose the board, motor driver and signal GPIO. Motor power comes through an ESC or MOSFET stage; servos use a PWM signal.');
   const sensors=group('Sensors','Choose a device driver, then wire the pins shown. I²C sensors on one board share SDA and SCL; each needs its own address.');
   const core=C.boards.find(b=>b.tasks.includes('core'));
+  if(core&&ESP_PROFILES[core.kind]&&parts.some(c=>c.type==='motor'&&partWiring(c).driver==='pwm'))outputs.append(escConfigCard(C,core,editBoard));
   if(core)sensors.append(UI.button({class:'btn hw-preset-btn',type:'button',id:'hw-10dof-'+core.id,text:'Use 10DOF module: MPU6050 + BMP180 + HMC5883L',onclick:()=>use10Dof(core)}));
   let cargo=null;
   for(const c of parts){
@@ -60,7 +79,7 @@ function renderHardware() {
       if(c.type==='motor')card.append(hardwareField('Motor driver',hardwareSelect(c.name+' motor driver','hw-motor-driver-'+c.id,[['pwm','PWM ESC'],['brushed','Brushed motor · MOSFET']],p.driver,v=>update({driver:v}))));
       if(owner)card.append(pinPicker(owner,c.name+(brushed?' gate GPIO':' signal GPIO'),'hw-pin-'+c.id,p.pin,'part'+c.id,pinsFor(owner),v=>update({pin:Number(v)})));
       if(brushed&&bus)card.append(hardwareNumber(c.name+' PWM frequency (Hz)',bus.brushedHz,v=>editBoard(owner,{brushedHz:v},'brushedHz'),1000,30000),hardwareNumber(c.name+' maximum duty (%)',p.maxDuty??100,v=>update({maxDuty:v}),1,100),el('p',{class:'hint',text:'Frequency is shared by MOSFET motors on this board. Active-high, one direction; zero duty when stopped. Use an external gate pulldown and a suitable MOSFET power stage with flyback protection. Set the motor’s thrust/response in Airframe.'}));
-      if(c.type==='motor'&&!brushed&&bus)card.append(el('p',{class:'hint',text:bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs · timing in Board settings below'}));
+      if(c.type==='motor'&&!brushed&&bus){const k=escPresetOf(bus);card.append(el('p',{class:'hint',text:(k==='custom'?'Custom ESC':ESC_PRESETS[k].label.split(' · ')[0])+' · '+escSummary(bus)+' · set in '+owner.name+' · ESC configuration'}));}
       if(c.type==='joint')card.append(hardwareDetails('servo'+c.id,'Pulse calibration',hardwareNumber(c.name+' centre µs',saved.center??1500,v=>update({center:v}),800,2200),hardwareNumber(c.name+' µs/radian',saved.usPerRad??(500/(Math.PI/4)),v=>update({usPerRad:v}),-2000,2000)));
       card.dataset.hwPart=c.id;outputs.append(card);continue;
     }
@@ -93,7 +112,21 @@ function renderHardware() {
       hardwareDetails('battery'+core.id,'Voltage divider',hardwareNumber('Battery divider ratio',bus.batteryDivider,v=>editBoard(core,{batteryDivider:v},'divider'),1,30),el('p',{class:'hint',text:'Ratio = battery voltage / voltage at the ADC pin. Connect the pack through a suitable resistor divider, never directly to a GPIO.'}))));
     auxiliary.lastChild.dataset.hwRole='battery';
   }
-  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){const bus=hardwareBus(C,b);auxiliary.append(hardwareBoardCard(b,'Flight-controller link','Board link',(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',el('p',{class:'hw-owner',text:'Board: '+b.name}),hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'})));auxiliary.lastChild.dataset.hwRole='link-'+b.id;}
+  for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){
+    const bus=hardwareBus(C,b),mqtt=bus.linkTransport==='mqtt',coreB=C.boards.find(x=>x.tasks.includes('core')),coreBus=coreB&&hardwareBus(C,coreB);
+    const transport=hardwareField('Transport',hardwareSelect(b.name+' flight link transport','hw-link-tr-'+b.id,Object.entries(LINK_TRANSPORTS),bus.linkTransport,v=>editBoard(b,{linkTransport:v},'linkTransport')));
+    const kids=[el('p',{class:'hw-owner',text:'Board: '+b.name}),transport];
+    if(!mqtt)kids.push(hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'}));
+    else {
+      if(b.kind==='pizero'){const id='hw-net-'+b.id,i=UI.input({type:'checkbox',id});i.checked=!!bus.net;i.addEventListener('change',()=>editBoard(b,{net:i.checked},'net'));kids.push(el('label',{class:'check',for:id},i,'This Pi has a network (a Zero W, or a USB Wi-Fi or Ethernet adapter)'));}
+      kids.push(hardwareField('Broker runs',hardwareSelect(b.name+' MQTT broker place','hw-mq-where-'+b.id,[['here','On this Pi (mosquitto): one Wi-Fi hop'],['elsewhere','Elsewhere on the network: two hops']],bus.mqttBroker,v=>editBoard(b,{mqttBroker:v},'mqttBroker'))),
+        hardwareText('Broker address',bus.mqttHost,v=>editBoard(b,{mqttHost:v},'mqttHost')),hardwareNumber('Broker port',bus.mqttPort,v=>editBoard(b,{mqttPort:v},'mqttPort'),1,65535),
+        hardwareText('Topic prefix',bus.mqttPrefix,v=>editBoard(b,{mqttPrefix:v},'mqttPrefix')));
+      if(coreB&&ESP_PROFILES[coreB.kind])kids.push(hardwareText(coreB.name+' Wi-Fi network (name)',coreBus.wifiSsid,v=>editBoard(coreB,{wifiSsid:v},'wifiSsid')));
+      kids.push(el('p',{class:'hint',text:'Frames go as MQTT messages on '+(bus.mqttPrefix||'PREFIX')+'/link/to-fc and '+(bus.mqttPrefix||'PREFIX')+'/link/from-fc, one frame each: any MQTT tool can watch them. '+(coreB?coreB.name:'The flight controller')+' joins the network as a station and keeps its UART for USB; set its password once in its console (wifi=SSID,PASSWORD). The broker\'s address is the one the flight controller reaches it at (the Pi\'s own when it runs the broker).'}));
+    }
+    auxiliary.append(hardwareBoardCard(b,'Flight-controller link','Board link',mqtt?'MQTT · '+mqttLinkUrl(C,b):(!bus.linkPort||bus.linkPort==='/dev/serial0')?'UART · Pi TX GPIO 14 / RX GPIO 15':'USB serial · no Pi GPIO',...kids));auxiliary.lastChild.dataset.hwRole='link-'+b.id;
+  }
   const radio=C.boards.find(b=>b.tasks.includes('tlm'));
   // the link's card (r: radioCfg, or the second link's, radioCfg2): what it needs wired, its picker
   const radioCard=(r,second)=>{
@@ -138,9 +171,9 @@ function renderHardware() {
   }
   for(const card of auxiliary.querySelectorAll('.hw-device'))if(!card.dataset.hwBoard)card.dataset.hwRole='radio';
   renderGroundHardware(group('Command-module wiring','Buttons, sticks and the transmitter on the ground-side board.'),C);
-  const advanced=group('Board settings & custom code','Shared timing and source code live here. Most devices work with a built-in driver and need no code edits.');
-  for(const b of C.boards){const bus=hardwareBus(C,b);if(!b.tasks.includes('core')||!ESP_PROFILES[b.kind])continue;
-    advanced.append(hardwareDetails('timing'+b.id,b.name+' · ESC timing',...[['escHz','ESC PWM Hz',50,490],['escMin','ESC minimum µs',800,1700],['escMax','ESC maximum µs',1300,2200]].map(([k,l,min,max])=>hardwareNumber(l,bus[k],v=>editBoard(b,{[k]:v},k),min,max))),customDriverEditor(C,b));
+  const advanced=group('Board settings & custom code','Custom sensor driver code lives here. Most devices work with a built-in driver and need no code edits. ESC signal settings are under Motors & servos.');
+  for(const b of C.boards){if(!b.tasks.includes('core')||!ESP_PROFILES[b.kind])continue;
+    advanced.append(customDriverEditor(C,b));
   }
   const modulePreset=sensors.querySelector('.hw-preset-btn');if(modulePreset&&core)modulePreset.dataset.hwBoard=core.id;
   const report=el('div',{class:'hw-report',role:'status',id:'hardwareReport'}),errors=new Set(),warnings=new Set();

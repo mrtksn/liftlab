@@ -23,7 +23,7 @@
  * telemetry task (it sends RN_LINK_WANT bit 2), the flight core's items go to the Pi instead (RN_LINK_TLM).
  * A fresh board drives no pin: no motors or servos until the wiring (motors=, servos=) is set, saved and rebooted.
  * "version" says the build (firmware COMMIT CHIP flight, as firmware/manifest.json records it); "scan" lists every
- * address that answers on the sensors' I2C bus (disarmed).
+ * address that answers on the sensors' I2C bus (disarmed); "accel" reports a fresh acceleration sample in sensor axes.
  * Which radio (settings, as all the others: over the link, save, reboot; "show" lists them, the secrets masked):
  *   radio=elrs,250,4      an ExpressLRS (or Crossfire) receiver on a second UART, crsf=RX,TX (CRSF at 420000 baud);
  *                         the packet rate and telemetry ratio as set on the radio (the default)
@@ -101,6 +101,8 @@
 #include "fleet.h"
 #include "hw.h"
 #include "esp_board.h"
+#include "accel_readout.h"
+#include "link_mqtt.h"
 
 extern const uint8_t *const rn_builtin_img;
 extern const uint32_t rn_builtin_len;
@@ -142,7 +144,7 @@ static void host_event(void *ctx, int code, const char *what) {
 }
 
 /* ── sensor task → control loop ── */
-static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static float baro_alt; static int baro_new;   /* under imu_mux */
+static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static int imu_ok; static float baro_alt; static int baro_new;   /* under imu_mux */
 static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1;
@@ -163,13 +165,14 @@ static void sensor_task(void *arg) {
     vTaskDelayUntil(&last, period);
     fc_imu m; memset(&m, 0, sizeof m);
     int64_t us = esp_timer_get_time();
-    if (hw_imu_read(&m)) memset(&m, 0, sizeof m);          /* a failed read: no gyro this sample */
+    int ok = hw_imu_read(&m) == 0;
+    if (!ok) memset(&m, 0, sizeof m);          /* a failed read: no gyro this sample */
     float a; int nb = 0;
     if(SENS.baro==2 || SENS.baro==3) nb=hw_baro_read(&a); else if ((tb += period) >= 40) { tb = 0; nb = hw_baro_read(&a); }
     if((tm+=period)>=10) { tm=0;if(hw_mag_read(mag)) mag_us=us; }
     m.have_mag=us-mag_us<100000;memcpy(m.mag,mag,sizeof mag);
     portENTER_CRITICAL(&imu_mux);
-    imu_now = m; imu_us = us; imu_seq++; if (nb) { baro_alt = a; baro_new = 1; }
+    imu_now = m; imu_us = us; imu_seq++; imu_ok = ok; if (nb) { baro_alt = a; baro_new = 1; }
     portEXIT_CRITICAL(&imu_mux);
     xTaskNotifyGive(flight_h);
   }
@@ -312,10 +315,12 @@ static uint8_t *img_buf;
 static void link_send(uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[FC_MODEL_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
+  if (k && HW.link_mqtt) link_mqtt_send(fr, k);      /* (and over MQTT, when the companion is there) */
 }
 static void link_send2(uint8_t type, const void *p, uint32_t n) {   /* (the radio task's own buffer) */
   static uint8_t fr[FLEET_PACK_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
+  if (k && HW.link_mqtt) link_mqtt_send(fr, k);
 }
 static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
 static void report(const char *text) { link_send(RN_LINK_REPORT, text, (uint32_t)strlen(text)); }
@@ -357,6 +362,15 @@ static void setting(const char *line) {
     report(radio_peer_ping(id) ? "no such drone (or peers=off): see peers" : "ping sent: its round trip shows in peers"); return;
   }
   if (F.state != FC_DISARMED) { report("disarm first"); return; }
+  if (!strcmp(line, "accel")) {
+    accel_readout sample;
+    portENTER_CRITICAL(&imu_mux);
+    memcpy(sample.acc, imu_now.acc, sizeof sample.acc);
+    sample.us = imu_us; sample.seq = imu_seq; sample.valid = imu_ok;
+    portEXIT_CRITICAL(&imu_mux);
+    accel_readout_format(s, sizeof s, SENS.imu != 0, &sample, esp_timer_get_time());
+    report(s); return;
+  }
   if (!strcmp(line, "scan")) { hw_i2c_scan(s, sizeof s); report(s); return; }   /* (disarmed: the probes hold the bus for a moment) */
   if (!strcmp(line, "save")) { report(hw_save(&HW_next) ? "couldn't save the settings" : "saved; reboot to use them"); return; }
   if (!strcmp(line, "reboot")) { report("rebooting"); vTaskDelay(pdMS_TO_TICKS(100)); hw_outputs_safe(); esp_restart(); }
@@ -384,6 +398,9 @@ static uint32_t frame_limit(uint8_t type) {
 }
 static void link_task(void *arg) {
   static rn_link L; rn_link_init(&L, img_buf, IMG_CAP); L.limit = frame_limit;
+  /* The link over MQTT too (link=mqtt): its own parser beside the UART's; programs and airframes still come by UART. */
+  static rn_link L2; static uint8_t l2buf[4096], rx2[512]; rn_link_init(&L2, l2buf, sizeof l2buf); L2.limit = frame_limit;
+  if (HW.link_mqtt && link_mqtt_start(HW.wifi_ssid, HW.wifi_pass, HW.link_host, HW.link_port, HW.link_prefix, post)) say("link=mqtt didn't start: the UART only");
   static uint8_t rx[256];
   int64_t next_t = 0, next_b = 0, telem_us = HW.telem_hz ? 1000000 / HW.telem_hz : 0, last_rx = 0, keep = 0, frame_t0 = 0;
   int prev_state = 0;
@@ -402,43 +419,46 @@ static void link_task(void *arg) {
     if (L.state == 3 && L.type == RN_LINK_PROGRAM && now - last_rx < 50000 && now - frame_t0 < (int64_t)L.len * 10 * 1000000 / HW.link_baud + 500000 && now - keep > 100000) {
       keep = now; keep_new = 1;
     }
-    for (int i = 0; i < n; i++) {
-      int type = rn_link_feed(&L, rx[i]);
-      if (L.state != 0 && prev_state == 0) frame_t0 = esp_timer_get_time();
-      prev_state = L.state;
-      if (type == RN_LINK_CMD && (L.len == 28 || L.len == 48)) {   /* the pilot's sticks, or a guided command from the Pi */
-        float v[12] = { 0 }; memcpy(v, L.buf, L.len);
+    int n2 = HW.link_mqtt ? link_mqtt_read(rx2, sizeof rx2) : 0;
+    if (HW.link_mqtt && link_mqtt_resync() && L2.state) rn_link_reset(&L2);   /* (reconnected: no half frame from before) */
+    for (int i = 0; i < n + n2; i++) {
+      int src = i >= n; rn_link *Lp = src ? &L2 : &L;
+      int type = rn_link_feed(Lp, src ? rx2[i - n] : rx[i]);
+      if (!src) { if (L.state != 0 && prev_state == 0) frame_t0 = esp_timer_get_time(); prev_state = L.state; }
+      if (src && (type == RN_LINK_PROGRAM || type == RN_LINK_AIRFRAME)) { say("programs and airframes come by the UART (USB), not MQTT"); continue; }
+      if (type == RN_LINK_CMD && (Lp->len == 28 || Lp->len == 48)) {   /* the pilot's sticks, or a guided command from the Pi */
+        float v[12] = { 0 }; memcpy(v, Lp->buf, Lp->len);
         fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6],
                      v[7] > 0.5f, { v[8], v[9], v[10] }, v[11] };
-        if (c.guided || L.len == 48) guided_us = now;
+        if (c.guided || Lp->len == 48) guided_us = now;
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_PROGRAM) {
-        char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)L.len); say(s);
+        char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)Lp->len); say(s);
         int64_t t0 = esp_timer_get_time();
-        int e = rn_host_prepare(&H, img_buf, L.len);
+        int e = rn_host_prepare(&H, img_buf, Lp->len);
         if (!e) { snprintf(s, sizeof s, "checked and self-tested in %lld ms", (long long)((esp_timer_get_time() - t0) / 1000)); say(s); }
       } else if (type == RN_LINK_AIRFRAME) {
-        memcpy(af_box, L.buf, L.len); af_len = L.len; af_result = 1; af_new = 1;
+        memcpy(af_box, Lp->buf, Lp->len); af_len = Lp->len; af_result = 1; af_new = 1;
         while (af_new) vTaskDelay(1);
         if (af_result == -2) say("airframe: disarm first");
         else if (af_result) { char s[96]; snprintf(s, sizeof s, "airframe refused: %s", F.why); say(s); }
         else say(hw_airframe_save(af_box, af_len) ? "airframe loaded, but it couldn't be saved to flash" : "airframe loaded and saved");
       } else if (type == RN_LINK_SETTING) {
-        char line[128]; uint32_t k = L.len < sizeof line - 1 ? L.len : sizeof line - 1; memcpy(line, L.buf, k); line[k] = 0; setting(line);
+        char line[128]; uint32_t k = Lp->len < sizeof line - 1 ? Lp->len : sizeof line - 1; memcpy(line, Lp->buf, k); line[k] = 0; setting(line);
       } else if (type == RN_LINK_STATUS) {
         char s[160]; snprintf(s, sizeof s, "%s: %s; flying slot %d (0 = built-in), candidate %d, phase %d; loop %lld us, over time %d; free heap %u",
                               fc_state_name(F.state), F.why, H.act, H.cand, H.phase, (long long)loop_us, loop_late, (unsigned)esp_get_free_heap_size());
         report(s);
       } else if (type == RN_LINK_EXC || type == RN_LINK_SET || type == RN_LINK_MODEL) {   /* the learning and the supervisor: to the control loop */
         float *box = type == RN_LINK_EXC ? exc_box : type == RN_LINK_SET ? set_box : model_box; volatile int *cnt = type == RN_LINK_EXC ? &exc_n : type == RN_LINK_SET ? &set_n : &model_n;
-        portENTER_CRITICAL(&mux); memcpy(box, L.buf, L.len & ~3u); *cnt = (int)(L.len / 4); portEXIT_CRITICAL(&mux);
-      } else if (type == RN_LINK_TUNE && L.len == sizeof tune_box) {
+        portENTER_CRITICAL(&mux); memcpy(box, Lp->buf, Lp->len & ~3u); *cnt = (int)(Lp->len / 4); portEXIT_CRITICAL(&mux);
+      } else if (type == RN_LINK_TUNE && Lp->len == sizeof tune_box) {
         portENTER_CRITICAL(&mux);
-        memcpy(tune_box, L.buf, sizeof tune_box);
+        memcpy(tune_box, Lp->buf, sizeof tune_box);
         tune_n = PID_FRAME;
         portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_WANT) {
-        float w = 1; if (L.len == 4) memcpy(&w, L.buf, 4);
+        float w = 1; if (Lp->len == 4) memcpy(&w, Lp->buf, 4);
         if (!isfinite(w) || w < 0 || w > 15)
           continue;
         if ((int)w & 1) want_us = now;
@@ -448,9 +468,9 @@ static void link_task(void *arg) {
           tune_want_us = now;
       } else if (type == RN_LINK_PEER_OUT) { /* the Pi's fleet program: what to
                                                 publish and send */
-        portENTER_CRITICAL(&tlm_mux); memcpy(peer_out_box, L.buf, L.len & ~3u); peer_out_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
+        portENTER_CRITICAL(&tlm_mux); memcpy(peer_out_box, Lp->buf, Lp->len & ~3u); peer_out_n = (int)(Lp->len / 4); portEXIT_CRITICAL(&tlm_mux);
       } else if (type == RN_LINK_TLM) { /* the Pi's tasks' telemetry, for the radio */
-        portENTER_CRITICAL(&tlm_mux); memcpy(tlm_in, L.buf, L.len & ~3u); tlm_in_n = (int)(L.len / 4); portEXIT_CRITICAL(&tlm_mux);
+        portENTER_CRITICAL(&tlm_mux); memcpy(tlm_in, Lp->buf, Lp->len & ~3u); tlm_in_n = (int)(Lp->len / 4); portEXIT_CRITICAL(&tlm_mux);
       } else if (type < 0)
         say("dropped a damaged or oversized frame");
     }

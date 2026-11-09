@@ -11,11 +11,16 @@
 /* Preserve frame boundaries over nonblocking short writes. A stalled UART must
  * not replay old flight commands: quit and let the core's independent watchdog
  * act. */
+/* The link over MQTT instead (dfb_pi --link mqtt://…): each frame goes as one message through this hook, and the
+ * client's own queue and reconnects replace this one (a broker that goes away is not a stalled UART). */
+static int (*link_publish)(const uint8_t *frame, uint32_t n);
 static uint8_t tx_queue[8192];
 static size_t tx_len;
 static double tx_since;
 static int tx_failed;
 static void flush_link(int fd) {
+  if (link_publish)
+    return;
   if (tx_failed)
     return;
   if (tx_len && now_s() - tx_since > .04) {
@@ -44,6 +49,11 @@ static void flush_link(int fd) {
 static void send_frame(int fd, uint8_t type, const void *p, uint32_t n) {
   uint8_t fr[FC_MODEL_MAX * 4 + 32];
   uint32_t len = rn_link_frame(fr, sizeof fr, type, (const uint8_t *)p, n);
+  if (link_publish) {
+    if (len)
+      link_publish(fr, len);
+    return;
+  }
   flush_link(fd);
   if (!len || tx_failed)
     return;

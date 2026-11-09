@@ -78,9 +78,15 @@ class BoardConn {
     try { await this.port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (e) {}
     const feed = dfParser((t, p) => this.frame(t, p), s => { this.o.text(s); this.match(s); });
     this.reading = (async () => {
+      let yieldAt = Date.now();
       while (this.port.readable && !this.closing) {
         this.reader = this.port.readable.getReader();
-        try { for (;;) { const { value, done } = await this.reader.read(); if (done) break; if (value) feed(value); } }
+        try { for (;;) {
+          const { value, done } = await this.reader.read(); if (done || this.closing) break;
+          if (value) feed(value);
+          // A port with buffered errors can otherwise keep the microtask queue busy indefinitely.
+          if (Date.now() - yieldAt >= 8) { await new Promise(r => setTimeout(r, 0)); yieldAt = Date.now(); }
+        } }
         catch (e) { if (!this.closing) this.o.text('(the port stopped: ' + e.message + ')'); }
         finally { try { this.reader.releaseLock(); } catch (e) {} }
         if (!this.closing) await new Promise(r => setTimeout(r, 50));
@@ -320,13 +326,28 @@ function espManual(t, ground, fwName, edited) {
   return UI.details({ class: 'inst-manual', title: 'What the files are, and doing it by hand' }, ...kids);
 }
 
-function instLog(s, cls) {
-  const con = $('#instConsole'); if (!con) return;
-  INST.log.push([s, cls]); if (INST.log.length > 400) INST.log.splice(0, INST.log.length - 400);
+const instLogRender = { pending: [], console: null, timer: null };
+function instLogFlush() {
+  instLogRender.timer = null;
+  const con = $('#instConsole'), pending = instLogRender.pending;
+  instLogRender.pending = [];
+  // Reopening the dialog renders INST.log itself; do not duplicate its old pending lines.
+  if (!con || con !== instLogRender.console || !pending.length) return;
   const near = con.scrollHeight - con.scrollTop - con.clientHeight < 30;
-  con.append(el('span', { class: cls || '', text: s + '\n' }));
+  const batch = document.createDocumentFragment();
+  for (const [s, cls] of pending) batch.append(el('span', { class: cls || '', text: s + '\n' }));
+  con.append(batch);
   while (con.childNodes.length > 400) con.firstChild.remove();
   if (near) con.scrollTop = con.scrollHeight;
+}
+function instLog(s, cls) {
+  const con = $('#instConsole'); if (!con) return;
+  s = String(s); if (s.length > 2048) s = s.slice(0, 2048) + ' … [line truncated]';
+  INST.log.push([s, cls]); if (INST.log.length > 400) INST.log.splice(0, INST.log.length - 400);
+  if (instLogRender.console !== con) { instLogRender.console = con; instLogRender.pending = []; }
+  instLogRender.pending.push([s, cls]);
+  if (instLogRender.pending.length > 400) instLogRender.pending.splice(0, instLogRender.pending.length - 400);
+  if (instLogRender.timer === null) instLogRender.timer = setTimeout(instLogFlush, 100);
 }
 function instConnUi() {
   renderUndo();
@@ -556,7 +577,8 @@ function piGuide(t, K) {
   const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
   if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in the Computers board and device details',true]);
-  fields.push(['link', 'Link to the ESP32', hardwareBus(computers(),t).linkPort||'/dev/serial0', 'Change the serial connection in the Computers board and device details',true]);
+  const mqttLink = linkMqtt(computers(), t), mqttBus = hardwareBus(computers(), t);
+  fields.push(['link', 'Link to the ESP32', mqttLink ? mqttLinkUrl(computers(), t) : mqttBus.linkPort||'/dev/serial0', mqttLink ? 'The MQTT broker and topics, from the Computers link details' : 'Change the serial connection in the Computers board and device details',true]);
   if (cargo) fields.push(['latch', 'Latch outputs', piLatchSettings(computers(),cfg.comps,t), 'Saved GPIO/PWM connections from Computers wiring',true]);
   const rk = radioCfg.kind, rlines = radioSettingLines(radioCfg);   // the link (Ground tab): a receiver on a serial port, or the Pi's own Wi-Fi
   if (radio && (rk === 'elrs' || rk === 'serial')) fields.push(['crsf', rk === 'serial' ? 'Serial line port' : 'Receiver port', hardwareBus(computers(),t).receiverPort || '/dev/ttyUSB1', 'Change this saved connection in the Computers board and device details',true]);
@@ -578,7 +600,9 @@ function piGuide(t, K) {
   // The saved connection determines the wiring and which Pi interfaces need enabling.
   const gpioLink=v('link')==='/dev/serial0',gpioSerial=gpioLink || (fix && v('gps')==='/dev/serial0') || (radio && v('crsf')==='/dev/serial0');
   const pwmCargo=cargo && /pwm/.test(v('latch'));
-  out.push(instStep(1, 'Wire it to the flight controller',
+  if (mqttLink) out.push(instStep(1, 'Connect it to the flight controller over the network',
+    instPara(`No wires between them: the flight controller joins the Wi-Fi network <b>${hardwareBus(computers(), core || t).wifiSsid || '(set its name in the link details)'}</b> and talks to the MQTT broker at <code>${mqttBus.mqttHost}:${mqttBus.mqttPort}</code>${mqttBus.mqttBroker === 'here' ? ', which runs on this Pi (step 2 installs it)' : ''}. Give the flight controller its network once, in its console: <code>wifi=SSID,PASSWORD</code> (<code>wifi=SSID</code> for an open one), then install its settings. This Pi needs that network too: ${t.kind === 'pizero' ? 'an original Pi Zero has no Wi-Fi, so a Zero W or a USB Wi-Fi or Ethernet adapter' : 'its Wi-Fi'}, set up as usual (nmcli device wifi connect …).`)));
+  else out.push(instStep(1, 'Wire it to the flight controller',
     gpioLink ? instPara(core ? `To <b>${core.name}</b> (${BOARD_KINDS[core.kind].label}), on its UART0 pins. Both sides are 3.3 V: no level shifter.` : 'To the flight controller’s UART0 pins.') : instPara(`Connect the flight controller to the Pi with a USB serial cable. The saved link is <code>${v('link')}</code>; this connection uses no Pi GPIO.`),
     ...(gpioLink ? [el('table', { class: 'inst-files' }, el('tbody', {},
       el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX0)` })),
@@ -586,6 +610,7 @@ function piGuide(t, K) {
       el('tr', {}, el('td', { text: 'Pi pin 6 (GND)' }), el('td', { text: '—' }), el('td', { text: 'ESP32 GND' })))),
       instPara('These are also connected to the ESP32’s USB serial adapter: unplug that USB cable while the Pi is wired here. A USB serial connection instead can be selected in the Computers board and device details.', 'hint')] : [])));
   cmds.serial = cmdBox('', 'the interface setup commands');
+  const mosq = mqttLink && mqttBus.mqttBroker === 'here' ? '\nsudo apt install -y mosquitto\nprintf "listener %s\\nallow_anonymous true\\n" ' + mqttBus.mqttPort + ' | sudo tee /etc/mosquitto/conf.d/liftlab.conf    # on the network, no login: a closed drone network only\nsudo systemctl restart mosquitto' : '';
   out.push(instStep(2, 'Prepare its interfaces', instPara(gpioSerial ? 'Free the Pi GPIO UART from the login console and Bluetooth, grant GPIO/serial access, then restart.' : 'Grant GPIO/USB serial access, then restart. The saved USB connections do not need the Pi GPIO UART.'), cmds.serial));
   cmds.copy = cmdBox('', 'the copy command'); cmds.clone = cmdBox('', 'the clone command');
   out.push(instStep(3, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder (where <code>index.html</code> is):'), cmds.copy,
@@ -624,6 +649,7 @@ function piGuide(t, K) {
       ...(pwmCargo ? [
         ...(!gpioSerial ? ['CFG=/boot/firmware/config.txt; [ -f $CFG ] || CFG=/boot/config.txt'] : []),
         'grep -q "^dtoverlay=pwm-2chan" $CFG || echo "dtoverlay=pwm-2chan" | sudo tee -a $CFG    # hardware PWM for the latches (GPIO 18, 19)'] : []),
+      ...(mosq ? [mosq.slice(1)] : []),
       'sudo usermod -aG dialout,gpio $USER',
       'sudo reboot'].join('\n');
     cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;

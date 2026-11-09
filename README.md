@@ -112,7 +112,7 @@ Long tabs have a compact previous/current/next section row. Click the current se
 - **Default:** the ESP32 runs the flight core and the radio; the Pi Zero runs the navigation, the learning and the supervisor. Take any of the Pi's tasks off to fly without it.
 - **Programs:** each board loads a program with the formulas of its tasks only. The ESP32's is small (about 14 KB of steps); the Pi's, with the throw's fit, about 170 KB.
 - **Wiring:** the IMU, compass and barometer (the GY-87 is all three) go to the flight core's board; the GPS and the flow camera to the board that navigates; the health sensors (motor temperatures, ESC telemetry, the battery's voltage, current and temperature) to the supervisor's board; the ExpressLRS receiver to the radio's board.
-- **Link:** a board talks to the flight controller over a serial link (921600 baud), 6 ms late each way. The flight core sends:
+- **Link:** a board talks to the flight controller over a serial link (921600 baud), 6 ms late each way, or through an MQTT broker over Wi-Fi (the link's Transport; see [hardware wiring](docs/hardware-wiring.md)), a few ms late with now and then a 10–40 ms burst. The flight core sends:
   - the navigation its attitude, rates, accelerometer and barometer height 100 times a second; the navigation answers with a guided command each time. If the commands stop, the flight core goes to its failsafe and lands;
   - the learning and the supervisor its telemetry 200 times a second (what each motor was told and what the IMU felt). The learning answers with test moves and the model to fly on; the supervisor with its settings, which also go to the navigation (to fly home or land) and the learning (to rescale what it learned). Tasks on the same board pass these directly.
 - **Load:** board details show task rates, roughly how much of a core they take and, on a microcontroller, how much memory the flight program needs. High estimated loads appear in red.
@@ -408,8 +408,10 @@ A design is the airframe: frame mass, every part, the steering mode, its flight 
 - **Forces:** thrust, weight, wind.
 - **Torque:** rotor torque, net torque, wanted torque. All off by default; **Q** turns rotor and net torque on and off together.
 - **Airframe:** prop spin, servo range, centre of mass, sensor beams, airflow.
-- **Flight:** trail, estimate, target.
+- **Flight:** trail, estimate, target, onboard camera.
 - **Scene:** ground grid, readouts, legend.
+
+**Onboard camera.** Any rigid mass can carry a camera: in its part card, **It carries a camera** sets its field of view, picture size, frame rate and where it looks (along the part's forward axis, tilted up or down and panned). The selected drone's camera picture shows top right of the view, at the camera's own resolution and frame rate in simulated time, without the force arrows and markers. **⇄** steps through the drone's cameras, **×** (or Show → Onboard camera) hides it. Lens distortion, exposure, motion blur, compression and the video link's delay are not simulated.
 
 Presets switch everything back to the defaults, everything on, or just the drone. The button counts how many switches differ from the defaults, the legend lists only what's shown, and your choice is kept in this browser.
 
@@ -453,6 +455,7 @@ Each sensor can be marked as known or unknown to the controller. When it's unkno
 
 The camera sees the ground slide by at flow ≈ ω − v/d: rotation makes the image move even when the drone doesn't, and the same speed gives less flow from higher up. `flowVelocity` removes the rotation with the gyro and multiplies by the rangefinder distance to get velocity over the ground. The estimator fuses that velocity, and uses the rangefinder for height (over flat ground) in place of the barometer.
 
+- The **Toy-drone rebuild (1S, ESP32 + Pi Zero, video board)** layout is a folding 1S toy airframe (from an AirVolt A13) with an ESP32 flight controller and a Pi Zero on a perfboard, a GY-87 (IMU, compass, barometer), the toy's brushless motors (fixed brushless physical models, about 0.9 N each at 3.8 V), a 1S 1800 mAh pack, its arm ESCs (the flight board's ESC configuration: 490 Hz, a 550 µs stop pulse, 1070–1940 µs) and its two-camera Wi-Fi video board (front and down cameras, 640×352). Masses, positions, prop size and motor constants are estimates from photos and listings: weigh and measure the real parts and edit them. With no position sensor it holds height on the barometer and drifts slowly sideways; add an optical-flow sensor or a position fix to hold position.
 - The **Indoor quad (optical flow, no GPS)** preset is a quad with an IMU, compass, barometer and a flow sensor, and no position fix.
 - **Target & environment** has *Ground texture* and *Light* sliders. Over water, in the dark, or above the rangefinder's range, flow drops out and the drone drifts slowly on the accelerometer and drag alone.
 - The sensor looks along its own −Z. A flow sensor that is rotated but marked unknown to the controller reads velocity in the wrong direction, and the drone flies away, which is what happens on a real drone with a mis-set sensor orientation.

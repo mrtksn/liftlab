@@ -16,7 +16,8 @@ static uint32_t motor_duty(int i,float t) {
     float max=oc.motor_max_pct[i]*0.01f;if(t>max)t=max;
     return (uint32_t)(t*1023.0f); /* 10 bits; never use the overflowing 2^resolution endpoint. */
   }
-  return (uint32_t)((oc.esc_min_us+t*(oc.esc_max_us-oc.esc_min_us))*oc.esc_hz*16384.0f/1e6f);
+  float us=t<=0 && oc.esc_stop_us>0?(float)oc.esc_stop_us:oc.esc_min_us+t*(oc.esc_max_us-oc.esc_min_us); /* stopped: the stop pulse, if the ESC has one */
+  return (uint32_t)(us*oc.esc_hz*16384.0f/1e6f);
 }
 static uint32_t servo_duty(float us) {return (uint32_t)(us*50*16384.0f/1e6f);}
 static void stop_outputs(void) {

@@ -6,12 +6,12 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 11
+#define HW_VERSION 12
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
   int8_t servo_pin[FC_MAX_JOINTS];
-  int16_t esc_hz, esc_min_us, esc_max_us;          /* standard PWM ESCs: 50–490 Hz, 1000–2000 µs */
+  int16_t esc_hz, esc_min_us, esc_max_us;          /* standard PWM ESCs: 50–490 Hz, 1000–2000 µs (stop pulse: esc_stop_us) */
   int16_t servo_center_us[FC_MAX_JOINTS];
   float servo_us_per_rad[FC_MAX_JOINTS];           /* negative: the servo turns the other way */
   int8_t sda, scl;
@@ -53,6 +53,16 @@ typedef struct {
   int8_t peer_channel;
   int8_t peer_pad[3];
   char fleet[32];
+  /* Appended in v12 (v11 blobs migrate with none): an ESC whose stop pulse lies below its running range
+   * (esc_us=MIN,MAX,STOP). At zero throttle the motors get STOP µs instead of MIN; 0: MIN, as standard ESCs want. */
+  int16_t esc_stop_us;
+  int16_t esc_pad;
+  /* Also v12: the companion link over MQTT beside the UART (link=mqtt,HOST[,PORT], link_topic=PREFIX; the network is
+   * wifi=SSID,PASSWORD): 0 the UART only. */
+  int8_t link_mqtt;
+  int8_t link_pad;
+  uint16_t link_port;
+  char link_host[48], link_prefix[48];
 } hw_config;
 
 void hw_defaults(hw_config *c);

@@ -11,6 +11,14 @@ let p=A.hardwarePlan(C,parts,C.boards[0]);assert.equal(p.errors.length,0);
 C.wiring={parts:{5:{board:1,driver:'mpu',address:0x68},6:{board:1,driver:'bmp180',address:0x77},7:{board:1,driver:'hmc',address:0x1e}},boards:{1:{sda:15,scl:16,driverCode:A.DRIVER_PRESETS['10dof'].code}}};
 p=A.hardwarePlan(C,parts,C.boards[0]);assert.equal(p.errors.length,0);assert.equal(p.warnings.length,0);
 const settings=A.hardwareSettings(p);assert.ok(settings.indexOf('esc_hz=50')<settings.indexOf('esc_us=1000,2000'));assert.ok(settings.indexOf('esc_us=1000,2000')<settings.indexOf('esc_hz=400'));assert.ok(settings.includes('i2c=15,16'));assert.ok(settings.includes('baro=2,119'));assert.ok(settings.includes('mag=1,30'));
+{const W=JSON.parse(JSON.stringify(C));vm.runInContext('this.esc={ESC_PRESETS,escPresetOf,escDutyPct}',ctx);const E=ctx.esc;
+  assert.equal(E.escPresetOf(A.hardwarePlan(W,parts,W.boards[0]).bus),'custom');   // (a design's old defaults: no preset)
+  const {label,note,...toy}=E.ESC_PRESETS.toyStop;void label;void note;W.wiring.boards[1]={...W.wiring.boards[1],...toy};
+  let q=A.hardwarePlan(W,parts,W.boards[0]);assert.equal(q.errors.length,0,q.errors.join());assert.equal(E.escPresetOf(q.bus),'toyStop');
+  assert.ok(A.hardwareSettings(q).includes('esc_us=1070,1940,550'));assert.ok(q.warnings.some(w=>w.includes('stop pulse needs')));
+  assert.ok(Math.abs(E.escDutyPct(550,490)-26.95)<1e-9);
+  for(const bad of [{escStop:1000},{escStop:200},{escStop:550.5},{escCellsMin:3,escCellsMax:2},{escCellsMax:15},{escMax:2000}]){W.wiring.boards[1]={...W.wiring.boards[1],...toy,...bad};assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/ESC/.test(e)),JSON.stringify(bad));}
+  W.wiring.boards[1]={...W.wiring.boards[1],...toy,escStop:0};assert.ok(A.hardwareSettings(A.hardwarePlan(W,parts,W.boards[0])).includes('esc_us=1070,1940'));}
 C.wiring.parts[1]={board:1,pin:15};assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('I2C')));
 C.wiring.parts[1]={board:1,pin:5};assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('more than once')));
 C.wiring.parts[1]={board:null};assert.ok(A.hardwarePlan(C,parts,C.boards[0]).errors.some(e=>e.includes('distributed')));
@@ -121,3 +129,25 @@ console.log('Wiring overview checks passed: saved pins, shared bus, mixed motor 
  assert.ok(!A.hardwareSettings(plan1,{kind:'wifi',channel:1,bind:'b',peers:1}).some(l=>/^peers=\d/.test(l)),'not beside Wi-Fi');
  assert.ok(!A.hardwareSettings(plan1,{kind:'elrs',peers:0}).some(l=>/^peers=\d|^fleet=/.test(l)),'peers off');}
 console.log('Radio settings checks passed: radio=, bind=, peers= and fleet= lines per link, on the radio\'s board and the command module; the radio card per link.');
+// The companion link over MQTT: the Pi's settings and network, the flight controller's Wi-Fi network, the lines it gets.
+{vm.runInContext('this.mq={boardLinks,hardwarePinClaims,linkMqtt,mqttLinkUrl}',ctx);const Q=ctx.mq;
+ const M={boards:[{id:1,kind:'esp32',name:'FC',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi',tasks:['nav','learn','super']}],wiring:{parts:{},boards:{}}};
+ const parts=[{id:1,type:'motor',name:'M1',pos:[0,0,0]},{id:5,type:'sensor',kind:'imu',name:'imu',pos:[0,0,0]}];
+ const errs=b=>A.hardwarePlan(M,parts,M.boards[b]).errors;
+ assert.ok(Q.hardwarePinClaims(M,parts,M.boards[1]).some(c=>c.key==='linkTx'),'serial: the Pi UART is claimed');
+ M.wiring.boards[2]={linkTransport:'mqtt'};
+ assert.ok(!Q.hardwarePinClaims(M,parts,M.boards[1]).some(c=>c.key==='linkTx'),'MQTT: the Pi UART is free');
+ assert.ok(errs(1).some(e=>e.includes('no network'))&&errs(1).some(e=>e.includes('broker\'s address')),'an original Pi Zero, no broker: refused');
+ assert.ok(errs(0).some(e=>e.includes('Wi-Fi network FC joins')),'the flight controller needs its network');
+ Object.assign(M.wiring.boards[2],{net:true,mqttHost:'192.168.1.100',mqttPrefix:'liftlab/a13'});M.wiring.boards[1]={wifiSsid:'KL-CAM'};
+ assert.equal(errs(1).length,0,errs(1).join());assert.equal(errs(0).length,0,errs(0).join());
+ const plan=A.hardwarePlan(M,parts,M.boards[0]),S=A.hardwareSettings(plan,{kind:'elrs',rate:250,ratio:4});
+ assert.ok(S.includes('link_topic=liftlab/a13')&&S.includes('link=mqtt,192.168.1.100,1883')&&S.indexOf('radio=elrs,250,4')<S.indexOf('link=mqtt,192.168.1.100,1883'),'link lines, after the radio');
+ assert.ok(plan.warnings.some(w=>w.includes('wifi=SSID,PASSWORD')),'says to set the password in the console');
+ assert.equal(Q.mqttLinkUrl(M,M.boards[1]),'mqtt://192.168.1.100/liftlab/a13');M.wiring.boards[2].mqttPort=1884;assert.equal(Q.mqttLinkUrl(M,M.boards[1]),'mqtt://192.168.1.100:1884/liftlab/a13');
+ const L=Q.boardLinks(M,parts)[0];assert.ok(L.transport==='mqtt'&&L.supported&&!L.wires.length&&L.ends[0].text.includes('KL-CAM'),'the link: no wires, its ends');
+ for(const bad of [{mqttHost:'bad host'},{mqttPort:0},{mqttPrefix:'/x'},{mqttPrefix:'a/#'},{mqttBroker:'moon'}]){const keep={...M.wiring.boards[2]};Object.assign(M.wiring.boards[2],bad);assert.ok(errs(1).some(e=>e.startsWith('MQTT link')),JSON.stringify(bad));M.wiring.boards[2]=keep;}
+ M.wiring.boards[1].wifiSsid='a,b';assert.ok(errs(0).some(e=>e.includes('Wi-Fi network')));M.wiring.boards[1].wifiSsid='KL-CAM';
+ M.boards[1].kind='pizero2';delete M.wiring.boards[2].net;assert.ok(!errs(1).some(e=>e.includes('no network')),'a Zero 2 W has Wi-Fi');
+ M.wiring.boards[2].linkTransport='serial';assert.ok(!A.hardwareSettings(A.hardwarePlan(M,parts,M.boards[0]),{kind:'elrs'}).some(l=>l.startsWith('link')),'serial: no link lines (older firmware)');}
+console.log('MQTT link wiring checks passed: the Pi UART freed, network and broker checks, the flight controller\'s Wi-Fi network, link= lines after the radio, URLs, the link card.');

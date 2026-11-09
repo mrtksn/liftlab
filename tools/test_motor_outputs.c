@@ -48,6 +48,7 @@ int main(void){
   old.version=2;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,link_baud)));assert(restored.link_baud==115200);
   old.version=9;old.radio_kind=RLINK_NRF24;old.radio_kbps=250;restored=config();restored.radio2_kind=-1;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio2_kind))&&restored.radio_kbps==250&&restored.radio2_kind==-1&&restored.version==HW_VERSION);old.radio_kind=0;
   old.version=10;old.radio2_kind=RLINK_NRF24;restored=config();restored.peer_channel=0;strcpy(restored.fleet,"liftlab");assert(lb_hw_restore(&restored,&old,offsetof(hw_config,peer_channel))&&restored.radio2_kind==RLINK_NRF24&&restored.peer_channel==0&&!strcmp(restored.fleet,"liftlab")&&restored.version==HW_VERSION);old.radio2_kind=0;
+  old.version=11;old.peer_channel=6;restored=config();restored.esc_stop_us=0;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,esc_stop_us))&&restored.peer_channel==6&&restored.esc_stop_us==0&&restored.version==HW_VERSION);old.peer_channel=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -74,5 +75,33 @@ int main(void){
   assert(!hw_set(&settings,"peers=off",log,sizeof log)&&!hw_peers(&settings)&&!hw_set(&settings,"radio2=none",log,sizeof log));
   char text[800];hw_describe(&settings,text,sizeof text);assert(strstr(text,"motor_driver=") && strstr(text,"motor_max=") && strstr(text,"brushed_hz=30000"));
   struct {char text[8];char canary[8];} small;memset(&small,42,sizeof small);hw_describe(&settings,small.text,sizeof small.text);assert(small.text[7]==0);for(int i=0;i<8;i++)assert(small.canary[i]==42);
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v10 migration, a second radio link, the other drones' settings.");
+  /* An ESC with a stop pulse under its running range: stopped gets the stop pulse, any throttle the range. */
+  {hw_config e;hw_defaults(&e);{const int mp[]={LB_MOTOR_PINS};char m[32];snprintf(m,sizeof m,"motors=%d,%d",mp[0],mp[1]);assert(!hw_set(&e,m,log,sizeof log));}assert(!hw_set(&e,"esc_hz=50",log,sizeof log));
+   assert(!hw_set(&e,"esc_us=1070,1940,550",log,sizeof log)&&e.esc_stop_us==550);assert(!hw_set(&e,"esc_hz=490",log,sizeof log));assert(!hw_check(&e,log,sizeof log));
+   {char d[1000];hw_describe(&e,d,sizeof d);assert(strstr(d,"esc_us=1070,1940,550"));}
+   assert(!hw_outputs_init(&e,log,sizeof log));
+   uint32_t stop=(uint32_t)(550.0f*490*16384.0f/1e6f),idle=(uint32_t)((1070+0.06f*870)*490*16384.0f/1e6f),full=(uint32_t)(1940.0f*490*16384.0f/1e6f);
+   assert(motor_actual(0)==stop&&motor_actual(1)==stop);   /* the first pulse is the stop pulse */
+   fc_out q={0};q.motor[0]=0.06f;q.motor[1]=1;hw_outputs_set(&q,2,0);assert(motor_actual(0)==idle&&motor_actual(1)==full);
+   q.motor[0]=NAN;q.motor[1]=-1;hw_outputs_set(&q,2,0);assert(motor_actual(0)==stop&&motor_actual(1)==stop);
+   q.motor[0]=1;q.motor[1]=1;hw_outputs_set(&q,2,0);hw_outputs_safe();assert(motor_actual(0)==stop&&motor_actual(1)==stop);
+   const char *nostop[]={"esc_us=1070,1940,1000","esc_us=1070,1940,200","esc_us=1070,1940,550.5","esc_us=1070,1940,550,1"};
+   for(unsigned i=0;i<4;i++){hw_config before=e;assert(hw_set(&e,nostop[i],log,sizeof log));assert(!memcmp(&e,&before,sizeof e));}
+   assert(!hw_set(&e,"esc_us=1070,1940",log,sizeof log)&&e.esc_stop_us==0);   /* two values clear it */
+   assert(!hw_outputs_init(&e,log,sizeof log));assert(motor_actual(0)==(uint32_t)(1070.0f*490*16384.0f/1e6f));
+   e.esc_stop_us=1000;assert(hw_check(&e,log,sizeof log));}
+  /* The companion link over MQTT: link=mqtt,HOST[,PORT], link_topic=PREFIX; it needs a network and the Wi-Fi to itself. */
+  {hw_config m;hw_defaults(&m);assert(!m.link_mqtt&&m.link_port==1883&&!strcmp(m.link_prefix,"liftlab"));
+   {hw_config before=m;assert(hw_set(&m,"link=mqtt,192.168.1.100",log,sizeof log)&&strstr(log,"wifi=SSID")&&!memcmp(&m,&before,sizeof m));}   /* no network yet: refused, said why */
+   assert(!hw_set(&m,"wifi=KL-CAM",log,sizeof log));                              /* (an open network: no password) */
+   assert(!hw_set(&m,"link=mqtt,192.168.1.100",log,sizeof log)&&m.link_mqtt&&m.link_port==1883&&!strcmp(m.link_host,"192.168.1.100")&&!hw_check(&m,log,sizeof log));
+   assert(!hw_set(&m,"link=mqtt,broker.local,1884",log,sizeof log)&&m.link_port==1884&&!strcmp(m.link_host,"broker.local"));
+   assert(!hw_set(&m,"link_topic=liftlab/a13",log,sizeof log)&&!strcmp(m.link_prefix,"liftlab/a13"));
+   {char d[1200];hw_describe(&m,d,sizeof d);assert(strstr(d,"link=mqtt,broker.local,1884 link_topic=liftlab/a13"));}
+   const char *nolink[]={"link=mqtt,","link=mqtt,bad host","link=mqtt,h,0","link=mqtt,h,70000","link=mqtt,h,12x","link=tcp,h","link_topic=","link_topic=/a","link_topic=a/","link_topic=a/#","link_topic=a b"};
+   for(unsigned i=0;i<sizeof nolink/sizeof *nolink;i++){hw_config before=m;assert(hw_set(&m,nolink[i],log,sizeof log));assert(!memcmp(&m,&before,sizeof m));}
+   {hw_config w=m;assert(hw_set(&w,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"link=mqtt"));w.radio_kind=RLINK_WIFI;assert(hw_check(&w,log,sizeof log)&&strstr(log,"link=mqtt"));}
+   {hw_config w=m;w.peer_channel=6;assert(hw_check(&w,log,sizeof log));}
+   assert(!hw_set(&m,"link=uart",log,sizeof log)&&!m.link_mqtt&&!hw_check(&m,log,sizeof log));}
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v11 migration, ESC stop pulses, the MQTT link settings, a second radio link, the other drones' settings.");
 }

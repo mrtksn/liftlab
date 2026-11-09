@@ -110,6 +110,8 @@ jobs:
       - run: python3 tools/sync_driver_presets.py --check
       - name: Sensor driver register tests
         run: |
+          cc -Wall -Wextra -Werror -fsanitize=undefined tools/test_accel_readout.c -lm -o /tmp/test-accel-readout
+          /tmp/test-accel-readout
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/fc -Irunner tools/test_sensor_drivers.c -lm -o /tmp/test-sensors
           /tmp/test-sensors
       - name: Packet radio and USB bridge tests
@@ -135,6 +137,15 @@ jobs:
           node tools/prog_test_data.js /tmp/prog
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner runner/fc/test_prog.c runner/fc/prog_core.c runner/fc/bus.c runner/rn_host.c runner/rn.c -lm -o /tmp/test-prog
           /tmp/test-prog /tmp/prog/prog.rnp
+      - name: MQTT client (the board link over a broker)
+        run: |
+          cc -Wall -Wextra -Werror -fsanitize=address,undefined -Irunner -Irunner/fc -Itools tools/test_mqtt_min.c runner/fc/mqtt_min.c runner/rn_link.c -o /tmp/test-mqtt
+          /tmp/test-mqtt
+      - if: runner.os == 'Linux'
+        name: Pi companion over MQTT, end to end
+        run: |
+          cc -O2 -Irunner -Irunner/fc -Itools tools/test_pi_mqtt_link.c runner/fc/nav_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c runner/fc/mqtt_min.c -lm -o /tmp/test-pi-mqtt
+          /tmp/test-pi-mqtt runner/pi/dfb_pi
       - name: ESC signal sniffer analysis
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/escsniff/main tools/test_escsniff.c runner/escsniff/main/sniff_core.c -lm -o /tmp/test-escsniff

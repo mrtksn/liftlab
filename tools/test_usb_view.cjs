@@ -28,6 +28,8 @@ const MOCK = () => {
     async setSignals() {}, async close() {},
   };
   usb.telem = (roll, pitch, yaw, h) => { const t = new Float32Array(36); t[2] = roll; t[3] = pitch; t[4] = yaw; t[8] = h; t[11] = 450; t[13] = 1 | 2 | 4; usb.ctrl.enqueue(frame(0x83, new Uint8Array(t.buffer))); };
+  usb.text = s => usb.ctrl.enqueue(new TextEncoder().encode(s));
+  usb.report = s => usb.ctrl.enqueue(frame(0x82, new TextEncoder().encode(s)));
   usb.port = port;
   const serial = Object.assign(new EventTarget(), { requestPort: async () => port });
   Object.defineProperty(navigator, 'serial', { value: serial, configurable: true });
@@ -50,6 +52,29 @@ const MOCK = () => {
     await page.waitForFunction(() => /same build/.test(document.querySelector('#instFw').textContent));
     assert.ok(await page.evaluate(() => __usb.lines.some(s => s.includes('version'))), 'it asks the board which build it runs');
     console.log('version: the board\'s build matches the page\'s firmware/manifest.json');
+    // A buffered board error flood must not starve UI timers or command replies.
+    const flood = await page.evaluate(async () => {
+      let beats = 0; const timer = setInterval(() => beats++, 1), start = performance.now();
+      const reply = INST.conn.waitFor(s => s === 'flood complete', 10000);
+      const chunk = Array.from({length: 64}, (_, i) => `I2C simulated failure ${i}\n`).join('');
+      for (let i = 0; i < 500; i++) __usb.text(chunk);
+      __usb.telem(12, 3, 4, 0); __usb.report('flood complete');
+      const result = await reply; clearInterval(timer);
+      return {result, beats, ms: performance.now() - start, records: INST.log.length};
+    });
+    assert.strictEqual(flood.result, 'flood complete', 'framed replies survive raw-log flooding');
+    assert.ok(flood.beats > 0, JSON.stringify(flood));
+    assert.ok(flood.records <= 400, JSON.stringify(flood));
+    await page.waitForFunction(() => document.querySelector('#instConsole').lastChild?.textContent.includes('flood complete'));
+    assert.ok(await page.evaluate(() => document.querySelector('#instConsole').childNodes.length <= 400));
+    await page.evaluate(() => __usb.text('x'.repeat(20000) + '\n'));
+    await page.waitForFunction(() => /line truncated/.test(document.querySelector('#instConsole').lastChild?.textContent || ''));
+    assert.ok(await page.evaluate(() => INST.log[INST.log.length - 1][0].length < 2100), 'unterminated/long noise lines are bounded');
+    // A dialog rebuilt before the delayed flush already replays history; do not append those lines twice.
+    await page.evaluate(() => { instLog('reopen flood marker'); openInstall(boardOf('core')); });
+    await page.waitForTimeout(150);
+    assert.strictEqual(await page.evaluate(() => [...document.querySelector('#instConsole').childNodes].filter(n => n.textContent === 'reopen flood marker\n').length), 1);
+    console.log('serial flood: 32,000 lines, UI timer progress, replies/telemetry, bounded history/lines and dialog rebuild passed', flood);
     // Another build, then firmware from before "version"
     const other = await page.evaluate(async () => { __usb.reply = 'firmware 1234567 esp32 flight'; INST.board = null; await instAskVersion(INST.conn); await new Promise(r => setTimeout(r, 100)); return document.querySelector('#instFw').textContent; });
     assert.match(other, /a different build/);

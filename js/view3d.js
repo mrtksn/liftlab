@@ -21,6 +21,7 @@ const LAYERS = [
   { key: 'trail', label: 'Trail', group: 'Flight', on: true, tip: 'The path flown' },
   { key: 'est', label: 'Estimate', group: 'Flight', on: true, tip: 'Where the flight software thinks the drone is' },
   { key: 'target', label: 'Target', group: 'Flight', on: true, tip: 'The position the drone is flying to' },
+  { key: 'onboard', label: 'Onboard camera', group: 'Flight', on: true, tip: 'What the selected drone\'s camera sees, in a corner of the view (a rigid mass marked as a camera, Airframe)' },
   { key: 'heading', label: 'Forward', group: 'Flight', on: true, tip: 'A level arrow beside the drone: the way the forward key (and stick) moves it' },
   { key: 'grid', label: 'Ground grid', group: 'Scene', on: true, tip: 'The grid on the ground' },
   { key: 'shadow', label: 'Shadow', group: 'Scene', on: true, tip: 'A shadow on whatever is under the drone, to judge its height' },

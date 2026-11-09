@@ -65,6 +65,40 @@ const PRESETS = {
     c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] }),
       mkMass('Wing', 0, 0, 0.06, { shape: 'box', size: [0.1, 0.8, 0.01], mass: 0.07, aero: 'wing', inc: 15 }));   // (chord clear of the props; 15° of incidence: a quad leans 10–15° nose down to cruise, and the wing should still lift)
     return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'tilt' }; } },
+  // A folding 1S toy-drone airframe (an AirVolt A13) rebuilt with an ESP32 flight controller and a Pi Zero on a
+  // perfboard, a GY-87 10DOF module, the toy's own brushless motors and arm ESCs, and its two-camera Wi-Fi video
+  // board. Everything here is a setting any design can change: the ESC signal (Computers → wiring → ESC
+  // configuration), the cameras (a rigid mass's camera option), each motor's physical model and the 1S pack.
+  // Estimates, not measurements: the masses, motor positions and prop size (from photos and seller listings of about
+  // 25 × 22 cm unfolded), and the motors' KV, resistance and current limit (sized for about 0.9 N each at 3.8 V).
+  // The ESC timing is from bench tests (tools/esc-control/README.md); the video stream from docs/a13-wifi-protocol.md.
+  toy1s: { label: 'Toy-drone rebuild (1S, ESP32 + Pi Zero, video board)', build() {
+    const motor = { tmax: 0.9, prop: 0.045, tau: 0.025, mass: 0.009, fm: 0.6, tmaxC: 100,
+      motorPhysics: { kind: 'brushless', kv: 7000, resistance: 0.2, currentLimit: 8, escEfficiency: 0.9, idleW: 0.05 }, propPhysics: { ct: 0.1 } };
+    const at = [['Front left', 0.08, 0.095, 0.012], ['Rear left', -0.08, 0.095, -0.004], ['Rear right', -0.08, -0.095, -0.004], ['Front right', 0.08, -0.095, 0.012]];   // (the rear arms fold out lower)
+    const c = at.map(([n, x, y, z], i) => mkMotor(n, x, y, z, { ...motor, motorPhysics: { ...motor.motorPhysics }, propPhysics: { ...motor.propPhysics }, spin: i % 2 ? -1 : 1 }));
+    const cam = o => ({ fov: 90, w: 640, h: 352, fps: 20, tilt: 0, pan: 0, ...o });   // MJPEG 640×352; frame rate and lens unmeasured
+    c.push(mkMass('Battery (1S 1800 mAh)', -0.005, 0, -0.02, { battery: true, mass: 0.038, size: [0.065, 0.034, 0.011] }),
+      mkMass('Landing feet', 0, 0, -0.03, { mass: 0.006, size: [0.12, 0.15, 0.012] }),   // (inside the motors' footprint: it stands on these)
+      mkMass('Perfboard', 0, 0, 0.03, { mass: 0.015, size: [0.09, 0.07, 0.0016] }),
+      mkMass('ESP32 DevKit', 0, -0.018, 0.038, { mass: 0.01, size: [0.052, 0.028, 0.012] }),
+      mkMass('Pi Zero', 0, 0.02, 0.036, { mass: 0.009, size: [0.065, 0.03, 0.005], deviceW: 0.8 }),
+      mkMass('5 V boost converter', -0.04, 0, 0.034, { mass: 0.003, size: [0.022, 0.017, 0.006] }),
+      mkMass('Wiring and headers', 0, 0, 0.024, { mass: 0.006, size: [0.04, 0.04, 0.006] }),
+      mkMass('Video board (Wi-Fi)', 0.035, 0, 0, { mass: 0.006, size: [0.04, 0.03, 0.006], deviceW: 1 }),
+      mkMass('Front camera', 0.075, 0, -0.012, { mass: 0.002, size: [0.012, 0.012, 0.012], camera: cam({}) }),
+      mkMass('Down camera', 0.02, 0, -0.022, { mass: 0.002, size: [0.012, 0.012, 0.006], camera: cam({ tilt: -90 }) }),
+      mkMass('IR obstacle module (not wired)', 0.05, 0, 0.022, { mass: 0.003, size: [0.02, 0.012, 0.006] }));
+    const sn = [mkSensor('imu', 'GY-87 IMU', 0, 0, 0.025), mkSensor('mag', 'GY-87 compass', -0.005, 0, 0.025), mkSensor('baro', 'GY-87 barometer', 0.005, 0.004, 0.025)];
+    return { frame: 0.049, comps: c.concat(sn), mode: 'tilt',
+      battery: { ...defaultBattery(), cells: 1, capacity: 1.8, rInt: 0.05, escCut: 3.0, avionicsW: 0.6 } };   // (avionicsW: the ESP32 and sensors; the Pi and the video board add their own)
+  },
+  computers() {   // the default boards; the ESP32's ESC outputs set for the toy's arm ESCs, the GY-87 on its I²C bus
+    const C = defaultComputers(), core = C.boards.find(b => b.tasks.includes('core'));
+    C.wiring = { parts: {}, boards: { [core.id]: Object.fromEntries(ESC_FIELDS.map(f => [f, ESC_PRESETS.toyStop[f]])) } };
+    for (const [kind, driver, address] of [['imu', 'mpu', 0x68], ['baro', 'bmp180', 0x77], ['mag', 'hmc', 0x1e]]) { const s = sensorsOf(kind)[0]; if (s) C.wiring.parts[s.id] = { board: core.id, driver, address }; }
+    return C;
+  } },
   tiltquad: { label: 'Tilt-rotor quad (thrust vectoring)', build() {
     const r = 0.2; const c = [45, 135, 225, 315].flatMap((a, i) => mkServoMotor('T' + (i + 1), r3(r * cosd(a)), r3(r * sind(a)), 0.02, { hingeAz: a, range: 30, rate: 360 }, { spin: i % 2 ? -1 : 1, tmax: 6 }));
     c.push(mkMass('Battery', 0, 0, -0.035, { battery: true, mass: 0.18, size: [0.1, 0.04, 0.03] })); return { frame: 0.45, comps: c.concat(defaultSensors()), mode: 'level' }; } },
@@ -510,19 +544,35 @@ function dynamics(dt) {
   // (groundContact, turned to face that surface). Landing on something at more than 3 m/s is a crash;
   // bumping into a wall isn't, but the props may not survive it (below).
   const near = (terrain.boxes.length ? terrainNear(S.p, cReach + 0.2 + nrm(S.v) * 0.02) : []).concat(cargoSolids(S.p, cReach + 0.2 + nrm(S.v) * 0.02, null, typeof fleet !== 'undefined' && fleet.ready));   // cable balls use the shared dynamic collision solver
+  // The contact's damping (its force's share that depends on the point's speed) is applied explicitly, once a step:
+  // on a light, compact airframe it can be more than one step can take (it then reverses the point's motion every
+  // step and the airframe chatters on the ground, which the IMU feels). So each point's damping is capped at what
+  // stops its own motion in one step, shared among the points touching: m_eff·|v|/(n·dt), with m_eff the airframe's
+  // mass as that point feels it (its inertia about the centre of mass included). The springs and anything a step
+  // can resolve are as the groundContact formula says.
+  const touching = [];
   for (const pt of cPts) {
     if (pt.b >= N) continue;
     const P = posed(pt.b, pt.rest), pw = toWorld(P);
     if (pw[2] >= pt.r && !near.length) { pt.prev = pw; continue; }
     const hits = terrainContacts(pw, pt.r, near, pt.prev); pt.prev = pw; if (!hits.length) continue;
     const vel = velW(pt.b, P);
-    for (const h of hits) {
-      const n = h.n, t1 = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : unit(crs([0, 0, 1], n)), t2 = crs(n, t1);   // the surface's own axes: on the ground, x, y, z
-      const relative=sub(vel,h.velocity||[0,0,0]),vl = [dot(relative, t1), dot(relative, t2), dot(relative, n)];
-      if (n[2] > 0.7 && vl[2] < -3 && !S.crashed) crash(`Hit ${h.ground ? 'the ground' : 'the top of ' + h.what} at ${(-vl[2]).toFixed(1)} m/s.`);
-      const f = run('groundContact', h.depth, vl);
-      push(pt.b, m3v(RT, add(add(scl(t1, f[0]), scl(t2, f[1])), scl(n, f[2]))), P);
+    for (const h of hits) touching.push({ pt, P, vel, h });
+  }
+  for (const { pt, P, vel, h } of touching) {
+    const n = h.n, t1 = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : unit(crs([0, 0, 1], n)), t2 = crs(n, t1);   // the surface's own axes: on the ground, x, y, z
+    const relative=sub(vel,h.velocity||[0,0,0]),vl = [dot(relative, t1), dot(relative, t2), dot(relative, n)];
+    if (n[2] > 0.7 && vl[2] < -3 && !S.crashed) crash(`Hit ${h.ground ? 'the ground' : 'the top of ' + h.what} at ${(-vl[2]).toFixed(1)} m/s.`);
+    const f = run('groundContact', h.depth, vl), f0 = run('groundContact', h.depth, [0, 0, 0]);
+    const r = sub(P, cgF), axes = [t1, t2, n];
+    for (let i = 0; i < 3; i++) {
+      const d = f[i] - f0[i]; if (!d || !vl[i]) continue;
+      const u = m3v(RT, axes[i]), rxu = crs(r, u), meff = 1 / (1 / truth.m + dot(rxu, m3v(truth.Jinv, rxu)));
+      const cap = meff * Math.abs(vl[i]) / (touching.length * dt);
+      if (Math.abs(d) > cap) f[i] = f0[i] + Math.sign(d) * cap;
     }
+    f[2] = Math.max(0, f[2]);
+    push(pt.b, m3v(RT, add(add(scl(t1, f[0]), scl(t2, f[1])), scl(n, f[2]))), P);
   }
   propStrikes(rotors, toWorld, near);
   // Servos: each sees its command after its delay, drives toward it along its torque–speed line, and stops

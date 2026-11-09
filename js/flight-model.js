@@ -10,9 +10,12 @@ function flightAtmosphere() {
   }
   return flightAir;
 }
+// The pack voltage the motors' thrust ratings and the flight core's tables are for: 4 V a cell of the design's pack
+// (16 V for 4S, as before). The flight core gets it too (fc_vref; the boards' vref= setting).
+const designVref = () => 4 * clamp(Math.round(cfg.battery?.cells || 4), 1, 14);
 function flightMotor(c) {
   let mp = flightMotorCache.get(c);
-  if (!mp) { mp = FlightPhysics.motor(c); flightMotorCache.set(c, mp); }
+  if (!mp || mp.refVoltage !== designVref()) { mp = FlightPhysics.motor(c, designVref()); flightMotorCache.set(c, mp); }
   return mp;
 }
 function flightPrepare() {
@@ -28,7 +31,7 @@ function flightDuty(c) {
   const p = computers().wiring?.parts?.[c.id];
   return p?.driver === 'brushed' ? clamp((p.maxDuty ?? 100) / 100, 0, 1) : 1;
 }
-function flightAvailable(c, voltage = S.battV || 16) {
+function flightAvailable(c, voltage = S.battV || designVref()) {
   const mp = heatParams(c, flightMotor(c)), air = flightAtmosphere();
   if (isCollective(c)) {
     const load = collectiveLoad(c, mp, 1);
@@ -55,7 +58,7 @@ function flightApplyLimits(w, voltage, acts = actuators()) {
   let changed = false;
   for (let i = 0; i < acts.length; i++) {
     const c = acts[i], duty = flightDuty(c);
-    const eq = clamp(duty * (voltage > 1 ? voltage / 16 : 1), 0, 1);
+    const eq = clamp(duty * (voltage > 1 ? voltage / designVref() : 1), 0, 1);
     // learn_core currently exports -1 for curve overrides: the core retains its prior.
     const bend = curveHat(c), cap = believedThrust(eq, bend);
     source.nextCaps[i] = Math.min(source[8 + 3 * i], cap);

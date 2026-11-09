@@ -249,6 +249,18 @@ static uint8_t *read_file(const char *path, uint32_t *n) {
   *n = (uint32_t)fread(b, 1, sizeof bufs[0], f); fclose(f); return b;
 }
 #include "serial_tx.h"
+#include "mqtt_min.h"
+/* The link over MQTT (--link mqtt://HOST[:PORT][/PREFIX]): what comes on PREFIX/link/from-fc is gathered here each pass
+ * (with where each message starts, so a frame cut short by a reconnect isn't joined to the next), and frames go out on
+ * PREFIX/link/to-fc, one a message. */
+static mq_client link_mq; static char mq_to[112], mq_from[112];
+static uint8_t mq_txb[65536], mq_rx[65536]; static uint32_t mq_rx_n, mq_starts[64]; static int mq_nstart;
+static void mq_begin(void *c, uint32_t len) { (void)c; (void)len; if (mq_nstart < 64) mq_starts[mq_nstart++] = mq_rx_n; }
+static void mq_bytes(void *c, const uint8_t *b, int n) { (void)c; if (mq_rx_n + (uint32_t)n > sizeof mq_rx) n = (int)(sizeof mq_rx - mq_rx_n); memcpy(mq_rx + mq_rx_n, b, (size_t)n); mq_rx_n += (uint32_t)n; }
+static void mq_say(void *c, const char *s) { (void)c; printf("%s\n", s); fflush(stdout); }
+static int mq_send(const uint8_t *fr, uint32_t n) { return mq_publish(&link_mq, mq_to, fr, n, now_s()); }
+/* A frame made here, straight out (the guided commands): over MQTT as one message, or to the UART. */
+static void link_raw(int fd, const uint8_t *fr, uint32_t len) { if (link_publish) link_publish(fr, len); else if (write(fd, fr, len) < 0 && errno != EAGAIN) perror("link"); }
 
 /* One link's end here (radio_io.h), as set; dev: its port (a serial line, an ExpressLRS receiver). 0: it didn't
  * open (said why). said: what it is, for the start line. */
@@ -268,6 +280,7 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
 
 int main(int argc, char **argv) {
   const char *tuning_path = 0;
+  const char *mqtt_id = "liftlab-pi";
   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
   rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   double origin[2] = { 0, 0 }; int have_origin = 0;
@@ -275,7 +288,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
     if (i + 1 >= argc) break;
-    if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
+    if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--mqtt-id")) mqtt_id = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--nav") || !strcmp(argv[i], "--config")) cfg_path = argv[++i]; else if (!strcmp(argv[i], "--port")) port = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--tuning"))
@@ -290,7 +303,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
-    "              [--link /dev/serial0] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
+    "              [--link /dev/serial0 | --link mqtt://BROKER[:1883][/PREFIX] [--mqtt-id liftlab-pi]] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
     "              [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,CHANNEL|wifi,sta [--bind PHRASE] [--radio-port 14570]\n"
     "               | --radio serial,BAUD[,half] --radio-dev /dev/ttyAMA1 [--bind PHRASE]\n"
     "               | --radio nrf24,250|1000|2000 [--nrf-spi /dev/spidev0.0] [--nrf-ce 25] [--bind PHRASE]]\n"
@@ -343,7 +356,15 @@ int main(int argc, char **argv) {
       if (latch_hw_open(&LO[n], tok, 1, us_closed, us_open, err, sizeof err)) { fprintf(stderr, "latch %d: %s\n", n + 1, err); return 1; }
     cargo_init(&CG, n, (1u << n) - 1, 0); cg_drive = cargo_drive(&CG); cg_said = CG.nmsg;
   }
-  int link = open_serial(link_dev, baud); if (link < 0) return 1;
+  int link = -1;
+  if (!strncmp(link_dev, "mqtt://", 7)) {           /* the flight controller through an MQTT broker (Wi-Fi, Ethernet, a USB adapter) */
+    char host[64], prefix[64]; int mport;
+    if (mq_parse_url(link_dev, host, sizeof host, &mport, prefix, sizeof prefix)) { fprintf(stderr, "--link mqtt://HOST[:PORT][/PREFIX]: can't read %s\n", link_dev); return 2; }
+    mq_link_topics(prefix, mq_to, sizeof mq_to, mq_from, sizeof mq_from);
+    mq_init(&link_mq, host, mport, mqtt_id, mq_from, mq_txb, sizeof mq_txb);
+    link_mq.on_begin = mq_begin; link_mq.on_bytes = mq_bytes; link_mq.on_say = mq_say; link_publish = mq_send;
+    printf("link: MQTT broker %s:%d as %s; to the flight controller on %s, from it on %s\n", host, mport, mqtt_id, mq_to, mq_from);
+  } else { link = open_serial(link_dev, baud); if (link < 0) return 1; }
   static autotune_state AT;
   static autotune_worker AW;
   autotune_init(&AT, &N, &LS, &SS, tuning_send, &link);
@@ -410,7 +431,7 @@ int main(int argc, char **argv) {
   int in_fd = 0, nav_got = 0; float nav_v[16];
   static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
   for (;;) {
-    struct pollfd pf[5] = { { link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
+    struct pollfd pf[5] = { { link_publish ? link_mq.fd : link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
     flush_link(link);
@@ -505,8 +526,11 @@ int main(int argc, char **argv) {
       }
       if (k == 2) { in_n = (int)(buf + have - s); if (in_n >= (int)sizeof in - 1) in_n = 0; memmove(in, s, (size_t)in_n); }
     }
-    uint8_t rx[512]; ssize_t n = (pf[0].revents & POLLIN) ? read(link, rx, sizeof rx) : 0;
+    uint8_t rxs[512]; const uint8_t *rx = rxs; ssize_t n; int si = 0;
+    if (link_publish) { mq_rx_n = 0; mq_nstart = 0; mq_poll(&link_mq, t); rx = mq_rx; n = (ssize_t)mq_rx_n; }   /* (it connects, reads and pings) */
+    else n = (pf[0].revents & POLLIN) ? read(link, rxs, sizeof rxs) : 0;
     for (ssize_t i = 0; i < n; i++) {
+      while (si < mq_nstart && mq_starts[si] == (uint32_t)i) { if (L.state) rn_link_reset(&L); si++; }   /* (a message starts: no half frame before it) */
       int type = rn_link_feed(&L, rx[i]);
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
@@ -647,7 +671,7 @@ int main(int argc, char **argv) {
         else if (!(e > 0 && o.fly)) {
           float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
           uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
-          if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
+          link_raw(link, fr, len);
           last_send = t;
         }
       }
@@ -694,7 +718,7 @@ int main(int argc, char **argv) {
     if (t - last_send > 0.1 && t - last_nav > 0.1 && !flying && (fc_state_t > 0 || t - t_start > 2)) {
       float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };
       uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
-      if (write(link, fr, len) < 0 && errno != EAGAIN) perror("link");
+      link_raw(link, fr, len);
       last_send = t;
     }
     (void)last_fix_t;

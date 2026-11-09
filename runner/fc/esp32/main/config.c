@@ -28,7 +28,11 @@ void hw_defaults(hw_config *c) {
   c->radio_kbps = 1000;
   c->radio2_kind = -1; c->radio2_a = c->radio2_b = 0;
   c->peer_channel = 0; strcpy(c->fleet, RCFG_BIND_DEFAULT);
+  c->link_mqtt = 0; c->link_port = 1883; strcpy(c->link_prefix, "liftlab");
 }
+/* An MQTT broker's name or address, a topic prefix: what they may hold. */
+static int host_ok(const char *s) { if (!s[0]) return 0; for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '.' || *s == '-')) return 0; return 1; }
+static int prefix_ok(const char *s) { size_t n = strlen(s); if (!n || s[0] == '/' || s[n - 1] == '/') return 0; for (; *s; s++) if (*s <= ' ' || *s > '~' || *s == '+' || *s == '#') return 0; return 1; }
 int hw_peers(const hw_config *c) { return c->peer_channel; }
 int hw_outputs_wired(const hw_config *c) {
   int n = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) n += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) n += c->servo_pin[j] >= 0;
@@ -102,6 +106,11 @@ int hw_check(const hw_config *c, char *err, int errn) {
     if (!rcfg_terminated(c->bind, sizeof c->bind) || (c->bind[0] && rcfg_bind_parse(t, c->bind, err, errn)))   /* (empty: the default) */
       { snprintf(err, errn, "invalid binding phrase"); return -1; }
     if (!rcfg_terminated(c->wifi_ssid, sizeof c->wifi_ssid) || !rcfg_terminated(c->wifi_pass, sizeof c->wifi_pass) || (c->wifi_pass[0] && !c->wifi_ssid[0])) { snprintf(err, errn, "invalid Wi-Fi network"); return -1; }
+    if (c->link_mqtt) {   /* the MQTT link joins a network as a station: the links that set the Wi-Fi up themselves can't share it yet */
+      int k2 = c->radio2_kind;
+      if (!c->wifi_ssid[0]) { snprintf(err, errn, "link=mqtt joins a Wi-Fi network: set wifi=SSID,PASSWORD (the broker's network) first"); return -1; }
+      if (k == RLINK_WIFI || k == RLINK_ESPNOW || k2 == RLINK_WIFI || k2 == RLINK_ESPNOW || c->peer_channel) { snprintf(err, errn, "link=mqtt uses the Wi-Fi: not yet beside radio=wifi, radio=espnow or peers (use elrs, nrf24, serial or ble)"); return -1; }
+    }
     if (c->radio2_kind >= 0) {                                       /* a second link: valid, and possible beside the first */
       rlink_cfg L2; char why[120];
       if (hw_radio2(c, &L2)) { snprintf(err, errn, "invalid second radio link"); return -1; }
@@ -121,6 +130,8 @@ int hw_check(const hw_config *c, char *err, int errn) {
   }
   { char t[RCFG_BIND_N]; if (!rcfg_terminated(c->fleet, sizeof c->fleet) || (c->fleet[0] && rcfg_bind_parse(t, c->fleet, err, errn))) { snprintf(err, errn, "invalid fleet phrase"); return -1; } }
   if(c->esc_hz<50 || c->esc_hz>490 || c->esc_min_us<800 || c->esc_max_us>2200 || c->esc_max_us-c->esc_min_us<500) {snprintf(err,errn,"invalid ESC pulse timing");return -1;}
+  if(c->esc_stop_us && (c->esc_stop_us<300 || c->esc_stop_us>c->esc_min_us-100)) {snprintf(err,errn,"invalid ESC stop pulse");return -1;}
+  if(!rcfg_terminated(c->link_host,sizeof c->link_host) || !rcfg_terminated(c->link_prefix,sizeof c->link_prefix) || !prefix_ok(c->link_prefix) || (c->link_mqtt && (!host_ok(c->link_host) || !c->link_port))) {snprintf(err,errn,"invalid MQTT link");return -1;}
   if(c->brushed_hz<1000 || c->brushed_hz>30000) {snprintf(err,errn,"brushed_hz: 1000 to 30000 Hz");return -1;}
   for(int i=0;i<FC_MAX_MOTORS;i++)if(c->motor_driver[i]>1 || c->motor_max_pct[i]<1 || c->motor_max_pct[i]>100) {snprintf(err,errn,"invalid motor driver/duty ceiling");return -1;}
   int used[SOC_GPIO_PIN_COUNT] = { 0 };
@@ -169,6 +180,21 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     c->peer_channel = (int8_t)ch; return 0;
   }
   if (!strcmp(key, "wifi")) return rcfg_wifi_parse(c->wifi_ssid, c->wifi_pass, eq + 1, err, errn);   /* wifi=SSID,PASSWORD */
+  if (!strcmp(key, "link")) {                        /* the companion link: link=uart, or link=mqtt,HOST[,PORT] beside the UART */
+    const char *a = eq + 1;
+    if (!a[0] || !strcmp(a, "uart")) { c->link_mqtt = 0; return 0; }
+    if (strncmp(a, "mqtt,", 5)) { snprintf(err, errn, "link=uart, or link=mqtt,BROKER[,PORT]"); return -1; }
+    a += 5; const char *cm = strchr(a, ','); size_t hl = cm ? (size_t)(cm - a) : strlen(a); char h[48]; long port = 1883;
+    if (!hl || hl >= sizeof h) { snprintf(err, errn, "link=mqtt,BROKER[,PORT]: the broker's address or name"); return -1; }
+    memcpy(h, a, hl); h[hl] = 0;
+    if (cm) { char *end; port = strtol(cm + 1, &end, 10); if (*end || port < 1 || port > 65535) { snprintf(err, errn, "link=mqtt,BROKER,PORT: a port from 1 to 65535"); return -1; } }
+    if (!host_ok(h)) { snprintf(err, errn, "link=mqtt: %s isn't an address or a name", h); return -1; }
+    strcpy(c->link_host, h); c->link_port = (uint16_t)port; c->link_mqtt = 1; return 0;
+  }
+  if (!strcmp(key, "link_topic")) {                  /* the topics' prefix: PREFIX/link/to-fc and PREFIX/link/from-fc */
+    if (strlen(eq + 1) >= sizeof c->link_prefix || !prefix_ok(eq + 1)) { snprintf(err, errn, "link_topic=PREFIX: up to 47 characters, no spaces, + or #, no / at either end"); return -1; }
+    strcpy(c->link_prefix, eq + 1); return 0;
+  }
   n = parse_list(eq + 1, v, FC_MAX_MOTORS);
   for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
   if (n < 0) { snprintf(err, errn, "%s: not a list of numbers", key); return -1; }
@@ -195,8 +221,11 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     if (n != 1 || v[0] < 50 || v[0] > 490) { snprintf(err, errn, "esc_hz: 50 to 490 for standard PWM ESCs"); return -1; }
     c->esc_hz = (int16_t)v[0];
   } else if (!strcmp(key, "esc_us")) {
-    if (n != 2 || v[0] < 800 || v[1] > 2200 || v[1] - v[0] < 500) { snprintf(err, errn, "esc_us=min,max, e.g. 1000,2000"); return -1; }
-    c->esc_min_us = (int16_t)v[0]; c->esc_max_us = (int16_t)v[1];
+    /* A third value is a stop pulse below the running range (some toy-drone ESCs stop at ~550 µs and start
+     * near 1070 µs); two values clear it, so a standard ESC never gets a stop pulse left from before. */
+    if ((n != 2 && n != 3) || v[0] < 800 || v[1] > 2200 || v[1] - v[0] < 500) { snprintf(err, errn, "esc_us=min,max[,stop], e.g. 1000,2000"); return -1; }
+    if (n == 3 && v[2] != 0 && (v[2] != (int)v[2] || v[2] < 300 || v[2] > v[0] - 100)) { snprintf(err, errn, "esc_us stop: 0 (none) or 300 µs to 100 µs under the minimum"); return -1; }
+    c->esc_min_us = (int16_t)v[0]; c->esc_max_us = (int16_t)v[1]; c->esc_stop_us = n == 3 ? (int16_t)v[2] : 0;
   } else if (!strcmp(key, "servo_center")) {
     for (int i = 0; i < n && i < FC_MAX_JOINTS; i++) { if (v[i] < 800 || v[i] > 2200) { snprintf(err, errn, "servo_center: 800 to 2200 µs"); return -1; } c->servo_center_us[i] = (int16_t)v[i]; }
   } else if (!strcmp(key, "servo_us_per_rad")) {
@@ -244,8 +273,10 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" motor_max=");for(int i=0;i<FC_MAX_MOTORS && c->motor_pin[i]>=0;i++)APP("%s%u",i?",":"",c->motor_max_pct[i]);
   APP(" brushed_hz=%ld servos=",(long)c->brushed_hz);for(int i=0;i<FC_MAX_JOINTS && c->servo_pin[i]>=0;i++)APP("%s%d",i?",":"",c->servo_pin[i]);
   char rl[32]; rlink_cfg L; hw_radio(c,&L); rlink_describe(&L,rl,sizeof rl);
-  APP(" esc_hz=%d esc_us=%d,%d i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
-      c->esc_hz,c->esc_min_us,c->esc_max_us,c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
+  APP(" esc_hz=%d esc_us=%d,%d",c->esc_hz,c->esc_min_us,c->esc_max_us);if(c->esc_stop_us)APP(",%d",c->esc_stop_us);
+  if (c->link_mqtt) APP(" link=mqtt,%s,%u link_topic=%s", c->link_host, (unsigned)c->link_port, c->link_prefix); else APP(" link=uart link_topic=%s", c->link_prefix);
+  APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
+      c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }
   if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");
   /* the packet links' settings: the binding phrase and the password masked (show goes wherever the link goes) */

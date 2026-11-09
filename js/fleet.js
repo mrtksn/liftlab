@@ -187,7 +187,7 @@ function fleetScene() {
   try {
     for (const d of fleet.drones) {
       droneGraphicsSwitch(d);
-      withDrone(d,()=>{editMode = wasEditing && d===selected; updateScene(d===selected);});
+      withDrone(d,()=>{editMode = wasEditing && d===selected; updateScene(d===selected); if (d===selected) onboardCamCapture();});
     }
   } finally { editMode = wasEditing; droneGraphicsSwitch(selected || restoreVisual); }
   if (!selected) { updateCity(cam.target.toArray()); shadowMesh.visible=false; updateCamera(); }

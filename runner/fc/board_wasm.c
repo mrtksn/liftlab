@@ -104,6 +104,8 @@ EXPORT("fc_setup") int fc_setup(uint32_t blob_len) {
   fc_bus_attach(&F, &BUS);
   return 0;
 }
+/* The pack voltage the airframe's tables are for (the boards' vref= setting): after fc_setup. */
+EXPORT("fc_vref") void fc_vref(float v) { if (v >= 3 && v <= 60) F.vref = v; }
 static fleet_state FL;                    /* the fleet program, beside the navigation (fleet.h) */
 /* The navigation, with its config. */
 EXPORT("nav_setup") int nav_setup(uint32_t cfg_len) {

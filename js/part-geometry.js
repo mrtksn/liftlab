@@ -89,6 +89,7 @@ function validatePartGeometry(c) {
   const vec = a => Array.isArray(a) && a.length === 3 && a.every(v => Number.isFinite(v) && Math.abs(v) <= 5000);
   if (c.cog != null && !vec(c.cog)) throw new Error('Invalid center of mass');
   if (c.rotation != null && !vec(c.rotation)) throw new Error('Invalid object rotation');
+  if (c.camera != null && (typeof c.camera !== 'object' || Array.isArray(c.camera) || Object.values(c.camera).some(v => !Number.isFinite(v)))) throw new Error('Invalid camera settings');
   if (c.points != null) {
     if (!Array.isArray(c.points) || c.points.length > 1024) throw new Error('Invalid attachment points');
     const ids = new Set();

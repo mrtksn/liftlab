@@ -14,7 +14,7 @@ Open a motor’s **Physical model** section. Generic mode preserves the existing
 
 The electrical model uses `Ke = 60 / (2π KV)`, equivalent winding resistance, current limit and combined motor/prop inertia. Brushed mode adds brush voltage drop and mechanical friction. The existing editable motor formula remains the plant entry point. Semi-implicit damping keeps stiff, small-inertia inputs bounded at the normal 0.5 ms step. This is an averaged equivalent circuit, not a phase-resolved ESC or brush-commutation simulation. Prop inertia must be updated when a real replacement changes it.
 
-The controller’s reference rating stays at **16 V and 1.225 kg/m³**, matching its existing file/API convention. A fixed profile derives thrust at this reference point; actual RPM/current/thrust depend on pack voltage, density, temperature and airflow. Generic prop coefficients use Ct and figure of merit to estimate torque; changing the prop does not identify its pitch, blade shape or Reynolds dependence.
+The controller’s reference rating is the design's pack at **4 V a cell** (16 V for 4S, as before) and 1.225 kg/m³. Motor thrust ratings, the controller's thrust tables and voltage compensation, the exported airframe and the boards' `vref=` setting all use it, so a 1S or 6S design is rated at its own pack rather than at 16 V. A fixed profile derives thrust at this reference point; actual RPM/current/thrust depend on pack voltage, density, temperature and airflow. Generic prop coefficients use Ct and figure of merit to estimate torque; changing the prop does not identify its pitch, blade shape or Reynolds dependence.
 
 Static measured prop data accepts 2–64 CSV rows:
 
@@ -35,6 +35,10 @@ Battery mass parts retain their initial mass as an anchor at the design’s save
 Battery input includes duty-weighted motor winding current, ESC efficiency/idle draw, configured avionics power, extra per-part device draw, and servo mechanical work/load losses through the BEC. Latches draw additional power while moving. Defaults are generic estimates. Braking dissipates rotor energy; regeneration into the battery is not modeled. Avionics is a configured total, not a measured sum for the selected board types.
 
 Motor and battery temperatures use I²R and lumped heat capacity/conductance. Explicit thermal parameters override estimates. Generic motor cooling uses a fixed reference rise independent of the failure threshold; raising a failure threshold no longer changes cooling. Battery thermal mass follows its actual battery-part weight. Existing temperature effects, wear, supervisor sensors and failures remain active. ESC/servo temperatures and detailed convection are not modeled.
+
+## Ground contact
+
+Each contact point's spring and damping come from the editable `groundContact` formula. The damping (the part of its force that depends on the point's speed) is applied explicitly once a step. On a light, compact airframe it could exceed what one 0.5 ms step resolves, and the drone then chattered on the ground at the step rate, which the 1 kHz IMU aliased into a steady false tilt and acceleration. Each point's damping is therefore capped at what stops its own motion in one step, shared among the touching points: `m_eff·|v|/(n·dt)`, where `m_eff` is the airframe's mass as felt at that point, including its rotational inertia about the centre of mass. Springs, and any damping a step can resolve, are as the formula gives them. Heavier airframes' landings are essentially unchanged.
 
 ## Airflow, aerodynamic data and sensors
 

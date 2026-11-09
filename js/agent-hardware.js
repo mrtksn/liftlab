@@ -2,8 +2,8 @@
 // Design-only hardware tools. These never access serial, flash firmware or execute C.
 const AGENT_BOARD_REF={type:['integer','string'],description:'Board id from get_computers; "ground" for the command module. Unique board names also work.'};
 const AGENT_PART_FIELDS={board:{type:['integer','string','null'],description:'Existing board id, "auto" to follow its task, or null / "off" to disconnect.'},pin:{type:'integer'},driver:{type:'string'},address:{type:'integer'},maxDuty:{type:'integer'},center:{type:'number'},usPerRad:{type:'number'},bias:{type:'string'},scale:{type:'string'},port:{type:'string'}};
-const AGENT_BUS_FIELDS=Object.fromEntries(['sda','scl','brushedHz','escHz','escMin','escMax','batteryPin','crsfRx','crsfTx'].map(k=>[k,{type:'integer'}]));
-Object.assign(AGENT_BUS_FIELDS,{batteryDivider:{type:'number'},linkPort:{type:'string'},receiverPort:{type:'string'}});
+const AGENT_BUS_FIELDS=Object.fromEntries(['sda','scl','brushedHz','escHz','escMin','escMax','escStop','escCellsMin','escCellsMax','batteryPin','crsfRx','crsfTx'].map(k=>[k,{type:'integer'}]));
+Object.assign(AGENT_BUS_FIELDS,{batteryDivider:{type:'number'},linkPort:{type:'string'},receiverPort:{type:'string'},linkTransport:{type:'string',enum:['serial','mqtt']},mqttHost:{type:'string'},mqttPort:{type:'integer'},mqttPrefix:{type:'string'},mqttBroker:{type:'string',enum:['here','elsewhere']},net:{type:'boolean'},wifiSsid:{type:'string'}});
 const AGENT_GROUND_FIELDS=Object.fromEntries(['tx','arm','fly','roll','pitch','throttle','yaw','buzzer','led'].map(k=>[k,{type:'array',items:{type:'integer'}}]));
 const agentClone=x=>JSON.parse(JSON.stringify(x));
 function agentFields(value,fields,label){
@@ -86,7 +86,7 @@ function agentSetHardware(a){
   for(const change of a.boards||[]){
     agentFields(change,{id:{type:['integer','string']},fields:{type:'object'}},'board change');const b=agentHardwareBoard(change.id,C);
     if(b.id==='ground'||seen.has(b.id))throw new Error('Use ground for command-module wiring; board changes must be unique');seen.add(b.id);
-    const fields=ESP_PROFILES[b.kind]?Object.fromEntries(Object.entries(AGENT_BUS_FIELDS).filter(([k])=>!['linkPort','receiverPort'].includes(k))):Object.fromEntries(['sda','scl','linkPort','receiverPort'].map(k=>[k,AGENT_BUS_FIELDS[k]]));
+    const fields=ESP_PROFILES[b.kind]?Object.fromEntries(Object.entries(AGENT_BUS_FIELDS).filter(([k])=>!['linkPort','receiverPort','linkTransport','mqttHost','mqttPort','mqttPrefix','mqttBroker','net'].includes(k))):Object.fromEntries(['sda','scl','linkPort','receiverPort','linkTransport','mqttHost','mqttPort','mqttPrefix','mqttBroker','net'].map(k=>[k,AGENT_BUS_FIELDS[k]]));
     agentFields(change.fields,fields,b.name);
     for(const [k,v] of Object.entries(change.fields))if(['sda','scl','batteryPin','crsfRx','crsfTx'].includes(k)&&v<(['sda','scl'].includes(k)?0:-1))throw new Error(b.name+'.'+k+': invalid GPIO');
     C.wiring.boards[b.id]={...C.wiring.boards[b.id],...change.fields};

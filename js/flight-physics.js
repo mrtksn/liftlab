@@ -59,13 +59,15 @@ const FlightPhysics = (() => {
     const Omega = (lo + hi) / 2, result = load(Omega);
     return { Omega, T: result.T, Q: result.Q, i: Math.min(mp.iMax, Math.max(0, (volts - mp.Ke * Omega) / mp.R)) };
   }
-  function motor(c) {
+  // vref: the pack voltage a motor's thrust rating is for (the design's: 4 V a cell, so 16 V for 4S).
+  function motor(c, vref = 16) {
+    vref = bounded(vref, 3, 60, 16);
     const nominalThrust = Math.max(.0001, c.tmax || .0001);
     const diameter = 2 * (c.prop || 0.035 * Math.sqrt(nominalThrust)), fm = bounded(c.fm, .2, .95, .6);
     const Om = TAU * Math.sqrt(nominalThrust / (.10 * RHO * diameter ** 4));
     const kap = Math.sqrt(.10) * diameter / (TAU * fm * Math.sqrt(Math.PI / 2));
     const kT = nominalThrust / (Om * Om), kQ = kap * kT, Qm = kap * nominalThrust;
-    const genericKe = .8 * 16 / Om, genericR = .2 * 16 * genericKe / Qm;
+    const genericKe = .8 * vref / Om, genericR = .2 * vref * genericKe / Qm;
     const p = c.motorPhysics || {}, explicit = p.kind === 'brushless' || p.kind === 'brushed';
     const Ke = explicit ? 60 / (TAU * bounded(p.kv, 10, 20000, 60 / (TAU * genericKe))) : genericKe;
     const R = explicit ? bounded(p.resistance, .005, 20, genericR) : genericR;
@@ -73,7 +75,7 @@ const FlightPhysics = (() => {
       iMax: explicit ? bounded(p.currentLimit, .1, 500, 2 * Qm / genericKe) : 2 * Qm / genericKe,
       brushDrop: p.kind === 'brushed' ? bounded(p.brushDrop, 0, 3, .6) : 0,
       friction: explicit ? bounded(p.friction, 0, 1, 0) : 0,
-      refVoltage: 16, // portable controller's fixed reference voltage
+      refVoltage: vref, // the voltage the controller's tables are for (fc_core vref)
       escEfficiency: bounded(p.escEfficiency, .5, 1, .97), idleW: bounded(p.idleW, 0, 20, .1),
       radius: diameter / 2, maxRpm: bounded(p.maxRpm, 0, 200000, 0), table: null };
     const prop = c.propPhysics || {};
@@ -90,7 +92,7 @@ const FlightPhysics = (() => {
     if (explicit || mp.table) { mp.Om = rated.Omega; mp.ratedThrust = rated.T; }
     else mp.ratedThrust = c.tmax;
     mp.ratedQ = rated.Q; mp.ratedCurrent = rated.i;
-    mp.response = Array.from({length: 33}, (_, i) => equilibrium(mp, i / 32, 16, RHO).T);
+    mp.response = Array.from({length: 33}, (_, i) => equilibrium(mp, i / 32, vref, RHO).T);
     mp.thermal = { C: bounded(p.heatCapacity, .1, 10000, 500 * Math.max(.02, c.mass)),
       G: bounded(p.cooling, .001, 100, rated.i ** 2 * R / (1.25 * 95)), referenceLoss: rated.i ** 2 * R };
     return mp;
@@ -120,7 +122,7 @@ const FlightPhysics = (() => {
     return loss;
   }
   function commandThrust(mp, duty, voltage, rho = RHO) {
-    const x = Math.max(0, duty * voltage / 16) * 32;
+    const x = Math.max(0, duty * voltage / mp.refVoltage) * 32;
     if (x >= 32) return mp.response[32] * (x / 32) ** 2 * rho / RHO;
     const i = Math.floor(x), f = x - i;
     return (mp.response[i] + f * (mp.response[i + 1] - mp.response[i])) * rho / RHO;

@@ -8,6 +8,20 @@ const DEVICE_PROFILES = {
   flow: { sim: { label: 'Simulation only (no hardware driver)', id: -1, addresses: [] } },
 };
 for (const kind of ['imu','baro','mag']) DEVICE_PROFILES[kind].custom = {label:'Custom C driver (rebuild firmware)',id:3,addresses:Array.from({length:112},(_,i)=>i+8)};
+// ESC configurations: how a flight board's PWM ESCs want their signal. One configuration per flight board: its ESC
+// outputs share one timer (runner/fc/esp32/main/outputs.c). Pulse widths are in µs at escHz; escStop > 0 is a stop
+// pulse below the running range (sent at zero throttle instead of escMin), as some toy-drone ESCs want; escCellsMin/Max
+// is the pack the ESC takes (checked against the battery). A preset only fills these fields; any can be edited.
+const ESC_PRESETS = {
+  standard: { label: 'Standard PWM ESC · 400 Hz, 1000–2000 µs', escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 2, escCellsMax: 6 },
+  servo50: { label: 'Standard PWM ESC · 50 Hz servo rate', escHz: 50, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 2, escCellsMax: 6 },
+  toyStop: { label: 'Toy-drone arm ESC · 490 Hz with a stop pulse', escHz: 490, escMin: 1070, escMax: 1940, escStop: 550, escCellsMin: 1, escCellsMax: 1,
+    note: 'From bench notes on a salvaged toy-drone arm ESC (tools/esc-control): about 490 Hz, stopped at 550 µs, starting near 1070 µs. 1940 µs is the longest pulse that leaves 100 µs low at 490 Hz; the true full-speed pulse is unmeasured.' },
+};
+const ESC_FIELDS = ['escHz', 'escMin', 'escMax', 'escStop', 'escCellsMin', 'escCellsMax'];
+const escPresetOf = bus => Object.keys(ESC_PRESETS).find(k => ESC_FIELDS.every(f => ESC_PRESETS[k][f] === bus[f])) || 'custom';
+const escDutyPct = (us, hz) => us * hz / 1e4;   // high time as a share of the period [%]
+function escSummary(bus) { return bus.escHz + ' Hz · ' + (bus.escStop > 0 ? 'stop ' + bus.escStop + ' µs · ' : '') + bus.escMin + '–' + bus.escMax + ' µs'; }
 const PI_GPIO_PINS = [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27];
 function hardwareOwner(C, c) {
   const p = C.wiring && C.wiring.parts && C.wiring.parts[c.id];
@@ -41,26 +55,52 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
   const wired = b => comps.some(c => ['motor', 'joint', 'sensor', 'latch'].includes(c.type) && hardwareOwner(C, c) === b);   // (a board with only devices on it: a sensor board)
   return C.boards.filter(b => b !== core && (b.tasks.length || wired(b))).map(b => {
     const coreEsp = ESP_PROFILES[core.kind], link = coreEsp && coreEsp.link, bus = hardwareBus(C, b), pi = b.kind.startsWith('pi');
-    const port = bus.linkPort || '/dev/serial0', gpio = port === '/dev/serial0';
+    const port = bus.linkPort || '/dev/serial0', gpio = port === '/dev/serial0', mqtt = pi && bus.linkTransport === 'mqtt';
+    if (mqtt) {
+      const cs = hardwareBus(C, core), coreEnd = cs.wifiSsid ? 'Wi-Fi station on ' + cs.wifiSsid : 'Wi-Fi station (network not set)';
+      return { a: core, b, pi, port: mqttLinkUrl(C, b), transport: 'mqtt', broker: bus.mqttBroker, ends: [{ board: core, text: coreEnd + ' → broker ' + (bus.mqttHost || '?') + ':' + bus.mqttPort }, { board: b, text: (bus.mqttBroker === 'here' ? 'runs the broker (mosquitto)' : 'a client of the broker') + ' · ' + bus.mqttPrefix + '/link/…' }],
+        wires: [], baud: 0, carries: [...b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean)], supported: !!link && boardHasNet(C, b),
+        note: !link ? core.name + ' has no MQTT link support (not an ESP32).' : !boardHasNet(C, b) ? b.name + ' has no network: it can\'t reach the broker.' : '' };
+    }
     const ends = !pi ? null : [
       { board: core, text: link ? 'UART0 · GPIO ' + link[0] + ' (TX), GPIO ' + link[1] + ' (RX)' : 'no UART pins for this chip' },
       { board: b, text: gpio ? port + ' · GPIO 14 (TX), GPIO 15 (RX)' : port + ' · USB serial adapter (no Pi GPIO)' }];
     const wires = !pi || !link ? [] : gpio ? [core.name + ' GPIO ' + link[0] + ' (TX) → ' + b.name + ' GPIO 15 (RX)', b.name + ' GPIO 14 (TX) → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'GND ↔ GND']
       : [core.name + ' GPIO ' + link[0] + ' (TX) → adapter RX', 'adapter TX → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'adapter GND ↔ ' + core.name + ' GND', 'adapter USB → ' + b.name + ' (' + port + ')'];
-    return { a: core, b, pi, port, ends, wires, baud: 921600, carries: [...b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean), ...(wired(b) && comps.some(c => c.type === 'sensor' && hardwareOwner(C, c) === b) ? ['sensor readings: the topics of the sensors wired to it, as the other board asks for them'] : [])],
+    return { a: core, b, pi, port, transport: 'serial', ends, wires, baud: 921600, carries: [...b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean), ...(wired(b) && comps.some(c => c.type === 'sensor' && hardwareOwner(C, c) === b) ? ['sensor readings: the topics of the sensors wired to it, as the other board asks for them'] : [])],
       supported: pi && !!link, note: !pi ? 'A link between two microcontrollers is simulated; there is no wiring recipe for it yet.' : !link ? core.name + ' has no UART pins for the link.' : '' };
   });
 }
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
-  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, nrfPins:[-1,-1,-1,-1,-1], ...s };
+  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 1, escCellsMax: 8, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, nrfPins:[-1,-1,-1,-1,-1],
+    linkTransport: 'serial', mqttHost: '', mqttPort: 1883, mqttPrefix: 'liftlab', mqttBroker: 'here', net: b.kind !== 'pizero', wifiSsid: '', ...s };
+}
+// The link between a companion board and the flight controller: the serial line (UART wires or a USB adapter), or an
+// MQTT broker over a network (runner/fc/mqtt_min.h): one link frame a message on PREFIX/link/to-fc and
+// PREFIX/link/from-fc. The flight controller joins a Wi-Fi network as a station for it (its UART stays: USB). The broker
+// runs on the companion (mosquitto on the Pi: one Wi-Fi hop) or elsewhere on the network (a laptop, a router: two).
+const LINK_TRANSPORTS = { serial: 'Serial (UART wires or a USB adapter)', mqtt: 'MQTT broker over a network' };
+const linkMqtt = (C, b) => !ESP_PROFILES[b.kind] && hardwareBus(C, b).linkTransport === 'mqtt';
+const boardHasNet = (C, b) => !!ESP_PROFILES[b.kind] || !!hardwareBus(C, b).net;   // (an original Pi Zero has none: a Zero W, 2 W, or a USB adapter has)
+const mqttLinkUrl = (C, b) => { const s = hardwareBus(C, b); return 'mqtt://' + s.mqttHost + (s.mqttPort !== 1883 ? ':' + s.mqttPort : '') + '/' + s.mqttPrefix; };
+const mqttHostOk = s => typeof s === 'string' && /^[A-Za-z0-9.-]{1,47}$/.test(s);
+const mqttPrefixOk = s => typeof s === 'string' && s.length > 0 && s.length < 48 && !/^\/|\/$|[\s+#]|[^\x21-\x7e]/.test(s);
+function mqttLinkErrors(C, b) {   // the companion's end of an MQTT link: its settings and its network
+  const s = hardwareBus(C, b), e = [];
+  if (!boardHasNet(C, b)) e.push(b.name + ': no network for the MQTT link. The original Pi Zero has no Wi-Fi: use a Zero W or 2 W, or a USB Wi-Fi or Ethernet adapter, and mark it as having a network');
+  if (!mqttHostOk(s.mqttHost)) e.push('MQTT link: the broker\'s address or name (e.g. 192.168.1.100, or the Pi\'s own address when it runs the broker)');
+  if (!Number.isInteger(s.mqttPort) || s.mqttPort < 1 || s.mqttPort > 65535) e.push('MQTT link: a broker port from 1 to 65535');
+  if (!mqttPrefixOk(s.mqttPrefix)) e.push('MQTT link: a topic prefix of up to 47 characters, no spaces, + or #, no / at either end');
+  if (!['here', 'elsewhere'].includes(s.mqttBroker)) e.push('MQTT link: where the broker runs');
+  return e;
 }
 function hardwareInputPins(kind) { const p=ESP_PROFILES[kind];return !p?PI_GPIO_PINS:kind==='esp32'?[...p.pins,34,35,36,37,38,39]:p.pins; }
 function hardwarePinClaims(C,comps,b) {
   const bus=hardwareBus(C,b),claims=[];
   if(ESP_PROFILES[b.kind]) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'},{pin:bus.batteryPin,name:'Battery ADC',key:'battery'},{pin:bus.crsfRx,name:'Receiver RX',key:'rx'},{pin:bus.crsfTx,name:'Receiver TX',key:'tx'});
   else { if(comps.some(c=>c.type==='sensor' && ['imu','baro','mag'].includes(c.kind) && hardwareOwner(C,c)===b)) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'});
-    if(b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)) && (!bus.linkPort || bus.linkPort==='/dev/serial0')) claims.push({pin:14,name:'Flight-controller serial TX',key:'linkTx'},{pin:15,name:'Flight-controller serial RX',key:'linkRx'});
+    if(b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)) && bus.linkTransport!=='mqtt' && (!bus.linkPort || bus.linkPort==='/dev/serial0')) claims.push({pin:14,name:'Flight-controller serial TX',key:'linkTx'},{pin:15,name:'Flight-controller serial RX',key:'linkRx'});
     for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port==='/dev/serial0')claims.push({pin:14,name:c.name+' UART TX',key:'gpsTx'+c.id},{pin:15,name:c.name+' UART RX',key:'gpsRx'+c.id});}
     if(bus.receiverPort==='/dev/serial0')claims.push({pin:14,name:'Receiver UART TX',key:'rxTx'},{pin:15,name:'Receiver UART RX',key:'rxRx'});
   }
@@ -128,6 +168,10 @@ function hardwarePlan(C, comps, b) {
     }
     if(!Number.isInteger(bus.brushedHz)||bus.brushedHz<1000||bus.brushedHz>30000)errors.push('Brushed PWM frequency must be 1000–30000 Hz');
     if (!Number.isInteger(bus.escHz) || bus.escHz<50 || bus.escHz>490 || bus.escMin<800 || bus.escMax>2200 || bus.escMax-bus.escMin<500 || bus.escMax>1000000/bus.escHz-100) errors.push('Invalid ESC PWM frequency or pulse range');
+    if (bus.escStop!==0 && (!Number.isInteger(bus.escStop) || bus.escStop<300 || bus.escStop>bus.escMin-100)) errors.push('ESC stop pulse: 0 (none) or 300 µs to 100 µs under the minimum');
+    if (!Number.isInteger(bus.escCellsMin) || !Number.isInteger(bus.escCellsMax) || bus.escCellsMin<1 || bus.escCellsMax>14 || bus.escCellsMin>bus.escCellsMax) errors.push('ESC cells: whole numbers, 1–14S, minimum not above maximum');
+    else if (motorConfigs.some(m=>m.driver==='pwm') && typeof battCfg==='function') { const n=battCfg().cells; if (n<bus.escCellsMin || n>bus.escCellsMax) warnings.push('The battery is '+n+'S, but '+b.name+'’s ESC configuration takes '+(bus.escCellsMin===bus.escCellsMax?bus.escCellsMin+'S':bus.escCellsMin+'–'+bus.escCellsMax+'S')); }
+    if (bus.escStop>0) warnings.push(b.name+': the ESC stop pulse needs flight firmware newer than build 038dec0 (esc_us with three values)');
   }
   if(profile && !b.tasks.includes('core') && b.tasks.includes('tlm') && bus.crsfRx>=0)errors.push('Receiver: standalone ESP radio firmware is not implemented; use the flight-core ESP or a telemetry Pi');
   const used=new Map();for(const claim of hardwarePinClaims(C,comps,b)){if(used.has(claim.pin))errors.push('GPIO '+claim.pin+': '+used.get(claim.pin)+' and '+claim.name+' overlap');used.set(claim.pin,claim.name);}
@@ -138,13 +182,24 @@ function hardwarePlan(C, comps, b) {
     if(!['pwm','gpio'].includes(p.driver))errors.push(c.name+': unsupported latch driver');
   }
   const ports=new Map();
-  if(!profile && b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)))ports.set(bus.linkPort||'/dev/serial0','Flight-controller link');
+  if(!profile && bus.linkTransport==='mqtt' && b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t))) errors.push(...mqttLinkErrors(C,b));
+  if(profile && b.tasks.includes('core')) {   // the flight controller's end of the MQTT links
+    const mq=C.boards.filter(x=>x!==b && linkMqtt(C,x) && x.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)));
+    if(mq.length){
+      if(!bus.wifiSsid || bus.wifiSsid.length>32 || /[,\x00-\x1f]/.test(bus.wifiSsid)) errors.push('MQTT link: the Wi-Fi network '+b.name+' joins (its name; up to 32 characters, no commas)');
+      if(radioHas('wifi') || radioHas('espnow') || peerSettingLines(hardwareRadio()||{}).after.length) errors.push('MQTT link: '+b.name+'\'s Wi-Fi is the pilot\'s radio or the other drones\' link here; not yet both (use ExpressLRS, nRF24L01, a serial line or Bluetooth LE for the radio)');
+      if(new Set(mq.map(x=>hardwareBus(C,x).mqttPrefix)).size>1) errors.push('MQTT link: '+b.name+' takes one topic prefix: give the companions the same one');
+      warnings.push(b.name+': set its network once in its console, wifi=SSID,PASSWORD (or just wifi=SSID for an open one): LiftLab doesn\'t keep Wi-Fi passwords. The MQTT link needs flight firmware newer than build 038dec0.');
+    }
+  }
+  if(!profile && bus.linkTransport!=='mqtt' && b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)))ports.set(bus.linkPort||'/dev/serial0','Flight-controller link');
   if(!profile && b.tasks.includes('tlm')){const port=bus.receiverPort||'/dev/ttyUSB1';if(ports.has(port))errors.push('Receiver: '+port+' is already used by '+ports.get(port));ports.set(port,'Receiver');}
   for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id){const port=p.port||'/dev/ttyUSB0';if(ports.has(port))errors.push(c.name+': '+port+' is already used by '+ports.get(port));ports.set(port,c.name);}}
   for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port && !/^\/[A-Za-z0-9_./-]+$/.test(p.port))errors.push(c.name+': use a serial device path such as /dev/ttyUSB0');}
   if(bus.receiverPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.receiverPort))errors.push('Receiver: use a serial device path such as /dev/ttyUSB1');
   if(bus.linkPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.linkPort))errors.push('Flight-controller link: use a serial device path such as /dev/serial0');
-  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings,radioBoard:b.tasks.includes('tlm')};
+  const mqttCompanion=profile && b.tasks.includes('core') ? C.boards.find(x=>x!==b && linkMqtt(C,x) && x.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t))) : null;
+  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings:[...new Set(warnings)],radioBoard:b.tasks.includes('tlm'),mqtt:mqttCompanion?hardwareBus(C,mqttCompanion):null};
 }
 // The pilot's radio link as settings lines (runner/fc/radio_link.h rlink_parse; the packet links' binding phrase):
 // radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta | serial,BAUD[,half] | nrf24,KBPS, then bind=PHRASE
@@ -193,7 +248,8 @@ function radioWiringRow(b,bus,esp,r) {
 function hardwareSettings(plan, radio=hardwareRadio()) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
   const {bus,motors,servos,sensors,motorConfigs}=plan;
-  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax,'esc_hz='+bus.escHz];
+  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax+(bus.escStop>0?','+bus.escStop:''),'esc_hz='+bus.escHz];
+  if(typeof designVref==='function')lines.push('vref='+designVref());   // the pack voltage the exported airframe's tables are for
   lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
@@ -202,6 +258,7 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
   if(plan.radioBoard) { const P=peerSettingLines(radio); lines.push(...P.before, ...radioSettingLines(radio), ...P.after); }
+  if(plan.mqtt) lines.push('link_topic='+plan.mqtt.mqttPrefix,'link=mqtt,'+plan.mqtt.mqttHost+','+plan.mqtt.mqttPort);   // (after the radio: it may not be Wi-Fi with it)
   return lines;
 }
 // The same duty ceiling applies to simulated physical actuation and the native MOSFET adapter.
@@ -245,7 +302,7 @@ function hardwareOverview(C, comps) {
     const bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
     if(c.type==='motor'||c.type==='joint'||c.type==='latch'){
       row.connection=pin(p.pin)+' → '+(c.type==='motor'?(p.driver==='brushed'?'MOSFET gate':'ESC signal'):c.type==='joint'||p.driver==='pwm'?'servo signal':'latch driver');
-      row.note=c.type==='motor'?(p.driver==='brushed'?bus.brushedHz+' Hz duty PWM · limit '+(p.maxDuty??100)+'%':bus.escHz+' Hz · '+bus.escMin+'–'+bus.escMax+' µs'):c.type==='joint'||p.driver==='pwm'?'50 Hz PWM':'Digital · high = closed';
+      row.note=c.type==='motor'?(p.driver==='brushed'?bus.brushedHz+' Hz duty PWM · limit '+(p.maxDuty??100)+'%':escSummary(bus)):c.type==='joint'||p.driver==='pwm'?'50 Hz PWM':'Digital · high = closed';
       if(p.pin<0)row.note='Choose a GPIO';
       if(c.type==='latch'?!b.kind.startsWith('pi'):b.id!==core?.id)row.note+=' · Hardware assignment unsupported';
     }else if(['imu','baro','mag'].includes(c.kind)){

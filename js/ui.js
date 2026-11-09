@@ -43,6 +43,12 @@ const FD = {
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   cable: { label: 'Cable length', hmax: 10,  path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
   inc: { label: 'Incidence (leading edge up)', path: ['inc'], min: -20, max: 20, step: 0.5, u: '°', dp: 1 },
+  camFov: { label: 'Field of view (horizontal)', path: ['camera', 'fov'], min: 20, max: 170, step: 1, u: '°', dp: 0 },
+  camW: { label: 'Picture width', path: ['camera', 'w'], min: 64, max: 1920, step: 8, u: 'px', dp: 0 },
+  camH: { label: 'Picture height', path: ['camera', 'h'], min: 48, max: 1440, step: 8, u: 'px', dp: 0 },
+  camFps: { label: 'Frame rate', path: ['camera', 'fps'], min: 1, max: 120, step: 1, u: 'fps', dp: 0 },
+  camTilt: { label: 'Looks up or down (−90° straight down)', path: ['camera', 'tilt'], min: -90, max: 90, step: 5, u: '°', dp: 0 },
+  camPan: { label: 'Looks left or right (+ left)', path: ['camera', 'pan'], min: -180, max: 180, step: 5, u: '°', dp: 0 },
   wchord: { label: 'Chord (X)', path: ['size', 0], min: 0.03, max: 0.6, hmax: 1.5, step: 0.005, u: 'm', dp: 3 },
   wspan: { label: 'Span (Y)', path: ['size', 1], min: 0.1, max: 2, hmax: 4, step: 0.01, u: 'm', dp: 2 },
   wthick: { label: 'Thickness (Z)', path: ['size', 2], min: 0.003, max: 0.08, step: 0.001, u: 'm', dp: 3 },
@@ -100,7 +106,7 @@ function summary(c) {
   if (c.type === 'motor') return `${c.tmax.toFixed(1)} N · ${c.push ? 'pusher · ' : ''}${c.spin > 0 ? 'CCW' : 'CW'} · ${p}${c.health < 100 ? ' · ' + c.health + '%' : ''}`;
   if (c.type === 'joint') { const n = descendants(c).length; return `${swingTag(c)} · ${steerJoints().includes(c) ? 'steering ±' + c.range + '°' : 'set to ' + c.manual + '°'} · carries ${n} part${n === 1 ? '' : 's'} · ${p}`; }
   if (c.type === 'mass' && isWing(c)) return `${c.mass.toFixed(2)} kg wing · span ${c.size[1].toFixed(2)} m · chord ${c.size[0].toFixed(2)} m · ${(c.inc || 0).toFixed(1)}° · ${p}`;
-  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.model ? (PART_CATEGORIES[c.category] || 'Payload').toLowerCase() : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
+  if (c.type === 'mass') return `${c.mass.toFixed(2)} kg ${c.battery ? 'battery' : c.camera ? 'camera' : c.model ? (PART_CATEGORIES[c.category] || 'Payload').toLowerCase() : c.shape}${c.known ? '' : ' · unknown'} · ${p}`;
   if (c.type === 'latch') { const n = descendants(c).length; return `${c.closed ? 'closed' : 'open'} at take-off · holds ${n} part${n === 1 ? '' : 's'} · reach ${Math.round((c.reach ?? 0.08) * 100)} cm · ${p}`; }
   if (c.type === 'sensor') {
     const u = (c.known ? '' : ' · mount unknown'), g = Math.round(c.mass * 1000) + ' g · ';
@@ -151,7 +157,7 @@ function propInfo(c) {
   const p = el('p', { class: 'hint derived' });
   const put = () => {
     const w = Math.pow(c.tmax / 2, 1.5) / ((c.fm || 0.6) * Math.sqrt(2 * 1.225 * Math.PI * propR(c) ** 2));
-    setText(p, `At the 16 V reference: ${Math.round(propOmega(c) * 60 / (2 * Math.PI)).toLocaleString()} rpm · torque ratio κ ${kappaOf(c).toFixed(4)} m · ${Math.round(w)} W generic hover shaft-power estimate at half thrust${c.propPhysics?.rows ? ' (use imported torque for actual power)' : ''}`);
+    setText(p, `At the ${designVref()} V reference (the pack's ${cfg.battery?.cells || 4}S at 4 V a cell): ${Math.round(propOmega(c) * 60 / (2 * Math.PI)).toLocaleString()} rpm · torque ratio κ ${kappaOf(c).toFixed(4)} m · ${Math.round(w)} W generic hover shaft-power estimate at half thrust${c.propPhysics?.rows ? ' (use imported torque for actual power)' : ''}`);
   };
   put(); if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []); cardRefresh.get(c.id).push(put);
   return p;
@@ -232,6 +238,13 @@ function compBody(c) {
     }
     b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
       el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }));
+    {   // a camera on it: its picture shows in a corner of the view (onboard-cam.js)
+      const id = `f-${c.id}-camera`, i = UI.input({ type: 'checkbox', id }); i.checked = !!c.camera;
+      i.addEventListener('change', () => { if (i.checked) c.camera = { ...CAMERA_DEFAULTS }; else delete c.camera; edited(c, 'camera'); rerender(); });
+      b.append(el('label', { class: 'check', for: id }, i, 'It carries a camera: show its picture on the view'));
+      if (c.camera) b.append(slider(c, 'camFov'), el('div', { class: 'subgrid' }, slider(c, 'camW'), slider(c, 'camH'), slider(c, 'camFps')), slider(c, 'camTilt'), slider(c, 'camPan'),
+        el('p', { class: 'hint', text: 'It looks along the part\'s forward (+X) axis, turned by the angles above; the picture\'s top is the part\'s up. The view draws it at this resolution and frame rate (Show → Onboard camera; ⇄ switches between cameras). Lens distortion, exposure and the video link\'s delay are not simulated.' }));
+    }
   } else if (c.type === 'latch') {
     const held = descendants(c);
     b.append(el('p', { class: 'hint', text: held.length ? 'Holds: ' + held.map(x => x.name).join(', ') + '. Opened in flight, all of it falls away together.' : 'Nothing hangs from it yet: drag a part onto it (a mass, a cable payload, an arm, even a motor or the battery), or pick something up in flight.' }),
@@ -961,7 +974,7 @@ const SHOW_PRESETS = {
   Defaults: () => Object.fromEntries(LAYERS.map(L => [L.key, L.on])),
   All: () => Object.fromEntries(LAYERS.map(L => [L.key, true])),
   'Drone only': () => Object.fromEntries(LAYERS.map(L => [L.key, L.key === 'grid'])),
-  Phone: () => Object.fromEntries(LAYERS.map(L => [L.key, ['thrust', 'spin', 'target', 'heading', 'grid', 'shadow', 'trail', 'servo'].includes(L.key)])),   // a small screen: the drone and where it's going, no panels over it
+  Phone: () => Object.fromEntries(LAYERS.map(L => [L.key, ['thrust', 'spin', 'target', 'heading', 'grid', 'shadow', 'trail', 'servo', 'onboard'].includes(L.key)])),   // a small screen: the drone and where it's going, no panels over it
 };
 // The layout: Phone (a one-line header, the flight pads with Home and Poke, no Keys, a lean view) or Full. Auto picks Phone
 // while the view is taller than it is wide, or 640 px wide or less, and follows the window as it turns or is resized. What
@@ -1173,7 +1186,7 @@ function boot() {
     uiT += dt; if (uiT > 0.1) { uiT = 0; updateLive(); if (fleet.selected) { drawChart(); if (typeof renderHealth === 'function') renderHealth(); cargoBarSync(); cargoSecSync(); syncRtabAlerts(); syncFolds(); } }
     if (fleet.selected) renderLaunch();
     replayUi();
-    worldMotionFrame(dt);fleetScene(); renderer.render(scene, camera);
+    worldMotionFrame(dt);fleetScene(); renderer.render(scene, camera); onboardCamRender();
     flightPerf.record(rawDt, performance.now() - cpuStart, physicsMs, Math.max(0, fleet.time - simStart)); requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

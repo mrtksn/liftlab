@@ -235,7 +235,7 @@ function boardsStart() {
   if (typeof atStop === 'function') atStop('Flight reset; measure again before applying a recommendation.');
   if (brt.autotune) { brt.autotune.phase = 'stopped'; brt.autotune.attVerified = null; }
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
-  brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
+  brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.mqttRng = null; brt.mqttLast = {}; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
@@ -264,6 +264,7 @@ function boardsStart() {
     if (needAf && !af) { brt.err = 'Flight core: ' + afErr; brt.fcWhy = brt.err; return; }
     if (needAf) new Uint8Array(w.memory.buffer, w.blob_ptr(), af.length).set(af);
     if (b.tasks.includes('core') && w.fc_setup(af.length)) { brt.err = 'Flight core: ' + cstr(w, w.why_ptr()); brt.fcWhy = brt.err; return; }
+    if (b.tasks.includes('core') && w.fc_vref) w.fc_vref(designVref());   // (the tables are for the design's pack)
     if (b.tasks.includes('nav')) {
       const cb = navConfigBlob(); new Uint8Array(w.memory.buffer, w.ncfg_ptr(), cb.length).set(cb);
       if (w.nav_setup(cb.length)) { brt.err = 'Navigation: ' + cstr(w, w.nav_why_ptr()); return; }
@@ -452,7 +453,21 @@ function pilotCargoCmd(latch, action) {
 
 /* ───────── frames between the tasks ───────── */
 // Each goes over the serial link (LINK_DELAY) unless both tasks are on the same board.
-function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + (fromB && toB.id === fromB.id ? 0 : LINK_DELAY), from: fromB, to: toB, kind, data }); }
+function sendFrame(fromB, toB, kind, data) { if (toB) brt.q.push({ at: brt.t + linkDelay(fromB, toB), from: fromB, to: toB, kind, data }); }
+// How late a frame from one board reaches another: at once on the same board; LINK_DELAY over the serial link; through
+// an MQTT broker (the companion's link set to MQTT, hardware.js), each Wi-Fi hop's time with its jitter and, now and
+// then, a burst of retries (10–40 ms), plus the broker's turn; frames stay in order each way, as TCP keeps them. The
+// randomness is the world's radio seed's, so a flight replays the same.
+function linkDelay(fromB, toB) {
+  if (!fromB || !toB || fromB.id === toB.id) return 0;
+  const C = computers(), other = BOARD_KINDS[fromB.kind]?.mcu ? toB : fromB;   // (the companion's end holds the link's settings)
+  if (!linkMqtt(C, other)) return LINK_DELAY;
+  const R = brt.mqttRng || (brt.mqttRng = mulberry32(seedHash(worldSeeds.radio, 'mqtt-link'))), hops = hardwareBus(C, other).mqttBroker === 'here' ? 1 : 2;
+  let d = 0.0005;
+  for (let h = 0; h < hops; h++) d += 0.0015 - 0.0015 * Math.log(1 - 0.999 * R()) + (R() < 0.02 ? 0.01 + 0.03 * R() : 0);
+  const key = fromB.id + '>' + toB.id, last = (brt.mqttLast || (brt.mqttLast = {}))[key] || 0, at = Math.max(brt.t + d, last);
+  brt.mqttLast[key] = at; return at - brt.t;
+}
 function deliverFrames() {
   const coreB = boardOf('core'), navB = boardOf('nav'), learnB = boardOf('learn'), superB = boardOf('super');
   for (let k = 0; k < brt.q.length;) {
@@ -623,7 +638,7 @@ function boardsControl(dt) {
   if (navB && brt.t >= brt.nextTel) {
     brt.nextTel += 0.01;
     const tel = { q: est.q.slice(), w: est.w.slice(), acc: est.haveImu ? est.fAccel.slice() : [0, 0, 9.81], att: brt.out.attOk, alt: brt.out.alt, haveAlt: brt.out.haveAlt, ts: brt.t };
-    brt.toNav.push({ at: brt.t + (same ? 0 : LINK_DELAY), tel });
+    brt.toNav.push({ at: brt.t + linkDelay(coreB, navB), tel });
   }
   while (brt.toNav.length && brt.toNav[0].at <= brt.t + 1e-9) brt.tel = brt.toNav.shift().tel;
 
@@ -669,8 +684,8 @@ function boardsControl(dt) {
     if (S.steps % 400 === 0 || err) brt.navWhy = cstr(nav, nav.nav_why_ptr());
     // the command it sends the flight core (as dfb_pi.c does): arm, fly, the acceleration and heading
     const armNav = brt.navOut.landed ? 0 : tw ? (brt.navOut.radio.arm ? 1 : 0) : brt.pilot.arm;   // the supervisor landed it: it disarms
-    if (!err && T) fcSend({ arm: armNav, throttle: brt.navOut.fly ? 1 : 0, guided: 1, acc: brt.navOut.acc, heading: brt.navOut.heading }, same ? 0 : LINK_DELAY);
-    else if (!T) fcSend({ arm: 0, throttle: 0, guided: 1, acc: [0, 0, 0], heading: 0 }, same ? 0 : LINK_DELAY);   // announcing itself, disarmed
+    if (!err && T) fcSend({ arm: armNav, throttle: brt.navOut.fly ? 1 : 0, guided: 1, acc: brt.navOut.acc, heading: brt.navOut.heading }, linkDelay(navB, coreB));
+    else if (!T) fcSend({ arm: 0, throttle: 0, guided: 1, acc: [0, 0, 0], heading: 0 }, linkDelay(navB, coreB));   // announcing itself, disarmed
   }
   // Without navigation: the pilot's sticks, 50 times a second (a radio, or fly.py over USB).
   if (!navB && !tw && brt.t >= brt.nextStick) { brt.nextStick += 0.02; fcSend(stickCommand(), 0.002); }
@@ -735,7 +750,7 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     if (cgB && cgB.id !== tlmB.id && (!navB || cgB.id !== navB.id)) sendFrame(tlmB, cgB, 'rc', frOut(tw, tw.rc_pack(brt.t)));
     if (!navB && coreB && !tw.radio_stick(brt.t)) {                 // angle mode: the sticks, while the channels come
       const c = new Float32Array(tw.memory.buffer, tw.cmd_ptr(), 5);
-      fcSend({ arm: c[0], roll: c[1], pitch: c[2], yaw: c[3], throttle: c[4] }, coreB.id === tlmB.id ? 0 : LINK_DELAY);
+      fcSend({ arm: c[0], roll: c[1], pitch: c[2], yaw: c[3], throttle: c[4] }, linkDelay(tlmB, coreB));
     }
   }
 }

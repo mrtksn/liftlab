@@ -53,7 +53,7 @@ function flightPhysicsFields(c, onChanged) {
     select.value = mp.kind;
     select.addEventListener('change', () => { if (select.value === 'generic') { p.kind = 'generic'; delete prop.rows; } else { flightFixedMotor(c, select.value); p = c.motorPhysics; } changed(); flightRerenderParts(); });
     box.append(el('div', {class: 'field'}, el('label', {for: select.id, text: 'Motor model'}), select));
-    box.append(el('p', {class: 'hint', text: mp.kind === 'generic' ? 'KV, resistance and inertia are estimated from thrust and prop size. Select a fixed motor to keep its electrical traits when changing props.' : 'Max thrust is derived at 16 V and 1.225 kg/m³. Changing the prop changes load on this motor. Initial values are estimates; enter measured motor specifications. Reset to load the new controller description.'}));
+    box.append(el('p', {class: 'hint', text: mp.kind === 'generic' ? 'KV, resistance and inertia are estimated from thrust and prop size. Select a fixed motor to keep its electrical traits when changing props.' : 'Max thrust is derived at the design\'s reference voltage (4 V a cell of its pack: 16 V for 4S) and 1.225 kg/m³. Changing the prop changes load on this motor. Initial values are estimates; enter measured motor specifications. Reset to load the new controller description.'}));
     if (mp.kind !== 'generic') box.append(
       num(p, 'kv', 'Motor KV', 10, 20000, 10, 'RPM/V', 60 / (2 * Math.PI * mp.Ke)),
       num(p, 'resistance', 'Equivalent winding resistance', .005, 20, .005, 'Ω', mp.R),

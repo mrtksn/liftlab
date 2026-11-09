@@ -330,7 +330,7 @@ function powerCards(C){
 // A link between two boards: which ends, how it's wired.
 function linkCard(L){
   return interactiveCard({'data-link':L.b.id,class:'computer-card assignment-card'+(L.supported?'':' empty'),'aria-label':L.a.name+' to '+L.b.name+' link'},()=>openComputerView({kind:'link',id:L.b.id}),
-    el('b',{text:L.a.name+' ↔ '+L.b.name}),el('div',{class:'assigned-board'},el('b',{text:!L.pi?'Simulated link':L.port==='/dev/serial0'?'Serial · UART wires':'Serial · USB adapter'}),el('span',{text:L.pi?L.baud+' baud · '+L.port:'no wiring recipe yet'})));
+    el('b',{text:L.a.name+' ↔ '+L.b.name}),el('div',{class:'assigned-board'},el('b',{text:!L.pi?'Simulated link':L.transport==='mqtt'?'MQTT · Wi-Fi':L.port==='/dev/serial0'?'Serial · UART wires':'Serial · USB adapter'}),el('span',{text:!L.pi?'no wiring recipe yet':L.transport==='mqtt'?L.port:L.baud+' baud · '+L.port})));
 }
 function deviceDescription(c){return c.type==='sensor'?(SENSOR_KINDS[c.kind]+' sensor: choose the board that receives its measurements.'):c.type==='joint'?'Servo: choose the board that controls its position.':c.type==='latch'?'Cargo latch: choose the board that opens and closes it.':'Motor: choose the board that sends its throttle signal.';}
 function openComputerView(view){
@@ -386,7 +386,7 @@ function renderComputerDetail(){
   }
   if(view.kind==='link'){
     const L=boardLinks(C).find(L=>L.b.id===view.id);if(!L){$('#computerDlg').close();return;}$('#computerDlgTitle').textContent=L.a.name+' ↔ '+L.b.name;
-    box.append(el('p',{text:L.b.name+' talks to '+L.a.name+', which runs the flight core, over a serial link at '+L.baud+' baud. Each frame is checked; if the flight core hears nothing for half a second it levels and lands by itself.'}));
+    box.append(el('p',{text:L.transport==='mqtt'?L.b.name+' talks to '+L.a.name+', which runs the flight core, through an MQTT broker ('+(L.broker==='here'?'on '+L.b.name+': one Wi-Fi hop':'elsewhere on the network: two Wi-Fi hops')+'), one link frame a message. The simulator delays each frame by the hops, with jitter and now and then a burst of retries; each frame is checked, and if the flight core hears nothing for half a second it levels and lands by itself.':L.b.name+' talks to '+L.a.name+', which runs the flight core, over a serial link at '+L.baud+' baud. Each frame is checked; if the flight core hears nothing for half a second it levels and lands by itself.'}));
     if(L.note)box.append(el('p',{class:'hint',text:L.note}));
     if(L.ends){const dl=el('dl',{class:'hw-wire-list'});for(const e of L.ends)dl.append(el('dt',{text:e.board.name}),el('dd',{},el('span',{text:e.text}),el('small',{text:BOARD_KINDS[e.board.kind].label})));box.append(el('h3',{text:'Ends'}),dl);}
     if(L.wires.length)box.append(el('h3',{text:'Wires'}),el('ul',{class:'link-wires'},...L.wires.map(w=>el('li',{text:w}))),el('p',{class:'hint',text:'TX goes to RX both ways. 3.3 V logic on both ends: no level shifter needed.'}));
