@@ -127,7 +127,7 @@ Object.assign(AGENT_TOOLS, {
     } },
   poke: { desc: 'Poke the drone: a random spin and shove, as the Poke button (strength 0..1: up to 12 rad/s and 3 m/s).', params: obj({ strength: { type: 'number' } }),
     run: a => { if (S.crashed) throw new Error('crashed: reset first'); const k = pokeHit(clamp(num(a.strength, 0.5), 0, 1)); return { spin_rad_s: rnd(k.spin, 1), shove_m_s: rnd(k.push, 1) }; } },
-  set_view: { desc: 'The 3D view: camera (top, front, right, back, left, bottom, iso), projection (persp, ortho), follow the drone, chase camera, and what it draws (layers: thrust, weight, wind, lift, drag, torque, rtorque, ntorque, want, spin, servo, cog, beam, air, trail, est, target, heading, grid, shadow, readouts, legend).',
+  set_view: { desc: 'The 3D view: camera (top, front, right, back, left, bottom, iso), projection (persp, ortho), follow the drone, chase camera, and what it draws (layers: thrust, weight, wind, lift, drag, torque, rtorque, ntorque, want, spin, servo, cog, beam, air, trail, est, target, heading, onboard (the onboard camera inset), grid, shadow, readouts, legend).',
     params: obj({ camera: { type: 'string', enum: ['top', 'front', 'right', 'back', 'left', 'bottom', 'iso'] }, projection: { type: 'string', enum: ['persp', 'ortho'] }, follow: { type: 'boolean' }, chase: { type: 'boolean' }, layers: { type: 'object' } }),
     run: a => {
       if (a.camera) snapView(a.camera); if (a.projection) setProjection(a.projection);

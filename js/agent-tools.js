@@ -11,7 +11,7 @@ const kindOf = c => c.type === 'sensor' ? c.kind : c.type === 'mass' && isWing(c
 const partBrief = c => ({ id: c.id, type: kindOf(c), name: c.name, on: parentOf(c) ? parentOf(c).id : 'frame', pos: c.pos.map(v => Math.round(v * 1000) / 1000), mass: c.mass,
   ...(c.type === 'motor' ? { max_thrust_N: c.tmax, spin: c.spin > 0 ? 'CCW' : 'CW', pusher: !!c.push, tilt: c.tilt || 0, az: c.az || 0, prop_m: propR(c) * 2 } : {}),
   ...(c.type === 'joint' ? { mode: c.mode, range: c.range, hinge_az: c.hingeAz, hinge_el: c.hingeEl } : {}),
-  ...(c.type === 'mass' ? { shape: c.shape, size: c.size, aero: c.aero, battery: c.battery || undefined } : {}), ...(c.type === 'sensor' ? { kind: c.kind } : {}) });
+  ...(c.type === 'mass' ? { shape: c.shape, size: c.size, aero: c.aero, battery: c.battery || undefined, camera: cameraSpec(c) || undefined } : {}), ...(c.type === 'sensor' ? { kind: c.kind } : {}) });
 function partOf(id) { const c = cfg.comps.find(x => x.id === +id || x.name === id); if (!c) throw new Error(`no part ${JSON.stringify(id)} (get_airframe lists them)`); return c; }
 
 // Run the simulation for a while, at its speed (or as fast as it goes), stopping early on a crash, a condition, or Stop.
@@ -70,12 +70,18 @@ const AGENT_TOOLS = {
     run: () => ({ frame_mass: cfg.frame.mass, frame_shape: frameShapeOf(), steering: mode, battery: battCfg(), parts: cfg.comps.map(partBrief),
       layouts: Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, p.label])) }) },
   get_part: { desc: 'Every field of one part (by id or name).', params: obj({ id: { type: ['integer', 'string'] } }, ['id']), run: a => partOf(a.id) },
-  set_part: { desc: 'Change fields of a part (any field get_part shows except id, type, parent; same kind of value). `pos` is [x,y,z] in body axes. Moving or turning a servo or rod carries what is on it.',
+  set_part: { desc: 'Change fields of a part (any field get_part shows except id, type, parent; same kind of value). `pos` is [x,y,z] in body axes. Moving or turning a servo or rod carries what is on it. A rigid mass can carry a camera: camera {fov (horizontal °, 20–170), w, h (px), fps, tilt (° up, −90 straight down), pan (° left)}, looking along the part\'s +X; the view shows its picture (Show → Onboard camera). Missing camera fields take their defaults; camera null removes it.',
     params: obj({ id: { type: ['integer', 'string'] }, fields: { type: 'object' } }, ['id', 'fields']),
     run: a => {
       const c = partOf(a.id), F = a.fields || {}, bad = [];
       for (const [k, v] of Object.entries(F)) {
         if (['id', 'type', 'parent'].includes(k)) { bad.push(`${k}: can't be set (attach_part moves a part)`); continue; }
+        if (k === 'camera') {   // (a camera on a rigid mass: added, changed or removed)
+          if (c.type !== 'mass') { bad.push('camera: only a rigid mass carries one'); continue; }
+          if (v === null || v === false) { delete c.camera; continue; }
+          if (!v || typeof v !== 'object' || Array.isArray(v) || Object.entries(v).some(([f, x]) => !(f in CAMERA_DEFAULTS) || typeof x !== 'number' || !isFinite(x))) { bad.push('camera: an object of numbers: fov, w, h, fps, tilt, pan (or null to remove)'); continue; }
+          c.camera = { ...CAMERA_DEFAULTS, ...(c.camera || {}), ...v }; c.camera = cameraSpec(c); continue;
+        }
         if (!(k in c)) { bad.push(`${k}: no such field`); continue; }
         const o = c[k];
         if (Array.isArray(o) ? !(Array.isArray(v) && v.length === o.length && v.every(x => typeof x === typeof o[0] && (typeof x !== 'number' || isFinite(x)))) : typeof v !== typeof o || (typeof v === 'number' && !isFinite(v))) { bad.push(`${k}: expected ${Array.isArray(o) ? 'an array of ' + o.length : typeof o}`); continue; }

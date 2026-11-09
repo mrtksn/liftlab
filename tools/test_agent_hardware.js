@@ -126,6 +126,20 @@ async function main(){
   const html=fs.readFileSync('index.html','utf8');assert.ok(html.indexOf('js/agent-tools.js')<html.indexOf('js/agent-hardware.js'));assert.ok(html.indexOf('js/agent-hardware.js')<html.indexOf('js/agent-ui.js'));
   const prompt=fs.readFileSync('js/agent.js','utf8');for(const name of ['get_hardware','set_hardware','get_install_settings','set_driver_code','get_wiring_overview'])assert.ok(prompt.includes(name));
   assert.ok(saves>0&&resets>0&&renders>0);assert.equal(vm.runInContext('brt.sig',ctx),null);assert.match(vm.runInContext('undoKey',ctx),/wiring|computers/);
+  // The ESC configuration and the MQTT link, through the agent's hardware tools.
+  reset();
+  assert.deepEqual(clone(run('get_hardware').esc_presets.toyStop),'Toy-drone arm ESC · 490 Hz with a stop pulse');
+  run('set_hardware',{boards:[{id:7,fields:{esc_preset:'toyStop'}}]});
+  let fc=run('get_hardware',{board:7});assert.equal(fc.esc.preset,'toyStop');assert.equal(fc.settings.escStop,550);assert.equal(fc.esc.stop_duty_pct,26.9);
+  run('set_hardware',{boards:[{id:7,fields:{esc_preset:'standard',escHz:300}}]});fc=run('get_hardware',{board:7});assert.equal(fc.esc.preset,'custom');assert.equal(fc.settings.escStop,0);assert.equal(fc.settings.escHz,300);
+  unchanged(()=>run('set_hardware',{boards:[{id:7,fields:{esc_preset:'nope'}}]}),/esc_preset/);
+  unchanged(()=>run('set_hardware',{boards:[{id:7,fields:{escStop:1200}}]}),/stop pulse/);
+  unchanged(()=>run('set_hardware',{boards:[{id:12,fields:{linkTransport:'mqtt',mqttHost:'10.0.0.2'}}]}),/no network|Wi-Fi network/);
+  run('set_hardware',{boards:[{id:12,fields:{linkTransport:'mqtt',mqttHost:'10.0.0.2',mqttPrefix:'liftlab/a13',net:true}},{id:7,fields:{wifiSsid:'drone-net'}}]});
+  const piHw=run('get_hardware',{board:12});assert.equal(piHw.link.url,'mqtt://10.0.0.2/liftlab/a13');assert.ok(!piHw.claims.some(c=>c.key==='linkTx'));
+  assert.ok(run('get_install_settings',{board:7}).settings.some(l=>l==='set link=mqtt,10.0.0.2,1883'));assert.equal(run('get_install_settings',{board:12}).link,'mqtt://10.0.0.2/liftlab/a13');
+  unchanged(()=>run('set_hardware',{boards:[{id:7,fields:{linkTransport:'mqtt'}}]}),/unknown field/);   // (a Pi's field, not the flight board's)
+  const agentPrompt=fs.readFileSync('js/agent.js','utf8');assert.ok(agentPrompt.includes('MQTT')&&agentPrompt.includes('stop pulse')&&agentPrompt.includes('camera'));
   console.log('Agent hardware support checks passed. No physical-board APIs are called by these tools.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
