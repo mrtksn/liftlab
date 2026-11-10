@@ -167,11 +167,13 @@ function hardwarePlan(C, comps, b) {
       if (def.id >= 0 && s.address) { if (seen.has(s.address)) errors.push('Two sensors use the same I²C address'); seen.add(s.address); }
     }
     if(!Number.isInteger(bus.brushedHz)||bus.brushedHz<1000||bus.brushedHz>30000)errors.push('Brushed PWM frequency must be 1000–30000 Hz');
-    if (!Number.isInteger(bus.escHz) || bus.escHz<50 || bus.escHz>490 || bus.escMin<800 || bus.escMax>2200 || bus.escMax-bus.escMin<500 || bus.escMax>1000000/bus.escHz-100) errors.push('Invalid ESC PWM frequency or pulse range');
+    if (!Number.isInteger(bus.escHz) || bus.escHz<50 || bus.escHz>490) errors.push('ESC signal frequency: a whole number, 50–490 Hz (it is '+bus.escHz+')');
+    else if (!Number.isFinite(bus.escMin) || !Number.isFinite(bus.escMax) || bus.escMin<800 || bus.escMax>2200) errors.push('ESC pulses: start pulse at least 800 µs, full-throttle pulse at most 2200 µs (they are '+bus.escMin+' and '+bus.escMax+')');
+    else if (bus.escMax-bus.escMin<500) errors.push('ESC pulses: full throttle needs to be at least 500 µs above the start pulse ('+bus.escMin+'→'+bus.escMax+' is '+(bus.escMax-bus.escMin)+' µs)');
+    else if (bus.escMax>1000000/bus.escHz-100) errors.push('ESC pulses: at '+bus.escHz+' Hz the period is '+Math.round(1e6/bus.escHz)+' µs, so the full-throttle pulse can be at most '+Math.floor(1000000/bus.escHz-100)+' µs (it is '+bus.escMax+'): lower the frequency or the pulse');
     if (bus.escStop!==0 && (!Number.isInteger(bus.escStop) || bus.escStop<300 || bus.escStop>bus.escMin-100)) errors.push('ESC stop pulse: 0 (none) or 300 µs to 100 µs under the minimum');
     if (!Number.isInteger(bus.escCellsMin) || !Number.isInteger(bus.escCellsMax) || bus.escCellsMin<1 || bus.escCellsMax>14 || bus.escCellsMin>bus.escCellsMax) errors.push('ESC cells: whole numbers, 1–14S, minimum not above maximum');
     else if (motorConfigs.some(m=>m.driver==='pwm') && typeof battCfg==='function') { const n=battCfg().cells; if (n<bus.escCellsMin || n>bus.escCellsMax) warnings.push('The battery is '+n+'S, but '+b.name+'’s ESC configuration takes '+(bus.escCellsMin===bus.escCellsMax?bus.escCellsMin+'S':bus.escCellsMin+'–'+bus.escCellsMax+'S')); }
-    if (bus.escStop>0) warnings.push(b.name+': the ESC stop pulse needs flight firmware newer than build 038dec0 (esc_us with three values)');
   }
   if(profile && !b.tasks.includes('core') && b.tasks.includes('tlm') && bus.crsfRx>=0)errors.push('Receiver: standalone ESP radio firmware is not implemented; use the flight-core ESP or a telemetry Pi');
   const used=new Map();for(const claim of hardwarePinClaims(C,comps,b)){if(used.has(claim.pin))errors.push('GPIO '+claim.pin+': '+used.get(claim.pin)+' and '+claim.name+' overlap');used.set(claim.pin,claim.name);}
@@ -189,7 +191,7 @@ function hardwarePlan(C, comps, b) {
       if(!bus.wifiSsid || bus.wifiSsid.length>32 || /[,\x00-\x1f]/.test(bus.wifiSsid)) errors.push('MQTT link: the Wi-Fi network '+b.name+' joins (its name; up to 32 characters, no commas)');
       if(radioHas('wifi') || radioHas('espnow') || peerSettingLines(hardwareRadio()||{}).after.length) errors.push('MQTT link: '+b.name+'\'s Wi-Fi is the pilot\'s radio or the other drones\' link here; not yet both (use ExpressLRS, nRF24L01, a serial line or Bluetooth LE for the radio)');
       if(new Set(mq.map(x=>hardwareBus(C,x).mqttPrefix)).size>1) errors.push('MQTT link: '+b.name+' takes one topic prefix: give the companions the same one');
-      warnings.push(b.name+': set its network once in its console, wifi=SSID,PASSWORD (or just wifi=SSID for an open one): LiftLab doesn\'t keep Wi-Fi passwords. The MQTT link needs flight firmware newer than build 038dec0.');
+      warnings.push(b.name+': set its network once in its console, wifi=SSID,PASSWORD (or just wifi=SSID for an open one): LiftLab doesn\'t keep Wi-Fi passwords.');
     }
   }
   if(!profile && bus.linkTransport!=='mqtt' && b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)))ports.set(bus.linkPort||'/dev/serial0','Flight-controller link');

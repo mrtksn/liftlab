@@ -15,7 +15,7 @@ const settings=A.hardwareSettings(p);assert.ok(settings.indexOf('esc_hz=50')<set
   assert.equal(E.escPresetOf(A.hardwarePlan(W,parts,W.boards[0]).bus),'custom');   // (a design's old defaults: no preset)
   const {label,note,...toy}=E.ESC_PRESETS.toyStop;void label;void note;W.wiring.boards[1]={...W.wiring.boards[1],...toy};
   let q=A.hardwarePlan(W,parts,W.boards[0]);assert.equal(q.errors.length,0,q.errors.join());assert.equal(E.escPresetOf(q.bus),'toyStop');
-  assert.ok(A.hardwareSettings(q).includes('esc_us=1070,1940,550'));assert.ok(q.warnings.some(w=>w.includes('stop pulse needs')));
+  assert.ok(A.hardwareSettings(q).includes('esc_us=1070,1940,550'));assert.equal(q.warnings.length,0,q.warnings.join());
   assert.ok(Math.abs(E.escDutyPct(550,490)-26.95)<1e-9);
   for(const bad of [{escStop:1000},{escStop:200},{escStop:550.5},{escCellsMin:3,escCellsMax:2},{escCellsMax:15},{escMax:2000}]){W.wiring.boards[1]={...W.wiring.boards[1],...toy,...bad};assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/ESC/.test(e)),JSON.stringify(bad));}
   W.wiring.boards[1]={...W.wiring.boards[1],...toy,escStop:0};assert.ok(A.hardwareSettings(A.hardwarePlan(W,parts,W.boards[0])).includes('esc_us=1070,1940'));}
