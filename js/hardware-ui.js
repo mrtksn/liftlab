@@ -31,9 +31,7 @@ function escConfigCard(C,b,editBoard){
 }
 function hardwareBoardCard(b,...args){const card=hardwareCard(...args);card.dataset.hwBoard=b.id;return card;}
 function renderWiringOverview(C){
-  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}));
-  if(typeof renderWiringDiagram==='function')section.append(el('h3',{text:'Diagram'}),renderWiringDiagram(C),el('h3',{text:'Connection list'}));
-  section.append(el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
+  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
   for(const g of [...data.groups.filter(g=>g.id==='ground'),...data.groups.filter(g=>g.id!=='ground'),...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
     const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
     for(const r of g.rows)list.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
