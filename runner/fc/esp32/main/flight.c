@@ -177,7 +177,7 @@ static void sensor_task(void *arg) {
     portENTER_CRITICAL(&imu_mux);
     imu_now = m; imu_us = us; imu_seq++; imu_ok = ok; if (nb) { baro_alt = a; baro_new = 1; }
     portEXIT_CRITICAL(&imu_mux);
-    xTaskNotifyGive(flight_h);
+    if (flight_h) xTaskNotifyGive(flight_h);
   }
 }
 
@@ -641,21 +641,32 @@ void app_main(void) {
   printf("control loop %d Hz on core %d; telemetry %d Hz; free heap %u bytes\n\n", HW.rate_hz, LB_FLIGHT_CPU, HW.telem_hz, (unsigned)esp_get_free_heap_size());
 
   printf("link: %ld baud from here on\n", (long)HW.link_baud); fflush(stdout); vTaskDelay(pdMS_TO_TICKS(20));
-  uart_driver_install(LINK, 8192, 8192, 0, NULL, 0);
+  /* The UARTs' buffers come from the same ~50 KB of heap as the tasks below: the Pi's own UART (link_uart=) takes the
+   * big ones (programs come that way); the USB port's then only carries settings, airframes and the console. */
+#if LB_LINK_UART >= 0
+  const int own = HW.link_tx >= 0;
+#else
+  const int own = 0;
+#endif
+  uart_driver_install(LINK, own ? 1024 : 8192, own ? 2048 : 8192, 0, NULL, 0);
   uart_set_baudrate(LINK, (uint32_t)HW.link_baud);
   uart_vfs_dev_use_driver(LINK);
 #if LB_LINK_UART >= 0
   if (HW.link_tx >= 0) {   /* the Pi on pins of its own */
     uart_config_t uc = { .baud_rate = HW.link_baud, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };
-    esp_err_t e = uart_driver_install(LB_LINK_UART, 8192, 8192, 0, NULL, 0);
+    esp_err_t e = uart_driver_install(LB_LINK_UART, 4096, 4096, 0, NULL, 0);
     if (e == ESP_OK) e = uart_param_config(LB_LINK_UART, &uc);
     if (e == ESP_OK) e = uart_set_pin(LB_LINK_UART, HW.link_tx, HW.link_rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     if (e == ESP_OK) { link2 = 1; printf("link: the Pi on GPIO %d (TX), GPIO %d (RX); the USB port keeps the console\n", HW.link_tx, HW.link_rx); }
     else printf("link_uart: %s; the Pi's link stays on the USB port's UART\n", esp_err_to_name(e));
   }
 #endif
-  xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU);
-  xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);
-  xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0);
-  xTaskCreatePinnedToCore(radio_task, "radio", 6144, NULL, 4, NULL, 0);
+  /* (a task that can't start for want of memory says so, rather than leave the others to crash on its absence) */
+  if (xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU) != pdPASS) {
+    printf("NO MEMORY FOR THE CONTROL LOOP: motors stay off (free heap %u bytes)\n", (unsigned)esp_get_free_heap_size()); return;
+  }
+  if (xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0) != pdPASS) printf("no memory for the sensor task\n");
+  if (xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0) != pdPASS) printf("no memory for the link task\n");
+  if (xTaskCreatePinnedToCore(radio_task, "radio", 6144, NULL, 4, NULL, 0) != pdPASS) printf("no memory for the radio task\n");
+  printf("tasks started; free heap %u bytes\n", (unsigned)esp_get_free_heap_size());
 }
