@@ -1283,3 +1283,10 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .pd-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
 .pd-col { width: 100%; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); resize: vertical; }
 .pd-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.hw-overview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hw-view-toggle { display: inline-flex; gap: 0; }
+.hw-view-toggle .btn { border-radius: 0; }
+.hw-view-toggle .btn:first-child { border-radius: 8px 0 0 8px; }
+.hw-view-toggle .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.hw-view-toggle .btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.hw-overview-view[hidden] { display: none; }

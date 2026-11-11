@@ -30,16 +30,26 @@ function escConfigCard(C,b,editBoard){
   card.dataset.hwBoard=b.id;return card;
 }
 function hardwareBoardCard(b,...args){const card=hardwareCard(...args);card.dataset.hwBoard=b.id;return card;}
+// The wiring overview: each board's drawing first (the pins as they sit on its headers, each labelled with what it goes
+// to); a toggle switches to the connection list. The choice lasts while the page is open.
 function renderWiringOverview(C){
-  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}));
-  if(typeof boardPinoutView==='function'){const bs=C.boards.filter(b=>boardModel(C,b));if(bs.length){section.append(el('p',{class:'hint',text:'Each board as you hold it, every pin in use labelled with what it goes to. A board\'s model and pinout are set (and editable) in its own dialog: Computers → the board.'}));for(const b of bs)section.append(boardPinoutView(C,b));section.append(pinoutLegend(),el('h3',{text:'Connection list'}));}}
-  section.append(el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the chip’s GPIO names; the drawings above show where they are on the headers. Changes below update this list.'}));
+  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'});
+  const bs=typeof boardPinoutView==='function'?C.boards.filter(b=>boardModel(C,b)):[];
+  const drawings=el('div',{class:'hw-overview-view'}),list=el('div',{class:'hw-overview-view'});
+  if(bs.length){drawings.append(el('p',{class:'hint',text:'Each board as you hold it, every pin in use labelled with what it goes to. A board\'s model and pinout are set (and editable) in its own dialog: Computers → the board → Board & pinout.'}));for(const b of bs)drawings.append(boardPinoutView(C,b));drawings.append(pinoutLegend());}
+  list.append(el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the chip’s GPIO names'+(bs.length?'; the drawings show where they are on the headers':'')+'.'}));
   for(const g of [...data.groups.filter(g=>g.id==='ground'),...data.groups.filter(g=>g.id!=='ground'),...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
-    const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
-    for(const r of g.rows)list.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
-    card.append(g.rows.length?list:el('p',{class:'hint',text:'No device connections assigned.'}));section.append(card);
+    const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),dl=el('dl',{class:'hw-wire-list'});
+    for(const r of g.rows)dl.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
+    card.append(g.rows.length?dl:el('p',{class:'hint',text:'No device connections assigned.'}));list.append(card);
   }
-  section.append(el('p',{class:'hint',text:'Power: connect each module to its specified supply and share signal GND. Motors take power through their ESC or MOSFET stage; servos need a suitable supply. Battery sensing uses a resistor divider. This list describes signal wiring; check module pinouts and the wiring checks below before installation.'}));
+  const head=el('div',{class:'hw-overview-head'},el('h3',{text:'Wiring overview'}));
+  if(bs.length){
+    const show=v=>{HW_UI.wiringView=v;drawings.hidden=v!=='drawings';list.hidden=v!=='list';btns.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===v)));};
+    const btns=[['drawings','Diagrams'],['list','List']].map(([v,t])=>UI.button({class:'btn sm','data-view':v,text:t,onclick:()=>show(v)}));
+    head.append(el('div',{class:'hw-view-toggle',role:'group','aria-label':'Show the wiring as'},...btns));section.append(head,drawings,list);show(HW_UI.wiringView==='list'?'list':'drawings');
+  }else section.append(head,list);
+  section.append(el('p',{class:'hint',text:'Power: connect each module to its specified supply and share signal GND. Motors take power through their ESC or MOSFET stage; servos need a suitable supply. Battery sensing uses a resistor divider. Check module pinouts and the wiring checks below before installation.'}));
   return section;
 }
 function renderHardware() {
