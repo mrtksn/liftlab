@@ -1290,3 +1290,7 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .hw-view-toggle .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
 .hw-view-toggle .btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .hw-overview-view[hidden] { display: none; }
+.pinout-diagram .pd-tab { fill: #b8bec6; stroke: #7d848d; }
+.pinout-diagram .pd-pin1 { fill: #f2d16b; stroke: #fff; stroke-width: 1.5; }
+.pinout-diagram .pd-rows { fill: var(--muted); font-size: 10px; }
+.pd-hold { margin: 0; padding: 6px 12px 10px; font-size: 12px; color: var(--ink-2); }

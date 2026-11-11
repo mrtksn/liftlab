@@ -5,22 +5,29 @@
 // design), and each board picks one (C.wiring.boards[id].model).
 //
 // A model: { label, kinds: chip kinds it fits, layout: 'sides' (two rows on the board's long edges, a DevKit) or
-// 'header' (one 2-row header, a Pi: odd pins in the first column), top: what the top of the drawing is, cols: two
+// 'header' (one 2-row header, a Pi: odd pins in the first column; pin 1 drawn square, as its pad is), top: what the
+// top of the drawing is, hold: how to hold the board to match the drawing, rows: the two columns' names, cols: two
 // columns, top to bottom, each pin a line: a label, '=GPIO' for a GPIO (D15=15, RX2=16), or a supply as it's
 // printed (3V3, 5V, VIN, GND, EN) }.
 const BUILTIN_BOARD_MODELS = {
   'esp32-devkit30': { label: 'ESP32 DevKit V1 (30 pins)', kinds: ['esp32'], layout: 'sides', top: 'USB end',
+    hold: 'Components facing you (the ESP32 module\'s metal can and the chips on top), the USB connector at the top.',
     cols: [['3V3','GND','D15=15','D2=2','D4=4','RX2=16','TX2=17','D5=5','D18=18','D19=19','D21=21','RX0=3','TX0=1','D22=22','D23=23'],
            ['VIN','GND','D13=13','D12=12','D14=14','D27=27','D26=26','D25=25','D33=33','D32=32','D35=35','D34=34','VN=39','VP=36','EN']] },
   'esp32-devkitc38': { label: 'ESP32-DevKitC (38 pins)', kinds: ['esp32'], layout: 'sides', top: 'USB end',
+    hold: 'Components facing you (the ESP32 module\'s metal can on top), the USB connector at the top.',
     cols: [['CLK=6','SD0=7','SD1=8','15=15','2=2','0=0','4=4','16=16','17=17','5=5','18=18','19=19','GND','21=21','RX=3','TX=1','22=22','23=23','GND'],
            ['5V','CMD=11','SD3=10','SD2=9','13=13','GND','12=12','14=14','27=27','26=26','25=25','33=33','32=32','35=35','34=34','SVN=39','SVP=36','EN','3V3']] },
   'esp32s3-devkitc1': { label: 'ESP32-S3-DevKitC-1 (44 pins)', kinds: ['s3'], layout: 'sides', top: 'antenna end (USB at the bottom)',
+    hold: 'Components facing you, the module\'s antenna end at the top and the two USB connectors at the bottom.',
     cols: [['3V3','3V3','RST','4=4','5=5','6=6','7=7','15=15','16=16','17=17','18=18','8=8','3=3','46=46','9=9','10=10','11=11','12=12','13=13','14=14','5V','GND'],
            ['GND','TX=43','RX=44','1=1','2=2','42=42','41=41','40=40','39=39','38=38','37=37','36=36','35=35','0=0','45=45','48=48','47=47','21=21','20=20','19=19','GND','GND']] },
   'esp32c3-supermini': { label: 'ESP32-C3 SuperMini (16 pins)', kinds: ['c3'], layout: 'sides', top: 'USB end',
+    hold: 'Components facing you (the chip and the BOOT/RESET buttons on top), the USB-C connector at the top.',
     cols: [['5V','GND','3V3','4=4','3=3','2=2','1=1','0=0'], ['5=5','6=6','7=7','8=8','9=9','10=10','RX=20','TX=21']] },
-  'pi-header40': { label: 'Raspberry Pi 40-pin header', kinds: ['pizero','pizero2','pi4'], layout: 'header', top: 'pin 1 end',
+  'pi-header40': { label: 'Raspberry Pi 40-pin header', kinds: ['pizero','pizero2','pi4'], layout: 'header', top: 'pin 1 end: the microSD card end on a Zero',
+    hold: 'Components facing you, the header on the right, the microSD card end up (a Pi 4: the end away from the USB ports). Pin 1 is the square pad; odd pins are on the inner row, even pins on the row along the board\'s edge.',
+    rows: ['odd · inner row', 'even · edge row'],
     cols: [['3V3','SDA=2','SCL=3','GPIO4=4','GND','GPIO17=17','GPIO27=27','GPIO22=22','3V3','MOSI=10','MISO=9','SCLK=11','GND','ID_SD=0','GPIO5=5','GPIO6=6','GPIO13=13','GPIO19=19','GPIO26=26','GND'],
            ['5V','5V','GND','TXD=14','RXD=15','GPIO18=18','GND','GPIO23=23','GPIO24=24','GND','GPIO25=25','CE0=8','CE1=7','ID_SC=1','GND','GPIO12=12','GND','GPIO16=16','GPIO20=20','GPIO21=21']] },
 };
@@ -45,7 +52,7 @@ function boardModelId(C, b) {
 function boardModel(C, b) {
   const id = boardModelId(C, b); if (!id) return null; const m = boardModels(C)[id];
   const cols = (m.cols || [[], []]).slice(0, 2).map((col, c) => col.map((s, i) => ({ ...parsePinLine(s), num: m.layout === 'header' ? 2 * i + 1 + c : null, col: c, row: i })));
-  return { id, label: m.label, layout: m.layout === 'header' ? 'header' : 'sides', top: m.top || '', cols, builtin: !!BUILTIN_BOARD_MODELS[id], edited: !!(BUILTIN_BOARD_MODELS[id] && C.wiring && C.wiring.models && C.wiring.models[id]) };
+  return { id, label: m.label, layout: m.layout === 'header' ? 'header' : 'sides', top: m.top || '', hold: m.hold || '', rows: Array.isArray(m.rows) ? m.rows : m.layout === 'header' ? ['odd pins', 'even pins'] : ['left row', 'right row'], cols, builtin: !!BUILTIN_BOARD_MODELS[id], edited: !!(BUILTIN_BOARD_MODELS[id] && C.wiring && C.wiring.models && C.wiring.models[id]) };
 }
 const modelPins = M => M ? [...M.cols[0], ...M.cols[1]] : [];
 // A model's problems: a GPIO listed twice, a bad line.
@@ -101,21 +108,26 @@ const pdEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 function boardPinoutSvg(C, comps, b, opt = {}) {
   const M = boardModel(C, b); if (!M) return '';
   const uses = opt.uses || boardPinUses(C, comps, b), header = M.layout === 'header', bw = header ? PD.headerW : PD.sidesW;
-  const rows = Math.max(M.cols[0].length, M.cols[1].length), bx = PD.labelW + 20, H = PD.top + rows * PD.pitch + 24, W = bx + bw + PD.labelW + 20;
+  const rows = Math.max(M.cols[0].length, M.cols[1].length), bx = PD.labelW + 20, H = PD.top + rows * PD.pitch + 44, W = bx + bw + PD.labelW + 20;
   const out = [];
   // a supply is labelled once, at its pin nearest the signals in use (the GND beside the link's TX and RX, say)
   const used = modelPins(M).filter(p => p.fn === 'gpio' && uses.has(p.gpio)), mid = used.length ? used.reduce((a, p) => a + p.row, 0) / used.length : 0;
   const supplyPin = {}; for (const k of ['3v3', '5v', 'gnd']) { const c = modelPins(M).filter(p => p.fn === k); if (c.length) supplyPin[k] = c.reduce((a, p) => Math.abs(p.row - mid) < Math.abs(a.row - mid) ? p : a); }
   out.push('<rect class="pd-board" x="' + bx + '" y="' + (PD.top - 14) + '" width="' + bw + '" height="' + (rows * PD.pitch + 16) + '" rx="8"/>');
-  out.push('<text class="pd-title" x="' + (bx + bw / 2) + '" y="18" text-anchor="middle">' + pdEsc(b.name + ' · ' + M.label) + '</text>');
-  out.push('<text class="pd-top" x="' + (bx + bw / 2) + '" y="34" text-anchor="middle">↑ ' + pdEsc(M.top || 'top') + '</text>');
+  out.push('<rect class="pd-tab" x="' + (bx + bw * 0.25) + '" y="' + (PD.top - 20) + '" width="' + (bw * 0.5) + '" height="10" rx="2"><title>' + pdEsc(M.top || 'top') + '</title></rect>');   // (the end that's up: its connector)
+  out.push('<text class="pd-title" x="' + (bx + bw / 2) + '" y="16" text-anchor="middle">' + pdEsc(b.name + ' · ' + M.label) + '</text>');
+  out.push('<text class="pd-top" x="' + (bx + bw / 2) + '" y="' + (PD.top - 25) + '" text-anchor="middle">↑ ' + pdEsc(M.top || 'top') + '</text>');
+  const by = PD.top + rows * PD.pitch + 16;   // the rows' names under the board
+  out.push('<text class="pd-rows" x="' + (bx + (header ? 16 : 10)) + '" y="' + by + '" text-anchor="end">' + pdEsc(M.rows[0]) + ' ↑</text><text class="pd-rows" x="' + (bx + bw - (header ? 16 : 10)) + '" y="' + by + '" text-anchor="start">↑ ' + pdEsc(M.rows[1]) + '</text>');
   M.cols.forEach((col, c) => col.forEach((p, i) => {
     const y = PD.top + i * PD.pitch, x = header ? bx + (c ? bw - 16 : 16) : bx + (c ? bw - 10 : 10), side = c ? 1 : -1;
     const key = p.fn === 'gpio' ? p.gpio : p.fn;
     let list = uses.get(key) || [];
     if (p.fn !== 'gpio' && supplyPin[key] !== p) list = [];
     const on = list.length > 0, inner = header ? (c ? bx + bw - 28 : bx + 28) : x - side * 10;
-    out.push('<circle class="pd-pin pd-' + p.fn + (on ? ' on' : '') + '" cx="' + x + '" cy="' + y + '" r="' + (on ? 5 : 3.6) + '"><title>' + pdEsc(p.label + (p.num ? ' · header pin ' + p.num : '') + (p.gpio !== null ? ' · GPIO ' + p.gpio : '')) + '</title></circle>');
+    const tip = '<title>' + pdEsc(p.label + (p.num ? ' · header pin ' + p.num : '') + (p.num === 1 ? ' (the square pad)' : '') + (p.gpio !== null ? ' · GPIO ' + p.gpio : '')) + '</title>', r = on ? 5 : 3.6;
+    out.push(p.num === 1 ? '<rect class="pd-pin pd-pin1' + (on ? ' on' : '') + '" x="' + (x - r - 0.5) + '" y="' + (y - r - 0.5) + '" width="' + (2 * r + 1) + '" height="' + (2 * r + 1) + '">' + tip + '</rect>'
+      : '<circle class="pd-pin pd-' + p.fn + (on ? ' on' : '') + '" cx="' + x + '" cy="' + y + '" r="' + r + '">' + tip + '</circle>');
     const silk = header ? String(p.num) : p.label;
     out.push('<text class="pd-silk' + (on ? ' on' : '') + '" x="' + inner + '" y="' + (y + 4) + '" text-anchor="' + (c ? 'end' : 'start') + '">' + pdEsc(silk) + '</text>');
     if (on) {
@@ -130,7 +142,8 @@ function boardPinoutSvg(C, comps, b, opt = {}) {
 const PD_LEGEND = { sda: 'I²C SDA', scl: 'I²C SCL', pwm: 'PWM (ESC, servo)', tx: 'UART out (TX)', rx: 'UART in (RX)', signal: 'Other signal', v33: '3.3 V', v5: '5 V', gnd: 'GND' };
 function pinoutLegend() { return el('div', { class: 'pd-legend' }, ...Object.entries(PD_LEGEND).map(([k, t]) => el('span', {}, el('i', { class: 'pd-swatch pd-' + k }), t))); }
 function boardPinoutView(C, b) {
-  const box = el('div', { class: 'pd-scroll' }); box.innerHTML = boardPinoutSvg(C, cfg.comps, b) || '';
+  const M = boardModel(C, b), box = el('div', { class: 'pd-scroll' }); box.innerHTML = boardPinoutSvg(C, cfg.comps, b) || '';
+  if (M) box.append(el('p', { class: 'pd-hold', text: 'Hold it: ' + (M.hold || M.top + ' at the top, components facing you.') + (M.layout === 'header' ? ' Pin 1 is drawn square.' : '') }));
   return box;
 }
 
@@ -141,19 +154,21 @@ function boardModelSection(C, b, editWiringFn) {
   const choices = modelsForKind(C, b.kind).map(([id, m]) => [id, m.label + (BUILTIN_BOARD_MODELS[id] ? (C.wiring?.models?.[id] ? ' (edited)' : '') : ' (yours)')]);
   const setModel = id => editWiringFn(w => { w.boards[b.id] = { ...(w.boards[b.id] || {}), model: id }; }, b.id + 'model');
   if (choices.length) wrap.append(hardwareField('Board model', hardwareSelect(b.name + ' board model', 'pd-model-' + b.id, choices, M ? M.id : '', setModel)));
-  if (M) wrap.append(boardPinoutView(C, b), pinoutLegend(), el('p', { class: 'hint', text: 'Drawn as you hold the board, ' + (M.top || 'top') + ' up. Each pin in use is labelled with what it goes to. Boards vary: check the silkscreen, and edit the pinout below if yours differs.' }));
+  if (M) wrap.append(boardPinoutView(C, b), pinoutLegend(), el('p', { class: 'hint', text: 'Each pin in use is labelled with what it goes to. Boards vary: check the silkscreen, and edit the pinout below if yours differs.' }));
   // the editor: a model's pins as two columns of lines
   const src = M ? boardModels(C)[M.id] : { label: (BOARD_KINDS[b.kind]?.label || b.kind) + ' board', kinds: [b.kind], layout: 'sides', top: 'USB end', cols: [[], []] };
-  const draft = { label: src.label, layout: src.layout || 'sides', top: src.top || '', cols: [(src.cols?.[0] || []).join('\n'), (src.cols?.[1] || []).join('\n')] };
+  const draft = { label: src.label, layout: src.layout || 'sides', top: src.top || '', hold: src.hold || '', rows: (src.rows || []).join(', '), cols: [(src.cols?.[0] || []).join('\n'), (src.cols?.[1] || []).join('\n')] };
   const err = el('p', { class: 'bad', hidden: true });
   const save = id => {
-    const m = { label: draft.label.trim().slice(0, 48), kinds: id && boardModels(C)[id] ? boardModels(C)[id].kinds : [b.kind], layout: draft.layout, top: draft.top.trim().slice(0, 48), cols: draft.cols.map(t => t.split('\n').map(s => s.trim()).filter(Boolean)) };
+    const m = { label: draft.label.trim().slice(0, 48), kinds: id && boardModels(C)[id] ? boardModels(C)[id].kinds : [b.kind], layout: draft.layout, top: draft.top.trim().slice(0, 64), hold: draft.hold.trim().slice(0, 300), ...(draft.rows.trim() ? { rows: draft.rows.split(',').map(s => s.trim().slice(0, 24)).slice(0, 2) } : {}), cols: draft.cols.map(t => t.split('\n').map(s => s.trim()).filter(Boolean)) };
     const e = boardModelErrors(m); if (e.length) { err.hidden = false; err.textContent = 'Not saved: ' + e.join('; '); return; }
     const newId = id || 'custom-' + Date.now().toString(36);
     editWiringFn(w => { w.models = { ...(w.models || {}), [newId]: m }; if (!id) w.boards[b.id] = { ...(w.boards[b.id] || {}), model: newId }; }, b.id + 'pinout');
   };
   const name = UI.input({ type: 'text', value: draft.label, 'aria-label': 'Model name' }); name.addEventListener('input', () => { draft.label = name.value; });
   const top = UI.input({ type: 'text', value: draft.top, 'aria-label': 'Top of the drawing' }); top.addEventListener('input', () => { draft.top = top.value; });
+  const hold = UI.input({ type: 'text', value: draft.hold, 'aria-label': 'How to hold it' }); hold.addEventListener('input', () => { draft.hold = hold.value; });
+  const rowNames = UI.input({ type: 'text', value: draft.rows, 'aria-label': 'Row names', placeholder: 'odd · inner row, even · edge row' }); rowNames.addEventListener('input', () => { draft.rows = rowNames.value; });
   const layout = hardwareSelect('Layout', 'pd-layout-' + b.id, [['sides', 'Two rows on the long edges (a DevKit)'], ['header', 'One 2-row header, odd pins first (a Pi)']], draft.layout, v => { draft.layout = v; });
   const col = i => { const t = el('textarea', { class: 'pd-col', rows: 16, spellcheck: 'false', 'aria-label': (i ? 'Right' : 'Left') + ' column of pins' }); t.value = draft.cols[i]; t.addEventListener('input', () => { draft.cols[i] = t.value; }); return t; };
   const buttons = el('div', { class: 'pd-buttons' });
@@ -163,7 +178,8 @@ function boardModelSection(C, b, editWiringFn) {
   if (M && !M.builtin) buttons.append(UI.button({ class: 'btn', text: 'Delete this model', onclick: () => editWiringFn(w => { const x = { ...(w.models || {}) }; delete x[M.id]; w.models = x; for (const s of Object.values(w.boards || {})) if (s.model === M.id) delete s.model; }, b.id + 'pinout') }));
   wrap.append(hardwareDetails('pinout' + b.id, M ? 'Edit the pinout, or add a board model' : 'Add a board model',
     el('p', { class: 'hint', text: 'One pin per line, top to bottom, as printed on the board: a GPIO as LABEL=GPIO (D15=15, RX2=16, TXD=14), a supply or other pin as its label (3V3, 5V, VIN, GND, EN). Edits are saved with this design. A new model fits ' + (BOARD_KINDS[b.kind]?.label || b.kind) + ' boards: its firmware and GPIO rules stay the chip\'s.' }),
-    el('div', { class: 'hw-fields' }, hardwareField('Model name', name), hardwareField('Top of the drawing', top), hardwareField('Layout', layout)),
+    el('div', { class: 'hw-fields' }, hardwareField('Model name', name), hardwareField('Top of the drawing (the end that\'s up)', top), hardwareField('Layout', layout), hardwareField('Row names (left, right)', rowNames)),
+    hardwareField('How to hold it to match the drawing (which side faces you, where pin 1 is)', hold),
     el('div', { class: 'pd-cols' }, hardwareField('Left column', col(0)), hardwareField('Right column', col(1))), err, buttons));
   return wrap;
 }
