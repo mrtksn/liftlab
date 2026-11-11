@@ -31,7 +31,9 @@ function escConfigCard(C,b,editBoard){
 }
 function hardwareBoardCard(b,...args){const card=hardwareCard(...args);card.dataset.hwBoard=b.id;return card;}
 function renderWiringOverview(C){
-  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}),el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the board’s GPIO names, not header pin numbers. Changes below update this list.'}));
+  const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'},el('h3',{text:'Wiring overview'}));
+  if(typeof boardPinoutView==='function'){const bs=C.boards.filter(b=>boardModel(C,b));if(bs.length){section.append(el('p',{class:'hint',text:'Each board as you hold it, every pin in use labelled with what it goes to. A board\'s model and pinout are set (and editable) in its own dialog: Computers → the board.'}));for(const b of bs)section.append(boardPinoutView(C,b));section.append(pinoutLegend(),el('h3',{text:'Connection list'}));}}
+  section.append(el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the chip’s GPIO names; the drawings above show where they are on the headers. Changes below update this list.'}));
   for(const g of [...data.groups.filter(g=>g.id==='ground'),...data.groups.filter(g=>g.id!=='ground'),...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
     const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),list=el('dl',{class:'hw-wire-list'});
     for(const r of g.rows)list.append(el('dt',{text:r.device}),el('dd',{},el('span',{text:r.connection}),el('small',{text:r.note})));
@@ -47,7 +49,8 @@ function renderHardware() {
   const pinsFor=b=>ESP_PROFILES[b.kind]?ESP_PROFILES[b.kind].pins:PI_GPIO_PINS;
   const pinPicker=(b,label,id,value,key,pins,change)=>{
     const claims=hardwarePinClaims(C,cfg.comps,b).filter(x=>x.key!==key),used=new Map(claims.map(x=>[x.pin,x.name]));
-    const options=[...(['sda','scl'].includes(key)?[]:[[-1,'Not connected']]),...pins.map(p=>[p,'GPIO '+p+(used.has(p)?' · '+used.get(p):''),used.has(p)])];
+    const M=typeof boardModel==='function'?boardModel(C,b):null,silk=p=>{if(!M)return '';const q=modelPins(M).find(q=>q.gpio===p);return !q?' · not on '+M.label:M.layout==='header'?' · pin '+q.num:String(q.label)!==String(p)?' · '+q.label:'';};
+    const options=[...(['sda','scl'].includes(key)?[]:[[-1,'Not connected']]),...pins.map(p=>[p,'GPIO '+p+silk(p)+(used.has(p)?' · '+used.get(p):''),used.has(p)])];
     if(value>=0&&!pins.includes(value))options.push([value,'GPIO '+value+' · unavailable',true]);
     return hardwareField(label,hardwareSelect(label,id,options,value,change));
   };

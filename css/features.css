@@ -1257,3 +1257,29 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .onboard-name{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .onboard-meta{margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .onboard-btn{pointer-events:auto;min-height:0;padding:0 6px;line-height:18px}
+
+/* Board pinouts (js/board-pinouts.js) */
+.pd-section { display: grid; gap: 10px; }
+.pd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin: 6px 0; }
+.pinout-diagram { display: block; max-width: none; font: 11px var(--font-mono, ui-monospace, monospace); }
+.pinout-diagram .pd-board { fill: #1f5e3a; stroke: #154229; }
+.pinout-diagram .pd-title { fill: var(--ink); font: 600 13px var(--font-sans, system-ui, sans-serif); }
+.pinout-diagram .pd-top { fill: var(--muted); font-size: 10px; }
+.pinout-diagram .pd-pin { fill: #c9b26b; stroke: #8a7535; }
+.pinout-diagram .pd-pin.on { fill: #f2d16b; stroke: #fff; stroke-width: 1.5; }
+.pinout-diagram .pd-silk { fill: #cfe3d6; font-size: 10px; }
+.pinout-diagram .pd-silk.on { fill: #fff; font-weight: 700; }
+.pinout-diagram .pd-lead { stroke: var(--pd-c); stroke-width: 2.5; }
+.pinout-diagram .pd-tag rect { fill: var(--panel-2); stroke: var(--pd-c); stroke-width: 1.5; }
+.pinout-diagram .pd-tag text { fill: var(--ink); font-size: 11px; }
+.pd-sda { --pd-c: #2f7de1; } .pd-scl { --pd-c: #e0a800; } .pd-pwm { --pd-c: #e8702a; } .pd-tx { --pd-c: #1fa65a; }
+.pd-rx { --pd-c: #9b51e0; } .pd-signal { --pd-c: #12a3b4; } .pd-v33 { --pd-c: #e5484d; } .pd-v5 { --pd-c: #b4232c; }
+.pd-gnd { --pd-c: #3b4048; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pd-gnd { --pd-c: #9aa4b1; } }
+:root[data-theme="dark"] .pd-gnd { --pd-c: #9aa4b1; }
+.pd-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
+.pd-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.pd-swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; background: var(--pd-c); }
+.pd-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.pd-col { width: 100%; font: 12px/1.5 var(--font-mono, ui-monospace, monospace); resize: vertical; }
+.pd-buttons { display: flex; flex-wrap: wrap; gap: 8px; }

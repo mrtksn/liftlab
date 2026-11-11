@@ -65,7 +65,8 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
     const ends = !pi ? null : [
       { board: core, text: link ? fl.uart + ' · GPIO ' + link[0] + ' (TX), GPIO ' + link[1] + ' (RX)' : 'no UART pins for this chip' },
       { board: b, text: gpio ? port + ' · GPIO 14 (TX), GPIO 15 (RX)' : port + ' · USB serial adapter (no Pi GPIO)' }];
-    const wires = !pi || !link ? [] : gpio ? [core.name + ' GPIO ' + link[0] + ' (TX) → ' + b.name + ' GPIO 15 (RX)', b.name + ' GPIO 14 (TX) → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'GND ↔ GND']
+    const nm = (x, g) => (typeof boardGpioName === 'function' && boardGpioName(C, x, g)) || 'GPIO ' + g;   // (the board's own name for it, with the header pin)
+    const wires = !pi || !link ? [] : gpio ? [core.name + ' ' + nm(core, link[0]) + ' TX → ' + b.name + ' ' + nm(b, 15) + ' RX', b.name + ' ' + nm(b, 14) + ' TX → ' + core.name + ' ' + nm(core, link[1]) + ' RX', 'GND ↔ GND']
       : [core.name + ' GPIO ' + link[0] + ' (TX) → adapter RX', 'adapter TX → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'adapter GND ↔ ' + core.name + ' GND', 'adapter USB → ' + b.name + ' (' + port + ')'];
     return { a: core, b, pi, port, transport: 'serial', ends, wires, baud: 921600, carries: [...b.tasks.map(t => LINK_CARRIES[t]).filter(Boolean), ...(wired(b) && comps.some(c => c.type === 'sensor' && hardwareOwner(C, c) === b) ? ['sensor readings: the topics of the sensors wired to it, as the other board asks for them'] : [])],
       supported: pi && !!link, note: !pi ? 'A link between two microcontrollers is simulated; there is no wiring recipe for it yet.' : !link ? core.name + ' has no UART pins for the link.' : '' };
@@ -189,6 +190,7 @@ function hardwarePlan(C, comps, b) {
   }
   if(profile && !b.tasks.includes('core') && b.tasks.includes('tlm') && bus.crsfRx>=0)errors.push('Receiver: standalone ESP radio firmware is not implemented; use the flight-core ESP or a telemetry Pi');
   const used=new Map();for(const claim of hardwarePinClaims(C,comps,b)){if(used.has(claim.pin))errors.push('GPIO '+claim.pin+': '+used.get(claim.pin)+' and '+claim.name+' overlap');used.set(claim.pin,claim.name);}
+  if(typeof boardModel==='function'){const M=boardModel(C,b);if(M){const on=new Set(modelPins(M).map(p=>p.gpio));for(const [pin,name] of used)if(!on.has(pin))warnings.push(name+': GPIO '+pin+' isn\'t on '+b.name+'\'s header ('+M.label+'): pick another pin, or fix the board\'s pinout');}}
   for(const c of comps.filter(c=>c.type==='latch')) { const p=hardwarePart(C,c,comps);if(p.board!==b.id)continue;
     if(!b.kind.startsWith('pi') || !b.tasks.includes('cargo'))errors.push(c.name+': real latch outputs need the cargo Pi');
     if(p.driver==='pwm' && ![18,19].includes(p.pin))errors.push(c.name+': Pi hardware PWM uses GPIO 18 or 19');

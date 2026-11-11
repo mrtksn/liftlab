@@ -429,6 +429,7 @@ function renderComputerDetail(){
     mountHardware(box,'[data-hw-board="'+b.id+'"]');
     if(boardOf('tlm')?.id===b.id)mountHardware(box,'[data-hw-role="radio"]');
     computerWiringIssues(box,b);
+    if(typeof boardModelSection==='function'&&(ESP_PROFILES[b.kind]||b.kind.startsWith('pi')))box.append(el('h3',{text:'Board & pinout'}),boardModelSection(C,b,editWiring));
   }
 }
 function openFormulaEditor(key){const dlg=$('#formulaDlg');if(key)$('#formulaSearch').value='';renderUndo();if(!dlg.open)dlg.showModal();showFormula(key||COMP.formula||formulaGroups()[0].keys[0]);}
