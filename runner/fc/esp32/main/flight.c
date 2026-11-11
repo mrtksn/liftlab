@@ -473,7 +473,7 @@ static void link_task(void *arg) {
                               fc_state_name(F.state), F.why, H.act, H.cand, H.phase, (long long)loop_us, loop_late, (unsigned)esp_get_free_heap_size());
         report(s);
         #define HWM(h) ((h) ? (int)uxTaskGetStackHighWaterMark(h) : -1)
-        char m[224]; snprintf(m, sizeof m, "stack never used (bytes): flight %d of 16384, sensors %d of 4096, link %d of 8192, radio %d of 6144 (-1: not running); largest free block %u",
+        char m[224]; snprintf(m, sizeof m, "stack never used (bytes): flight %d of 12288, sensors %d of 4096, link %d of 8192, radio %d of 6144 (-1: not running); largest free block %u",
                  HWM(flight_h), HWM(sensor_h), HWM(link_h), HWM(radio_h), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         report(m);
       } else if (type == RN_LINK_EXC || type == RN_LINK_SET || type == RN_LINK_MODEL) {   /* the learning and the supervisor: to the control loop */
@@ -533,8 +533,11 @@ static void radio_task(void *arg) {
   radio_io *R = RADIO_IO; int radio = R != 0;
   rlink_cfg RL; hw_radio(&HW, &RL);
   static crsf_parser P; static uint8_t rx[128], out[256]; static float pk[TLM_PACK_MAX];
-  fc_state *Fs = calloc(1, sizeof *Fs);               /* (the telemetry's copy of the flight state, on the heap: static DRAM is short with Wi-Fi) */
-  if (!Fs) { post("no memory for the telemetry: no radio"); vTaskDelete(NULL); }
+  /* (the telemetry's copy of the flight state, on the heap: static DRAM is short with Wi-Fi. The start-up task's stack
+   * comes back to the heap once app_main returns, a moment after this task starts: wait for it rather than give up.) */
+  fc_state *Fs = 0;
+  for (int k = 0; !Fs && k < 40; k++) { Fs = calloc(1, sizeof *Fs); if (!Fs) vTaskDelay(pdMS_TO_TICKS(50)); }
+  if (!Fs) { post("no memory for the telemetry: no radio"); radio_h = 0; vTaskDelete(NULL); }
   tlm_init(&TS); tlm_watch_init(&TW);
   int64_t next_pub = 0, next_rc = 0, next_want = 0, next_pack = 0, next_peer = 0;
   for (;;) {
@@ -666,7 +669,7 @@ void app_main(void) {
   }
 #endif
   /* (a task that can't start for want of memory says so, rather than leave the others to crash on its absence) */
-  if (xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU) != pdPASS) {
+  if (xTaskCreatePinnedToCore(flight_task, "flight", 12288, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU) != pdPASS) {
     printf("NO MEMORY FOR THE CONTROL LOOP: motors stay off (free heap %u bytes)\n", (unsigned)esp_get_free_heap_size()); return;
   }
   if (xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, &sensor_h, 0) != pdPASS) printf("no memory for the sensor task\n");
