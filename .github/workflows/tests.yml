@@ -1,96 +1,22 @@
-name: Board firmware and host programs
+name: Tests
+# What every change needs: the host programs build and the unit tests pass (Linux, a few minutes at most). The
+# real-time radio end-to-end flights run by hand (Actions → Tests → Run workflow).
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
-  pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/**', 'tools/**', 'firmware/manifest.json', '.github/workflows/tests.yml']
   workflow_dispatch:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
-  # Each chip and role built as the installer serves it (tools/build_firmware.sh), stamped with this commit.
-  esp:
-    runs-on: ubuntu-latest
-    container: espressif/idf:v5.3.2
-    strategy:
-      matrix:
-        chip: [esp32, esp32s3, esp32c3]
-        role: [flight, ground]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the firmware bundle
-        shell: bash
-        run: |
-          . /opt/esp/idf/export.sh
-          ONLY=${{ matrix.chip }}-${{ matrix.role }} DFB_FW_COMMIT=${GITHUB_SHA::7} sh tools/build_firmware.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bundle-${{ matrix.chip }}-${{ matrix.role }}
-          path: firmware/${{ matrix.chip }}-${{ matrix.role }}/
-          retention-days: 3
-  # The six bundles and their manifest as one artifact (firmware-COMMIT): unzip it over firmware/ and commit it to
-  # publish this build (docs/deployment.md). It warns when the checked-in bundles are older than the source.
-  firmware:
-    needs: esp
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Are the checked-in bundles current?
-        run: sh tools/check_firmware_fresh.sh || echo "::warning title=Firmware bundles are stale::firmware/ is older than the firmware source. Unzip this run's firmware-${GITHUB_SHA::7} artifact over firmware/ and commit it (docs/deployment.md)."
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: bundle-*
-          path: /tmp/bundles
-      - name: Write the manifest
-        run: |
-          for d in /tmp/bundles/bundle-*; do n=${d#/tmp/bundles/bundle-}; rm -rf "firmware/$n"; mkdir -p "firmware/$n"; cp -R "$d/." "firmware/$n/"; done
-          MANIFEST_ONLY=1 DFB_FW_COMMIT=${GITHUB_SHA::7} sh tools/build_firmware.sh
-          echo "FW_NAME=firmware-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.FW_NAME }}
-          path: |
-            firmware/manifest.json
-            firmware/esp32-flight/
-            firmware/esp32-ground/
-            firmware/esp32s3-flight/
-            firmware/esp32s3-ground/
-            firmware/esp32c3-flight/
-            firmware/esp32c3-ground/
-          retention-days: 30
-  # The ESC signal sniffer (runner/escsniff, ESP32-S3, listens only) as one image to flash at 0x0.
-  escsniff:
-    runs-on: ubuntu-latest
-    container: espressif/idf:v5.3.2
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the ESC signal sniffer
-        shell: bash
-        run: |
-          . /opt/esp/idf/export.sh
-          cd runner/escsniff
-          idf.py -D IDF_TARGET=esp32s3 build
-          cd build && esptool.py --chip esp32s3 merge_bin -o "$GITHUB_WORKSPACE/escsniff-esp32s3.bin" @flash_args
-      - uses: actions/upload-artifact@v4
-        with:
-          name: escsniff-esp32s3
-          path: escsniff-esp32s3.bin
-          retention-days: 30
   host:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: sh runner/ground/build.sh
-      - if: runner.os == 'Linux'
-        run: sh runner/pi/build.sh
-      - if: runner.os == 'Linux'
-        name: Ground and Pi radio integration tests
-        run: sh tools/test_radio_e2e.sh
+      - run: sh runner/pi/build.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -141,8 +67,7 @@ jobs:
         run: |
           cc -Wall -Wextra -Werror -fsanitize=address,undefined -Irunner -Irunner/fc -Itools tools/test_mqtt_min.c runner/fc/mqtt_min.c runner/rn_link.c -o /tmp/test-mqtt
           /tmp/test-mqtt
-      - if: runner.os == 'Linux'
-        name: Pi companion over MQTT, end to end
+      - name: Pi companion over MQTT, end to end
         run: |
           cc -O2 -Irunner -Irunner/fc -Itools tools/test_pi_mqtt_link.c runner/fc/nav_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c runner/fc/mqtt_min.c -lm -o /tmp/test-pi-mqtt
           /tmp/test-pi-mqtt runner/pi/dfb_pi
@@ -156,3 +81,10 @@ jobs:
             cc -Wall -Wextra -Werror -fsanitize=undefined -DCONFIG_IDF_TARGET_$chip=1 -Itools/pwm-stubs -Irunner -Irunner/fc tools/test_motor_outputs.c runner/fc/radio_link.c -lm -o /tmp/test-motors
             /tmp/test-motors
           done
+  e2e:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ground and Pi radio integration tests (real time)
+        run: sh tools/test_radio_e2e.sh

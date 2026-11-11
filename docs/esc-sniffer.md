@@ -6,7 +6,7 @@ Nothing here drives a motor. The only output is an optional test signal on GPIO8
 
 ## Get it on the board
 
-CI (`.github/workflows/boards.yml`, job `escsniff`) builds one image, `escsniff-esp32s3.bin`, from ESP-IDF v5.3.2. Download it from the run's artifacts and flash it at offset `0x0`, either with the [esptool-js web flasher](https://espressif.github.io/esptool-js/) or with:
+CI (`.github/workflows/firmware.yml`, job `escsniff`, run by hand: Actions → Firmware → Run workflow) builds one image, `escsniff-esp32s3.bin`, from ESP-IDF v5.3.2. Download it from the run's artifacts and flash it at offset `0x0`, either with the [esptool-js web flasher](https://espressif.github.io/esptool-js/) or with:
 
 ```bash
 esptool.py --chip esp32s3 write_flash 0x0 escsniff-esp32s3.bin
