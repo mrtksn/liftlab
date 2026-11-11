@@ -1,9 +1,9 @@
 name: Board firmware and host programs
 on:
   push:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'js/wiring-diagram.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   pull_request:
-    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
+    paths: ['runner/**', 'js/board-hardware.js', 'js/hardware*.js', 'js/agent*.js', 'js/driver-presets.js', 'js/install-ui.js', 'js/boards.js', 'js/autotune.js', 'js/laws.js', 'js/tuning.js', 'js/rn-bridge.js', 'js/computers-ui.js', 'js/wiring-diagram.js', 'tools/test*.js', 'tools/test_learning_native.c', 'tools/test_hardware*', 'tools/autotune_math_probe.c', 'tools/test_pi*', 'tools/test_sensor_drivers.c', 'tools/test_motor_outputs.c', 'tools/test_escsniff.c', 'tools/pwm-stubs/**', 'tools/sync_driver_presets.py', 'tools/build_firmware.sh', 'tools/check_firmware_fresh.sh', 'firmware/manifest.json', '.github/workflows/boards.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -96,6 +96,7 @@ jobs:
           node-version: '20'
       - run: node tools/test_board_install.js
       - run: node tools/test_hardware_wiring.js
+      - run: node tools/test_wiring_diagram.js
       - run: node tools/test_agent_hardware.js
       - run: node tools/test_driver_presets.js
       - run: node tools/test_flight_physics.js

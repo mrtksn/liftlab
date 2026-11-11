@@ -1257,3 +1257,31 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .onboard-name{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .onboard-meta{margin-right:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .onboard-btn{pointer-events:auto;min-height:0;padding:0 6px;line-height:18px}
+
+/* Wiring diagram (js/wiring-diagram.js) */
+.wd-wrap { display: grid; gap: 10px; }
+.wd-controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; }
+.wd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.wiring-diagram { display: block; max-width: none; font: 11px var(--font-mono, ui-monospace, monospace); }
+.wiring-diagram .wd-board rect { fill: #1f5e3a; stroke: #154229; }
+.wiring-diagram .wd-board-name { fill: var(--ink); font: 600 13px var(--font-sans, system-ui, sans-serif); }
+.wiring-diagram .wd-board-sub { fill: var(--muted); font-size: 10px; }
+.wiring-diagram .wd-pin { fill: #c9b26b; stroke: #8a7535; }
+.wiring-diagram .wd-pin.on { fill: #f2d16b; stroke: #fff; stroke-width: 1.5; }
+.wiring-diagram .wd-pin-label { fill: #d7e7dc; font-size: 10px; }
+.wiring-diagram .wd-pin-label.on { fill: #fff; font-weight: 700; }
+.wiring-diagram .wd-dev rect { fill: var(--panel-2); stroke: var(--line-strong); }
+.wiring-diagram .wd-dev-name { fill: var(--ink); font: 600 12px var(--font-sans, system-ui, sans-serif); }
+.wiring-diagram .wd-dev-sub { fill: var(--muted); font-size: 9.5px; }
+.wiring-diagram .wd-term { fill: var(--ink-2); }
+.wiring-diagram .wd-term-label { fill: var(--ink-2); font-size: 10px; }
+.wiring-diagram .wd-wire { fill: none; stroke: var(--wd-c); stroke-width: 2.4; stroke-linecap: round; opacity: .9; }
+.wiring-diagram .wd-wire:hover { stroke-width: 5; opacity: 1; }
+.wd-sda { --wd-c: #2f7de1; } .wd-scl { --wd-c: #e0a800; } .wd-pwm { --wd-c: #e8702a; } .wd-tx { --wd-c: #1fa65a; }
+.wd-rx { --wd-c: #9b51e0; } .wd-signal { --wd-c: #12a3b4; } .wd-v33 { --wd-c: #e5484d; } .wd-v5 { --wd-c: #b4232c; }
+.wd-gnd { --wd-c: #2b2f36; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wd-gnd { --wd-c: #9aa4b1; } }
+:root[data-theme="dark"] .wd-gnd { --wd-c: #9aa4b1; }
+.wd-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); }
+.wd-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.wd-swatch { display: inline-block; width: 18px; height: 4px; border-radius: 2px; background: var(--wd-c); }
