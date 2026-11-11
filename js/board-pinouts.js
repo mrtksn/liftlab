@@ -71,6 +71,12 @@ function boardGpioName(C, b, gpio) {
   const p = modelPins(M).find(p => p.gpio === gpio); if (!p) return null;
   return M.layout === 'header' ? 'pin ' + p.num + ' (GPIO ' + gpio + ')' : p.label + (String(p.label) === String(gpio) ? '' : ' (GPIO ' + gpio + ')');
 }
+// The same, short for a drawing's labels: D35 rather than D35 (GPIO 35) when the silkscreen already says the number.
+function boardGpioShort(C, b, gpio) {
+  const M = boardModel(C, b), p = M && modelPins(M).find(p => p.gpio === gpio);
+  if (p && M.layout !== 'header' && new RegExp('(^|\\D)' + gpio + '$').test(p.label)) return p.label;
+  return boardGpioName(C, b, gpio) || 'GPIO ' + gpio;
+}
 
 // What each pin of a board is wired to: Map key (a GPIO number, or '3v3' / '5v' / 'gnd') → [{text, kind}].
 function boardPinUses(C, comps, b) {
@@ -92,14 +98,35 @@ function boardPinUses(C, comps, b) {
     else if (gps) { const c = comps.find(c => c.id === +gps[2]); add(cl.pin, gps[1] === 'Tx' ? 'TX → ' + c.name + ' RX' : 'RX ← ' + c.name + ' TX', gps[1] === 'Tx' ? 'tx' : 'rx'); supply['3v3'].add(c.name); supply.gnd.add(c.name); }
     else if (k === 'rxTx' || k === 'rxRx') { add(cl.pin, k === 'rxTx' ? 'TX → receiver RX' : 'RX ← receiver TX', k === 'rxTx' ? 'tx' : 'rx'); supply.gnd.add('receiver'); }
   }
-  for (const L of boardLinks(C, comps)) {   // the companion's serial link, from either end
-    if (L.transport !== 'serial' || !L.pi || L.port !== '/dev/serial0') continue;
-    const fl = fcLinkPins(C, L.a); if (!fl) continue;
-    if (b === L.a) { add(fl.tx, 'TX → ' + L.b.name + ' ' + (boardGpioName(C, L.b, 15) || 'GPIO 15'), 'tx'); add(fl.rx, 'RX ← ' + L.b.name + ' ' + (boardGpioName(C, L.b, 14) || 'GPIO 14'), 'rx'); supply.gnd.add(L.b.name); }
-    if (b === L.b) { add(15, 'RX ← ' + L.a.name + ' ' + (boardGpioName(C, L.a, fl.tx) || 'GPIO ' + fl.tx), 'rx'); add(14, 'TX → ' + L.a.name + ' ' + (boardGpioName(C, L.a, fl.rx) || 'GPIO ' + fl.rx), 'tx'); supply.gnd.add(L.a.name); }
-  }
+  for (const L of boardLinks(C, comps)) linkPinUses(C, L, b, add, supply);   // the companion's serial link, from either end
   for (const [k, set] of Object.entries(supply)) if (set.size) add(k, (k === 'gnd' ? 'GND → ' : k === '5v' ? '5 V → ' : '3.3 V → ') + [...set].join(', '), k === 'gnd' ? 'gnd' : k === '5v' ? 'v5' : 'v33');
   return uses;
+}
+
+// A board link's pins on board b: its TX, RX and the shared ground (a Pi's GPIO 14/15, or the flight
+// controller's link UART, wired to the Pi or to a USB serial adapter).
+function linkPinUses(C, L, b, add, supply) {
+  if (L.transport !== 'serial' || !L.pi) return;
+  const fl = fcLinkPins(C, L.a); if (!fl) return;
+  const gpio = L.port === '/dev/serial0', far = gpio ? L.b.name + ' ' : 'USB adapter ';
+  if (b === L.a) { add(fl.tx, 'TX → ' + far + (gpio ? boardGpioShort(C, L.b, 15) : 'RX'), 'tx'); add(fl.rx, 'RX ← ' + far + (gpio ? boardGpioShort(C, L.b, 14) : 'TX'), 'rx'); supply.gnd.add(gpio ? L.b.name : 'USB adapter'); }
+  if (b === L.b && gpio) { add(15, 'RX ← ' + L.a.name + ' ' + boardGpioShort(C, L.a, fl.tx), 'rx'); add(14, 'TX → ' + L.a.name + ' ' + boardGpioShort(C, L.a, fl.rx), 'tx'); supply.gnd.add(L.a.name); }
+}
+// Only the link's pins, for its own drawing.
+function linkOnlyUses(C, L, b) {
+  const uses = new Map(), add = (k, text, kind) => { if (!uses.has(k)) uses.set(k, []); uses.get(k).push({ text, kind }); }, supply = { gnd: new Set() };
+  linkPinUses(C, L, b, add, supply);
+  if (supply.gnd.size) add('gnd', 'GND → ' + [...supply.gnd].join(', '), 'gnd');
+  return uses;
+}
+// The link drawn: each end's board with just the link's pins labelled ('' when there are no wires: MQTT).
+function boardLinkView(C, L) {
+  const ends = [L.a, L.b].filter(b => boardModel(C, b) && linkOnlyUses(C, L, b).size);
+  if (!ends.length) return null;
+  const box = el('div', { class: 'pd-link' });
+  for (const b of ends) box.append(boardPinoutView(C, b, { uses: linkOnlyUses(C, L, b) }));
+  if (L.port !== '/dev/serial0') box.append(el('p', { class: 'hint', text: 'The other end is a USB-to-UART adapter plugged into ' + L.b.name + ' (' + L.port + '): its RX, TX and GND go to the pins above.' }));
+  return box;
 }
 
 // One board drawn with its headers, each pin in use labelled on its own line beside it (no wires to cross).
@@ -141,8 +168,8 @@ function boardPinoutSvg(C, comps, b, opt = {}) {
 }
 const PD_LEGEND = { sda: 'I²C SDA', scl: 'I²C SCL', pwm: 'PWM (ESC, servo)', tx: 'UART out (TX)', rx: 'UART in (RX)', signal: 'Other signal', v33: '3.3 V', v5: '5 V', gnd: 'GND' };
 function pinoutLegend() { return el('div', { class: 'pd-legend' }, ...Object.entries(PD_LEGEND).map(([k, t]) => el('span', {}, el('i', { class: 'pd-swatch pd-' + k }), t))); }
-function boardPinoutView(C, b) {
-  const M = boardModel(C, b), box = el('div', { class: 'pd-scroll' }); box.innerHTML = boardPinoutSvg(C, cfg.comps, b) || '';
+function boardPinoutView(C, b, opt = {}) {
+  const M = boardModel(C, b), box = el('div', { class: 'pd-scroll' }); box.innerHTML = boardPinoutSvg(C, cfg.comps, b, opt) || '';
   if (M) box.append(el('p', { class: 'pd-hold', text: 'Hold it: ' + (M.hold || M.top + ' at the top, components facing you.') + (M.layout === 'header' ? ' Pin 1 is drawn square.' : '') }));
   return box;
 }

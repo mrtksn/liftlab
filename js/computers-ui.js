@@ -390,6 +390,7 @@ function renderComputerDetail(){
     if(L.note)box.append(el('p',{class:'hint',text:L.note}));
     if(L.ends){const dl=el('dl',{class:'hw-wire-list'});for(const e of L.ends)dl.append(el('dt',{text:e.board.name}),el('dd',{},el('span',{text:e.text}),el('small',{text:BOARD_KINDS[e.board.kind].label})));box.append(el('h3',{text:'Ends'}),dl);}
     if(L.wires.length)box.append(el('h3',{text:'Wires'}),el('ul',{class:'link-wires'},...L.wires.map(w=>el('li',{text:w}))),el('p',{class:'hint',text:'TX goes to RX both ways. 3.3 V logic on both ends: no level shifter needed.'}));
+    const draw=typeof boardLinkView==='function'&&boardLinkView(C,L);if(draw)box.append(el('h3',{text:'On the boards'}),draw,pinoutLegend());
     if(L.carries.length)box.append(el('h3',{text:'What it carries'}),el('ul',{class:'link-wires'},...L.carries.map(t=>el('li',{text:t}))));
     mountHardware(box,'[data-hw-role="link-'+L.b.id+'"]');computerWiringIssues(box,L.b);return;
   }
