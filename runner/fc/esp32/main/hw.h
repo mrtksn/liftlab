@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 12
+#define HW_VERSION 13
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -63,6 +63,11 @@ typedef struct {
   int8_t link_pad;
   uint16_t link_port;
   char link_host[48], link_prefix[48];
+  /* Appended in v13 (v12 blobs migrate with none): the companion's serial link on pins of its own (link_uart=TX,RX), on
+   * a UART beside the USB port's (LB_LINK_UART): then programs come that way, and the USB port keeps the console,
+   * settings and airframes. −1: the link shares UART0 with the USB port (GPIO 1 and 3 on an ESP32 DevKit). */
+  int8_t link_tx, link_rx;
+  int8_t link_uart_pad[2];
 } hw_config;
 
 void hw_defaults(hw_config *c);

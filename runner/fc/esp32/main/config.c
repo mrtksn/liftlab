@@ -29,6 +29,7 @@ void hw_defaults(hw_config *c) {
   c->radio2_kind = -1; c->radio2_a = c->radio2_b = 0;
   c->peer_channel = 0; strcpy(c->fleet, RCFG_BIND_DEFAULT);
   c->link_mqtt = 0; c->link_port = 1883; strcpy(c->link_prefix, "liftlab");
+  c->link_tx = c->link_rx = -1;
 }
 /* An MQTT broker's name or address, a topic prefix: what they may hold. */
 static int host_ok(const char *s) { if (!s[0]) return 0; for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '.' || *s == '-')) return 0; return 1; }
@@ -92,6 +93,9 @@ int hw_check(const hw_config *c, char *err, int errn) {
       (c->crsf_rx >= 0 && !lb_input_pin(c->crsf_rx)) || (c->crsf_tx >= 0 && !lb_output_pin(c->crsf_tx))) {
     snprintf(err, errn, "reserved sensor or radio pin"); return -1;
   }
+  if ((c->link_tx >= 0) != (c->link_rx >= 0) || (c->link_tx >= 0 && (LB_LINK_UART < 0 || !lb_output_pin(c->link_tx) || !lb_input_pin(c->link_rx)))) {
+    snprintf(err, errn, LB_LINK_UART < 0 ? "link_uart: this chip has no spare UART (the link stays on the USB port's)" : "link_uart=TX,RX: a free output pin and a free input pin"); return -1;
+  }
   const int ds[3]={c->imu_driver,c->baro_driver,c->mag_driver}; const int as[3]={c->imu_addr,c->baro_addr,c->mag_addr};
   if(c->mag_driver==2) {snprintf(err,errn,"unknown compass driver");return -1;}
   for(int i=0;i<3;i++) { if(ds[i]<-1 || ds[i]>3 || (as[i] && (as[i]<8 || as[i]>119))) { snprintf(err,errn,"invalid sensor driver/address"); return -1; }
@@ -140,6 +144,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
   USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
   for (int i = 0; i < 5; i++) USE(c->nrf_pin[i], "nRF24L01");
+  USE(c->link_tx, "companion link"); USE(c->link_rx, "companion link");
   #undef USE
   int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
   if (nm + ns > LB_PWM_OUTPUTS) { snprintf(err, errn, "%d motors and %d servos: this chip has %d PWM outputs", nm, ns, LB_PWM_OUTPUTS); return -1; }
@@ -251,6 +256,12 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     else if (n != 2 || !lb_input_pin((int)v[0]) || !pin_ok((int)v[1]) || v[1] < 0) { snprintf(err, errn, "crsf=rx,tx: free input and output pins (or crsf=-1)"); return -1; }
     else { c->crsf_rx = (int8_t)v[0]; c->crsf_tx = (int8_t)v[1]; }
 
+  } else if (!strcmp(key, "link_uart")) {          /* the companion link on pins of its own: link_uart=TX,RX, or -1 (the USB port's UART0) */
+    if (n == 1 && v[0] == -1) c->link_tx = c->link_rx = -1;
+    else if (LB_LINK_UART < 0) { snprintf(err, errn, "link_uart: this chip has no spare UART (the link stays on the USB port's)"); return -1; }
+    else if (n != 2 || v[0] < 0 || !lb_output_pin((int)v[0]) || !lb_input_pin((int)v[1])) { snprintf(err, errn, "link_uart=TX,RX: a free output pin and a free input pin (or link_uart=-1: the USB port's UART0)"); return -1; }
+    else { c->link_tx = (int8_t)v[0]; c->link_rx = (int8_t)v[1]; }
+
   } else if (!strcmp(key, "nrf24")) {                 /* an nRF24L01's pins: nrf24=SCK,MOSI,MISO,CSN,CE, or nrf24=-1 */
     if (n == 1 && v[0] == -1) for (int i = 0; i < 5; i++) c->nrf_pin[i] = -1;
     else {
@@ -275,6 +286,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   char rl[32]; rlink_cfg L; hw_radio(c,&L); rlink_describe(&L,rl,sizeof rl);
   APP(" esc_hz=%d esc_us=%d,%d",c->esc_hz,c->esc_min_us,c->esc_max_us);if(c->esc_stop_us)APP(",%d",c->esc_stop_us);
   if (c->link_mqtt) APP(" link=mqtt,%s,%u link_topic=%s", c->link_host, (unsigned)c->link_port, c->link_prefix); else APP(" link=uart link_topic=%s", c->link_prefix);
+  if (c->link_tx >= 0) APP(" link_uart=%d,%d", c->link_tx, c->link_rx); else APP(" link_uart=-1(the USB port's)");
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }

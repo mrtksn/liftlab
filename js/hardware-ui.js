@@ -116,7 +116,20 @@ function renderHardware() {
     const bus=hardwareBus(C,b),mqtt=bus.linkTransport==='mqtt',coreB=C.boards.find(x=>x.tasks.includes('core')),coreBus=coreB&&hardwareBus(C,coreB);
     const transport=hardwareField('Transport',hardwareSelect(b.name+' flight link transport','hw-link-tr-'+b.id,Object.entries(LINK_TRANSPORTS),bus.linkTransport,v=>editBoard(b,{linkTransport:v},'linkTransport')));
     const kids=[el('p',{class:'hw-owner',text:'Board: '+b.name}),transport];
-    if(!mqtt)kids.push(hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins. ESP UART0 pins are fixed by chip.'}));
+    if(!mqtt){
+      kids.push(hardwareText(b.name+' flight link serial port',bus.linkPort||'/dev/serial0',v=>editBoard(b,{linkPort:v},'link')),el('p',{class:'hint',text:'GPIO UART: Pi TX 14 → ESP RX; Pi RX 15 ← ESP TX; share GND. Use a USB serial path to free these Pi pins.'}));
+      const cp=coreB&&ESP_PROFILES[coreB.kind];
+      if(cp){   // the flight controller's end: UART0 (the USB port's fixed pins) or a UART of its own on pins picked to be close
+        const fl=fcLinkPins(C,coreB),used=new Set(hardwarePinClaims(C,cfg.comps,coreB).filter(x=>!['fcLinkTx','fcLinkRx'].includes(x.key)).map(x=>x.pin));
+        const pick=()=>{const tx=cp.pins.find(p=>!used.has(p)),ins=hardwareInputPins(coreB.kind),rx=[...ins.filter(p=>!cp.pins.includes(p)),...ins].find(p=>!used.has(p)&&p!==tx);return {fcLinkTx:tx??-1,fcLinkRx:rx??-1};};
+        if(cp.linkUart){
+          kids.push(hardwareField(coreB.name+'’s end',hardwareSelect(coreB.name+' link UART','hw-fclink-'+coreB.id,[['usb','UART0, shared with the USB port · GPIO '+cp.link[0]+' (TX), '+cp.link[1]+' (RX)'],['own','Pins of its own (UART1) · USB stays free']],fl.own?'own':'usb',v=>editBoard(coreB,v==='own'?{...pick(),fcLinkReset:false}:{fcLinkTx:-1,fcLinkRx:-1,fcLinkReset:true},'fcLink'))));
+          if(fl.own)kids.push(pinPicker(coreB,coreB.name+' TX GPIO (→ '+b.name+' GPIO 15, RX)','hw-fclink-tx-'+coreB.id,fl.tx,'fcLinkTx',cp.pins,v=>editBoard(coreB,{fcLinkTx:Number(v)},'fcLinkTx')),
+            pinPicker(coreB,coreB.name+' RX GPIO (← '+b.name+' GPIO 14, TX)','hw-fclink-rx-'+coreB.id,fl.rx,'fcLinkRx',hardwareInputPins(coreB.kind),v=>editBoard(coreB,{fcLinkRx:Number(v)},'fcLinkRx')));
+          kids.push(el('p',{class:'hint',text:fl.own?'Pick the GPIOs nearest the Pi\'s pins 8 and 10 to keep the wires short. Any free output works for TX; RX can also be an input-only pin ('+(coreB.kind==='esp32'?'34–39':'none on this chip')+'). Programs come this way; USB keeps the console, settings and the airframe. Needs flight firmware with link_uart (newer than 0df6c14).':'UART0 is also the USB port: unplug USB while the Pi talks to it, or give the link pins of its own.'}));
+        }else kids.push(el('p',{class:'hint',text:cp.label+' has no spare UART: the link uses UART0, GPIO '+cp.link[0]+' (TX) and '+cp.link[1]+' (RX), shared with USB.'}));
+      }
+    }
     else {
       if(b.kind==='pizero'){const id='hw-net-'+b.id,i=UI.input({type:'checkbox',id});i.checked=!!bus.net;i.addEventListener('change',()=>editBoard(b,{net:i.checked},'net'));kids.push(el('label',{class:'check',for:id},i,'This Pi has a network (a Zero W, or a USB Wi-Fi or Ethernet adapter)'));}
       kids.push(hardwareField('Broker runs',hardwareSelect(b.name+' MQTT broker place','hw-mq-where-'+b.id,[['here','On this Pi (mosquitto): one Wi-Fi hop'],['elsewhere','Elsewhere on the network: two hops']],bus.mqttBroker,v=>editBoard(b,{mqttBroker:v},'mqttBroker'))),

@@ -2,7 +2,7 @@
 // Design-only hardware tools. These never access serial, flash firmware or execute C.
 const AGENT_BOARD_REF={type:['integer','string'],description:'Board id from get_computers; "ground" for the command module. Unique board names also work.'};
 const AGENT_PART_FIELDS={board:{type:['integer','string','null'],description:'Existing board id, "auto" to follow its task, or null / "off" to disconnect.'},pin:{type:'integer'},driver:{type:'string'},address:{type:'integer'},maxDuty:{type:'integer'},center:{type:'number'},usPerRad:{type:'number'},bias:{type:'string'},scale:{type:'string'},port:{type:'string'}};
-const AGENT_BUS_FIELDS=Object.fromEntries(['sda','scl','brushedHz','escHz','escMin','escMax','escStop','escCellsMin','escCellsMax','batteryPin','crsfRx','crsfTx'].map(k=>[k,{type:'integer'}]));
+const AGENT_BUS_FIELDS=Object.fromEntries(['sda','scl','brushedHz','escHz','escMin','escMax','escStop','escCellsMin','escCellsMax','batteryPin','crsfRx','crsfTx','fcLinkTx','fcLinkRx'].map(k=>[k,{type:'integer'}]));
 Object.assign(AGENT_BUS_FIELDS,{batteryDivider:{type:'number'},linkPort:{type:'string'},receiverPort:{type:'string'},linkTransport:{type:'string',enum:['serial','mqtt']},mqttHost:{type:'string'},mqttPort:{type:'integer'},mqttPrefix:{type:'string'},mqttBroker:{type:'string',enum:['here','elsewhere']},net:{type:'boolean'},wifiSsid:{type:'string'}});
 const AGENT_GROUND_FIELDS=Object.fromEntries(['tx','arm','fly','roll','pitch','throttle','yaw','buzzer','led'].map(k=>[k,{type:'array',items:{type:'integer'}}]));
 const agentClone=x=>JSON.parse(JSON.stringify(x));
@@ -57,7 +57,7 @@ function agentGetHardware(a={}){
   const b=agentHardwareBoard(a.board,C),profile=ESP_PROFILES[b.kind];
   if(b.id==='ground')return {board:b,wiring:groundHardware(C),pins:profile?{signal:hardwareInputPins(b.kind),adc:profile.adc}:null,errors:groundHardwareErrors(C),settings:groundHardware(C)?groundHardwareSettings(C):null};
   const bus=hardwareBus(C,b),{driverCode,...settings}=bus,plan=hardwarePlan(C,cfg.comps,b);
-  return {board:b,settings,...(profile&&b.tasks.includes('core')?{esc:{preset:escPresetOf(bus),summary:escSummary(bus),stop_duty_pct:bus.escStop>0?+escDutyPct(bus.escStop,bus.escHz).toFixed(1):null}}:{}),...(!profile&&linkMqtt(C,b)?{link:{transport:'mqtt',url:mqttLinkUrl(C,b)}}:{}),custom_code_saved:typeof driverCode==='string',custom_code_length:driverCode?.length||0,pins:profile?{output:profile.pins,input:hardwareInputPins(b.kind),adc:profile.adc,uart0:profile.link,max_outputs:profile.outputs}:{gpio:PI_GPIO_PINS},claims:hardwarePinClaims(C,cfg.comps,b),parts:cfg.comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type)&&hardwareOwner(C,c)?.id===b.id).map(c=>({id:c.id,name:c.name,type:c.type,kind:c.kind,assignment:Object.hasOwn(C.wiring?.parts?.[c.id]||{},'board')?'explicit':'automatic',...hardwarePart(C,c,cfg.comps)})),errors:plan.errors,warnings:plan.warnings};
+  return {board:b,settings,...(profile&&b.tasks.includes('core')?{esc:{preset:escPresetOf(bus),summary:escSummary(bus),stop_duty_pct:bus.escStop>0?+escDutyPct(bus.escStop,bus.escHz).toFixed(1):null},companion_link:fcLinkPins(C,b)}:{}),...(!profile&&linkMqtt(C,b)?{link:{transport:'mqtt',url:mqttLinkUrl(C,b)}}:{}),custom_code_saved:typeof driverCode==='string',custom_code_length:driverCode?.length||0,pins:profile?{output:profile.pins,input:hardwareInputPins(b.kind),adc:profile.adc,uart0:profile.link,max_outputs:profile.outputs}:{gpio:PI_GPIO_PINS},claims:hardwarePinClaims(C,cfg.comps,b),parts:cfg.comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type)&&hardwareOwner(C,c)?.id===b.id).map(c=>({id:c.id,name:c.name,type:c.type,kind:c.kind,assignment:Object.hasOwn(C.wiring?.parts?.[c.id]||{},'board')?'explicit':'automatic',...hardwarePart(C,c,cfg.comps)})),errors:plan.errors,warnings:plan.warnings};
 }
 function agentSetHardware(a){
   agentFields(a,{parts:{type:'array'},boards:{type:'array'},ground:{type:'object'},draft:{type:'boolean'}},'set_hardware');
@@ -92,7 +92,7 @@ function agentSetHardware(a){
       const {esc_preset,...rest}=change.fields;void esc_preset;change.fields={...Object.fromEntries(ESC_FIELDS.map(f=>[f,p[f]])),...rest};
     }
     agentFields(change.fields,fields,b.name);
-    for(const [k,v] of Object.entries(change.fields))if(['sda','scl','batteryPin','crsfRx','crsfTx'].includes(k)&&v<(['sda','scl'].includes(k)?0:-1))throw new Error(b.name+'.'+k+': invalid GPIO');
+    for(const [k,v] of Object.entries(change.fields))if(['sda','scl','batteryPin','crsfRx','crsfTx','fcLinkTx','fcLinkRx'].includes(k)&&v<(['sda','scl'].includes(k)?0:-1))throw new Error(b.name+'.'+k+': invalid GPIO');
     C.wiring.boards[b.id]={...C.wiring.boards[b.id],...change.fields};
   }
   if(a.ground){

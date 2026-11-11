@@ -6,6 +6,8 @@
  * Core 0: the sensor task (reads the IMU at the loop's rate and the barometer at 25 Hz, then wakes the control
  *   loop), and the link task (the Pi on the USB serial port, 921600 baud by default (setting baud): commands,
  *   programs, the airframe, settings, telemetry and events; the learning's and the supervisor's frames; see rn_link.h).
+ *   link_uart=TX,RX puts the Pi on pins of its own (a second UART, LB_LINK_UART), at the same speed: then programs come
+ *   that way, and the USB port stays the console (settings, the airframe, status; no programs). Both get every frame.
  *
  * Safety as the firmware sees it (the rest is in fc_core.h):
  *   - from power-on every ESC gets its minimum pulse (standard PWM ESCs arm on it and stay still);
@@ -112,6 +114,7 @@ extern const uint32_t rn_builtin_len;
 #define IMG_CAP (40 * 1024)
 #define AIRFRAME_CAP 4096       /* the largest airframe (12 motors on 2 joints each, 8 servos) is 3.6 KB */
 #define LINK UART_NUM_0
+static int link2;          /* the companion on its own UART (link_uart=): LB_LINK_UART */
 
 static hw_config HW, HW_next;            /* the wiring in use, and as it will be after a reboot */
 static hw_sensors SENS;
@@ -315,11 +318,13 @@ static uint8_t *img_buf;
 static void link_send(uint8_t type, const void *p, uint32_t n) {
   static uint8_t fr[FC_MODEL_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
+  if (k && link2) uart_write_bytes(LB_LINK_UART, fr, k);
   if (k && HW.link_mqtt) link_mqtt_send(fr, k);      /* (and over MQTT, when the companion is there) */
 }
 static void link_send2(uint8_t type, const void *p, uint32_t n) {   /* (the radio task's own buffer) */
   static uint8_t fr[FLEET_PACK_MAX * 4 + 16]; uint32_t k = rn_link_frame(fr, sizeof fr, type, p, n);
   if (k) uart_write_bytes(LINK, fr, k);
+  if (k && link2) uart_write_bytes(LB_LINK_UART, fr, k);
   if (k && HW.link_mqtt) link_mqtt_send(fr, k);
 }
 static void say(const char *text) { link_send(RN_LINK_EVENT, text, (uint32_t)strlen(text)); printf("%s\n", text); }   /* frame first: fly.py then skips the text copy */
@@ -407,12 +412,20 @@ static void link_task(void *arg) {
     else if (link_mqtt_start(HW.wifi_ssid, HW.wifi_pass, HW.link_host, HW.link_port, HW.link_prefix, post)) say("link=mqtt didn't start: the UART only");
     else { rn_link_init(&L2, l2buf, 4096); L2.limit = frame_limit; mqtt = 1; }
   }
+  /* The Pi on its own UART (link_uart=): it gets the main parser (programs, 40 KB); the USB port a small one of its own. */
+  const uart_port_t MAIN = link2 ? (uart_port_t)LB_LINK_UART : LINK;
+  static rn_link L3; uint8_t *l3buf = 0, *rx3 = 0; int usb2 = 0; int64_t last_rx3 = 0;
+  if (link2) {
+    l3buf = malloc(AIRFRAME_CAP); rx3 = malloc(256);
+    if (!l3buf || !rx3) say("link_uart: no memory for the USB port's parser; the Pi's UART only");
+    else { rn_link_init(&L3, l3buf, AIRFRAME_CAP); L3.limit = frame_limit; usb2 = 1; }
+  }
   static uint8_t rx[256];
   int64_t next_t = 0, next_b = 0, telem_us = HW.telem_hz ? 1000000 / HW.telem_hz : 0, last_rx = 0, keep = 0, frame_t0 = 0;
   int prev_state = 0;
   for (;;) {
     { char ev[80]; while (take_event(ev)) say(ev); }
-    int n = uart_read_bytes(LINK, rx, sizeof rx, pdMS_TO_TICKS(5));
+    int n = uart_read_bytes(MAIN, rx, sizeof rx, pdMS_TO_TICKS(5));
     int64_t now = esp_timer_get_time();
     if (n > 0) last_rx = now;
     /* a frame whose bytes stopped coming is dropped, so the next frame isn't taken as its payload */
@@ -427,11 +440,15 @@ static void link_task(void *arg) {
     }
     int n2 = mqtt ? link_mqtt_read(rx2, 512) : 0;
     if (mqtt && link_mqtt_resync() && L2.state) rn_link_reset(&L2);   /* (reconnected: no half frame from before) */
-    for (int i = 0; i < n + n2; i++) {
-      int src = i >= n; rn_link *Lp = src ? &L2 : &L;
-      int type = rn_link_feed(Lp, src ? rx2[i - n] : rx[i]);
+    int n3 = usb2 ? uart_read_bytes(LINK, rx3, 256, 0) : 0;
+    if (n3 > 0) last_rx3 = now;
+    if (usb2 && L3.state != 0 && now - last_rx3 > 50000) rn_link_reset(&L3);   /* (a USB frame that stopped halfway) */
+    for (int i = 0; i < n + n2 + n3; i++) {
+      int src = i < n ? 0 : i < n + n2 ? 1 : 2; rn_link *Lp = src == 0 ? &L : src == 1 ? &L2 : &L3;
+      int type = rn_link_feed(Lp, src == 0 ? rx[i] : src == 1 ? rx2[i - n] : rx3[i - n - n2]);
       if (!src) { if (L.state != 0 && prev_state == 0) frame_t0 = esp_timer_get_time(); prev_state = L.state; }
-      if (src && (type == RN_LINK_PROGRAM || type == RN_LINK_AIRFRAME)) { say("programs and airframes come by the UART (USB), not MQTT"); continue; }
+      if (src == 1 && (type == RN_LINK_PROGRAM || type == RN_LINK_AIRFRAME)) { say("programs and airframes come by the UART (USB), not MQTT"); continue; }
+      if (src == 2 && type == RN_LINK_PROGRAM) { say("programs come by the Pi's UART (link_uart), not the USB port"); continue; }
       if (type == RN_LINK_CMD && (Lp->len == 28 || Lp->len == 48)) {   /* the pilot's sticks, or a guided command from the Pi */
         float v[12] = { 0 }; memcpy(v, Lp->buf, Lp->len);
         fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6],
@@ -627,6 +644,16 @@ void app_main(void) {
   uart_driver_install(LINK, 8192, 8192, 0, NULL, 0);
   uart_set_baudrate(LINK, (uint32_t)HW.link_baud);
   uart_vfs_dev_use_driver(LINK);
+#if LB_LINK_UART >= 0
+  if (HW.link_tx >= 0) {   /* the Pi on pins of its own */
+    uart_config_t uc = { .baud_rate = HW.link_baud, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1, .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT };
+    esp_err_t e = uart_driver_install(LB_LINK_UART, 8192, 8192, 0, NULL, 0);
+    if (e == ESP_OK) e = uart_param_config(LB_LINK_UART, &uc);
+    if (e == ESP_OK) e = uart_set_pin(LB_LINK_UART, HW.link_tx, HW.link_rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (e == ESP_OK) { link2 = 1; printf("link: the Pi on GPIO %d (TX), GPIO %d (RX); the USB port keeps the console\n", HW.link_tx, HW.link_rx); }
+    else printf("link_uart: %s; the Pi's link stays on the USB port's UART\n", esp_err_to_name(e));
+  }
+#endif
   xTaskCreatePinnedToCore(flight_task, "flight", 16384, NULL, configMAX_PRIORITIES - 1, &flight_h, LB_FLIGHT_CPU);
   xTaskCreatePinnedToCore(sensor_task, "sensors", 4096, NULL, configMAX_PRIORITIES - 2, NULL, 0);
   xTaskCreatePinnedToCore(link_task, "link", 8192, NULL, 5, NULL, 0);

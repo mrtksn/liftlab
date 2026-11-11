@@ -103,5 +103,16 @@ int main(void){
    {hw_config w=m;assert(hw_set(&w,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"link=mqtt"));w.radio_kind=RLINK_WIFI;assert(hw_check(&w,log,sizeof log)&&strstr(log,"link=mqtt"));}
    {hw_config w=m;w.peer_channel=6;assert(hw_check(&w,log,sizeof log));}
    assert(!hw_set(&m,"link=uart",log,sizeof log)&&!m.link_mqtt&&!hw_check(&m,log,sizeof log));}
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v11 migration, ESC stop pulses, the MQTT link settings, a second radio link, the other drones' settings.");
+  {hw_config u;hw_defaults(&u);assert(u.link_tx==-1&&u.link_rx==-1);   /* the companion link on pins of its own */
+#if CONFIG_IDF_TARGET_ESP32
+   assert(!hw_set(&u,"link_uart=32,34",log,sizeof log)&&u.link_tx==32&&u.link_rx==34&&!hw_check(&u,log,sizeof log));   /* (34: input only, fine for RX) */
+   assert(hw_set(&u,"link_uart=34,32",log,sizeof log));                        /* an input-only pin can't send */
+   assert(hw_set(&u,"motors=32",log,sizeof log)&&strstr(log,"twice"));          /* a pin used twice */
+   assert(hw_set(&u,"link_uart=32",log,sizeof log));
+#elif CONFIG_IDF_TARGET_ESP32C3
+   assert(hw_set(&u,"link_uart=4,5",log,sizeof log)&&strstr(log,"no spare UART"));
+#endif
+   assert(!hw_set(&u,"link_uart=-1",log,sizeof log)&&u.link_tx==-1&&!hw_check(&u,log,sizeof log));
+   hw_config v12=u;v12.version=12;v12.link_mqtt=1;hw_config r;hw_defaults(&r);assert(lb_hw_restore(&r,&v12,offsetof(hw_config,link_tx))&&r.link_mqtt==1&&r.link_tx==-1&&r.version==HW_VERSION);}
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v12 migration, ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
 }

@@ -574,7 +574,7 @@ function piGuide(t, K) {
   const tasks = t.tasks, learnOrSuper = tasks.includes('learn') || tasks.includes('super');
   const gpsSensor=sensorsOf('fix').find(c=>wiredTo(c)===t);
   const fix = sensorsOf('fix').some(c => wiredTo(c) === t) && tasks.includes('nav'), nL = latches().length, cargo = tasks.includes('cargo') && nL > 0, radio = tasks.includes('tlm');
-  const core = boardOf('core'), coreProfile = core && ESP_PROFILES[core.kind], linkPins = coreProfile ? coreProfile.link : [1,3], bt = t.kind !== 'pizero';
+  const core = boardOf('core'), fl = core && fcLinkPins(computers(), core), linkPins = fl ? [fl.tx, fl.rx] : [1,3], bt = t.kind !== 'pizero';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
   if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in the Computers board and device details',true]);
   const mqttLink = linkMqtt(computers(), t), mqttBus = hardwareBus(computers(), t);
@@ -605,8 +605,8 @@ function piGuide(t, K) {
   else out.push(instStep(1, 'Wire it to the flight controller',
     gpioLink ? instPara(core ? `To <b>${core.name}</b> (${BOARD_KINDS[core.kind].label}), on its UART0 pins. Both sides are 3.3 V: no level shifter.` : 'To the flight controller’s UART0 pins.') : instPara(`Connect the flight controller to the Pi with a USB serial cable. The saved link is <code>${v('link')}</code>; this connection uses no Pi GPIO.`),
     ...(gpioLink ? [el('table', { class: 'inst-files' }, el('tbody', {},
-      el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX0)` })),
-      el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: `Flight controller GPIO ${linkPins[0]} (TX0)` })),
+      el('tr', {}, el('td', { text: 'Pi pin 8 (GPIO 14, TX)' }), el('td', { text: '→' }), el('td', { text: `Flight controller GPIO ${linkPins[1]} (RX${fl && fl.own ? '1' : '0'})` })),
+      el('tr', {}, el('td', { text: 'Pi pin 10 (GPIO 15, RX)' }), el('td', { text: '←' }), el('td', { text: `Flight controller GPIO ${linkPins[0]} (TX${fl && fl.own ? '1' : '0'})` })),
       el('tr', {}, el('td', { text: 'Pi pin 6 (GND)' }), el('td', { text: '—' }), el('td', { text: 'ESP32 GND' })))),
       instPara('These are also connected to the ESP32’s USB serial adapter: unplug that USB cable while the Pi is wired here. A USB serial connection instead can be selected in the Computers board and device details.', 'hint')] : [])));
   cmds.serial = cmdBox('', 'the interface setup commands');

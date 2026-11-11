@@ -2,11 +2,11 @@
 // Real firmware profiles; these limits are distinct from the simulated board's budget.
 const ESP_PROFILES = {
   esp32: { chip: 'esp32', label: 'ESP32', imageId: 0, boot: 0x1000, outputs: 16, rate: 1000,
-    motors: [25,26,27,14,32,33,4,13], servos: [16,17,18,19,23], i2c: [21,22], tx: [17,16], link: [1,3],
+    motors: [25,26,27,14,32,33,4,13], servos: [16,17,18,19,23], i2c: [21,22], tx: [17,16], link: [1,3], linkUart: true,
     pins: [4,13,14,16,17,18,19,21,22,23,25,26,27,32,33], adc: [32,33,34,35,36,37,38,39],
     ground: 'set tx=17,16\nset arm=25\nset fly=26\nset roll=34\nset pitch=35\nset throttle=32\nset yaw=33\nset buzzer=27\nset led=2' },
   s3: { chip: 'esp32s3', label: 'ESP32-S3', imageId: 9, boot: 0, outputs: 8, rate: 1000,
-    motors: [4,5,6,7,8,9,10,11], servos: [12,13], i2c: [17,18], tx: [15,16], link: [43,44],
+    motors: [4,5,6,7,8,9,10,11], servos: [12,13], i2c: [17,18], tx: [15,16], link: [43,44], linkUart: true,
     pins: [1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,38,39,40,41,42,47,48], adc: [1,2,4,5,6,7,8,9,10],
     ground: 'set tx=15,16\nset arm=4\nset fly=5\nset roll=6\nset pitch=7\nset throttle=8\nset yaw=9\nset buzzer=10\nset led=-1' },
   c3: { chip: 'esp32c3', label: 'ESP32-C3', imageId: 5, boot: 0, outputs: 6, rate: 250,

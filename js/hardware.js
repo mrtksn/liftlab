@@ -54,7 +54,7 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
   const core = C.boards.find(b => b.tasks.includes('core')); if (!core) return [];
   const wired = b => comps.some(c => ['motor', 'joint', 'sensor', 'latch'].includes(c.type) && hardwareOwner(C, c) === b);   // (a board with only devices on it: a sensor board)
   return C.boards.filter(b => b !== core && (b.tasks.length || wired(b))).map(b => {
-    const coreEsp = ESP_PROFILES[core.kind], link = coreEsp && coreEsp.link, bus = hardwareBus(C, b), pi = b.kind.startsWith('pi');
+    const fl = fcLinkPins(C, core), link = fl && [fl.tx, fl.rx], bus = hardwareBus(C, b), pi = b.kind.startsWith('pi');
     const port = bus.linkPort || '/dev/serial0', gpio = port === '/dev/serial0', mqtt = pi && bus.linkTransport === 'mqtt';
     if (mqtt) {
       const cs = hardwareBus(C, core), coreEnd = cs.wifiSsid ? 'Wi-Fi station on ' + cs.wifiSsid : 'Wi-Fi station (network not set)';
@@ -63,7 +63,7 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
         note: !link ? core.name + ' has no MQTT link support (not an ESP32).' : !boardHasNet(C, b) ? b.name + ' has no network: it can\'t reach the broker.' : '' };
     }
     const ends = !pi ? null : [
-      { board: core, text: link ? 'UART0 · GPIO ' + link[0] + ' (TX), GPIO ' + link[1] + ' (RX)' : 'no UART pins for this chip' },
+      { board: core, text: link ? fl.uart + ' · GPIO ' + link[0] + ' (TX), GPIO ' + link[1] + ' (RX)' : 'no UART pins for this chip' },
       { board: b, text: gpio ? port + ' · GPIO 14 (TX), GPIO 15 (RX)' : port + ' · USB serial adapter (no Pi GPIO)' }];
     const wires = !pi || !link ? [] : gpio ? [core.name + ' GPIO ' + link[0] + ' (TX) → ' + b.name + ' GPIO 15 (RX)', b.name + ' GPIO 14 (TX) → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'GND ↔ GND']
       : [core.name + ' GPIO ' + link[0] + ' (TX) → adapter RX', 'adapter TX → ' + core.name + ' GPIO ' + link[1] + ' (RX)', 'adapter GND ↔ ' + core.name + ' GND', 'adapter USB → ' + b.name + ' (' + port + ')'];
@@ -73,13 +73,21 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
 }
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
-  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 1, escCellsMax: 8, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, nrfPins:[-1,-1,-1,-1,-1],
+  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 1, escCellsMax: 8, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, fcLinkTx:-1, fcLinkRx:-1, nrfPins:[-1,-1,-1,-1,-1],
     linkTransport: 'serial', mqttHost: '', mqttPort: 1883, mqttPrefix: 'liftlab', mqttBroker: 'here', net: b.kind !== 'pizero', wifiSsid: '', ...s };
 }
 // The link between a companion board and the flight controller: the serial line (UART wires or a USB adapter), or an
 // MQTT broker over a network (runner/fc/mqtt_min.h): one link frame a message on PREFIX/link/to-fc and
 // PREFIX/link/from-fc. The flight controller joins a Wi-Fi network as a station for it (its UART stays: USB). The broker
 // runs on the companion (mosquitto on the Pi: one Wi-Fi hop) or elsewhere on the network (a laptop, a router: two).
+// The flight controller's end of the companion's serial link: UART0, shared with the USB port (the chip's fixed
+// pins), or a UART of its own on pins you pick (fcLinkTx/fcLinkRx; firmware link_uart=TX,RX), so the wires can take
+// the shortest way and USB stays free for the console. {tx, rx, own, uart}, or null for a chip without a link profile.
+function fcLinkPins(C, core) {
+  const p = core && ESP_PROFILES[core.kind]; if (!p) return null;
+  const s = hardwareBus(C, core), own = !!p.linkUart && s.fcLinkTx >= 0 && s.fcLinkRx >= 0;
+  return own ? { tx: s.fcLinkTx, rx: s.fcLinkRx, own: true, uart: 'UART1' } : { tx: p.link[0], rx: p.link[1], own: false, uart: 'UART0 (shared with USB)' };
+}
 const LINK_TRANSPORTS = { serial: 'Serial (UART wires or a USB adapter)', mqtt: 'MQTT broker over a network' };
 const linkMqtt = (C, b) => !ESP_PROFILES[b.kind] && hardwareBus(C, b).linkTransport === 'mqtt';
 const boardHasNet = (C, b) => !!ESP_PROFILES[b.kind] || !!hardwareBus(C, b).net;   // (an original Pi Zero has none: a Zero W, 2 W, or a USB adapter has)
@@ -99,6 +107,7 @@ function hardwareInputPins(kind) { const p=ESP_PROFILES[kind];return !p?PI_GPIO_
 function hardwarePinClaims(C,comps,b) {
   const bus=hardwareBus(C,b),claims=[];
   if(ESP_PROFILES[b.kind]) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'},{pin:bus.batteryPin,name:'Battery ADC',key:'battery'},{pin:bus.crsfRx,name:'Receiver RX',key:'rx'},{pin:bus.crsfTx,name:'Receiver TX',key:'tx'});
+  if(ESP_PROFILES[b.kind]&&b.tasks.includes('core')){const fl=fcLinkPins(C,b);if(fl.own)claims.push({pin:fl.tx,name:'Companion link TX',key:'fcLinkTx'},{pin:fl.rx,name:'Companion link RX',key:'fcLinkRx'});}
   else { if(comps.some(c=>c.type==='sensor' && ['imu','baro','mag'].includes(c.kind) && hardwareOwner(C,c)===b)) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'});
     if(b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)) && bus.linkTransport!=='mqtt' && (!bus.linkPort || bus.linkPort==='/dev/serial0')) claims.push({pin:14,name:'Flight-controller serial TX',key:'linkTx'},{pin:15,name:'Flight-controller serial RX',key:'linkRx'});
     for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port==='/dev/serial0')claims.push({pin:14,name:c.name+' UART TX',key:'gpsTx'+c.id},{pin:15,name:c.name+' UART RX',key:'gpsRx'+c.id});}
@@ -171,6 +180,9 @@ function hardwarePlan(C, comps, b) {
     else if (!Number.isFinite(bus.escMin) || !Number.isFinite(bus.escMax) || bus.escMin<800 || bus.escMax>2200) errors.push('ESC pulses: start pulse at least 800 µs, full-throttle pulse at most 2200 µs (they are '+bus.escMin+' and '+bus.escMax+')');
     else if (bus.escMax-bus.escMin<500) errors.push('ESC pulses: full throttle needs to be at least 500 µs above the start pulse ('+bus.escMin+'→'+bus.escMax+' is '+(bus.escMax-bus.escMin)+' µs)');
     else if (bus.escMax>1000000/bus.escHz-100) errors.push('ESC pulses: at '+bus.escHz+' Hz the period is '+Math.round(1e6/bus.escHz)+' µs, so the full-throttle pulse can be at most '+Math.floor(1000000/bus.escHz-100)+' µs (it is '+bus.escMax+'): lower the frequency or the pulse');
+    if ((bus.fcLinkTx>=0)!==(bus.fcLinkRx>=0)) errors.push('Companion link pins: choose both TX and RX, or neither (the USB port\'s UART0)');
+    else if (bus.fcLinkTx>=0 && !profile.linkUart) errors.push('Companion link pins: '+profile.label+' has no spare UART; the link stays on the USB port\'s UART0');
+    else if (bus.fcLinkTx>=0 && (!profile.pins.includes(bus.fcLinkTx) || !hardwareInputPins(b.kind).includes(bus.fcLinkRx) || bus.fcLinkTx===bus.fcLinkRx)) errors.push('Companion link pins: TX needs a free output GPIO, RX a free input GPIO');
     if (bus.escStop!==0 && (!Number.isInteger(bus.escStop) || bus.escStop<300 || bus.escStop>bus.escMin-100)) errors.push('ESC stop pulse: 0 (none) or 300 µs to 100 µs under the minimum');
     if (!Number.isInteger(bus.escCellsMin) || !Number.isInteger(bus.escCellsMax) || bus.escCellsMin<1 || bus.escCellsMax>14 || bus.escCellsMin>bus.escCellsMax) errors.push('ESC cells: whole numbers, 1–14S, minimum not above maximum');
     else if (motorConfigs.some(m=>m.driver==='pwm') && typeof battCfg==='function') { const n=battCfg().cells; if (n<bus.escCellsMin || n>bus.escCellsMax) warnings.push('The battery is '+n+'S, but '+b.name+'’s ESC configuration takes '+(bus.escCellsMin===bus.escCellsMax?bus.escCellsMin+'S':bus.escCellsMin+'–'+bus.escCellsMax+'S')); }
@@ -250,11 +262,12 @@ function radioWiringRow(b,bus,esp,r) {
 function hardwareSettings(plan, radio=hardwareRadio()) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
   const {bus,motors,servos,sensors,motorConfigs}=plan;
-  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1','imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax+(bus.escStop>0?','+bus.escStop:''),'esc_hz='+bus.escHz];
+  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1',...(bus.fcLinkTx>=0||bus.fcLinkReset?['link_uart=-1']:[]),'imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax+(bus.escStop>0?','+bus.escStop:''),'esc_hz='+bus.escHz];
   if(typeof designVref==='function')lines.push('vref='+designVref());   // the pack voltage the exported airframe's tables are for
   lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
+  if(bus.fcLinkTx>=0 && bus.fcLinkRx>=0)lines.push('link_uart='+bus.fcLinkTx+','+bus.fcLinkRx);
   if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
@@ -321,9 +334,9 @@ function hardwareOverview(C, comps) {
     const g=groups.find(g=>g.id===b.id),bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
     if(esp&&b.id===core?.id)g.rows.push({device:'Battery voltage',connection:pin(bus.batteryPin)+(bus.batteryPin>=0?' ← resistor divider midpoint':''),note:bus.batteryPin>=0?'Divider ratio '+bus.batteryDivider+' · divider GND → board GND':'Optional ADC input'});
     if(b.kind.startsWith('pi')){
-      const port=bus.linkPort||'/dev/serial0',link=core&&ESP_PROFILES[core.kind]?.link;
+      const port=bus.linkPort||'/dev/serial0',fl=fcLinkPins(C,core),link=fl&&[fl.tx,fl.rx];
       g.rows.push({device:'Link to '+(core?.name||'flight controller'),connection:port==='/dev/serial0'&&link?'GPIO 14 (TX) → '+core.name+' GPIO '+link[1]+' (RX); GPIO 15 (RX) ← '+core.name+' GPIO '+link[0]+' (TX)':port+' · serial link',note:!core?'No flight-core board':port==='/dev/serial0'&&!link?'Target UART pins unavailable':port==='/dev/serial0'?'Share board GND':'USB serial adapter; no Pi GPIO'});
-      if(core&&link)groups.find(x=>x.id===core.id).rows.push({device:'Link to '+b.name,connection:port==='/dev/serial0'?'GPIO '+link[1]+' (RX) ← '+b.name+' GPIO 14 (TX); GPIO '+link[0]+' (TX) → '+b.name+' GPIO 15 (RX)':'GPIO '+link[1]+' (RX) ← USB adapter TX; GPIO '+link[0]+' (TX) → USB adapter RX',note:port==='/dev/serial0'?'UART0 · share board GND':'Pi '+port+' · USB-to-UART adapter · share GND'});
+      if(core&&link)groups.find(x=>x.id===core.id).rows.push({device:'Link to '+b.name,connection:port==='/dev/serial0'?'GPIO '+link[1]+' (RX) ← '+b.name+' GPIO 14 (TX); GPIO '+link[0]+' (TX) → '+b.name+' GPIO 15 (RX)':'GPIO '+link[1]+' (RX) ← USB adapter TX; GPIO '+link[0]+' (TX) → USB adapter RX',note:port==='/dev/serial0'?fl.uart+' · share board GND':'Pi '+port+' · USB-to-UART adapter · share GND'});
     }else if(esp&&b.id!==core?.id&&b.tasks.length)g.rows.push({device:'Flight-controller link',connection:'Hardware routing not implemented',note:'Inter-board link is simulated; no supported wiring recipe'});
     if(b.id===radio?.id){g.rows.push(radioWiringRow(b,bus,esp,hardwareRadio()));const r2=hardwareRadio2();if(r2&&r2.kind&&r2.kind!==hardwareRadio()?.kind){const row=radioWiringRow(b,bus,esp,r2);g.rows.push({...row,device:'Second link: '+row.device});}}
   }

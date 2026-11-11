@@ -150,4 +150,14 @@ console.log('Radio settings checks passed: radio=, bind=, peers= and fleet= line
  M.wiring.boards[1].wifiSsid='a,b';assert.ok(errs(0).some(e=>e.includes('Wi-Fi network')));M.wiring.boards[1].wifiSsid='KL-CAM';
  M.boards[1].kind='pizero2';delete M.wiring.boards[2].net;assert.ok(!errs(1).some(e=>e.includes('no network')),'a Zero 2 W has Wi-Fi');
  M.wiring.boards[2].linkTransport='serial';assert.ok(!A.hardwareSettings(A.hardwarePlan(M,parts,M.boards[0]),{kind:'elrs'}).some(l=>l.startsWith('link')),'serial: no link lines (older firmware)');}
+{const W=JSON.parse(JSON.stringify(C));W.wiring.boards[1]={...W.wiring.boards[1]};const esp={...W,boards:[{...W.boards[0],kind:'esp32'},W.boards[1]]};vm.runInContext('this.fl={fcLinkPins,boardLinks}',ctx);const F=ctx.fl;
+ esp.wiring.boards[1]={sda:21,scl:22};let pl=A.hardwarePlan(esp,parts,esp.boards[0]);assert.deepEqual({...F.fcLinkPins(esp,esp.boards[0])},{tx:1,rx:3,own:false,uart:'UART0 (shared with USB)'});assert.ok(!A.hardwareSettings(pl).some(l=>l.startsWith('link_uart')),'USB UART0: no link_uart line (older firmware)');
+ esp.wiring.boards[1]={sda:21,scl:22,fcLinkTx:32,fcLinkRx:34};pl=A.hardwarePlan(esp,parts,esp.boards[0]);assert.equal(pl.errors.length,0,pl.errors.join());
+ const S=A.hardwareSettings(pl);assert.ok(S.indexOf('link_uart=-1')<S.indexOf('motors=25,26,27,14')&&S.includes('link_uart=32,34'),'cleared first, set after');
+ assert.ok(F.boardLinks(esp,parts)[0].wires[0].includes('GPIO 32 (TX)'),'the link\'s wires use the pins');assert.ok(A.hardwareOverview(esp,parts).groups.some(g=>g.rows.some(r=>/GPIO 34 \(RX\)/.test(r.connection))),'and the overview');
+ esp.wiring.boards[1].fcLinkTx=34;assert.ok(A.hardwarePlan(esp,parts,esp.boards[0]).errors.some(e=>e.startsWith('Companion link')),'an input-only pin can\'t send');
+ esp.wiring.boards[1].fcLinkTx=25;assert.ok(A.hardwarePlan(esp,parts,esp.boards[0]).errors.some(e=>e.includes('overlap')),'a motor pin is taken');
+ esp.wiring.boards[1]={sda:21,scl:22,fcLinkReset:true};assert.ok(A.hardwareSettings(A.hardwarePlan(esp,parts,esp.boards[0])).includes('link_uart=-1'),'back to USB: cleared once');
+ const c3={...esp,boards:[{...esp.boards[0],kind:'c3'},esp.boards[1]]};c3.wiring={...esp.wiring,boards:{1:{sda:0,scl:1,fcLinkTx:4,fcLinkRx:5}}};assert.ok(A.hardwarePlan(c3,parts,c3.boards[0]).errors.some(e=>e.includes('no spare UART')));}
+console.log('Companion link pin checks passed: UART0 by default, pins of its own, link_uart lines, wires and overview, conflicts, the C3.');
 console.log('MQTT link wiring checks passed: the Pi UART freed, network and broker checks, the flight controller\'s Wi-Fi network, link= lines after the radio, URLs, the link card.');
