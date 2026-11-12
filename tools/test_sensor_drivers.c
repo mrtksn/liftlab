@@ -23,6 +23,13 @@ int main(void) {
   assert(!lb_bmp180_pressure(&cal,27898,23843,0,&pa));assert(pa==69964);
   lb_bmp180_cal bad=cal;bad.ac4=0;assert(lb_bmp180_pressure(&bad,27898,23843,0,&pa));
   assert(lb_bmp180_pressure(&cal,27898,23843,4,&pa));
+  /* oversampling: the commands and waits of datasheet table 3; UP from the three bytes, shifted by 8 - oss */
+  assert(lb_bmp180_cmd(0)==0x34 && lb_bmp180_cmd(3)==0xF4 && lb_bmp180_wait_us(0)==5000 && lb_bmp180_wait_us(3)==26000);
+  {uint8_t r0[3]={0x5D,0x23,0x00}; assert(lb_bmp180_up(r0,0)==23843);
+   uint8_t r3[3]={(uint8_t)(190744>>11),(uint8_t)(190744>>3),(uint8_t)(190744<<5)}; assert(lb_bmp180_up(r3,3)==190744);
+   uint8_t hi[3]={0xFF,0xFF,0xE0}; assert(lb_bmp180_up(hi,3)==524287);}
+  /* the same pressure at oss 3 (UP eight times as fine, b3 and b7 scaled to match): within a pascal of oss 0's */
+  {int32_t p3; assert(!lb_bmp180_pressure(&cal,27898,23843<<3,3,&p3)); assert(p3>=pa-1 && p3<=pa+1);}
   regs[0x68][0x75]=0x68;assert(!custom_imu_init(0x68));
   assert(regs[0x68][0x37]==2 && regs[0x68][0x6a]==0); /* auxiliary compass bypass */
   set16(0x68,0x3b,4096);set16(0x68,0x43,16384);fc_imu m={0};assert(!custom_imu_read(&m));

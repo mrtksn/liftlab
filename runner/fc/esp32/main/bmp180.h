@@ -21,4 +21,11 @@ static inline int lb_bmp180_pressure(const lb_bmp180_cal *c,int32_t ut,int32_t u
   if(p<30000 || p>110000) return -1;
   *pa=(int32_t)p; return 0;
 }
+/* Oversampling (datasheet table 3): 0 is one sample in 4.5 ms (about 0.5 m RMS noise), 3 is eight in 25.5 ms (about
+ * 0.25 m): the flight firmware reads at 3, a reading every ~30 ms with the temperature. The command for register
+ * 0xF4, the time to wait for it (with a margin), and UP from the 3 bytes at 0xF6 (MSB, LSB, XLSB). */
+#define LB_BMP180_OSS 3
+static inline uint8_t lb_bmp180_cmd(int oss) { return (uint8_t)(0x34 + (oss << 6)); }
+static inline int lb_bmp180_wait_us(int oss) { static const int w[4] = { 4500, 7500, 13500, 25500 }; return w[oss & 3] + 500; }
+static inline int32_t lb_bmp180_up(const uint8_t b[3], int oss) { return (int32_t)((uint32_t)b[0] << 16 | (uint32_t)b[1] << 8 | b[2]) >> (8 - oss); }
 #endif

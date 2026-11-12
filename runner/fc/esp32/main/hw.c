@@ -209,9 +209,9 @@ int hw_baro_read(float *alt) {
     int64_t now=esp_timer_get_time();uint8_t b[3];
     if(b180_phase && now<b180_due) return 0;
     if(!b180_phase) { if(wr(baro_dev,0xF4,0x2e)) return 0; b180_phase=1;b180_due=now+5000;return 0; }
-    if(b180_phase==1) { if(rd(baro_dev,0xF6,b,2) || wr(baro_dev,0xF4,0x34)) {b180_phase=0;return 0;} b180_ut=b[0]<<8|b[1];b180_phase=2;b180_due=now+5000;return 0; }
+    if(b180_phase==1) { if(rd(baro_dev,0xF6,b,2) || wr(baro_dev,0xF4,lb_bmp180_cmd(LB_BMP180_OSS))) {b180_phase=0;return 0;} b180_ut=b[0]<<8|b[1];b180_phase=2;b180_due=now+lb_bmp180_wait_us(LB_BMP180_OSS);return 0; }
     b180_phase=0;if(rd(baro_dev,0xF6,b,3)) return 0;int32_t pa;
-    if(lb_bmp180_pressure(&b180,b180_ut,(b[0]<<16|b[1]<<8|b[2])>>8,0,&pa)) return 0;
+    if(lb_bmp180_pressure(&b180,b180_ut,lb_bmp180_up(b,LB_BMP180_OSS),LB_BMP180_OSS,&pa)) return 0;
     if(p0==0) { p0=(float)pa; }
     *alt=44330.0f*(1-powf((float)pa/p0,0.190295f));return 1;
   }
