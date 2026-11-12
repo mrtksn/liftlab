@@ -9,24 +9,39 @@
 // 3D view (its attitude and position from the telemetry), the Ground tab (the command module's view, alerts, link log),
 // and the keys, the on-screen pads and a gamepad are its sticks. Arm, take off, hold and home are the bar's switches.
 //
+// Or over Wi-Fi (the Ground tab's link set to Wi-Fi: the drone's Pi running dfb_pi --radio wifi,...): a browser can't
+// send UDP, so the packets go through runner/ground/wifi_bridge.py on this computer, one WebSocket message a packet,
+// one UDP datagram a packet to the Pi's port 14570. The packet layer is the same as Bluetooth's; its sizes the Wi-Fi
+// link's (plink_cfg_link), as dfb_pi has them.
+//
 // The ground program steps every 4 ms on a timer. A hidden tab's timers slow to once a second: the channels then stop
 // and the drone's failsafe takes over (as when a command module's program stalls). Lost, the page reconnects by
 // itself; the switches stay as they were (as a handset's).
 
 const LIVE_UUID = n => `6c1f000${n}-6b3d-4e8b-9a7e-6c6966746c62`;   // radio_ble.c SVC, CHR_UP, CHR_DOWN, CHR_INFO
 const LIVE_SVC = LIVE_UUID(1), LIVE_UP = LIVE_UUID(2), LIVE_DOWN = LIVE_UUID(3), LIVE_INFO = LIVE_UUID(4);
+const LIVE_BRIDGE = 'ws://127.0.0.1:14571';                          // wifi_bridge.py's default
 const live = {
-  on: false, state: 'off', dev: null, up: null, g: null, t0: 0, t: 0, lastT: 0, rx: [], writing: false, pend: null,
+  on: false, state: 'off', via: 'ble', ws: null, url: '', target: '', dev: null, up: null, g: null, t0: 0, t: 0, lastT: 0, rx: [], writing: false, pend: null,
   timer: 0, mtu: 0, name: '', arm: false, fly: false, nextGnd: 0, nextGs: 0, lastRx: -1, tries: 0, sent: 0, got: 0,
   bad: 0, wErr: 0, wasRunning: true, stopAsk: 0, slow: 0, retry: 0, gp: null,
 };
 const liveOn = () => live.on;
 const liveSupported = () => !!(navigator.bluetooth && window.isSecureContext);
+// How this page reaches the drone: Wi-Fi through the bridge when the Ground tab's link is Wi-Fi, else Bluetooth LE
+// (the drone's ESP32-S3 or C3 set to radio=ble, whatever the design's link).
+const liveVia = () => radioCfg.kind === 'wifi' ? 'wifi' : 'ble';
+// The link as the packet layer sets it (radio_link.h rlink_make): kind, a, b.
+const liveLink = () => live.via === 'wifi' ? [2, radioCfg.sta ? 1 : 0, Math.min(13, Math.max(1, radioCfg.channel || 1))] : [5, 0, 0];
+const liveBridgeUrl = () => String(instPref('liveBridge', LIVE_BRIDGE)).trim() || LIVE_BRIDGE;
+const liveDroneHost = () => String(instPref('drone', radioCfg.sta ? 'liftlab-drone.local' : '192.168.4.1')).trim();
 // While connected, the link the rest of the page sees (radioModel): this one.
 const LIVE_MODEL = {
-  label: 'Bluetooth LE, from this browser', receiver: 'the drone\'s ESP32 (radio=ble)', packets: true, settings: [],
-  wasm: () => [5, 0, 0], room: () => 6000, roomNote: () => '',
-  signalNote: () => live.state === 'up' ? `Connected to ${live.name} from this browser, packets up to ${live.mtu - 3} bytes (the connection's MTU ${live.mtu}). The browser doesn't say the signal: the drone's own reading is its RSSI here.` : live.state === 'lost' ? `${live.name}: the connection dropped; reconnecting.` : 'Connecting…',
+  get label() { return live.via === 'wifi' ? 'Wi-Fi, from this browser through the bridge' : 'Bluetooth LE, from this browser'; },
+  get receiver() { return live.via === 'wifi' ? 'the drone\'s Pi (dfb_pi --radio wifi)' : 'the drone\'s ESP32 (radio=ble)'; },
+  packets: true, settings: [],
+  wasm: () => liveLink(), room: () => 6000, roomNote: () => '',
+  signalNote: () => live.state === 'up' ? (live.via === 'wifi' ? `Connected to the bridge (${live.url}), packets to ${live.target || 'the drone'} over Wi-Fi. The signal strength isn't known over UDP: the link quality is counted from the packets.` : `Connected to ${live.name} from this browser, packets up to ${live.mtu - 3} bytes (the connection's MTU ${live.mtu}). The browser doesn't say the signal: the drone's own reading is its RSSI here.`) : live.state === 'lost' ? `${live.name}: the connection dropped; reconnecting.` : 'Connecting…',
   reset() {}, rebind() {}, step() {}, toStack() {}, fromDrone() {}, command() {},
   connected: () => live.state === 'up' && live.t - live.lastRx < 1,
   stats: () => ({ queued: 0, upQueued: 0 }),
@@ -35,7 +50,7 @@ const LIVE_MODEL = {
 const liveModel = () => live.on ? LIVE_MODEL : null;
 
 // The ground program in an instance of its own, as boards.js groundStart starts the simulator's.
-function liveGround() {
+function liveGround(link) {
   if (!brt.module) throw new Error('the flight computers are still loading');
   const g = new WebAssembly.Instance(brt.module, { env: RnWasm.env() }).exports;
   let img = null, why = '';
@@ -44,7 +59,7 @@ function liveGround() {
   if (img) { new Uint8Array(g.memory.buffer, g.img_ptr(), img.length).set(img); if (g.host_setup(img.length)) why = 'its program didn\'t load'; }
   else g.host_setup(0);
   const e = g.gnd_setup(0, 0);
-  g.radio_link(5, 0, 0);
+  g.radio_link(...link);
   return { g, why: why || (e ? cstr(g, g.gnd_why_ptr(), 96) : '') };
 }
 function liveMark(g, phrase) {
@@ -57,9 +72,18 @@ function liveMark(g, phrase) {
 /* ───────── connecting ───────── */
 async function liveFind() {
   const msg = $('#liveDlgMsg'), say = (s, tone) => { msg.textContent = s; msg.dataset.tone = tone || ''; };
-  if (!liveSupported()) return say('This browser has no Web Bluetooth here.', 'bad');
+  const via = liveVia();
   if (!hasTask('tlm')) return say('This design has no radio: give a board the Telemetry & radio task (Computers tab).', 'bad');
-  let G; try { G = liveGround(); } catch (e) { return say(e.message, 'bad'); }
+  if (via === 'ble' && !liveSupported()) return say('This browser has no Web Bluetooth here.', 'bad');
+  live.via = via;
+  let G; try { G = liveGround(liveLink()); } catch (e) { return say(e.message, 'bad'); }
+  if (via === 'wifi') {
+    const url = liveBridgeUrl();
+    if (!/^wss?:\/\/[^/\s]+/.test(url)) return say('The bridge address is a ws:// address, like ' + LIVE_BRIDGE + '.', 'bad');
+    $('#liveDlg').close();
+    liveStart(null, G, url);
+    return;
+  }
   const phrase = radioCfg.bind, mark = liveMark(G.g, phrase);
   let dev = null;
   try {
@@ -73,26 +97,59 @@ async function liveFind() {
   $('#liveDlg').close();
   liveStart(dev, G);
 }
-function liveStart(dev, G) {
+// dev: the Bluetooth device, or null over Wi-Fi with url the bridge's address.
+function liveStart(dev, G, url) {
   if (typeof usbViewOn === 'function' && usbViewOn()) usbViewStop(false);   // (the USB board's view ends: one real drone at a time)
   live.wasRunning = running;
   doReset();                                                         // (the simulated drone back on the ground, its boards started again)
   running = false; renderRun();
   radioReset();
-  Object.assign(live, { on: true, state: 'connecting', dev, g: G.g, name: dev.name || 'the drone', t0: performance.now() / 1000 - 1, rx: [], writing: false, pend: null,
+  const wifi = !dev;
+  Object.assign(live, { on: true, state: 'connecting', via: wifi ? 'wifi' : 'ble', dev, ws: null, url: url || '', target: wifi ? liveDroneHost() : '',
+    g: G.g, name: wifi ? 'the drone (Wi-Fi)' : dev.name || 'the drone', t0: performance.now() / 1000 - 1, rx: [], writing: false, pend: null,
     arm: false, fly: false, lastRx: -1, sent: 0, got: 0, bad: 0, wErr: 0, mtu: 0, tries: 0, stopAsk: 0, slow: 0 });
   live.t = live.lastT = 1; live.nextGnd = 1; live.nextGs = 1;
   const ph = new TextEncoder().encode(String(radioCfg.bind)).slice(0, 63);
   new Uint8Array(G.g.memory.buffer, G.g.rbuf_ptr(), ph.length).set(ph);
   const ses = crypto.getRandomValues(new Uint32Array(1))[0] & 0x7FFFFFFF || 1;
-  G.g.plink_setup(0, ph.length, ses, 5, 0, 0); G.g.plink_mtu(64);
+  G.g.plink_setup(0, ph.length, ses, ...liveLink());
+  if (!wifi) G.g.plink_mtu(64);                                      // (Bluetooth: until the connection's MTU is known; Wi-Fi: 250, as dfb_pi's)
   brt.gnd = G.g; brt.gndOk = !G.why; brt.gndErr = G.why ? `This page's command module: ${G.why}` : ''; brt.t = 1; radio.t = 1;
-  dev.addEventListener('gattserverdisconnected', liveDropped);
+  if (dev) dev.addEventListener('gattserverdisconnected', liveDropped);
   document.querySelector('.view').classList.add('live'); document.body.classList.add('live-on'); $('#livePaused').hidden = false;
   $('#liveBar').hidden = false; liveRenderBar(true); liveRenderBtn();
-  linkLog('↕', 'link', `connecting to ${live.name}`, 'Bluetooth LE from this browser', 'warn');
+  linkLog('↕', 'link', `connecting to ${live.name}`, wifi ? `Wi-Fi through the bridge at ${live.url}` : 'Bluetooth LE from this browser', 'warn');
   live.timer = setInterval(liveTick, 4);
-  liveGatt();
+  if (wifi) liveWs(); else liveGatt();
+}
+// Wi-Fi: the bridge's WebSocket (runner/ground/wifi_bridge.py), one message a packet. Lost or not there yet, it tries
+// again each second.
+function liveWs() {
+  if (!live.on || live.via !== 'wifi') return;
+  live.state = live.tries ? 'lost' : 'connecting'; live.tries++;
+  let ws; try { ws = new WebSocket(live.url); } catch (e) { liveWsFailed(null, e.message); return; }
+  ws.binaryType = 'arraybuffer'; live.ws = ws; let opened = false;
+  ws.onopen = () => {
+    if (live.ws !== ws) return;
+    opened = true; live.state = 'up'; live.tries = 0;
+    linkLog('↕', 'link', 'connected to the bridge', `${live.url}: packets to ${live.target || 'the drone'} over Wi-Fi`, 'good');
+  };
+  ws.onmessage = e => {
+    if (live.ws !== ws) return;
+    if (typeof e.data === 'string') {                                // (the bridge's hello: where the packets go)
+      try { const h = JSON.parse(e.data); if (h && h.drone) { live.target = String(h.drone); linkLog('↕', 'link', `the bridge sends to ${live.target}`, '', ''); } } catch (err) {}
+      return;
+    }
+    live.rx.push(new Uint8Array(e.data));
+  };
+  ws.onclose = e => { if (live.ws === ws) liveWsFailed(ws, opened ? 'the bridge closed the connection' : 'no bridge answered', opened); };
+}
+function liveWsFailed(ws, why, wasUp) {
+  if (!live.on || (ws && live.ws !== ws)) return;
+  live.ws = null; live.state = 'lost';
+  if (wasUp) linkLog('↕', 'link', `${live.name}: disconnected`, `${why}; reconnecting, the drone's failsafe flies it meanwhile`, 'bad');
+  else if (live.tries === 1 || live.tries % 10 === 0) linkLog('↕', 'link', `couldn't reach the bridge at ${live.url}`, `${why}. Start it on this computer: python3 runner/ground/wifi_bridge.py --drone ${live.target || 'THE-PI-ADDRESS'}; trying again`, 'bad');
+  clearTimeout(live.retry); live.retry = setTimeout(liveWs, 1000);
 }
 async function liveGatt() {
   const d = live.dev; if (!live.on || !d) return;
@@ -126,7 +183,8 @@ function liveStop() {
   if (!live.on) return;
   live.on = false; live.state = 'off';
   clearInterval(live.timer); clearTimeout(live.retry);
-  const d = live.dev; live.dev = null; live.up = null;
+  const d = live.dev, ws = live.ws; live.dev = null; live.up = null; live.ws = null;
+  if (ws) { try { ws.close(); } catch (e) {} }
   if (d) { d.removeEventListener('gattserverdisconnected', liveDropped); try { if (d.gatt.connected) d.gatt.disconnect(); } catch (e) {} }
   live.g = null;
   document.querySelector('.view').classList.remove('live'); document.body.classList.remove('live-on'); $('#livePaused').hidden = true;
@@ -138,6 +196,10 @@ function liveStop() {
 
 /* ───────── each 4 ms: the command module ───────── */
 function liveSend(b) {
+  if (live.via === 'wifi') {                                         // (a datagram each: none waits, a lost one is as a lost packet)
+    if (live.ws && live.ws.readyState === 1 && live.ws.bufferedAmount < 16384) { live.ws.send(b); live.sent++; } else live.wErr++;
+    return;
+  }
   if (!live.up) return;
   if (live.writing) { live.pend = b; return; }                       // (one write at a time: the newest waits; plink sends again what counts)
   live.writing = true; live.sent++;
@@ -250,7 +312,7 @@ function liveRenderBtn() {
   const b = $('#liveBtn'); if (!b) return;
   b.classList.toggle('on', live.on); b.setAttribute('aria-pressed', String(live.on));
   setText(b.querySelector('.live-lbl'), live.on ? 'Live' : 'Connect to drone');
-  b.title = live.on ? 'Flying the real drone over Bluetooth: the bar over the view disconnects' : 'Fly the real drone from this page over Bluetooth LE (its ESP32-S3 or C3 set to radio=ble)';
+  b.title = live.on ? `Flying the real drone over ${live.via === 'wifi' ? 'Wi-Fi' : 'Bluetooth'}: the bar over the view disconnects` : 'Fly the real drone from this page: over Bluetooth LE (an ESP32-S3 or C3 set to radio=ble) or Wi-Fi (a Pi, through the bridge on this computer)';
 }
 function liveArmToggle() {
   if (!live.arm) {
@@ -266,15 +328,27 @@ function flashEl(e) { if (!e) return; e.classList.remove('flash'); void e.offset
 /* ───────── the page ───────── */
 function liveOpen() {
   if (live.on) { $('#liveStop').focus(); return; }
-  const ok = liveSupported(), dlg = $('#liveDlg');
+  const via = liveVia(), ok = via === 'wifi' || liveSupported(), dlg = $('#liveDlg');
   setText($('#livePhrase'), radioCfg.bind);
-  $('#liveNoBt').hidden = ok; $('#liveFind').disabled = !ok;
+  setText($('#liveHow'), via === 'wifi' ? `Wi-Fi, to the drone's Pi running dfb_pi --radio wifi,${radioCfg.sta ? 'sta' : 'ap,' + (radioCfg.channel || 1)} (this computer on its network).`
+    : 'Bluetooth LE, to the drone\'s ESP32-S3 or C3 set to radio=ble (pick Wi-Fi on the Ground tab for a Pi on Wi-Fi).');
+  $('#liveWifi').hidden = via !== 'wifi';
+  if (via === 'wifi') { $('#liveDrone').value = liveDroneHost(); $('#liveBridge').value = liveBridgeUrl(); liveBridgeCmd(); }
+  $('#liveNoBt').hidden = via !== 'ble' || ok; $('#liveFind').disabled = !ok;
+  setText($('#liveFind'), via === 'wifi' ? 'Connect' : 'Find the drone');
   setText($('#liveDlgMsg'), ''); setText($('#liveMode'), hasTask('nav') ? 'This design navigates: the keys, the pads or a gamepad move it, the switches arm it and take it off.' : 'This design flies in angle mode (no navigation): plug in a gamepad for the sticks before you arm.');
   dlg.showModal();
+}
+// The bridge's command line, from the drone's address and the bridge's port (both kept, as the install guides' fields).
+function liveBridgeCmd() {
+  const drone = $('#liveDrone').value.trim() || 'THE-PI-ADDRESS', m = /:(\d+)\s*$/.exec($('#liveBridge').value.trim()), port = m ? +m[1] : 14571;
+  setText($('#liveBridgeCmd'), `python3 runner/ground/wifi_bridge.py --drone ${drone}${port !== 14571 ? ' --port ' + port : ''}`);
 }
 (function liveBind() {
   const b = $('#liveBtn'); if (!b) return;
   b.addEventListener('click', liveOpen);
+  $('#liveDrone').addEventListener('input', e => { instSave('drone', e.target.value.trim()); liveBridgeCmd(); });
+  $('#liveBridge').addEventListener('input', e => { instSave('liveBridge', e.target.value.trim()); liveBridgeCmd(); });
   $('#liveFind').addEventListener('click', liveFind);
   $('#liveClose').addEventListener('click', () => $('#liveDlg').close());
   $('#liveArm').addEventListener('click', liveArmToggle);

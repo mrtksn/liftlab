@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=c09b57ca86">
+<link rel="stylesheet" href="css/style.css?v=56d856fc7d">
 </head>
 <body>
 <div class="app">
@@ -149,7 +149,7 @@
       <div class="pane gs" id="paneGs" role="tabpanel" aria-labelledby="tabGs" hidden>
         <section class="sec gs-sec" id="liveConnectSec">
           <h2>Real drone</h2>
-          <button class="btn live-btn" id="liveBtn" type="button" aria-pressed="false" title="Fly the real drone from this page over Bluetooth LE (its ESP32-S3 or C3 set to radio=ble)">
+          <button class="btn live-btn" id="liveBtn" type="button" aria-pressed="false" title="Fly the real drone from this page: over Bluetooth LE (an ESP32-S3 or C3 set to radio=ble) or Wi-Fi (a Pi, through the bridge on this computer)">
             <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 5 7 6-3.5 3V2l3.5 3-7 6"/></svg>
             <span class="live-lbl">Connect to drone</span>
           </button>
@@ -400,7 +400,13 @@
       </div>
       <dialog class="ask live-dlg" id="liveDlg" aria-labelledby="liveTitle">
         <h2 id="liveTitle">Fly the real drone</h2>
-        <p>This page becomes the command module. Its program runs here and talks to the drone's ESP32-S3 or C3 over Bluetooth LE, set to <code>radio=ble</code>. The 3D view and the Ground tab show the drone's telemetry, and the simulation pauses while you're connected.</p>
+        <p>This page becomes the command module. Its program runs here and talks to the drone over the Ground tab's link: <span id="liveHow"></span> The 3D view and the Ground tab show the drone's telemetry, and the simulation pauses while you're connected.</p>
+        <div class="live-wifi" id="liveWifi" hidden>
+          <label>The drone's address <input type="text" id="liveDrone" spellcheck="false" autocomplete="off" aria-label="The drone's address on the Wi-Fi network"></label>
+          <label>The bridge <input type="text" id="liveBridge" spellcheck="false" autocomplete="off" aria-label="The bridge's address on this computer"></label>
+          <p class="hint">A browser can't send UDP, so the packets go through a small relay on this computer. In this repository's folder, in a terminal (Python 3, nothing to install):</p>
+          <pre class="live-cmd"><code id="liveBridgeCmd"></code></pre>
+        </div>
         <ul class="live-list">
           <li>Binding phrase: <b id="livePhrase"></b> (the Ground tab's). The drone's <code>bind=</code> must be the same.</li>
           <li id="liveMode"></li>
@@ -666,9 +672,9 @@
 <script src="js/apps.js?v=93c0cbb01e"></script>
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
-<script src="js/live.js?v=351bf507a2"></script>
+<script src="js/live.js?v=ed2478adf9"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
-<script src="js/gs-ui.js?v=979f35d7ed"></script>
+<script src="js/gs-ui.js?v=97dba298fa"></script>
 <script src="js/agent.js?v=df7f044dda"></script>
 <script src="js/agent-tools.js?v=6fe4ba418f"></script>
 <script src="js/agent-tools-more.js?v=9b996aefba"></script>

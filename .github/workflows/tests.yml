@@ -76,6 +76,8 @@ jobs:
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/escsniff/main tools/test_escsniff.c runner/escsniff/main/sniff_core.c -lm -o /tmp/test-escsniff
           /tmp/test-escsniff
+      - name: Wi-Fi bridge (LiftLab's page to a Pi's UDP link)
+        run: python3 tools/test_wifi_bridge.py
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do
