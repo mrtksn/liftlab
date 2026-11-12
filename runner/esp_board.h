@@ -15,6 +15,7 @@
 #define LB_RATE 1000
 #define LB_RADIO_UART UART_NUM_2
 #define LB_LINK_UART 1   /* UART_NUM_1: the companion link on pins of its own (link_uart=) */
+#define LB_WIFI_BESIDE_LINK_UART 1
 #define LB_RX_SIGNAL U2RXD_IN_IDX
 #define LB_TX_SIGNAL U2TXD_OUT_IDX
 static inline int lb_output_pin(int p) { return p == 1 || p == 2 || (p >= 4 && p <= 18) || p == 21 || (p >= 38 && p <= 42) || p == 47 || p == 48; }
@@ -29,6 +30,7 @@ static inline int lb_output_pin(int p) { return p == 1 || p == 2 || (p >= 4 && p
 #define LB_RATE 250
 #define LB_RADIO_UART UART_NUM_1
 #define LB_LINK_UART -1           /* (two UARTs: the USB port's and the radio's; none spare) */
+#define LB_WIFI_BESIDE_LINK_UART 1
 #define LB_RX_SIGNAL U1RXD_IN_IDX
 #define LB_TX_SIGNAL U1TXD_OUT_IDX
 static inline int lb_output_pin(int p) { return p == 0 || p == 1 || (p >= 3 && p <= 7) || p == 10; }
@@ -43,6 +45,9 @@ static inline int lb_output_pin(int p) { return p == 0 || p == 1 || (p >= 3 && p
 #define LB_RATE 1000
 #define LB_RADIO_UART UART_NUM_2
 #define LB_LINK_UART 1   /* UART_NUM_1 */
+/* The Wi-Fi driver (radio=wifi, espnow, peers) takes ~45 KB of the ~50 KB heap left beside the flight program: with
+ * the companion link's own UART and tasks as well, the sensor and link tasks get no memory. One or the other here. */
+#define LB_WIFI_BESIDE_LINK_UART 0
 #define LB_RX_SIGNAL U2RXD_IN_IDX
 #define LB_TX_SIGNAL U2TXD_OUT_IDX
 static inline int lb_output_pin(int p) { return p == 4 || (p >= 13 && p <= 14) || (p >= 16 && p <= 19) || (p >= 21 && p <= 23) || (p >= 25 && p <= 27) || p == 32 || p == 33; }

@@ -28,6 +28,11 @@ int hw_load(hw_config *c) {
   if(nvs_get_blob(h,"hw",&t,&n)==ESP_OK)lb_hw_restore(c,&t,n);
   nvs_close(h);
   char why[96];
+  if (hw_wifi_crowded(c)) {   /* (saved by older firmware) the companion link and the motors first: the Wi-Fi radio goes */
+    hw_config d; hw_defaults(&d);
+    c->radio_kind = d.radio_kind; c->radio2_kind = -1; c->peer_channel = 0;
+    printf("saved radio dropped: the Wi-Fi radio and link_uart don't both fit in this chip's memory (the Pi can carry the radio)\n");
+  }
   if (hw_check(c, why, sizeof why)) { printf("saved wiring refused: %s; using chip defaults\n", why); hw_defaults(c); }
   return 0;
 }

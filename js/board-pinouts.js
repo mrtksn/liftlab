@@ -211,3 +211,79 @@ function boardModelSection(C, b, editWiringFn) {
   return wrap;
 }
 if (typeof module !== 'undefined') module.exports = { BUILTIN_BOARD_MODELS, parsePinLine, boardModel, boardModelErrors, boardPinUses, boardPinoutSvg };
+
+// The power wiring drawn: the battery's + and − to the ESCs (or MOSFET stages) and to each board's supply (a converter's
+// 5 V out to the board's 5 V / VIN pin, another board's 5 V pin, or USB), the voltage divider to the ADC pin, one ground.
+function supplyPinName(C, b) {
+  const M = boardModel(C, b), p = modelPins(M).find(p => p.fn === '5v');
+  return p ? (M.layout === 'header' ? 'pin ' + p.num + ' (' + p.label + ')' : p.label) : '5 V';
+}
+function groundPinName(C, b) {
+  const M = boardModel(C, b), p = modelPins(M).find(p => p.fn === 'gnd');
+  return p ? (M.layout === 'header' ? 'pin ' + p.num + ' (GND)' : 'GND') : 'GND';
+}
+function powerDiagramSvg(C, comps, battery, cells) {
+  const W = 734, x1 = 12, w1 = 150, xp = 186, xg = 204, x2 = 226, w2 = 220, x3 = 506, w3 = 206, top = 52, out = [];
+  const vmin = (cells * LIPO_MIN).toFixed(1), vmax = (cells * LIPO_MAX).toFixed(1);
+  const box = (x, y, w, h, kind, lines) => {
+    out.push('<g class="pw-box pd-' + kind + '"><rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="6"/>');
+    lines.forEach((t, i) => out.push('<text class="' + (i ? 'pw-sub' : 'pw-t') + '" x="' + (x + 9) + '" y="' + (y + 17 + i * 15) + '">' + pdEsc(t) + '</text>'));
+    out.push('</g>');
+  };
+  const wire = (kind, pts) => out.unshift('<polyline class="pd-lead pd-' + kind + '" fill="none" points="' + pts.map(p => p.join(',')).join(' ') + '"/>');
+  const dot = (kind, x, y) => out.push('<circle class="pw-dot pd-' + kind + '" cx="' + x + '" cy="' + y + '" r="3.5"/>');
+  // the middle column: an ESC or MOSFET stage per motor, then the converters
+  const mid = [], motors = comps.filter(c => c.type === 'motor');
+  for (const c of motors) {
+    const p = hardwarePart(C, c, comps), owner = hardwareOwner(C, c), brushed = p.driver === 'brushed';
+    mid.push({ kind: 'pwm', lines: [(brushed ? 'MOSFET stage' : 'ESC') + ' → ' + c.name, 'signal ← ' + (owner && p.pin >= 0 ? owner.name + ' ' + boardGpioShort(C, owner, p.pin) : 'not wired')], h: 42 });
+  }
+  const supplies = new Map(C.boards.map(b => [b, boardSupply(C, b, cells)])), conv = {};
+  for (const k of ['boost5', 'reg5']) if ([...supplies.values()].some(S => S.kind === k)) { conv[k] = { kind: 'v5', lines: [POWER_SUPPLIES[k].short, k === 'boost5' ? 'in: ' + vmin + '–' + vmax + ' V · out: 5 V' : 'in: the pack · out: 5 V'], h: 42 }; mid.push(conv[k]); }
+  let y = top; for (const m of mid) { m.y = y; y += m.h + 14; }
+  // the right column: the boards
+  let yb = top; const at = new Map();
+  for (const b of C.boards) { at.set(b, { y: yb, h: 56 }); yb += 56 + 16; }
+  const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core), sense = core && ESP_PROFILES[core.kind] && bus.batteryPin >= 0;
+  const batH = 64, divY = top + batH + 26, divH = 72;
+  const rail = Math.max(y, yb, sense ? divY + divH + 14 : top + batH + 14, top + batH + 30) + 10, H = rail + 26;
+  // + and − lanes, the top lane for boards fed straight from the pack, the ground rail
+  const lanes = { pos: [], neg: [] };
+  box(x1, top, w1, batH, 'vbat', [battery, cells + 'S · ' + vmin + '–' + vmax + ' V', '+ red · − black']);
+  wire('vbat', [[x1 + w1, top + 18], [xp, top + 18]]); lanes.pos.push(top + 18);
+  wire('gnd', [[x1 + 30, top + batH], [x1 + 30, rail]]);
+  for (const m of mid) {
+    box(x2, m.y, w2, m.h, m.kind, m.lines);
+    wire('vbat', [[xp, m.y + 13], [x2, m.y + 13]]); lanes.pos.push(m.y + 13); dot('vbat', xp, m.y + 13);
+    wire('gnd', [[xg, m.y + m.h - 10], [x2, m.y + m.h - 10]]); lanes.neg.push(m.y + m.h - 10); dot('gnd', xg, m.y + m.h - 10);
+  }
+  if (lanes.pos.length) wire('vbat', [[xp, Math.min(...lanes.pos)], [xp, Math.max(...lanes.pos)]]);
+  if (lanes.neg.length) wire('gnd', [[xg, Math.min(...lanes.neg)], [xg, rail]]);
+  if (sense) {
+    const R = dividerResistors(bus.batteryDivider);
+    box(x1, divY, w1, divH, 'signal', ['Voltage divider', 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, bus.batteryPin)]);
+    wire('vbat', [[x1 + w1, divY + 14], [xp - 8, divY + 14], [xp - 8, top + 18]]); dot('vbat', xp - 8, top + 18);
+    wire('gnd', [[x1 + 60, divY + divH], [x1 + 60, rail]]);
+  }
+  // the boards: 5 V from a converter, another board or the pack; their grounds to the rail on the right
+  const lane5 = { boost5: x3 - 46, reg5: x3 - 36 }, direct = x3 - 24, fromLane = x3 - 12, gx = x3 + w3 + 10;
+  const fed = { boost5: [], reg5: [] };
+  for (const b of C.boards) {
+    const S = supplies.get(b), a = at.get(b), yin = a.y + 30;
+    box(x3, a.y, w3, a.h, S.kind === 'usb' ? 'signal' : 'v5', [b.name, S.kind === 'usb' ? 'powered from its USB port' : '5 V in: ' + supplyPinName(C, b) + (S.kind === 'direct' ? ' ← battery +' : ''), 'GND: ' + groundPinName(C, b)]);
+    if (fed[S.kind]) { wire('v5', [[lane5[S.kind], yin], [x3, yin]]); fed[S.kind].push(yin); }
+    if (S.kind === 'direct') { wire('vbat', [[xp, top + 18], [xp, top - 22], [direct, top - 22], [direct, yin], [x3, yin]]); }
+    if (S.kind === 'board' && S.from) { const f = at.get(S.from); wire('v5', [[x3, f.y + 30], [fromLane, f.y + 30], [fromLane, yin], [x3, yin]]); }
+    wire('gnd', [[x3 + w3, a.y + a.h - 10], [gx, a.y + a.h - 10]]);
+  }
+  wire('gnd', [[gx, top + 46], [gx, rail], [x1 + 30, rail]]);
+  for (const k of Object.keys(fed)) if (fed[k].length) { const c = conv[k], yo = c.y + c.h / 2; wire('v5', [[x2 + w2, yo], [lane5[k], yo], [lane5[k], Math.min(yo, ...fed[k])], [lane5[k], Math.max(yo, ...fed[k])]]); }
+  out.push('<text class="pw-rail" x="' + (x1 + 36) + '" y="' + (rail - 5) + '">GND: one common ground (battery −, every ESC and board)</text>');
+  out.push('<text class="pd-title" x="' + x1 + '" y="20">Power wiring</text>');
+  return '<svg class="pinout-diagram power-diagram" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Power wiring">' + out.join('') + '</svg>';
+}
+const PW_LEGEND = { vbat: 'Battery + (pack voltage)', v5: '5 V', gnd: 'GND', pwm: 'ESC / MOSFET stage', signal: 'Sensing' };
+function powerDiagramView(C, comps, battery, cells) {
+  const box = el('div', { class: 'pd-scroll' }); box.innerHTML = powerDiagramSvg(C, comps, battery, cells);
+  return el('div', {}, box, el('div', { class: 'pd-legend' }, ...Object.entries(PW_LEGEND).map(([k, t]) => el('span', {}, el('i', { class: 'pd-swatch pd-' + k }), t))));
+}

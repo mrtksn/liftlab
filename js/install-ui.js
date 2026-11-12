@@ -448,8 +448,10 @@ async function espSendWiring(motors, servos, msg) {
   const custom=Object.values(plan.sensors).some(s=>s.driver==='custom');
   if(custom && !INST.customFirmware) { instMsg(msg,'Custom C drivers require rebuilt firmware. Flash your custom .bin files first, then send these settings.','bad');return; }
   const lines=hardwareSettings(plan);
-  for (const l of lines) {
-    const r = await espSend(dfFrame(LK.SETTING, l), s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_|radio|bind|phrase|firmware/.test(s), 2000, msg, 'Sending ' + l);   // (radio=, bind=: the board's answer, or why it can't)
+  const answer = s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_|radio|bind|phrase|firmware|no memory/.test(s);   // (radio=, bind=: the board's answer, or why it can't)
+  for (const [i, l] of lines.entries()) {
+    let r = await espSend(dfFrame(LK.SETTING, l), answer, 2000, msg, 'Sending ' + l);
+    if (r === null && i === 0 && !/Couldn|Not conn/.test(msg.textContent)) r = await espSend(dfFrame(LK.SETTING, l), answer, 3000, msg, 'Sending ' + l + ' (again: it may still have been starting)');   // (just flashed or connected: it restarts)
     if (r === null) { if (!/Couldn|Not conn/.test(msg.textContent)) instMsg(msg, 'No answer from the board.', 'bad'); return; }
     if (!/^set /.test(r)) { instMsg(msg, 'The board refused ' + l + ': ' + r, 'bad'); return; }
   }

@@ -109,6 +109,9 @@ int main(void){
    assert(hw_set(&u,"link_uart=34,32",log,sizeof log));                        /* an input-only pin can't send */
    assert(hw_set(&u,"motors=32",log,sizeof log)&&strstr(log,"twice"));          /* a pin used twice */
    assert(hw_set(&u,"link_uart=32",log,sizeof log));
+   assert(hw_set(&u,"radio=wifi,ap,6",log,sizeof log)&&strstr(log,"no memory for both"));   /* Wi-Fi and the link's UART: not both here */
+   assert(hw_set(&u,"peers=6",log,sizeof log)&&strstr(log,"no memory for both"));
+   {hw_config w=u;w.link_tx=w.link_rx=-1;assert(!hw_set(&w,"radio=wifi,ap,6",log,sizeof log)&&hw_set(&w,"link_uart=32,34",log,sizeof log));}
 #elif CONFIG_IDF_TARGET_ESP32C3
    assert(hw_set(&u,"link_uart=4,5",log,sizeof log)&&strstr(log,"no spare UART"));
 #endif

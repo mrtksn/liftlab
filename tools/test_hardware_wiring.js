@@ -155,6 +155,9 @@ console.log('Radio settings checks passed: radio=, bind=, peers= and fleet= line
  esp.wiring.boards[1]={sda:21,scl:22,fcLinkTx:32,fcLinkRx:34};pl=A.hardwarePlan(esp,parts,esp.boards[0]);assert.equal(pl.errors.length,0,pl.errors.join());
  const S=A.hardwareSettings(pl);assert.ok(S.indexOf('link_uart=-1')<S.indexOf('motors=25,26,27,14')&&S.includes('link_uart=32,34'),'cleared first, set after');
  assert.ok(F.boardLinks(esp,parts)[0].wires[0].includes('GPIO 32 (TX)'),'the link\'s wires use the pins');assert.ok(A.hardwareOverview(esp,parts).groups.some(g=>g.rows.some(r=>/GPIO 34 \(RX\)/.test(r.connection))),'and the overview');
+ {const was=ctx.radioCfg,e=()=>A.hardwarePlan({...esp,boards:[{...esp.boards[0],tasks:[...new Set([...esp.boards[0].tasks,'tlm'])]},...esp.boards.slice(1).map(b=>({...b,tasks:b.tasks.filter(t=>t!=='tlm')}))]},parts,{...esp.boards[0],tasks:[...new Set([...esp.boards[0].tasks,'tlm'])]}).errors;
+  ctx.radioCfg={kind:'wifi',sta:0,channel:6,bind:'b'};assert.ok(e().some(x=>x.includes('don\'t both fit')),'Wi-Fi radio beside link_uart on a classic ESP32');
+  ctx.radioCfg={kind:'elrs',rate:250,ratio:4};assert.ok(!e().some(x=>x.includes('don\'t both fit')),'ExpressLRS fits');ctx.radioCfg=was;}
  esp.wiring.boards[1].fcLinkTx=34;assert.ok(A.hardwarePlan(esp,parts,esp.boards[0]).errors.some(e=>e.startsWith('Companion link')),'an input-only pin can\'t send');
  esp.wiring.boards[1].fcLinkTx=25;assert.ok(A.hardwarePlan(esp,parts,esp.boards[0]).errors.some(e=>e.includes('overlap')),'a motor pin is taken');
  esp.wiring.boards[1]={sda:21,scl:22,fcLinkReset:true};assert.ok(A.hardwareSettings(A.hardwarePlan(esp,parts,esp.boards[0])).includes('link_uart=-1'),'back to USB: cleared once');

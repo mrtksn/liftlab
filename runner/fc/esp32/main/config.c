@@ -35,6 +35,14 @@ void hw_defaults(hw_config *c) {
 static int host_ok(const char *s) { if (!s[0]) return 0; for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '.' || *s == '-')) return 0; return 1; }
 static int prefix_ok(const char *s) { size_t n = strlen(s); if (!n || s[0] == '/' || s[n - 1] == '/') return 0; for (; *s; s++) if (*s <= ' ' || *s > '~' || *s == '+' || *s == '#') return 0; return 1; }
 int hw_peers(const hw_config *c) { return c->peer_channel; }
+int hw_wifi_crowded(const hw_config *c) {
+#if LB_WIFI_BESIDE_LINK_UART
+  (void)c; return 0;
+#else
+  int k = c->radio_kind, k2 = c->radio2_kind;
+  return c->link_tx >= 0 && (k == RLINK_WIFI || k == RLINK_ESPNOW || k2 == RLINK_WIFI || k2 == RLINK_ESPNOW || c->peer_channel);
+#endif
+}
 int hw_outputs_wired(const hw_config *c) {
   int n = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) n += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) n += c->servo_pin[j] >= 0;
   return n;
@@ -115,6 +123,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
       if (!c->wifi_ssid[0]) { snprintf(err, errn, "link=mqtt joins a Wi-Fi network: set wifi=SSID,PASSWORD (the broker's network) first"); return -1; }
       if (k == RLINK_WIFI || k == RLINK_ESPNOW || k2 == RLINK_WIFI || k2 == RLINK_ESPNOW || c->peer_channel) { snprintf(err, errn, "link=mqtt uses the Wi-Fi: not yet beside radio=wifi, radio=espnow or peers (use elrs, nrf24, serial or ble)"); return -1; }
     }
+    if (hw_wifi_crowded(c)) { snprintf(err, errn, "Wi-Fi radio or peers beside link_uart: no memory for both on this chip"); return -1; }
     if (c->radio2_kind >= 0) {                                       /* a second link: valid, and possible beside the first */
       rlink_cfg L2; char why[120];
       if (hw_radio2(c, &L2)) { snprintf(err, errn, "invalid second radio link"); return -1; }

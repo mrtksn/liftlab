@@ -44,6 +44,47 @@ function hardwarePart(C, c, comps) {
 // otherwise (wiring.parts[id].power === false). With no wired battery on board the drone doesn't turn on.
 const batteryParts = comps => comps.filter(c => c.type === 'mass' && c.battery);
 const batteryWired = (C, c) => { const p = C.wiring && C.wiring.parts && C.wiring.parts[c.id]; return !(p && p.power === false); };
+// What feeds each board's 5 V (wiring.boards[id].supply; 'auto': a boost converter on a 1S pack, a 5 V regulator above).
+// 'board' takes another board's 5 V pin (wiring.boards[id].supplyFrom: that board's id), as a Pi's 5 V feeds an ESP32's VIN.
+const POWER_SUPPLIES = {
+  boost5: { label: '5 V boost converter from the battery', short: '5 V boost converter' },
+  reg5: { label: '5 V regulator (BEC) from the battery', short: '5 V regulator (BEC)' },
+  board: { label: 'Another board\'s 5 V pin', short: 'another board' },
+  direct: { label: 'The battery straight to its 5 V / VIN pin', short: 'the battery, direct' },
+  usb: { label: 'Its USB port (on the bench)', short: 'USB' },
+};
+const LIPO_MAX = 4.2, LIPO_MIN = 3.0;   // a LiPo cell's volts, charged and flat
+function boardSupply(C, b, cells) {
+  const s = hardwareBus(C, b), want = POWER_SUPPLIES[s.supply] ? s.supply : 'auto';
+  const kind = want === 'auto' ? (cells <= 1 ? 'boost5' : 'reg5') : want;
+  return { kind, auto: want === 'auto', from: kind === 'board' ? C.boards.find(x => x.id === s.supplyFrom && x !== b) || null : null };
+}
+// The power wiring's problems: a supply that can't make 5 V from this pack, a board fed straight from it, a divider that
+// would put too much on the ADC pin (or too little to read it well).
+function powerIssues(C, cells) {
+  const errors = [], warnings = [], vmax = cells * LIPO_MAX, vmin = cells * LIPO_MIN, pack = cells + 'S (' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V)';
+  for (const b of C.boards) {
+    const S = boardSupply(C, b, cells), esp = !!ESP_PROFILES[b.kind];
+    if (S.kind === 'boost5' && vmax >= 5) errors.push(b.name + ': a boost converter only steps up: a ' + pack + ' pack is already above 5 V. Use a 5 V regulator (BEC).');
+    if (S.kind === 'reg5' && vmin < 5.5) errors.push(b.name + ': a 5 V regulator can\'t make 5 V from a ' + pack + ' pack. Use a 5 V boost converter.');
+    if (S.kind === 'direct' && !esp) errors.push(b.name + ': its 5 V pin wants 4.75–5.25 V, not the battery\'s ' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V. Feed it 5 V from a converter.');
+    if (S.kind === 'direct' && esp && cells <= 1) warnings.push(b.name + ': from ' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V its own 3.3 V regulator (about 1 V of dropout) gives too little as the pack drains, and it resets. Feed it 5 V.');
+    if (S.kind === 'direct' && esp && cells > 1) errors.push(b.name + ': ' + vmax.toFixed(1) + ' V on its VIN overheats or destroys its linear 3.3 V regulator. Feed it 5 V.');
+    if (S.kind === 'board' && !S.from) errors.push(b.name + ': choose which board\'s 5 V pin feeds it');
+    if (S.kind === 'board' && S.from) { const F = boardSupply(C, S.from, cells); if (F.kind === 'board' && F.from === b) errors.push(b.name + ' and ' + S.from.name + ' feed each other: one of them needs a supply of its own'); else if (F.kind === 'usb') warnings.push(b.name + ': fed from ' + S.from.name + ', which is on USB: fine on the bench, not in flight'); }
+    if (S.kind === 'usb') warnings.push(b.name + ': on USB it works on the bench only. Give it a supply from the battery to fly.');
+  }
+  const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core);
+  if (core && ESP_PROFILES[core.kind] && bus.batteryPin >= 0 && bus.batteryDivider >= 1) {
+    const v = vmax / bus.batteryDivider, best = Math.max(1, Math.ceil(vmax / 2.2 * 2) / 2);
+    if (v > 3.3) errors.push('Battery voltage: at full charge the ADC pin would see ' + v.toFixed(2) + ' V, more than the chip takes (3.3 V). Use a divider ratio of at least ' + best + '.');
+    else if (v > 2.45) warnings.push('Battery voltage: at full charge the ADC pin sees ' + v.toFixed(2) + ' V; the ESP32 reads accurately only up to about 2.45 V. A ratio of ' + best + ' keeps it in range.');
+    else if (v < 1.2) warnings.push('Battery voltage: at full charge the ADC pin sees only ' + v.toFixed(2) + ' V of its range, so it reads coarsely. A ratio of ' + best + ' suits a ' + cells + 'S pack.');
+  }
+  return { errors, warnings };
+}
+// Resistors for a divider ratio: R1 (battery + to the midpoint) 100 kΩ, R2 (midpoint to GND) to suit, both in kΩ.
+const dividerResistors = r => ({ r1: 100, r2: r > 1 ? Math.round(100 / (r - 1) * 10) / 10 : Infinity });
 // The links between onboard boards: every other board with duties talks to the flight core's board over a serial
 // link (921600 baud). On a Pi: its UART on GPIO 14/15 (/dev/serial0) or a USB serial adapter, to the ESP's UART0.
 const LINK_CARRIES = { nav: 'navigation: attitude and sensors up 100 times a second, the acceleration and heading wanted down',
@@ -188,6 +229,9 @@ function hardwarePlan(C, comps, b) {
     if (!Number.isInteger(bus.escCellsMin) || !Number.isInteger(bus.escCellsMax) || bus.escCellsMin<1 || bus.escCellsMax>14 || bus.escCellsMin>bus.escCellsMax) errors.push('ESC cells: whole numbers, 1–14S, minimum not above maximum');
     else if (motorConfigs.some(m=>m.driver==='pwm') && typeof battCfg==='function') { const n=battCfg().cells; if (n<bus.escCellsMin || n>bus.escCellsMax) warnings.push('The battery is '+n+'S, but '+b.name+'’s ESC configuration takes '+(bus.escCellsMin===bus.escCellsMax?bus.escCellsMin+'S':bus.escCellsMin+'–'+bus.escCellsMax+'S')); }
   }
+  // A Wi-Fi radio (wifi, ESP-NOW, the other drones) takes most of a classic ESP32's memory: beside the companion link's own UART the sensor and link tasks get none.
+  if(profile && profile.wifiBesideLinkUart===false && b.tasks.includes('tlm') && bus.fcLinkTx>=0 && (radioHas('wifi') || radioHas('espnow') || peerSettingLines(hardwareRadio()||{}).after.length))
+    errors.push(b.name+': the pilot\'s Wi-Fi radio ('+(radioHas('wifi')?'Wi-Fi':'ESP-NOW')+') and the companion link on its own pins don\'t both fit in the '+profile.label+'\'s memory. Assign the radio to the companion board (Computers → Radio), or pick a radio without Wi-Fi (ExpressLRS, nRF24L01, a serial line) on the Ground tab');
   if(profile && !b.tasks.includes('core') && b.tasks.includes('tlm') && bus.crsfRx>=0)errors.push('Receiver: standalone ESP radio firmware is not implemented; use the flight-core ESP or a telemetry Pi');
   const used=new Map();for(const claim of hardwarePinClaims(C,comps,b)){if(used.has(claim.pin))errors.push('GPIO '+claim.pin+': '+used.get(claim.pin)+' and '+claim.name+' overlap');used.set(claim.pin,claim.name);}
   if(typeof boardModel==='function'){const M=boardModel(C,b);if(M){const on=new Set(modelPins(M).map(p=>p.gpio));for(const [pin,name] of used)if(!on.has(pin))warnings.push(name+': GPIO '+pin+' isn\'t on '+b.name+'\'s header ('+M.label+'): pick another pin, or fix the board\'s pinout');}}
@@ -299,7 +343,7 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired};
+if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
@@ -307,7 +351,9 @@ function hardwareOverview(C, comps) {
   const groups=C.boards.map(b=>({id:b.id,name:b.name,kind:b.kind,rows:[]})),unassigned=[];
   {   // power first: what feeds everything else
     const bats=batteryParts(comps),g={id:'power',name:'Power',kind:'',rows:[]};
-    for(const c of bats)g.rows.push(batteryWired(C,c)?{device:c.name,connection:'+ / − → power distribution: ESCs (or MOSFET stages), and each board through its regulator',note:'Share GND with every board'}:{device:c.name,connection:'Not connected',note:'Unplugged: it powers nothing'});
+    const cells=typeof battCfg==='function'?battCfg().cells:1;
+    for(const c of bats)g.rows.push(batteryWired(C,c)?{device:c.name,connection:'+ / − → power distribution: ESCs (or MOSFET stages), and the boards\' supplies',note:'Share GND with every board'}:{device:c.name,connection:'Not connected',note:'Unplugged: it powers nothing'});
+    if(bats.some(c=>batteryWired(C,c)))for(const b of C.boards){const S=boardSupply(C,b,cells);g.rows.push({device:b.name+' supply',connection:S.kind==='board'?(S.from?S.from.name+'\'s 5 V pin':'choose a board'):POWER_SUPPLIES[S.kind].label,note:S.auto?'automatic for a '+cells+'S pack':''});}
     if(!bats.length)g.rows.push({device:'Battery',connection:'None on the drone',note:'Nothing powers it: add a battery in Airframe'});
     else if(!bats.some(c=>batteryWired(C,c)))g.rows.push({device:'Power',connection:'No battery connected',note:'The drone doesn\'t turn on'});
     groups.unshift(g);

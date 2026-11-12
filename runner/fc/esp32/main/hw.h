@@ -84,6 +84,8 @@ void hw_radio(const hw_config *c, rlink_cfg *L);
 int hw_radio2(const hw_config *c, rlink_cfg *L);
 /* The other drones' channel (peers=), 0: off. */
 int hw_peers(const hw_config *c);
+/* Wi-Fi (radio=wifi/espnow, peers) and link_uart set together on a chip without the memory for both (LB_WIFI_BESIDE_LINK_UART 0) */
+int hw_wifi_crowded(const hw_config *c);
 /* How many motors and servos have a pin (0 on a fresh board: nothing is driven). */
 int hw_outputs_wired(const hw_config *c);
 /* What usually answers at a 7-bit I2C address (a guess from the address alone). */

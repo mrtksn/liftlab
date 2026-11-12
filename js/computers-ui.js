@@ -381,6 +381,17 @@ function renderComputerDetail(){
       UI.card({class:'board-assignment'},el('div',{},el('b',{text:on?'Connected':'Not connected'}),el('span',{class:'computer-meta',text:b.cells+'S · '+b.capacity+' Ah · its cells, capacity and limits are in Tune → Battery'})),
         UI.button({class:'btn sm','data-power-toggle':'',text:on?'Disconnect':'Connect',onclick:()=>setBatteryWired(c,!on)})));
     if(!cargo.power)box.append(el('p',{class:'bad',text:'No power now: '+powerWhy()+'.'}));
+    box.append(el('h3',{text:'Board supplies'}),el('p',{class:'hint',text:'What feeds each board\'s 5 V. A '+b.cells+'S pack is '+(b.cells*LIPO_MIN).toFixed(1)+'–'+(b.cells*LIPO_MAX).toFixed(1)+' V: '+(b.cells<=1?'below 5 V, so a boost converter steps it up':'above 5 V, so a regulator (BEC) steps it down')+'. Every ground joins the battery\'s −.'}));
+    const sup=el('div',{class:'hw-fields'});
+    for(const x of C.boards){
+      const s=hardwareBus(C,x),S=boardSupply(C,x,b.cells),others=C.boards.filter(o=>o!==x);
+      const pick=v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supply:v,...(v==='board'&&!others.some(o=>o.id===s.supplyFrom)&&others[0]?{supplyFrom:others[0].id}:{})};},x.id+'supply');
+      sup.append(hardwareField(x.name+' supply',hardwareSelect(x.name+' supply','pw-supply-'+x.id,[['auto','Automatic: '+POWER_SUPPLIES[b.cells<=1?'boost5':'reg5'].short],...Object.entries(POWER_SUPPLIES).filter(([k])=>k!=='board'||others.length).map(([k,d])=>[k,d.label])],S.auto?'auto':S.kind,pick)));
+      if(S.kind==='board')sup.append(hardwareField(x.name+' fed from',hardwareSelect(x.name+' fed from','pw-from-'+x.id,others.map(o=>[o.id,o.name+' · '+supplyPinName(C,o)]),S.from?.id??'',v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supplyFrom:Number(v)};},x.id+'supplyFrom'))));
+    }
+    box.append(sup);
+    if(typeof powerDiagramView==='function')box.append(powerDiagramView(C,cfg.comps,c.name,b.cells));
+    const P=powerIssues(C,b.cells);for(const m of P.errors)box.append(el('p',{class:'bad',text:m}));for(const m of P.warnings)box.append(el('p',{class:'hint',text:m}));
     box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the pack voltage (low-battery warnings, thrust that stays true as it drains).'}));
     mountHardware(box,'[data-hw-role="battery"]');computerWiringIssues(box,boardOf('core'));return;
   }
