@@ -77,6 +77,7 @@ int main(void) {
   static uint8_t lbuf[8192]; rn_link L; rn_link_init(&L, lbuf, sizeof lbuf);
   double t0 = now_s(), next = t0, armed_at = 0, fwd_at = 0, up_at = 0, stop_at = 0, last_cmd = 0;
   char pbuf[4096], gbuf[4096]; int pn = 0, gn = 0;
+  double guided_t = -10; long arm_flaps = 0;                                         /* when a guided command last came: NAV frames go for 1 s after (as flight.c) */
   long n28 = 0, n48 = 0, armed_cmds = 0; float pitch_max = 0, thr_rest = -1, thr_up = 0; int refused_thr = 0;
   while (now_s() - t0 < 22) {
     double el = now_s() - t0;
@@ -86,11 +87,12 @@ int main(void) {
     for (ssize_t i = 0; i < n; i++) {
       int type = rn_link_feed(&L, rx[i]);
       if (type != RN_LINK_CMD) continue;
-      if (L.len == 48) { n48++; continue; }
+      if (L.len == 48) { n48++; guided_t = el; continue; }
       if (L.len != 28) continue;
       float v[7]; memcpy(v, L.buf, 28); n28++; last_cmd = el;
       fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f ? (int)(v[5] + 0.5f) : -1, v[6], 0, { 0, 0, 0 }, 0 };
       fc_command(&F, &c);
+      { static int was; if (c.arm && !was && armed_cmds) arm_flaps++; was = c.arm; }
       if (c.arm) { armed_cmds++; refused_thr |= strstr(F.why, "throttle stick not at the bottom") != 0; }
       if (armed_at && !fwd_at && el > armed_at + 1.5 && thr_rest < 0) thr_rest = c.throttle;
       if (fwd_at && el < fwd_at + 1.5 && c.pitch > pitch_max) pitch_max = c.pitch;
@@ -100,7 +102,7 @@ int main(void) {
     next += 0.01;
     for (int k = 0; k < 10; k++) step_ms();
     float nb[16] = { (float)F.t, (float)F.state, F.q[0], F.q[1], F.q[2], F.q[3], F.w[0], F.w[1], F.w[2], (float)acc_b[0], (float)acc_b[1], (float)acc_b[2], F.alt_e, (float)F.have_alt, (float)F.att_ok, 0 };
-    send_frame(lm, RN_LINK_NAV, nb, 64);
+    if (el - guided_t < 1.0) send_frame(lm, RN_LINK_NAV, nb, 64);   /* (as the ESP32: only while the Pi's navigation flies it) */
     /* the pilot's script */
     if (el > 3 && !armed_at) { say("press arm"); armed_at = el; }
     if (armed_at && !fwd_at && el > armed_at + 3) fwd_at = el;
@@ -111,9 +113,9 @@ int main(void) {
     if (stop_at && el > stop_at + 5) break;
   }
   kill(pi, SIGTERM); usleep(300000); lines(pi_out, pbuf, &pn, "pi");
-  printf("  commands: %ld angle (%ld armed), %ld guided; throttle at rest %.2f, pressing up %.2f; pitch pressing forward %.2f; last command %.1f s after the stop; ESP32 now %s; it refused to arm on the middle throttle %d\n",
-         n28, armed_cmds, n48, thr_rest, thr_up, pitch_max, last_cmd - stop_at, fc_state_name(F.state), refused_thr);
-  int ok = angle_line && !wait_line && n28 > 300 && n48 == 0 && armed_cmds > 100 && refused_thr && F.state == FC_DISARMED
+  printf("  commands: %ld angle (%ld armed), %ld guided; throttle at rest %.2f, pressing up %.2f; pitch pressing forward %.2f; last command %.1f s after the stop; ESP32 now %s; it refused to arm on the middle throttle %d; the arm switch flapped %ld times\n",
+         n28, armed_cmds, n48, thr_rest, thr_up, pitch_max, last_cmd - stop_at, fc_state_name(F.state), refused_thr, arm_flaps);
+  int ok = angle_line && !wait_line && n28 > 300 && n48 == 0 && armed_cmds > 100 && refused_thr && F.state == FC_DISARMED && arm_flaps == 0
         && thr_rest > 0.45f && thr_rest < 0.55f && thr_up > 0.8f && pitch_max > 0.5f
         && last_cmd < stop_at + 1.5;
   printf(ok ? "angle mode on the Pi end-to-end: ok\n" : "angle mode on the Pi end-to-end: FAIL\n");

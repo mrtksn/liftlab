@@ -675,15 +675,7 @@ int main(int argc, char **argv) {
         int core_flying = fc_state == FC_ARMED || fc_state == FC_FAILSAFE;
         if (!in_control && (!core_flying || (radio && RCI.frames))) in_control = 1;
         if (!in_control) { static int said; if (!said) { said = 1; printf("the drone is flying and this program just started: not commanding it until the radio's channels or a command come (its failsafe lands it meanwhile)\n"); } }
-        else if (no_nav) {                                           /* angle mode: the sticks as they are, while they come */
-          fc_cmd sc;
-          if (radio_here && !rc_stick_cmd(&RCI, t, &sc)) {
-            float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
-            uint8_t fr[64]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
-            link_raw(link, fr, len);
-            last_send = t;
-          }
-        }
+        else if (no_nav) {}                                         /* (angle mode: the sticks go on their own beat, below) */
         else if (!(e > 0 && o.fly)) {
           float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
           uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
@@ -731,7 +723,19 @@ int main(int argc, char **argv) {
      * says its state (NAV, LTEL, its telemetry); with none for longer than its failsafe takes to land, or none at all
      * 2 s after starting, it counts as on the ground. */
     int flying = (fc_state == FC_ARMED || fc_state == FC_FAILSAFE) && fc_state_t > 0 && t - fc_state_t < 150;
-    if (t - last_send > 0.1 && t - last_nav > 0.1 && !flying && (fc_state_t > 0 || t - t_start > 2)) {
+    /* Angle mode: the sticks as they are, 50 times a second while the channels come (not on the ESP32's NAV frames:
+     * it sends those only while guided commands come). No announcing: a guided command, disarmed, would disarm it. */
+    if (no_nav) {
+      static double next_stick; fc_cmd sc;
+      if (t >= next_stick && radio_here && !rc_stick_cmd(&RCI, t, &sc)) {
+        next_stick = t + 0.02;
+        float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
+        uint8_t fr[64]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+        link_raw(link, fr, len);
+        last_send = t;
+      }
+    }
+    else if (t - last_send > 0.1 && t - last_nav > 0.1 && !flying && (fc_state_t > 0 || t - t_start > 2)) {
       float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };
       uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
       link_raw(link, fr, len);
