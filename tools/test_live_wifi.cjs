@@ -103,6 +103,32 @@ const MOCK = () => {
     assert(r2.before < -0.5 && r2.after > 0.5 && r2.off < -0.5, `the arm channel at the drone: ${r2.before} → ${r2.after} → ${r2.off}`);
     assert(r2.Sq.every((c, i) => Math.abs(c - r2.q[i]) < 0.05), 'the view shows the telemetry\'s attitude');
     console.log('switches: arm reached the drone; the 3D view follows its attitude');
+    // Angle mode (a design without navigation, no gamepad): the keys are the sticks; armed it idles, Take off puts the
+    // throttle at the middle (the height hold), W climbs, the arrows lean, Land sinks it until it is still, then idle
+    const r2b = await page.evaluate(async () => {
+      const tw = __drone.tw, wait = ms => new Promise(r => setTimeout(r, ms));
+      const ch = () => { const n = tw.rc_pack(performance.now() / 1000); return Array.from(new Float32Array(tw.memory.buffer, tw.fr_ptr(), n)); };
+      const navB = computers().boards.find(b => b.tasks.includes('nav')), tasks0 = navB.tasks.slice(); navB.tasks = tasks0.filter(x => x !== 'nav');   // (the Navigation task off, as in the Computers tab)
+      try {
+        $('#liveArm').click(); await wait(400); const armed = ch();
+        const flyShown = !$('#liveFly').hidden;
+        $('#liveFly').click(); await wait(400); const flying = ch();
+        press('up', 'test'); press('fwd', 'test'); await wait(500); const climbing = ch(); release('up', 'test'); release('fwd', 'test'); await wait(400); const let_go = ch();
+        $('#liveFly').click(); await wait(400); const landing = ch(), note = $('#liveNote').textContent;
+        const t0 = performance.now(); while (live.landing && performance.now() - t0 < 6000) { gs.v.baro = { alt: 0, vz: 0.02 }; await wait(50); }   // (the stand-in drone sends no barometer: on the ground, still)
+        await wait(300); const down = ch();
+        $('#liveArm').click(); await wait(300);
+        return { flyShown, armed: [armed[2], armed[4]], flying: flying[2], climbing: [climbing[2], climbing[1]], let_go: [let_go[2], let_go[1]], landing: landing[2], note, down: down[2], landed: !live.landing };
+      } finally { navB.tasks = tasks0; }
+    });
+    assert(r2b.flyShown, 'Take off shown in angle mode on the keys');
+    assert(r2b.armed[1] > 0.5 && r2b.armed[0] < -0.9, 'armed: the throttle at the bottom (idle): ' + JSON.stringify(r2b));
+    assert(Math.abs(r2b.flying) < 0.05, 'Take off: the throttle at the middle (hold the height): ' + r2b.flying);
+    assert(r2b.climbing[0] > 0.5 && r2b.climbing[1] > 0.4, 'W climbs, the arrow leans forward: ' + r2b.climbing);
+    assert(Math.abs(r2b.let_go[0]) < 0.05 && Math.abs(r2b.let_go[1]) < 0.05, 'let go: centred: ' + r2b.let_go);
+    assert(r2b.landing < -0.3 && r2b.landing > -0.5 && /landing/.test(r2b.note), 'Land: sinking (0.3 throttle): ' + r2b.landing + ' | ' + r2b.note);
+    assert(r2b.landed && r2b.down < -0.9, 'still: landed, idle: ' + r2b.down);
+    console.log('angle mode on the keys: idle when armed, Take off holds, W climbs, arrows lean, Land sinks then idles');
     // A dropped connection: reconnects by itself
     const r3 = await page.evaluate(async () => {
       __ws.refuse = 2; __ws.drop(); await new Promise(r => setTimeout(r, 200)); const lost = live.state;

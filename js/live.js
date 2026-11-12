@@ -107,7 +107,7 @@ function liveStart(dev, G, url) {
   const wifi = !dev;
   Object.assign(live, { on: true, state: 'connecting', via: wifi ? 'wifi' : 'ble', dev, ws: null, url: url || '', target: wifi ? liveDroneHost() : '',
     g: G.g, name: wifi ? 'the drone (Wi-Fi)' : dev.name || 'the drone', t0: performance.now() / 1000 - 1, rx: [], writing: false, pend: null,
-    arm: false, fly: false, lastRx: -1, sent: 0, got: 0, bad: 0, wErr: 0, mtu: 0, tries: 0, stopAsk: 0, slow: 0 });
+    arm: false, fly: false, landing: 0, stillT: 0, lastRx: -1, sent: 0, got: 0, bad: 0, wErr: 0, mtu: 0, tries: 0, stopAsk: 0, slow: 0 });
   live.t = live.lastT = 1; live.nextGnd = 1; live.nextGs = 1;
   const ph = new TextEncoder().encode(String(radioCfg.bind)).slice(0, 63);
   new Uint8Array(G.g.memory.buffer, G.g.rbuf_ptr(), ph.length).set(ph);
@@ -212,10 +212,27 @@ function liveInputs(t) {
   let held = 0, has = 0, ax = [0, 0, 0, 0];
   if (hasTask('nav')) { for (const k of ['right', 'left', 'fwd', 'back', 'up', 'down', 'yawR', 'yawL']) if (isHeld(k)) held |= bit(k); }
   const p = livePad(); if (p) { has = 15; ax = p; }
+  else if (!hasTask('nav')) { const s = liveStick(t); has = 15; ax = [s.roll, s.pitch, 2 * s.throttle - 1, -s.yaw]; }   // (as groundInputs: the keys and pads as sticks)
   if (live.arm) held |= bit('arm'); if (live.fly) held |= bit('fly');
   if (t < radio.holdUntil) held |= bit('hold'); if (t < radio.homeUntil) held |= bit('home');
   held |= bit(pilot.level === 'gentle' ? 'gentle' : pilot.level === 'sport' ? 'sport' : 'normal');
   return { held, has, ax };
+}
+// Angle mode (no navigation) without a gamepad: the keys and the on-screen pads as sticks, as the simulator's pilot
+// (boards.js stickCommand): armed, the throttle stays at the bottom (idle) until Take off; flying, its middle holds the
+// height (the flight core's barometer hold) and W/S climb or sink; the arrows lean, A/D turn. Land: it sinks at about
+// 0.9 m/s until the barometer says it stopped (on the ground), then idles. [throttle 0…1, the rest −1…1]
+function liveStick(t) {
+  const k = c => isHeld(c) ? 1 : 0, s = { gentle: 0.4, normal: 0.7, sport: 1 }[pilot.level] || 0.7;
+  let throttle = 0;
+  if (live.arm && live.fly) { live.landing = 0; throttle = clamp(0.5 + 0.35 * (k('up') - k('down')), 0.06, 1); }
+  else if (live.arm && live.landing) {
+    const b = gs.v.baro, still = b && Math.abs(b.vz || 0) < 0.15;
+    live.stillT = still ? (live.stillT || 0) + 0.004 : 0;
+    if (t - live.landing > 1.5 && live.stillT > 1.5 || t - live.landing > 30) { live.landing = 0; linkLog('↕', 'link', 'landed', 'the height stopped changing: idle (disarm when you like)', ''); }
+    else throttle = 0.3;
+  }
+  return { pitch: s * (k('fwd') - k('back')), roll: s * (k('right') - k('left')), yaw: k('yawL') - k('yawR'), throttle };
 }
 // A gamepad's sticks, Mode 2 (the left stick throttle and yaw, the right stick roll and pitch): [roll, pitch, throttle,
 // yaw], −1…1, or null with none.
@@ -299,13 +316,13 @@ function liveRenderBar(force) {
   const al = $('#liveAlert'), show = a && a.level > 0 && live.state !== 'connecting';
   al.hidden = !show; if (show) { setText(al, a.text.charAt(0).toUpperCase() + a.text.slice(1)); al.dataset.tone = a.level >= 2 ? 'bad' : 'warn'; }
   const nav = hasTask('nav'), pad = !!live.gp;
-  $('#liveFly').hidden = !nav;
+  $('#liveFly').hidden = !nav && pad;                                 // (angle mode on the keys: Take off engages the throttle)
   $('#liveHome').hidden = !nav;
   $('#liveArm').setAttribute('aria-pressed', String(live.arm)); $('#liveArm').textContent = live.arm ? 'Armed' : 'Arm';
   $('#liveFly').setAttribute('aria-pressed', String(live.fly)); $('#liveFly').textContent = live.fly ? 'Land' : 'Take off';
   const stop = $('#liveStop'); if (live.stopAsk && now > live.stopAsk) live.stopAsk = 0;
   stop.textContent = live.stopAsk ? 'Really disconnect?' : 'Disconnect';
-  setText($('#liveNote'), !nav && !pad ? 'Angle mode: plug in a gamepad for the sticks (the keys move only a navigated drone).'
+  setText($('#liveNote'), !nav && !pad ? `Angle mode: ${live.landing ? 'landing (it sinks until the height stops changing).' : live.fly ? 'W/S climb and sink (let go: it holds the height), A/D turn, the arrows lean.' : 'Arm, then Take off: the keys and pads fly it, W/S climb.'}${live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : ''}`
     : `${pad ? `Gamepad: ${live.gp.replace(/\s*\(.*$/, '')}. ` : ''}${nav ? 'The keys and pads move it; Space holds, H flies home.' : ''}${live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : ''}`);
 }
 function liveRenderBtn() {
@@ -316,10 +333,9 @@ function liveRenderBtn() {
 }
 function liveArmToggle() {
   if (!live.arm) {
-    if (!hasTask('nav') && !live.gp) { linkLog('↕', 'link', 'not armed', 'angle mode needs a gamepad for the throttle', 'bad'); return; }
     const p = livePad(); if (!hasTask('nav') && p && p[2] > -0.9) { linkLog('↕', 'link', 'not armed', 'throttle stick down first', 'bad'); flashEl($('#liveNote')); return; }
   }
-  live.arm = !live.arm; if (!live.arm) live.fly = false;
+  live.arm = !live.arm; if (!live.arm) { live.fly = false; live.landing = 0; }
   linkLog('↑', 'switch', `ARM ${live.arm ? 'on' : 'off'}`, 'this page\'s switch', live.arm ? 'warn' : '');
   liveRenderBar(true);
 }
@@ -352,7 +368,8 @@ function liveBridgeCmd() {
   $('#liveFind').addEventListener('click', liveFind);
   $('#liveClose').addEventListener('click', () => $('#liveDlg').close());
   $('#liveArm').addEventListener('click', liveArmToggle);
-  $('#liveFly').addEventListener('click', () => { if (!live.arm && !live.fly) { linkLog('↕', 'link', 'not taking off', 'arm first', 'bad'); return; } live.fly = !live.fly; linkLog('↑', 'switch', `FLY ${live.fly ? 'on' : 'off'}`, 'this page\'s switch', ''); liveRenderBar(true); });
+  $('#liveFly').addEventListener('click', () => { if (!live.arm && !live.fly) { linkLog('↕', 'link', 'not taking off', 'arm first', 'bad'); return; } live.fly = !live.fly;
+    if (!live.fly && !hasTask('nav') && !live.gp) { live.landing = live.t; live.stillT = 0; }   /* (angle mode on the keys: Land sinks it until it is down) */ linkLog('↑', 'switch', `FLY ${live.fly ? 'on' : 'off'}`, 'this page\'s switch', ''); liveRenderBar(true); });
   $('#liveHold').addEventListener('click', () => radioHold());
   $('#liveHome').addEventListener('click', () => radioHome());
   $('#liveStop').addEventListener('click', () => {

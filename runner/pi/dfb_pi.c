@@ -66,6 +66,10 @@
  *                   | --radio serial,115200 --crsf /dev/ttyAMA1 [--bind PHRASE]]
  *                  [--latch pwm0,gpio17 [--latch-us 1000,2000]]
  * While the radio's channels come, they fly it; the text commands are for when there is no radio.
+ * --no-navigation (the design's Pi without the Navigation task: a drone with no position sensor, indoors): angle
+ * mode. The radio's sticks go to the ESP32 as they are (fc/rc_core.h rc_stick_cmd, as the simulator's receiver board
+ * makes them): the sticks lean it and turn it, the throttle's middle holds the height on the barometer. The estimate,
+ * the telemetry, the learning and the supervisor run as before; no channels, no command (the ESP32's failsafe lands).
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
 #define _DEFAULT_SOURCE
@@ -281,12 +285,13 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
 int main(int argc, char **argv) {
   const char *tuning_path = 0;
   const char *mqtt_id = "liftlab-pi";
-  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0;
+  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0, no_nav = 0;
   rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   double origin[2] = { 0, 0 }; int have_origin = 0;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
+    if (!strcmp(argv[i], "--no-navigation")) { no_nav = 1; continue; }
     if (i + 1 >= argc) break;
     if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--mqtt-id")) mqtt_id = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
@@ -302,14 +307,15 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--fleet-origin")) { if (sscanf(argv[++i], "%lf,%lf", &origin[0], &origin[1]) != 2 || fabs(origin[0]) > 90 || fabs(origin[1]) > 180) { fprintf(stderr, "--fleet-origin LAT,LON: degrees\n"); return 2; } have_origin = 1; }
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
   }
-  if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor]\n"
+  if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor] [--no-navigation]\n"
     "              [--link /dev/serial0 | --link mqtt://BROKER[:1883][/PREFIX] [--mqtt-id liftlab-pi]] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
     "              [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,CHANNEL|wifi,sta [--bind PHRASE] [--radio-port 14570]\n"
     "               | --radio serial,BAUD[,half] --radio-dev /dev/ttyAMA1 [--bind PHRASE]\n"
     "               | --radio nrf24,250|1000|2000 [--nrf-spi /dev/spidev0.0] [--nrf-ce 25] [--bind PHRASE]]\n"
     "              [--radio2 KIND,... [--radio2-dev DEV]] (a second link at once, as --radio: both carry; e.g. --radio2 serial,57600,up --radio2-dev /dev/ttyUSB1)\n"
     "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000] [--fleet-origin LAT,LON]\n"
-    "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config)\n"
+    "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config;\n"
+    "  --no-navigation: angle mode, the radio's sticks straight to the ESP32, for a drone without a position sensor)\n"
     "radio: an ExpressLRS receiver on a serial port (--crsf), or this Pi's Wi-Fi (--radio wifi,...: UDP; the Pi makes the network\n"
     "  (wifi,ap: hostapd or NetworkManager, on that channel) or joins one (wifi,sta), as the OS is set up; --bind: the same phrase\n"
     "  as the command module's), or a serial line to the command module (--radio serial,BAUD: a laser, fibre, infrared, a radio\n"
@@ -420,6 +426,7 @@ int main(int argc, char **argv) {
   fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
   printf("navigation: %s, link %s at %d, GPS %s, commands on stdin%s; learning %s, supervisor %s; radio %s; latches %d\n", N.why, link_dev, baud, gps_dev ? gps_dev : "none", udp >= 0 ? " and UDP" : "",
          have_learn ? "on" : "off", have_super ? "on" : "off", radio_said, CG.n);
+  if (no_nav) printf("angle mode (--no-navigation): %s\n", radio_here ? "the radio's sticks go to the ESP32 as they are; the throttle's middle holds the height" : "no radio here to take sticks from: the ESP32's own receiver flies it, or nothing does");
 
   static uint8_t rxbuf[4096]; rn_link L; rn_link_init(&L, rxbuf, sizeof rxbuf);
   gps_t G; memset(&G, 0, sizeof G);
@@ -623,7 +630,7 @@ int main(int argc, char **argv) {
       if (RCI.frames) { radio_arm = rc_pilot_step(&RP, &RCI, t, &N, &o, dt, &rsp);
         if (fleet_was && !RP.mis_on) fleet_engage(&FL, 0, &N, &o, RP.mis_why);
         if (RP.fleet_req) { fleet_engage(&FL, RP.fleet_req == 1, &N, &o, "the pilot's radio"); RP.fleet_req = 0; }
-        if (RP.said) { RP.said = 0; printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); }
+        if (RP.said) { RP.said = 0; if (!no_nav) { printf("radio: %s\n", RP.msg); tlm_text(&TS, 4, RP.msg); } }   /* (angle mode: the navigation's pilot isn't flying it) */
         if (RP.learn_req) {
           autotune_stop(&AT, "stopped: radio learning command");
           int c = RP.learn_req;
@@ -659,7 +666,7 @@ int main(int argc, char **argv) {
       else {
         { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
         if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
-        if (P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
+        if (!no_nav && P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
         if (!radio && !pickup_active(&PKt) && !FL.engaged) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
         last_sp = P.sp;
         /* nothing to step on (no attitude in this frame): in the air no new command, the ESP32 flies on the last one */
@@ -668,6 +675,15 @@ int main(int argc, char **argv) {
         int core_flying = fc_state == FC_ARMED || fc_state == FC_FAILSAFE;
         if (!in_control && (!core_flying || (radio && RCI.frames))) in_control = 1;
         if (!in_control) { static int said; if (!said) { said = 1; printf("the drone is flying and this program just started: not commanding it until the radio's channels or a command come (its failsafe lands it meanwhile)\n"); } }
+        else if (no_nav) {                                           /* angle mode: the sticks as they are, while they come */
+          fc_cmd sc;
+          if (radio_here && !rc_stick_cmd(&RCI, t, &sc)) {
+            float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
+            uint8_t fr[64]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+            link_raw(link, fr, len);
+            last_send = t;
+          }
+        }
         else if (!(e > 0 && o.fly)) {
           float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
           uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);

@@ -588,7 +588,9 @@ function piGuide(t, K) {
   const cmds = {};
   const out = [];
   const notes = [];
-  if (!tasks.includes('nav')) notes.push('dfb_pi always runs the navigation (it needs the .dnc): with this board\'s navigation off in the simulator, the real Pi still runs it.');
+  if (!tasks.includes('nav')) notes.push(radio ? 'No navigation on this board: angle mode (dfb_pi --no-navigation). The pilot\'s sticks go to the flight controller as they are: they lean it and turn it, and the throttle\'s middle holds the height on the barometer. No position sensor needed (indoors, no GPS); it doesn\'t hold its place by itself.'
+    : 'No navigation on this board: dfb_pi runs with --no-navigation and doesn\'t command the flight controller (the radio isn\'t here: it flies on its own receiver\'s sticks).');
+  else if (!fix && !sensorsOf('flow').some(c => wiredTo(c) === t)) notes.push('This board navigates, but no position sensor (a GPS or optical flow) is wired to it: its position never settles, so it won\'t take off. To fly without one (indoors), take the Navigation task off this board (Computers tab): angle mode, the sticks fly it and the barometer holds the height.');
   if (editedFor(tasks).length) notes.push(`Your edits to ${editedFor(tasks).join(', ')} aren't loaded by dfb_pi yet: it runs its built-in formulas.`);
   if (tasks.includes('cargo') && !nL) notes.push('This design has no latches, so the cargo task has nothing to drive.');
   if (radio && rk === 'ble') notes.push('Bluetooth LE needs an ESP32-S3 or C3 on the drone: a Pi can\'t be its drone end here (dfb_pi refuses it). Put the Telemetry & radio task on the S3 or C3.');
@@ -659,7 +661,7 @@ function piGuide(t, K) {
     cmds.build.code.textContent = 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/pi/build.sh';
     let files = []; try { files = need.map(w => instFile(w, t)); } catch (e) { cmds.files.code.textContent = '# This design can\'t be exported: ' + e.message; }
     if (files.length) cmds.files.code.textContent = await pastePack(files, 'sudo systemctl restart dfb 2>/dev/null; true');
-    const args = ['--nav drone.dnc', ...(learnOrSuper ? ['--airframe drone.dfa --pi drone.dlc'] : []), ...(tasks.includes('learn') && tasks.includes('super') ? ['--tuning drone.dft'] : []), ...(v('link') && v('link') !== '/dev/serial0' ? ['--link ' + v('link')] : []),
+    const args = ['--nav drone.dnc', ...(tasks.includes('nav') ? [] : ['--no-navigation']), ...(learnOrSuper ? ['--airframe drone.dfa --pi drone.dlc'] : []), ...(tasks.includes('learn') && tasks.includes('super') ? ['--tuning drone.dft'] : []), ...(v('link') && v('link') !== '/dev/serial0' ? ['--link ' + v('link')] : []),
       ...(!tasks.includes('learn') && learnOrSuper ? ['--no-learning'] : []), ...(!tasks.includes('super') && learnOrSuper ? ['--no-supervisor'] : []),
       ...(fix ? ['--gps ' + v('gps')] : []), ...(cargo ? ['--latch ' + v('latch')] : []), ...(radio && rk === 'elrs' ? ['--crsf ' + v('crsf') + ' --radio ' + rlines[0].slice(6)] : []), ...(radio && rk === 'wifi' ? [`--radio ${rlines[0].slice(6)} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && rk === 'serial' ? [`--radio ${rlines[0].slice(6)} --radio-dev ${v('crsf')} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && rk === 'nrf24' ? [`--radio ${rlines[0].slice(6)} --nrf-spi ${hardwareBus(computers(),t).nrfSpi || '/dev/spidev0.0'} --nrf-ce ${hardwareBus(computers(),t).nrfCe ?? 25} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && radioTwo() ? [`--radio2 ${radioSpec(radioCfg2)}${['serial', 'elrs'].includes(radioCfg2.kind) ? ' --radio2-dev /dev/ttyUSB2' : ''}${radioCfg2.kind === 'nrf24' && rk !== 'nrf24' ? ` --nrf-spi ${hardwareBus(computers(),t).nrfSpi || '/dev/spidev0.0'} --nrf-ce ${hardwareBus(computers(),t).nrfCe ?? 25}` : ''}${rk === 'elrs' && radioCfg2.kind !== 'elrs' ? ` --bind ${shq(radioCfg.bind)}` : ''}`] : [])].join(' ');
     cmds.run.code.textContent = `cd ~/dfb && ./runner/pi/dfb_pi ${args}`;
