@@ -262,12 +262,19 @@ static void flight_task(void *arg) {
       else {
         /* loaded into a copy, which then is the state: just what fc_airframe_load makes of it, as in the simulator
          * (the old airframe's learned model and the supervisor's settings go with it); refused, nothing changes */
-        static fc_state G; G = F; int e = fc_airframe_load(&G, af_box, af_len);
-        if (!e) {
-          char why[64];
-          if (!hw_outputs_ok(G.A.n_motors, G.A.n_joints, why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
-          else { F = G; outputs_ok = 1; }
-        } else strcpy(F.why, G.why);
+        /* (the copy on the heap, for the moment it takes: kept in static DRAM it was the 8 KB that left the classic
+         * ESP32 none for FreeRTOS's idle tasks) */
+        fc_state *G = malloc(sizeof *G); int e;
+        if (!G) { snprintf(F.why, sizeof F.why, "airframe: no memory to load it"); e = -3; }
+        else {
+          *G = F; e = fc_airframe_load(G, af_box, af_len);
+          if (!e) {
+            char why[64];
+            if (!hw_outputs_ok(G->A.n_motors, G->A.n_joints, why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
+            else { F = *G; outputs_ok = 1; }
+          } else strcpy(F.why, G->why);
+          free(G);
+        }
         af_result = e;
       }
       af_new = 0;
