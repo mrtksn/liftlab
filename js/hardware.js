@@ -39,11 +39,47 @@ function hardwarePart(C, c, comps) {
   return { ...saved, board: owner ? owner.id : null, pin: Number.isInteger(saved.pin) ? saved.pin : c.type==='latch' ? [18,19,17,27,22,23,24,25][index]??-1 : p ? (c.type === 'motor' ? p.motors : p.servos)[index] ?? -1 : -1,
     driver, address: Number.isInteger(saved.address) ? saved.address : choices ? choices[driver].addresses[0] || 0 : 0 };
 }
-// Power: a rigid mass marked as a battery feeds the motors (through their ESCs or MOSFET stages) and the boards
-// (through their regulators) when it's wired to the power distribution, which it is unless the design says
+// Power: a rigid mass marked as a battery is a pack. It feeds the motors (through their ESCs or MOSFET stages) and the
+// boards (through their regulators) when it's wired to the power distribution, which it is unless the design says
 // otherwise (wiring.parts[id].power === false). With no wired battery on board the drone doesn't turn on.
 const batteryParts = comps => comps.filter(c => c.type === 'mass' && c.battery);
 const batteryWired = (C, c) => { const p = C.wiring && C.wiring.parts && C.wiring.parts[c.id]; return !(p && p.power === false); };
+// Several packs: each says what it feeds (wiring.parts[id].feeds: 'all', the default, or 'motors' or 'boards'), as a
+// drone with one pack for the motors and a small one of its own for the electronics, so the motors' sag and noise
+// never reach the boards. The pack that feeds the motors is the main one: its cells, capacity and limits are the
+// Battery settings. Another pack has its own cells and capacity (the part's pack: { cells, capacity [Ah] }; until
+// set, the main pack's). Each board takes its supply from wiring.boards[id].pack (a battery's id), else from the first
+// connected pack that feeds boards. Every pack's − joins one common ground: the boards' signal wires need it.
+const PACK_FEEDS = {
+  all: { label: 'The motors and the boards', short: 'motors and boards' },
+  motors: { label: 'The motors only (ESCs or MOSFET stages)', short: 'motors' },
+  boards: { label: 'The boards only (their 5 V supplies)', short: 'boards' },
+};
+const packWiring = (C, c) => (C.wiring && C.wiring.parts && C.wiring.parts[c.id]) || {};
+const packFeeds = (C, c) => { const f = packWiring(C, c).feeds; return PACK_FEEDS[f] ? f : 'all'; };
+const packFeedsMotors = (C, c) => packFeeds(C, c) !== 'boards', packFeedsBoards = (C, c) => packFeeds(C, c) !== 'motors';
+// The pack the motors run on: the first connected one that feeds them (null: the motors have no power).
+const motorPack = (C, comps) => batteryParts(comps).find(c => batteryWired(C, c) && packFeedsMotors(C, c)) || null;
+// The pack whose spec is the Battery settings: the motors' pack, else the first that would feed motors, else the first.
+function mainPack(C, comps) { const bats = batteryParts(comps); return motorPack(C, comps) || bats.find(c => packFeedsMotors(C, c)) || bats[0] || null; }
+const mainSpec = () => { const b = typeof battCfg === 'function' ? battCfg() : null; return { cells: b ? b.cells : 1, capacity: b ? b.capacity : 1 }; };
+function packSpec(C, c, comps) {
+  const m = mainSpec(); if (!c || c === mainPack(C, comps)) return { ...m, main: true };
+  const p = c.pack || {};
+  return { cells: Number.isInteger(p.cells) && p.cells >= 1 && p.cells <= 8 ? p.cells : m.cells, capacity: p.capacity > 0 && p.capacity <= 50 ? p.capacity : m.capacity, main: false };
+}
+// The pack a board's supply draws on (a board fed from another board's 5 V pin: that board's), or null: none connected
+// feeds boards (or it's on USB).
+function boardPack(C, b, comps, seen = new Set()) {
+  if (seen.has(b)) return null; seen.add(b);
+  const s = hardwareBus(C, b);
+  if (s.supply === 'usb') return null;
+  if (s.supply === 'board') { const f = C.boards.find(x => x.id === s.supplyFrom && x !== b); return f ? boardPack(C, f, comps, seen) : null; }
+  const bats = batteryParts(comps).filter(c => batteryWired(C, c) && packFeedsBoards(C, c));
+  return bats.find(c => c.id === s.pack) || bats[0] || null;
+}
+const boardCells = (C, b, comps) => packSpec(C, boardPack(C, b, comps) || mainPack(C, comps), comps).cells;
+const packLabel = (C, c, comps) => { const P = packSpec(C, c, comps); return P.cells + 'S · ' + (P.cells * LIPO_MIN).toFixed(1) + '–' + (P.cells * LIPO_MAX).toFixed(1) + ' V'; };
 // What feeds each board's 5 V (wiring.boards[id].supply; 'auto': a boost converter on a 1S pack, a 5 V regulator above).
 // 'board' takes another board's 5 V pin (wiring.boards[id].supplyFrom: that board's id), as a Pi's 5 V feeds an ESP32's VIN.
 const POWER_SUPPLIES = {
@@ -59,22 +95,34 @@ function boardSupply(C, b, cells) {
   const kind = want === 'auto' ? (cells <= 1 ? 'boost5' : 'reg5') : want;
   return { kind, auto: want === 'auto', from: kind === 'board' ? C.boards.find(x => x.id === s.supplyFrom && x !== b) || null : null };
 }
-// The power wiring's problems: a supply that can't make 5 V from this pack, a board fed straight from it, a divider that
-// would put too much on the ADC pin (or too little to read it well).
-function powerIssues(C, cells) {
-  const errors = [], warnings = [], vmax = cells * LIPO_MAX, vmin = cells * LIPO_MIN, pack = cells + 'S (' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V)';
+// The power wiring's problems: a supply that can't make 5 V from its pack, a board fed straight from it, no pack for
+// the motors or the boards, two packs in parallel, a divider that would put too much on the ADC pin (or too little).
+function powerIssues(C, comps) {
+  const errors = [], warnings = [], cellsOf = b => boardCells(C, b, comps);
+  const bats = batteryParts(comps), wired = bats.filter(c => batteryWired(C, c)), many = bats.length > 1;
+  if (wired.length && !wired.some(c => packFeedsMotors(C, c))) errors.push('No connected pack feeds the motors: set one of them to feed the motors.');
+  const motorPacks = wired.filter(c => packFeedsMotors(C, c));
+  if (motorPacks.length > 1) warnings.push(motorPacks.map(c => c.name).join(' and ') + ' all feed the motors: that is the packs in parallel. Parallel only matched packs at the same charge; otherwise set each to feed the motors or the boards. LiftLab runs the motors on ' + motorPacks[0].name + '.');
   for (const b of C.boards) {
-    const S = boardSupply(C, b, cells), esp = !!ESP_PROFILES[b.kind];
+    const cells = cellsOf(b), S = boardSupply(C, b, cells), esp = !!ESP_PROFILES[b.kind];
+    const vmax = cells * LIPO_MAX, vmin = cells * LIPO_MIN, P = many ? boardPack(C, b, comps) : null;
+    const pack = (P ? P.name + ', ' : '') + cells + 'S (' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V)';
+    const fromPack = ['boost5', 'reg5', 'direct'].includes(S.kind);
+    if (fromPack && wired.length && !wired.some(c => packFeedsBoards(C, c))) { errors.push(b.name + ': no connected pack feeds the boards. Set a pack to feed the boards, or this board to USB.'); continue; }
+    const want = hardwareBus(C, b).pack;
+    if (fromPack && many && want != null && !wired.some(c => c.id === want && packFeedsBoards(C, c))) warnings.push(b.name + ': the pack chosen for it ' + (bats.some(c => c.id === want) ? 'doesn\'t feed the boards or isn\'t connected' : 'is gone') + '; it takes ' + (P ? P.name : 'the first pack that feeds the boards') + '.');
     if (S.kind === 'boost5' && vmax >= 5) errors.push(b.name + ': a boost converter only steps up: a ' + pack + ' pack is already above 5 V. Use a 5 V regulator (BEC).');
     if (S.kind === 'reg5' && vmin < 5.5) errors.push(b.name + ': a 5 V regulator can\'t make 5 V from a ' + pack + ' pack. Use a 5 V boost converter.');
     if (S.kind === 'direct' && !esp) errors.push(b.name + ': its 5 V pin wants 4.75–5.25 V, not the battery\'s ' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V. Feed it 5 V from a converter.');
     if (S.kind === 'direct' && esp && cells <= 1) warnings.push(b.name + ': from ' + vmin.toFixed(1) + '–' + vmax.toFixed(1) + ' V its own 3.3 V regulator (about 1 V of dropout) gives too little as the pack drains, and it resets. Feed it 5 V.');
     if (S.kind === 'direct' && esp && cells > 1) errors.push(b.name + ': ' + vmax.toFixed(1) + ' V on its VIN overheats or destroys its linear 3.3 V regulator. Feed it 5 V.');
     if (S.kind === 'board' && !S.from) errors.push(b.name + ': choose which board\'s 5 V pin feeds it');
-    if (S.kind === 'board' && S.from) { const F = boardSupply(C, S.from, cells); if (F.kind === 'board' && F.from === b) errors.push(b.name + ' and ' + S.from.name + ' feed each other: one of them needs a supply of its own'); else if (F.kind === 'usb') warnings.push(b.name + ': fed from ' + S.from.name + ', which is on USB: fine on the bench, not in flight'); }
+    if (S.kind === 'board' && S.from) { const F = boardSupply(C, S.from, cellsOf(S.from)); if (F.kind === 'board' && F.from === b) errors.push(b.name + ' and ' + S.from.name + ' feed each other: one of them needs a supply of its own'); else if (F.kind === 'usb') warnings.push(b.name + ': fed from ' + S.from.name + ', which is on USB: fine on the bench, not in flight'); }
     if (S.kind === 'usb') warnings.push(b.name + ': on USB it works on the bench only. Give it a supply from the battery to fly.');
   }
+  // the voltage sensor reads the motors' pack: the flight controller corrects the throttle for its sag
   const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core);
+  const cells = packSpec(C, motorPack(C, comps) || mainPack(C, comps), comps).cells, vmax = cells * LIPO_MAX;
   if (core && ESP_PROFILES[core.kind] && bus.batteryPin >= 0 && bus.batteryDivider >= 1) {
     const v = vmax / bus.batteryDivider, best = Math.max(1, Math.ceil(vmax / 2.2 * 2) / 2);
     if (v > 3.3) errors.push('Battery voltage: at full charge the ADC pin would see ' + v.toFixed(2) + ' V, more than the chip takes (3.3 V). Use a divider ratio of at least ' + best + '.');
@@ -346,17 +394,17 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors};
+if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors,PACK_FEEDS,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
   const core=C.boards.find(b=>b.tasks.includes('core')),radio=C.boards.find(b=>b.tasks.includes('tlm'));
   const groups=C.boards.map(b=>({id:b.id,name:b.name,kind:b.kind,rows:[]})),unassigned=[];
   {   // power first: what feeds everything else
-    const bats=batteryParts(comps),g={id:'power',name:'Power',kind:'',rows:[]};
-    const cells=typeof battCfg==='function'?battCfg().cells:1;
-    for(const c of bats)g.rows.push(batteryWired(C,c)?{device:c.name,connection:'+ / − → power distribution: ESCs (or MOSFET stages), and the boards\' supplies',note:'Share GND with every board'}:{device:c.name,connection:'Not connected',note:'Unplugged: it powers nothing'});
-    if(bats.some(c=>batteryWired(C,c)))for(const b of C.boards){const S=boardSupply(C,b,cells);g.rows.push({device:b.name+' supply',connection:S.kind==='board'?(S.from?S.from.name+'\'s 5 V pin':'choose a board'):POWER_SUPPLIES[S.kind].label,note:S.auto?'automatic for a '+cells+'S pack':''});}
+    const bats=batteryParts(comps),g={id:'power',name:'Power',kind:'',rows:[]},many=bats.length>1;
+    const feeds={all:'ESCs (or MOSFET stages), and the boards\' supplies',motors:'ESCs (or MOSFET stages) only',boards:'the boards\' supplies only'};
+    for(const c of bats)g.rows.push(batteryWired(C,c)?{device:c.name,connection:'+ / − → '+feeds[packFeeds(C,c)],note:packLabel(C,c,comps)+' · '+(many?'its − joins the common ground':'Share GND with every board')}:{device:c.name,connection:'Not connected',note:'Unplugged: it powers nothing'});
+    if(bats.some(c=>batteryWired(C,c)))for(const b of C.boards){const cells=boardCells(C,b,comps),S=boardSupply(C,b,cells),P=many&&['boost5','reg5','direct'].includes(S.kind)?boardPack(C,b,comps):null;g.rows.push({device:b.name+' supply',connection:S.kind==='board'?(S.from?S.from.name+'\'s 5 V pin':'choose a board'):POWER_SUPPLIES[S.kind].label+(P?' ('+P.name+')':''),note:S.auto?'automatic for a '+cells+'S pack':''});}
     if(!bats.length)g.rows.push({device:'Battery',connection:'None on the drone',note:'Nothing powers it: add a battery in Airframe'});
     else if(!bats.some(c=>batteryWired(C,c)))g.rows.push({device:'Power',connection:'No battery connected',note:'The drone doesn\'t turn on'});
     groups.unshift(g);

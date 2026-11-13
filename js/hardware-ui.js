@@ -126,7 +126,7 @@ function renderHardware() {
   }
   const auxiliary=group('Power & radio','These connections belong to the board running the corresponding task. Settings are included when installing the design.');
   if(core&&ESP_PROFILES[core.kind]){
-    const bus=hardwareBus(C,core),battery=cfg.comps.find(c=>c.battery);
+    const bus=hardwareBus(C,core),battery=motorPack(C,cfg.comps)||cfg.comps.find(c=>c.battery);
     auxiliary.append(hardwareBoardCard(core,battery?.name?battery.name+' voltage':'Battery voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
       pinPicker(core,'Battery ADC GPIO','hw-battery-'+core.id,bus.batteryPin,'battery',ESP_PROFILES[core.kind].adc,v=>editBoard(core,{batteryPin:Number(v)},'battery')),
       hardwareDetails('battery'+core.id,'Voltage divider',hardwareNumber('Battery divider ratio',bus.batteryDivider,v=>editBoard(core,{batteryDivider:v},'divider'),1,30),el('p',{class:'hint',text:'Ratio = battery voltage / voltage at the ADC pin. Connect the pack through a suitable resistor divider, never directly to a GPIO.'}))));

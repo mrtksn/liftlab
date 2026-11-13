@@ -25,7 +25,7 @@ function renderBattery() {
     chk('vsens', 'Voltage sensor (the flight controller corrects the throttle for sag)'), chk('isens', 'Current sensor'), chk('tsens', 'Temperature sensor'),
     chk('failHeat', 'Overheating damages it'),
     el('div', { class: 'field' }, el('label', { for: 'batt-failMode', text: 'When it fails' }), sel),
-    el('p', { class: 'hint', text: 'Battery mass parts scale from their saved mass with capacity and cell count; editing a part’s mass selects manual weight. A design without a battery mass part uses an estimated thermal mass only. Pack current includes motors, ESC losses, avionics and servos. The battery heats through internal resistance; wear reduces capacity and increases resistance. Near empty its voltage drops. Low-voltage cutoff stops the motors after 1.5 s below the per-cell threshold; zero throttle resets it.' }));
+    el('p', { class: 'hint', text: 'Battery mass parts scale from their saved mass with capacity and cell count; editing a part’s mass selects manual weight. A design without a battery mass part uses an estimated thermal mass only. Pack current includes motors, ESC losses, avionics and servos; with a pack of its own for the boards (Computers → Power), the avionics and device draw comes from that pack instead. The battery heats through internal resistance; wear reduces capacity and increases resistance. Near empty its voltage drops. Low-voltage cutoff stops the motors after 1.5 s below the per-cell threshold; zero throttle resets it.' }));
   renderBattSmall();
   box.append(flightBatteryFields(b));
 }
@@ -65,14 +65,17 @@ function buildHealth1() {
   if (joints().length) group('Servos');
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name, j.id)));
   group('Power');
-  list.append(healthRow('batt', 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
+  list.append(healthRow('batt', cargo.boardsPack && cargo.boardsPack !== motorPack(computers(), cfg.comps) ? (motorPack(computers(), cfg.comps) || {}).name || 'Battery' : 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
+  const bp = cargo.boardsPack;   // a pack of its own for the boards
+  if (bp) list.append(healthRow('epack', bp.name, breakMenu([['cut', 'Cut out']], () => breakPack(bp), 'Break ' + bp.name, 'epack')));
   box.append(list, el('span', { class: 'lbl', text: 'What happened' }), el('ol', { class: 'h-log', id: 'supLog' }));
   HEALTH.sig = healthSig();
 }
-const healthSig = () => actuators().map(c => c.id + c.name + (c.failLoss ?? 50)).join(',') + '|' + joints().map(j => j.id + j.name).join(',');
+const healthSig = () => actuators().map(c => c.id + c.name + (c.failLoss ?? 50)).join(',') + '|' + joints().map(j => j.id + j.name).join(',') + '|' + (cargo.boardsPack ? cargo.boardsPack.id + cargo.boardsPack.name : '');
 function repairAll() {
   hs.forEach(s => Object.assign(s, { loss: 0, dead: false, prop: false, jam: null, limp: false, cause: '', failT: null, mode: null }));
   Object.assign(hb, { fade: 0, cellsLost: 0, cut: false, cause: '', failT: null });
+  if (S.packs) S.packs.forEach(st => { st.cut = false; }); cargo.power = designPowered();   // (a cut boards' pack reconnected; a flat one stays flat)
   refreshEnvelope();
   healthEvent('Everything repaired (the flight computers keep what they decided until the next reset).', 'good');
 }
@@ -108,6 +111,11 @@ function renderHealth(force) {
     const seen = [r.V != null ? `${r.V.toFixed(1)} V` : 'no voltage sensor', r.I != null ? `${r.I.toFixed(0)} A` : '', r.T != null ? `${Math.round(r.T)}°` : ''].filter(Boolean).join(' · ');
     put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)}°`, truth[0], truth[1],
       [['sim', `${Math.round(Math.max(0, soc) * 100)}%`], ['sensor', seen], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
+  }
+  if (cargo.boardsPack) {   // the boards' pack: its charge and voltage (not measured on the drone)
+    const st = S.packs && S.packs.get(cargo.boardsPack.id) || { soc: 1, V: 0, I: 0 };
+    put('epack', 0, '', st.cut ? 'cut out' : st.flat ? 'flat' : 'working', st.cut || st.flat ? 'bad' : (st.soc ?? 1) < 0.25 ? 'warn' : '',
+      [['sim', `${Math.round(Math.max(0, st.soc ?? 1) * 100)}% · ${(st.V || 0).toFixed(2)} V · ${((st.I || 0) * 1000).toFixed(0)} mA`], ['sensor', 'not measured']]);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
   if (pill.className !== 'pill ' + m[1]) pill.className = 'pill ' + m[1]; setText(pill.querySelector('span'), sv ? m[0] : 'Off');

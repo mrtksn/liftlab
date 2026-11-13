@@ -570,7 +570,8 @@ function updateLive() {
   }
   {   // battery
     const soc = Math.max(0, S.batt.soc ?? 1), b = battCfg();
-    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S`, !cargo.power ? 'bad' : soc < 0.25 ? 'bad' : soc < 0.5 ? 'warn' : 'good', !cargo.power ? 'No power: ' + powerWhy() : null);
+    const bp = cargo.boardsPack, bst = bp && S.packs && S.packs.get(bp.id), bsoc = bst ? Math.max(0, bst.soc ?? 1) : 1, low = Math.min(soc, bp ? bsoc : 1);   // (a pack for the boards: its charge too)
+    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S` + (bp ? ` · ${bp.name} ${Math.round(bsoc * 100)}%` : ''), !cargo.power ? 'bad' : low < 0.25 ? 'bad' : low < 0.5 ? 'warn' : 'good', !cargo.power ? 'No power: ' + powerWhy() : null);
     const f = $('#battFill'); if (f) f.setAttribute('width', (10.8 * clamp(cargo.power ? soc : 0, 0, 1)).toFixed(2));
   }
   {   // formulas

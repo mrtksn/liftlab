@@ -20,7 +20,7 @@ function flightMotor(c) {
 }
 function flightPrepare() {
   flightMotorCache = new WeakMap();
-  FlightPhysics.batteryMass(cfg.comps, battCfg());
+  FlightPhysics.batteryMass(cfg.comps, battCfg(), typeof packSpec === 'function' ? c => packSpec(computers(), c, cfg.comps) : null);
   flightBatteryThermalMass = cfg.comps.reduce((sum, c) => sum + (c.type === 'mass' && c.battery ? c.mass : 0), 0);
   for (const c of actuators()) {
     if (c.propPhysics?.rows && c.propPhysics.radius && Math.abs(c.propPhysics.radius - propR(c)) > 1e-8) delete c.propPhysics.rows;
@@ -84,7 +84,8 @@ function flightDevicePower() {
       const st = cargo.lat.get(c.id); if (st && st.drive != null && Math.abs(st.drive - st.pos) > .01) servoW += c.latchW ?? 2;
     }
   }
-  S.deviceW = watts + servoW / (b.becEfficiency ?? .9);
+  S.boardW = watts; S.servoW = servoW / (b.becEfficiency ?? .9);
+  S.deviceW = watts + S.servoW;
   return S.deviceW;
 }
 function flightCoast(st, mp, dt) {

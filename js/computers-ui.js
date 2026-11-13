@@ -273,7 +273,7 @@ function nameBox(value, label, id, onName) {
 function renderComputers(full) { keepFocus(() => renderComputers1(full)); }
 function renderComputers1(full) {
   if(!COMP.built)return;
-  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery]).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg(),typeof programs==='function'?programs():[],typeof apps==='function'?apps().map(a=>[a.id,a.name,a.kind]):[]]);
+  const C=computers(),sig=JSON.stringify(C)+'|'+cfg.comps.map(c=>[c.id,c.type,c.kind,c.name,c.mount,c.battery,c.pack?c.pack.cells+'/'+c.pack.capacity:'']).join(';')+'|'+JSON.stringify([radioCfg,radioCfg2,battCfg(),typeof programs==='function'?programs():[],typeof apps==='function'?apps().map(a=>[a.id,a.name,a.kind]):[]]);
   if(full||COMP.sig!==sig){
     COMP.sig=sig;COMP.rendering=true;
     try{
@@ -317,14 +317,26 @@ function assignmentCard(name,board,description,open,attrs={}){
     el('b',{text:name}),board?el('div',{class:'assigned-board'},el('b',{text:board.name}),el('span',{text:BOARD_KINDS[board.kind].label})):el('p',{class:'computer-meta',text:description}),
     ...(!board?[UI.button({class:'btn sm',text:'Assign',onclick:e=>{e.stopPropagation();open();}})]:[]));
 }
-// Power: a card per battery (connected to the power distribution, or not), or one saying there's none.
+// Power: a card per battery (connected to the power distribution, or not, and what it feeds), or one saying there's none.
 function setBatteryWired(c,on){editWiring(w=>{w.parts[c.id]={...w.parts[c.id],power:!!on};},'power'+c.id);}
+function setPackFeeds(c,v){editWiring(w=>{w.parts[c.id]={...w.parts[c.id],feeds:v};},'feeds'+c.id);}
+// A pack's own cells or capacity (not the main pack's: those are the Battery settings).
+function setPackSpec(c,key,v){const C=computers(),P=packSpec(C,c,cfg.comps);c.pack={cells:P.cells,capacity:P.capacity,[key]:v};undoKey='pack'+c.id;recomputeProps();if(typeof refreshEnvelope==='function')refreshEnvelope();if(typeof renderMass==='function')renderMass();doReset();save();renderComputers(true);}
+// A second pack just for the boards: added to the airframe (1S, 0.5 Ah), the one there feeds the motors only, and
+// every board on a supply from the battery takes the new pack.
+function addBoardPack(){
+  const C0=computers(),main=mainPack(C0,cfg.comps),c=addComp('battery');
+  c.pack={cells:1,capacity:0.5};c.mass=0.012;c.size=[0.05,0.03,0.008];c.batterySizing={capacity:0.5,cells:1,mass:0.012};
+  editWiring(w=>{w.parts[c.id]={...w.parts[c.id],feeds:'boards'};if(main)w.parts[main.id]={...w.parts[main.id],feeds:'motors'};
+    for(const b of computers().boards){const s=w.boards[b.id]||{};if(!['usb','board'].includes(s.supply))w.boards[b.id]={...s,pack:c.id};}},'addpack');
+  structural();openComputerView({kind:'power',id:c.id});
+}
 function powerCards(C){
-  const bats=batteryParts(cfg.comps),b=battCfg(),pack=b.cells+'S · '+b.capacity+' Ah';
+  const bats=batteryParts(cfg.comps);
   if(!bats.length)return [UI.card({class:'computer-card assignment-card empty','data-power':'none'},el('b',{text:'No battery'}),el('p',{class:'computer-meta',text:'Nothing powers the drone, so it doesn\'t turn on. Add a battery to the airframe.'}),
     UI.button({class:'btn sm',text:'Add a battery',onclick:()=>{addComp('battery');renderComputers(true);}}))];
-  return bats.map(c=>{const on=batteryWired(C,c);return interactiveCard({'data-power':c.id,class:'computer-card assignment-card'+(on?'':' empty'),'aria-label':c.name+' power'},()=>openComputerView({kind:'power',id:c.id}),
-    el('b',{text:c.name}),on?el('div',{class:'assigned-board'},el('b',{text:'Connected'}),el('span',{text:pack+' → motors and boards'})):el('p',{class:'computer-meta',text:'Not connected: '+(bats.some(x=>batteryWired(C,x))?'it powers nothing.':'the drone doesn\'t turn on.')}),
+  return bats.map(c=>{const on=batteryWired(C,c),P=packSpec(C,c,cfg.comps),pack=P.cells+'S · '+P.capacity+' Ah';return interactiveCard({'data-power':c.id,class:'computer-card assignment-card'+(on?'':' empty'),'aria-label':c.name+' power'},()=>openComputerView({kind:'power',id:c.id}),
+    el('b',{text:c.name}),on?el('div',{class:'assigned-board'},el('b',{text:'Connected'}),el('span',{text:pack+' → '+PACK_FEEDS[packFeeds(C,c)].short})):el('p',{class:'computer-meta',text:'Not connected: '+(bats.some(x=>batteryWired(C,x))?'it powers nothing.':'the drone doesn\'t turn on.')}),
     ...(on?[]:[UI.button({class:'btn sm',text:'Connect',onclick:e=>{e.stopPropagation();setBatteryWired(c,true);}})]));});
 }
 // A link between two boards: which ends, how it's wired.
@@ -375,24 +387,33 @@ function renderComputerDetail(){
     return;
   }
   if(view.kind==='power'){
-    const c=compById(view.id);if(!c||!c.battery){$('#computerDlg').close();return;}const on=batteryWired(C,c),b=battCfg();$('#computerDlgTitle').textContent=c.name;
-    box.append(el('p',{text:'The battery feeds the motors through their ESCs (or MOSFET stages) and every board through its regulator. Unplugged, it powers nothing: with no battery connected the drone doesn\'t turn on.'}),
+    const c=compById(view.id);if(!c||!c.battery){$('#computerDlg').close();return;}
+    const comps=cfg.comps,bats=batteryParts(comps),many=bats.length>1,on=batteryWired(C,c),P=packSpec(C,c,comps);$('#computerDlgTitle').textContent=c.name;
+    box.append(el('p',{text:many?'Each pack feeds the motors (through their ESCs or MOSFET stages), the boards (through their regulators), or both. A pack of its own for the boards keeps the motors\' sag and noise away from them. Every pack\'s − joins one common ground. Unplugged, a pack powers nothing.':'The battery feeds the motors through their ESCs (or MOSFET stages) and every board through its regulator. Unplugged, it powers nothing: with no battery connected the drone doesn\'t turn on.'}),
       el('h3',{text:'Power distribution'}),
-      UI.card({class:'board-assignment'},el('div',{},el('b',{text:on?'Connected':'Not connected'}),el('span',{class:'computer-meta',text:b.cells+'S · '+b.capacity+' Ah · its cells, capacity and limits are in Tune → Battery'})),
+      UI.card({class:'board-assignment'},el('div',{},el('b',{text:on?'Connected':'Not connected'}),el('span',{class:'computer-meta',text:P.cells+'S · '+P.capacity+' Ah'+(P.main?' · its cells, capacity and limits are in Tune → Battery':'')})),
         UI.button({class:'btn sm','data-power-toggle':'',text:on?'Disconnect':'Connect',onclick:()=>setBatteryWired(c,!on)})));
+    const own=el('div',{class:'hw-fields'});
+    if(many)own.append(hardwareField(c.name+' feeds',hardwareSelect(c.name+' feeds','pw-feeds-'+c.id,Object.entries(PACK_FEEDS).map(([k,d])=>[k,d.label]),packFeeds(C,c),v=>setPackFeeds(c,v))));
+    if(!P.main)own.append(hardwareNumber(c.name+' cells in series',P.cells,v=>Number.isInteger(v)&&v>=1&&v<=8&&setPackSpec(c,'cells',v),1,8),hardwareNumber(c.name+' capacity (Ah)',P.capacity,v=>v>0&&v<=50&&setPackSpec(c,'capacity',v),0.05,50));
+    if(own.childNodes.length)box.append(own);
+    if(!many&&on&&C.boards.length)box.append(UI.button({class:'btn sm','data-add-board-pack':'',text:'Add a separate pack for the boards',onclick:addBoardPack}),el('p',{class:'hint',text:'A small pack of its own for the flight controller and the other boards: this one then feeds the motors only. Their grounds still join.'}));
     if(!cargo.power)box.append(el('p',{class:'bad',text:'No power now: '+powerWhy()+'.'}));
-    box.append(el('h3',{text:'Board supplies'}),el('p',{class:'hint',text:'What feeds each board\'s 5 V. A '+b.cells+'S pack is '+(b.cells*LIPO_MIN).toFixed(1)+'–'+(b.cells*LIPO_MAX).toFixed(1)+' V: '+(b.cells<=1?'below 5 V, so a boost converter steps it up':'above 5 V, so a regulator (BEC) steps it down')+'. Every ground joins the battery\'s −.'}));
+    const boardPacks=bats.filter(x=>batteryWired(C,x)&&packFeedsBoards(C,x));
+    box.append(el('h3',{text:'Board supplies'}),el('p',{class:'hint',text:'What feeds each board\'s 5 V. A 1S pack is 3.0–4.2 V: below 5 V, so a boost converter steps it up; a bigger pack is above 5 V, so a regulator (BEC) steps it down. Every ground joins '+(many?'every pack\'s −':'the battery\'s −')+'.'}));
     const sup=el('div',{class:'hw-fields'});
     for(const x of C.boards){
-      const s=hardwareBus(C,x),S=boardSupply(C,x,b.cells),others=C.boards.filter(o=>o!==x);
+      const s=hardwareBus(C,x),cells=boardCells(C,x,comps),S=boardSupply(C,x,cells),others=C.boards.filter(o=>o!==x),fromPack=['boost5','reg5','direct'].includes(S.kind);
       const pick=v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supply:v,...(v==='board'&&!others.some(o=>o.id===s.supplyFrom)&&others[0]?{supplyFrom:others[0].id}:{})};},x.id+'supply');
-      sup.append(hardwareField(x.name+' supply',hardwareSelect(x.name+' supply','pw-supply-'+x.id,[['auto','Automatic: '+POWER_SUPPLIES[b.cells<=1?'boost5':'reg5'].short],...Object.entries(POWER_SUPPLIES).filter(([k])=>k!=='board'||others.length).map(([k,d])=>[k,d.label])],S.auto?'auto':S.kind,pick)));
+      sup.append(hardwareField(x.name+' supply',hardwareSelect(x.name+' supply','pw-supply-'+x.id,[['auto','Automatic: '+POWER_SUPPLIES[cells<=1?'boost5':'reg5'].short],...Object.entries(POWER_SUPPLIES).filter(([k])=>k!=='board'||others.length).map(([k,d])=>[k,d.label])],S.auto?'auto':S.kind,pick)));
       if(S.kind==='board')sup.append(hardwareField(x.name+' fed from',hardwareSelect(x.name+' fed from','pw-from-'+x.id,others.map(o=>[o.id,o.name+' · '+supplyPinName(C,o)]),S.from?.id??'',v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supplyFrom:Number(v)};},x.id+'supplyFrom'))));
+      if(fromPack&&many&&boardPacks.length){const bp=boardPack(C,x,comps);sup.append(hardwareField(x.name+' pack',hardwareSelect(x.name+' pack','pw-pack-'+x.id,boardPacks.map(o=>[o.id,o.name+' · '+packLabel(C,o,comps)]),bp?bp.id:'',v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),pack:Number(v)};},x.id+'pack'))));}
     }
     box.append(sup);
-    if(typeof powerDiagramView==='function')box.append(powerDiagramView(C,cfg.comps,c.name,b.cells));
-    const P=powerIssues(C,b.cells);for(const m of P.errors)box.append(el('p',{class:'bad',text:m}));for(const m of P.warnings)box.append(el('p',{class:'hint',text:m}));
-    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the pack voltage (low-battery warnings, thrust that stays true as it drains).'}));
+    if(typeof powerDiagramView==='function')box.append(powerDiagramView(C,comps));
+    const I=powerIssues(C,comps);for(const m of I.errors)box.append(el('p',{class:'bad',text:m}));for(const m of I.warnings)box.append(el('p',{class:'hint',text:m}));
+    const mp=motorPack(C,comps);
+    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the voltage of the pack that runs the motors'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' The flight firmware reads one pack: a board-only pack isn\'t measured on the drone yet, so check it with a meter or a cheap LiPo alarm.':'')}));
     mountHardware(box,'[data-hw-role="battery"]');computerWiringIssues(box,boardOf('core'));return;
   }
   if(view.kind==='link'){

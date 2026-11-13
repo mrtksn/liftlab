@@ -127,9 +127,9 @@ const FlightPhysics = (() => {
     const i = Math.floor(x), f = x - i;
     return (mp.response[i] + f * (mp.response[i + 1] - mp.response[i])) * rho / RHO;
   }
-  function batteryMass(parts, b) {
+  function batteryMass(parts, main, specOf) {   // specOf(part): that pack's { cells, capacity } (a design with several packs), else the main pack's
     for (const c of parts) if (c.type === 'mass' && c.battery && c.batteryAutoMass !== false) {
-      const r = c.batterySizing;
+      const b = specOf ? specOf(c) || main : main, r = c.batterySizing;
       if (!r || !(r.capacity > 0 && r.cells > 0 && r.mass > 0)) c.batterySizing = { capacity: b.capacity, cells: b.cells, mass: c.mass };
       const ref = c.batterySizing;
       c.mass = ref.mass * b.capacity * b.cells / (ref.capacity * ref.cells);

@@ -457,7 +457,11 @@ function dynamics(dt) {
   MB.bodies.forEach((B, i) => { if (B.I.m > 0) push(i, m3v(RT, run('gravity', B.I.m, G)), posed(i, add(B.pivot, B.I.c))); });
 
   // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
-  let Ibatt = cargo.power ? flightDevicePower() / Math.max(1, S.battV) : 0;
+  // The boards and devices draw on the motors' pack, unless the flight controller's board has a pack of its own: then
+  // they drain that one (through their converters) and only the servos and latches stay on the motors' pack.
+  const deviceW = cargo.power ? flightDevicePower() : 0, ownPack = cargo.power ? cargo.boardsPack : null;
+  let Ibatt = (ownPack ? S.servoW : deviceW) / Math.max(1, S.battV);
+  if (ownPack) packStep(ownPack, S.boardW / 0.85, dt);
   S.motorW = 0; S.shaftW = 0;
   const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0)) || !cargo.power;
   const rotors = acts.map(c => {
@@ -645,6 +649,7 @@ function resetSim() {
   flightLimitCache = new WeakMap();
   thr = null;
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
+  S.packs = new Map();                 // a pack for the boards, charged again (packStep)
   cargoReset();                        // every part back on board, the items to pick up where they're set
   buildBodies(); cPts = contactPoints();
   const blocked = (x, y) => { for (let z = 0.3; z <= Math.max(0.3, setpoint.z) + 0.01; z += 0.4) if (terrainNear([x, y, z], cReach + 0.4).length) return true; return false; };

@@ -42,6 +42,24 @@ function battParams() {
   return { cells: Math.max(0, b.cells - hb.cellsLost), capacity: b.capacity * 3600 * (1 - hb.fade), cut: hb.cut,
     rInt: b.rInt * clamp(Math.exp(0.015 * (25 - hb.T)), 0.6, 3) * (1 + 2 * hb.fade) };
 }
+// A pack of its own for the boards (hardware.js: what each pack feeds): it drains with what the boards and devices draw
+// (watts, through their converters) and sags like the main pack (the battery law), with no heating or wear. Once it's
+// flat (3.0 V a cell under load) or cut, the flight controller's board is off: the drone has no power.
+function packStep(c, watts, dt) {
+  const P = packSpec(computers(), c, cfg.comps);
+  let st = S.packs.get(c.id);
+  if (!st) { st = { soc: 1, V: P.cells * 4.2, I: 0 }; S.packs.set(c.id, st); }
+  if (st.cut || st.flat) { st.V = 0; st.I = 0; return; }
+  st.I = watts / Math.max(1, st.V);
+  st.V = run('batteryModel', st, st.I, dt, { cells: P.cells, capacity: P.capacity * 3600, rInt: 0.08 * P.cells, cut: false });
+  if (st.V / P.cells < 3.0) { st.flat = true; packOff(c, 'is flat'); }
+}
+function packOff(c, why) {
+  cargo.power = false; cargo.powerT = S.t;
+  healthEvent(`${c.name} ${why}: the boards on it are off. The motors stop.`, 'bad');
+  if (typeof cargoLog === 'function') cargoLog(`${c.name} ${why}: the boards on it are off.`, 'bad');
+}
+function breakPack(c) { let st = S.packs.get(c.id); if (!st) { st = { soc: 1, V: 0, I: 0 }; S.packs.set(c.id, st); } if (st.cut) return; st.cut = true; st.V = 0; packOff(c, 'cut out'); }
 // The ESCs' low-voltage cutoff (hardware, not the flight code): every ESC watches the pack voltage it runs on, and
 // once it stays under the cutoff (per cell, under load) for 1.5 s, the ESCs stop their motors. They start
 // again only after the throttle has been at zero (disarmed), as hobby ESCs do. 0 turns it off.

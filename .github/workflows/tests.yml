@@ -23,6 +23,7 @@ jobs:
       - run: node tools/test_board_install.js
       - run: node tools/test_hardware_wiring.js
       - run: node tools/test_board_pinouts.js
+      - run: node tools/test_power_packs.js
       - run: node tools/test_agent_hardware.js
       - run: node tools/test_driver_presets.js
       - run: node tools/test_flight_physics.js
