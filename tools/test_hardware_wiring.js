@@ -11,6 +11,10 @@ let p=A.hardwarePlan(C,parts,C.boards[0]);assert.equal(p.errors.length,0);
 C.wiring={parts:{5:{board:1,driver:'mpu',address:0x68},6:{board:1,driver:'bmp180',address:0x77},7:{board:1,driver:'hmc',address:0x1e}},boards:{1:{sda:15,scl:16,driverCode:A.DRIVER_PRESETS['10dof'].code}}};
 p=A.hardwarePlan(C,parts,C.boards[0]);assert.equal(p.errors.length,0);assert.equal(p.warnings.length,0);
 const settings=A.hardwareSettings(p);assert.ok(settings.indexOf('esc_hz=50')<settings.indexOf('esc_us=1000,2000'));assert.ok(settings.indexOf('esc_us=1000,2000')<settings.indexOf('esc_hz=400'));assert.ok(settings.includes('i2c=15,16'));assert.ok(settings.includes('baro=2,119'));assert.ok(settings.includes('mag=1,30'));
+assert.ok(settings.includes('level=boot'));   // (the default: as it sits at power-up is level)
+{const W=JSON.parse(JSON.stringify(C));
+  for(const [v,line] of [['off','level=off'],['2.5,-4','level=2.5,-4'],['boot','level=boot']]){W.wiring.parts[5].level=v;const q=A.hardwarePlan(W,parts,W.boards[0]);assert.equal(q.errors.length,0,q.errors.join());assert.ok(A.hardwareSettings(q).includes(line),line);}
+  for(const v of ['50,0','1','up']){W.wiring.parts[5].level=v;assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/level trim/.test(e)),v);}}
 {const W=JSON.parse(JSON.stringify(C));vm.runInContext('this.esc={ESC_PRESETS,escPresetOf,escDutyPct}',ctx);const E=ctx.esc;
   assert.equal(E.escPresetOf(A.hardwarePlan(W,parts,W.boards[0]).bus),'custom');   // (a design's old defaults: no preset)
   const {label,note,...toy}=E.ESC_PRESETS.toyStop;void label;void note;W.wiring.boards[1]={...W.wiring.boards[1],...toy};

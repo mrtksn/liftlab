@@ -113,6 +113,13 @@ function renderHardware() {
     }
     if(c.kind==='fix')card.append(hardwareText(c.name+' serial port',saved.port||'/dev/ttyUSB0',v=>update({port:v})),el('p',{class:'hint',text:saved.port==='/dev/serial0'?'GPS TX → Pi GPIO 15 (RX), GPS RX ← GPIO 14 (TX), share GND. The flight link must use another port.':'GPS TX → USB adapter RX; GPS RX ← adapter TX (if needed); share GND. A USB adapter uses no Pi GPIO. Use /dev/serial0 for the fixed GPIO 14/15 UART.'}));
     if(c.kind==='flow')card.append(el('p',{class:'hint',text:'No physical driver yet. SPI/UART pin assignment will appear when a device driver is available.'}));
+    if(c.kind==='imu'&&owner&&ESP_PROFILES[owner.kind]){
+      const lv=saved.level==null||saved.level==='boot'?'boot':saved.level==='off'?'off':'trim';
+      const box=hardwareDetails('level'+c.id,'Level',hardwareField('Which way is level',hardwareSelect(c.name+' level','hw-level-'+c.id,[['boot','As it sits at power-up (keep it level and still then)'],['off','The mount as set in Airframe'],['trim','A fixed trim (to start on a slope)']],lv,v=>update({level:v==='trim'?(lv==='trim'?saved.level:'0,0'):v}))));
+      if(lv==='trim')box.append(hardwareText('Level trim: roll,pitch (°)',saved.level,v=>update({level:v})));
+      box.append(el('p',{class:'hint',text:lv==='boot'?'At power-up the flight controller measures the gyro’s offset and takes the way it sits as level: a sensor fitted slightly tilted is trimmed out. Start it on a level surface.':lv==='off'?'Level is what the IMU mount in Airframe says; a sensor fitted tilted shows as a tilt.':'What a level drone reads, in degrees: the flight controller reports it after `level` (the Pi panel’s L key), to keep for a start on a slope.'}));
+      card.append(box);
+    }
     if(c.kind==='mag'&&p.driver!=='none')card.append(hardwareDetails('mag'+c.id,'Compass calibration',hardwareText('Compass offsets (µT)',saved.bias||'0,0,0',v=>update({bias:v})),hardwareText('Compass scale XYZ',saved.scale||'1,1,1',v=>update({scale:v})),el('p',{class:'hint',text:'Three comma-separated values, X,Y,Z. Set orientation in Airframe.'})));
     if(custom&&owner)card.append(UI.button({class:'btn',type:'button',text:'Edit C driver for '+owner.name,onclick:()=>{openComputerView({kind:'board',id:owner.id});const d=$('#hw-editor-'+owner.id);if(d){d.open=true;HW_UI.open.add('driver'+owner.id);$('#hw-code-'+owner.id).focus();}}}));
     card.dataset.hwPart=c.id;sensors.append(card);

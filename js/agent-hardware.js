@@ -1,7 +1,7 @@
 'use strict';
 // Design-only hardware tools. These never access serial, flash firmware or execute C.
 const AGENT_BOARD_REF={type:['integer','string'],description:'Board id from get_computers; "ground" for the command module. Unique board names also work.'};
-const AGENT_PART_FIELDS={board:{type:['integer','string','null'],description:'Existing board id, "auto" to follow its task, or null / "off" to disconnect.'},pin:{type:'integer'},driver:{type:'string'},address:{type:'integer'},maxDuty:{type:'integer'},center:{type:'number'},usPerRad:{type:'number'},bias:{type:'string'},scale:{type:'string'},port:{type:'string'}};
+const AGENT_PART_FIELDS={board:{type:['integer','string','null'],description:'Existing board id, "auto" to follow its task, or null / "off" to disconnect.'},pin:{type:'integer'},driver:{type:'string'},address:{type:'integer'},maxDuty:{type:'integer'},center:{type:'number'},usPerRad:{type:'number'},bias:{type:'string'},scale:{type:'string'},port:{type:'string'},level:{type:'string',description:'IMU: which way is level: "boot" (as it sits at power-up, the default), "off" (the Airframe mount), or "ROLL,PITCH" (a trim in degrees, at most 45).'}};
 const AGENT_BUS_FIELDS=Object.fromEntries(['sda','scl','brushedHz','escHz','escMin','escMax','escStop','escCellsMin','escCellsMax','batteryPin','crsfRx','crsfTx','fcLinkTx','fcLinkRx'].map(k=>[k,{type:'integer'}]));
 Object.assign(AGENT_BUS_FIELDS,{model:{type:'string'},batteryDivider:{type:'number'},linkPort:{type:'string'},receiverPort:{type:'string'},linkTransport:{type:'string',enum:['serial','mqtt']},mqttHost:{type:'string'},mqttPort:{type:'integer'},mqttPrefix:{type:'string'},mqttBroker:{type:'string',enum:['here','elsewhere']},net:{type:'boolean'},wifiSsid:{type:'string'}});
 const AGENT_GROUND_FIELDS=Object.fromEntries(['tx','arm','fly','roll','pitch','throttle','yaw','buzzer','led'].map(k=>[k,{type:'array',items:{type:'integer'}}]));
@@ -67,7 +67,7 @@ function agentSetHardware(a){
   for(const change of a.parts||[]){
     agentFields(change,{id:{type:['integer','string']},fields:{type:'object'}},'part change');
     const c=partOf(change.id);if(seen.has(c.id))throw new Error('Duplicate part change '+c.id);seen.add(c.id);
-    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(['imu','baro','mag'].includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='fix'?['port']:[])]:[];
+    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(['imu','baro','mag'].includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='imu'?['level']:[]),...(c.kind==='fix'?['port']:[])]:[];
     agentFields(change.fields,Object.fromEntries(keys.map(k=>[k,AGENT_PART_FIELDS[k]])),c.name);
     const patch=agentClone(change.fields),saved=C.wiring.parts[c.id]||{};
     if(Object.hasOwn(patch,'board')){

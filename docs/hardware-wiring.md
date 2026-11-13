@@ -34,6 +34,28 @@ Each motor card selects **PWM ESC** or **Brushed motor · MOSFET**. ESCs use the
 
 The card shows each pulse as a duty cycle as well (what a scope or logic analyser shows). The board gets `esc_hz=` and `esc_us=MIN,MAX[,STOP]`. Two values clear a stop pulse saved earlier, so a standard ESC never keeps one. The stop pulse needs flight firmware newer than build 038dec0 (wiring version 12); older builds refuse three values. Install also sends `vref=`, the pack voltage the exported airframe's thrust tables are for (4 V a cell of the design's battery).
 
+### Which way is level
+
+The IMU's card has **Level**: which way up the flight controller takes as level. The board gets `level=`:
+
+- **As it sits at power-up** (`level=boot`, the default). The flight controller already keeps still for a second
+  at power-up to measure the gyro's offset. It also takes the gravity it reads then as straight up. A sensor fitted
+  slightly tilted is trimmed out; start it on a level surface. If it was moving, there is no trim and it says so.
+- **The mount as set in Airframe** (`level=off`): no trim. A sensor fitted tilted shows as a tilt.
+- **A fixed trim** (`level=ROLL,PITCH`, degrees, at most 45 each): what a level drone reads. Use it to start on a
+  slope, where "as it sits" would be wrong. Measure it once on level ground: the `level` command (the Pi panel's `L`)
+  reports the trim; enter those numbers here.
+
+`level` (a settings line, or `liftlab send flight level`) re-levels it now, disarmed and still, until a reboot;
+`level none` drops the trim. The ESP32's `show` lists the trim in use. Needs flight firmware with wiring version 14.
+
+### Safety off
+
+`safety off` (a settings line, or the Pi panel's `!` twice) lets it arm without the "not level" check, and stops the
+crash cut-off: a big tilt no longer stops the motors. It's for bench work with the sensor out of the drone, where its
+attitude means nothing. It needs the drone disarmed. `safety on` restores the checks at any time, and so does every
+start: it is never saved. The telemetry carries it (the Pi panel shows **SAFETY OFF**), and so does `show`.
+
 MOSFET mode is active-high and runs in one direction. It switches an external power stage; the motor never connects directly to a GPIO. Use a gate driver or a MOSFET suitable for the GPIO’s 3.3 V drive, external gate pulldown, common ground and flyback protection appropriate to the motor circuit. The external pulldown holds the gate off before firmware takes control. Software starts with a low gate and zero duty, stops unused motors, and shuts outputs down on peripheral failures. ESCs get their stop pulse (or, without one, their start pulse) when stopped. The flight core’s controlled-descent failsafe remains active; crash/disarm cutoffs and hardware shutdown yield zero MOSFET duty.
 
 MOSFET output uses 10-bit PWM (0–1023); ESC/servo pulses use 14-bit timers on the APB clock. The frequency is shared across MOSFET motors on the board, while duty ceilings are individual. A duty ceiling clips the requested output; controller allocation, headroom estimates and native learning telemetry currently use the full motor model/requested throttle. Match the Airframe motor model to the actual motor/prop and validate reduced authority separately. H-bridge direction control, DShot and custom motor protocols remain unsupported.

@@ -202,6 +202,7 @@ function hardwarePlan(C, comps, b) {
       if (c.kind === 'mag' && p.driver === 'none') warnings.push(c.name + ': simulated compass only; choose HMC5883L for hardware');
       if(c.kind==='mag' && p.driver!=='none') { for(const [key,dflt] of [['bias','0,0,0'],['scale','1,1,1']]) { const v=String(p[key]||dflt).split(',').map(Number);if(v.length!==3 || v.some(n=>!Number.isFinite(n) || (key==='scale' && (n<0.01 || n>100)))) errors.push(c.name+': invalid compass '+key); } }
       if (c.kind === 'imu' && p.driver === 'lis') warnings.push(c.name + ': LIS3DH has no gyro and cannot arm for flight');
+      if (c.kind === 'imu' && p.level != null && p.level !== 'boot' && p.level !== 'off') { const v=String(p.level).split(',').map(Number); if (v.length!==2 || v.some(n=>!Number.isFinite(n) || Math.abs(n)>45)) errors.push(c.name+': level trim: roll,pitch in degrees, at most 45 each'); }
     }
   }
   if (profile && b.tasks.includes('core')) {
@@ -317,6 +318,8 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
+  // which way is level (runner/fc/esp32/main/hw.h level_mode): as it sits at power-up (the default), the mount as set, or a trim
+  if(sensors.imu) lines.push('level='+(sensors.imu.level==null||sensors.imu.level==='boot'?'boot':sensors.imu.level==='off'?'off':String(sensors.imu.level).split(',').map(n=>Number(Number(n).toFixed(2))).join(',')));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
   if(plan.radioBoard) { const P=peerSettingLines(radio); lines.push(...P.before, ...radioSettingLines(radio), ...P.after); }
   if(plan.mqtt) lines.push('link_topic='+plan.mqtt.mqttPrefix,'link=mqtt,'+plan.mqtt.mqttHost+','+plan.mqtt.mqttPort);   // (after the radio: it may not be Wi-Fi with it)
