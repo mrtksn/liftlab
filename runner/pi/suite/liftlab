@@ -24,6 +24,11 @@ boot = yes, started again if it stops (restart). Over SSH:
   liftlab build                                dfb_pi from src/ into bin/ (minutes on a Pi Zero; or tools/deploy_pi.sh from a computer)
   liftlab migrate                              from the earlier layout (~/dfb and dfb.service, ~/liftlab-bench)
   liftlab watch [--every 10]                   the health monitor: prints each change (the monitor service runs this)
+  liftlab send NAME TEXT...                    a text command to a dfb_pi program (status, health, autotune ..., and in
+                                               angle mode sticks ARM THROTTLE [ROLL PITCH YAW], motor N THROTTLE); its answer
+
+In the panel, c on a dfb_pi program is its control screen: the sticks from the keyboard, as a radio would send them
+(arm, throttle, roll, pitch, yaw; one motor at a time for a test), with the ESP32's state, attitude, height and motors.
 
 Health: the programs (running, restarts, a probe: dfb_pi's status over UDP, or a TCP port), and the computer: power
 (the Pi's under-voltage and throttling flags), temperature, memory, disk, Wi-Fi. Starting and stopping use sudo
@@ -314,15 +319,155 @@ def dfb_status(txt):
     m = re.search(r'sticks arm (on|off), throttle ([\d.]+)', txt)
     if m: d['arm'] = m.group(1) == 'on'; d['throttle'] = float(m.group(2))
     if 'no channels from the radio' in txt: d['channels'] = False
+    elif 'text sticks arm' in txt: d['channels'] = False; d['panel'] = True
     elif 'sticks arm' in txt: d['channels'] = True
     bits = []
     if 'esp32' in d: bits.append(f"ESP32 {d['esp32']}")
     if d.get('peer'): bits.append(f"pilot {d['peer']} LQ {d.get('lq', '?')}%")
     elif 'peer' in d: bits.append('no pilot connected')
-    if 'arm' in d: bits.append(f"sticks: arm {'on' if d['arm'] else 'off'}, throttle {d['throttle']:.2f}")
+    if 'arm' in d: bits.append(f"{'panel ' if d.get('panel') else ''}sticks: arm {'on' if d['arm'] else 'off'}, throttle {d['throttle']:.2f}")
     d['text'] = ' · '.join(bits) or txt[:80]
     if d.get('esp32') == 'not heard yet': d['ok'] = False
     return d
+
+# ───────────────────────── talking to dfb_pi ─────────────────────────
+
+def dfb_port(s):
+    """The UDP port a program takes dfb_pi's text commands on: its probe, 'dfb_pi PORT'; None if it isn't one."""
+    kind, _, arg = (s.probe or '').partition(' ')
+    try: return int(arg) if kind == 'dfb_pi' else None
+    except ValueError: return None
+
+def dfb_send(port, text, timeout=1.0):
+    """One text command to dfb_pi (status, health, sticks, motor, autotune, arm ...: its own list) and its answer."""
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.settimeout(timeout)
+    try:
+        u.sendto(text.encode(), ('127.0.0.1', port)); return u.recv(4096).decode('utf-8', 'replace').strip()
+    except OSError:
+        return None
+    finally:
+        u.close()
+
+def ctl_status(txt):
+    """dfb_pi's status in angle mode, for the control screen: the ESP32's state, who gives the sticks, what it measures."""
+    d = dfb_status(txt or '')
+    num = r'([-+]?\d+(?:\.\d+)?)'
+    m = re.search(rf'attitude roll {num} pitch {num} yaw {num} deg, height {num} m, vz {num} m/s, flags (\d+)[^;]*; motors((?: [\d.]+)*)', txt or '')
+    if m:
+        d['roll'], d['pitch'], d['yaw'], d['height'], d['vz'] = (float(m.group(i)) for i in range(1, 6))
+        d['flags'] = int(m.group(6)); d['motors'] = [float(x) for x in m.group(7).split()]
+    d['angle_mode'] = (txt or '').startswith('angle mode')
+    d['safety_off'] = 'SAFETY OFF' in (txt or ''); d['levelled'] = ', levelled' in (txt or '')
+    m = re.search(r'the ESP32 said (\d+) s ago: (.*?)(?:; wifi with|$)', txt or '')
+    if m: d['esp32_said'] = m.group(2).strip(); d['esp32_said_s'] = int(m.group(1))
+    d['source'] = 'this panel' if d.get('panel') else 'the radio' if d.get('channels') else 'nobody'
+    return d
+
+class Control:
+    """The control screen's sticks: what it sends to dfb_pi (angle mode's `sticks` and `motor`), 20 times a second
+    from a thread of its own while the screen is open; dfb_pi passes them to the ESP32 for half a second each. Leaving
+    stops them, and the ESP32's failsafe does the rest: disarmed on the ground, a slow landing in the air.
+
+    Keys (Control.KEYS): arming needs the throttle at the bottom (the flight core's rule) and the key twice; a motor test
+    only disarmed. The sticks are levels: they stay where the keys put them (a terminal says when a key is pressed,
+    not when it's let go)."""
+    STEP, THR_STEP = 0.1, 0.05
+    KEYS = ('space arm (twice) / disarm · w s throttle ±0.05 (W S ±0.01) · 0 bottom · h middle (holds height) · '
+            '←→ roll ↑↓ pitch · a d yaw · c centre · 1-9 test that motor, t g its throttle, m stop · x all stop · '
+            '! safety off/on · L level: as it sits now is level · : a command · q leave')
+
+    def __init__(self, port, send=None, now=time.monotonic):
+        self.port, self.now = port, now
+        self.arm, self.thr, self.roll, self.pitch, self.yaw = False, 0.0, 0.0, 0.0, 0.0
+        self.motor, self.test_thr, self.arm_ask = None, 0.10, -1e9
+        self.status, self.said, self.n_sent, self.on = ctl_status(''), '', 0, False
+        self.safety_ask, self.queue = -1e9, []                    # (one-off commands: the sending thread sends them)
+        self._u = None; self._send = send
+
+    # what goes out
+    def line(self):
+        if self.motor is not None: return f'motor {self.motor} {self.test_thr:.2f}'
+        return f'sticks {int(self.arm)} {self.thr:.2f} {self.roll:+.2f} {self.pitch:+.2f} {0.0 - self.yaw:+.2f}'   # (yaw: d turns right, the flight core's negative)
+
+    def armed(self): return self.status.get('esp32') in ('armed', 'failsafe')
+
+    def key(self, k):
+        """One key (a character, or 'left' 'right' 'up' 'down'); returns what to say, or None."""
+        cl = lambda v, lo, hi: round(min(hi, max(lo, v)), 2)
+        if k == ' ':
+            if self.arm: self.arm = False; self.motor = None; return 'disarm'
+            if self.motor is not None: return 'stop the motor test first (m)'
+            if self.thr > 0.05: return 'arming needs the throttle at the bottom: 0 first'
+            if self.now() - self.arm_ask > 2: self.arm_ask = self.now(); return 'space again to arm: the motors will spin'
+            self.arm = True; self.arm_ask = -1e9; return 'arm'
+        if k in ('w', 'W', 's', 'S'): self.thr = cl(self.thr + {'w': self.THR_STEP, 's': -self.THR_STEP, 'W': 0.01, 'S': -0.01}[k], 0, 1); return None
+        if k == '0': self.thr = 0.0; return None
+        if k == 'h': self.thr = 0.5; return 'throttle 0.50: holds the height'
+        if k in ('left', 'right'): self.roll = cl(self.roll + (self.STEP if k == 'right' else -self.STEP), -1, 1); return None
+        if k in ('up', 'down'): self.pitch = cl(self.pitch + (self.STEP if k == 'up' else -self.STEP), -1, 1); return None
+        if k in ('a', 'd'): self.yaw = cl(self.yaw + (self.STEP if k == 'd' else -self.STEP), -1, 1); return None
+        if k == 'c': self.roll = self.pitch = self.yaw = 0.0; return 'centred'
+        if k == '!':
+            if self.status.get('safety_off'): self.queue.append('safety on'); return 'safety on'
+            if self.arm or self.armed(): return 'safety off only disarmed'
+            if self.now() - self.safety_ask > 2: self.safety_ask = self.now(); return '! again: safety off (no level check when arming, no crash cut-off) until safety on or a reboot'
+            self.safety_ask = -1e9; self.queue.append('safety off'); return 'safety off'
+        if k == 'L':
+            if self.arm or self.armed(): return 'level: disarmed only'
+            self.queue.append('level'); return 'level: as it sits now is level (keep it still for half a second)'
+        if k == 'x': self.arm = False; self.motor = None; self.thr = self.roll = self.pitch = self.yaw = 0.0; return 'all stop: disarmed, sticks centred, throttle 0'
+        if k == 'm': self.motor = None; return 'motor test off'
+        if k in ('t', 'g'): self.test_thr = cl(self.test_thr + (self.THR_STEP if k == 't' else -self.THR_STEP), 0, 1); return f'test throttle {self.test_thr:.2f}'
+        if k.isdigit() and k != '0':
+            n = int(k); nm = len(self.status.get('motors') or [])
+            if self.arm or self.armed(): return 'a motor test only disarmed'
+            if nm and n > nm: return f'this airframe has {nm} motors'
+            if self.motor == n: self.motor = None; return 'motor test off'
+            if self.motor is not None: self.motor = None; return 'motor test off: press again for the next one (the flight controller wants one released first)'
+            self.motor = n; return f'motor {n} at {self.test_thr:.2f}'
+        return None
+
+    # the sending thread
+    def _io(self, text):
+        if self._send: return self._send(text)
+        if not self._u: self._u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); self._u.settimeout(0.2)
+        self._u.sendto(text.encode(), ('127.0.0.1', self.port))
+        try: return self._u.recv(4096).decode('utf-8', 'replace').strip()
+        except OSError: return None
+
+    def tick(self, ask_status):
+        """One send: the sticks, and dfb_pi's answer (kept when it isn't the usual echo); with ask_status, its status."""
+        while self.queue:
+            q = self.queue.pop(0); r = self._io(q)
+            if r: self.said = r
+        r = self._io(self.line()); self.n_sent += 1
+        if r and not (r.startswith('sticks: arm') or r.startswith('motor test:')): self.said = r
+        elif r: self.said = self.said if self.said and not self.said.startswith(('sticks', 'motor')) else ''
+        if ask_status:
+            st = self._io('status')
+            if st is not None: self.status = ctl_status(st); self.status['t'] = self.now()
+
+    def run(self, stop):
+        self.on = True; i = 0
+        try:
+            while not stop.is_set():
+                try: self.tick(i % 5 == 0)
+                except OSError as e: self.said = f'sending: {e}'
+                i += 1; stop.wait(0.05)
+        finally:
+            self.leave()
+
+    def leave(self):
+        """Stop sending. Disarmed first if it's on the ground; in the air (throttle above the bottom), nothing more:
+        the ESP32's failsafe lands it."""
+        try:
+            if not (self.arm and self.thr > 0.05):
+                self.arm = False; self.motor = None
+                for _ in range(3): self._io('sticks 0 0')
+            self._io('sticks off')
+        except OSError:
+            pass
+        self.on = False
 
 def rss_mb(pid):
     """A process's memory in use (VmRSS), where systemd doesn't account it (the Pi's kernel, by default)."""
@@ -550,6 +695,63 @@ def panel():
         h, w = scr.getmaxyx(); scr.addnstr(h - 1, 0, (q + ' [y/N] ').ljust(w - 1), w - 1, curses.A_REVERSE); scr.refresh()
         scr.timeout(-1); c = scr.getch(); scr.timeout(100); return c in (ord('y'), ord('Y'))
 
+    def prompt(scr, q):
+        """A line typed at the bottom (Enter sends, Esc gives up)."""
+        h, w = scr.getmaxyx(); txt = ''
+        scr.timeout(-1); curses.curs_set(1)
+        try:
+            while True:
+                scr.addnstr(h - 1, 0, (q + txt).ljust(w - 1), w - 1, curses.A_REVERSE); scr.move(h - 1, min(w - 2, len(q) + len(txt))); scr.refresh()
+                c = scr.get_wch()
+                if c in ('\n', '\r', curses.KEY_ENTER): return txt.strip()
+                if c in ('\x1b',): return ''
+                if c in ('\x7f', '\b', curses.KEY_BACKSPACE): txt = txt[:-1]
+                elif isinstance(c, str) and c.isprintable(): txt += c
+        except curses.error:
+            return ''
+        finally:
+            curses.curs_set(0); scr.timeout(100)
+
+    def svc_of(p):
+        return next((s for s in services() if s.name == p['name']), None) if p else None
+
+    def draw_control(scr, put, name, ctl, msg, G, Y, R, C):
+        h, w = scr.getmaxyx(); st = ctl.status
+        def bar(v, lo, hi, n=20, mid=None):
+            f = int(round((min(hi, max(lo, v)) - lo) / (hi - lo) * n)); b = ['#' if i < f else '.' for i in range(n)]
+            if mid is not None: b[int((mid - lo) / (hi - lo) * n)] = '|'
+            return '[' + ''.join(b) + ']'
+        put(0, 0, f' {name} · control: the sticks from here, as a radio would (props off to test!) · q leaves '.ljust(w - 1), curses.A_REVERSE)
+        fresh = time.monotonic() - st.get('t', -1e9) < 1.5
+        es = st.get('esp32', 'no answer') if fresh else 'no answer from dfb_pi'
+        put(2, 0, 'ESP32', curses.A_BOLD); put(2, 12, es.upper(), (R if es in ('armed', 'failsafe', 'testing') else G if es == 'disarmed' else Y) | curses.A_BOLD)
+        if fresh and st.get('safety_off'): put(2, 22, 'SAFETY OFF', R | curses.A_BOLD | curses.A_REVERSE)
+        put(2, 34, f"sticks from: {st.get('source', '?')}" + ('' if st.get('angle_mode', True) or not fresh else '  (not angle mode: start dfb_pi with --no-navigation)'), C)
+        y = 3
+        if 'roll' in st and fresh:
+            put(y, 0, 'attitude', curses.A_BOLD); put(y, 12, f"roll {st['roll']:+6.1f}°  pitch {st['pitch']:+6.1f}°  yaw {st['yaw']:5.0f}°" + ('   (levelled)' if st.get('levelled') else ''), Y if max(abs(st['roll']), abs(st['pitch'])) > 15 and not st.get('safety_off') else 0); y += 1
+            put(y, 0, 'height', curses.A_BOLD); put(y, 12, f"{st['height']:+.2f} m   vz {st['vz']:+.2f} m/s   (flags {st['flags']})"); y += 1
+            put(y, 0, 'motors', curses.A_BOLD)
+            for i, v in enumerate(st['motors']):
+                x = 12 + (i % 2) * 36; yy = y + i // 2
+                put(yy, x, f'{i + 1} {bar(v, 0, 1)} {v:.2f}', G if v > 0 else 0)
+            y += (len(st['motors']) + 1) // 2 or 1
+        else:
+            put(y, 12, 'no telemetry from the ESP32 yet', Y); y += 1
+        y += 1
+        put(y, 0, 'sending', curses.A_BOLD)
+        put(y, 12, 'ARM ON ' if ctl.arm else 'arm off', (R | curses.A_BOLD) if ctl.arm else G)
+        put(y, 21, f"throttle {bar(ctl.thr, 0, 1, 20, 0.5)} {ctl.thr:.2f}" + ('  holds height' if abs(ctl.thr - 0.5) < 0.01 else ''), 0); y += 1
+        put(y, 12, f"roll {ctl.roll:+.2f}  pitch {ctl.pitch:+.2f}  yaw {ctl.yaw:+.2f}   ({ctl.n_sent} sent)"); y += 1
+        put(y, 0, 'motor test', curses.A_BOLD)
+        put(y, 12, f"motor {ctl.motor} at {ctl.test_thr:.2f}" if ctl.motor else f"none (1-9 tests one at {ctl.test_thr:.2f}; t g change it)", Y if ctl.motor else 0); y += 2
+        if fresh and st.get('esp32_said'): put(y, 0, 'ESP32 said', curses.A_BOLD); put(y, 12, f"{st['esp32_said']}  ({st['esp32_said_s']} s ago)"[:max(0, w - 13)], R if 'won\'t' in st['esp32_said'] or 'refused' in st['esp32_said'] else 0); y += 1
+        if ctl.said: put(y, 0, 'dfb_pi', curses.A_BOLD); put(y, 12, ctl.said[:max(0, w - 13)], Y); y += 1
+        keys = Control.KEYS; lines_ = []
+        while keys: lines_.append(keys[:w - 2]); keys = keys[w - 2:]
+        for i, l in enumerate(lines_[-3:]): put(h - 1 - len(lines_[-3:]) + i, 0, l, curses.A_DIM)
+        put(h - 1, 0, msg[:w - 1])
+
     def main(scr):
         curses.curs_set(0); scr.timeout(100); scr.keypad(True)
         try: curses.set_escdelay(50)
@@ -561,6 +763,8 @@ def panel():
             pass
         G, Y, R, C = (curses.color_pair(i) for i in (1, 2, 3, 4))
         sel, logs_full, scroll, drawn = 0, False, 0, None
+        ctl = ctl_stop = ctl_thread = None; ctl_name = ''
+        arrows = {curses.KEY_LEFT: 'left', curses.KEY_RIGHT: 'right', curses.KEY_UP: 'up', curses.KEY_DOWN: 'down'}
         threading.Thread(target=gather, daemon=True).start()
         while True:
             snap = S['snap']; progs = snap['programs'] if snap else []
@@ -568,13 +772,14 @@ def panel():
             unit = progs[sel]['unit'] if progs else None
             if unit != S['unit'] or bool(logs_full) != bool(S['full']):  # (its log comes with the next look: within 2 s)
                 S['unit'] = unit; S['full'] = unit if logs_full else None
-            key = (S['v'], sel, logs_full, scroll, S['msg'], scr.getmaxyx())
+            key = (S['v'], sel, logs_full, scroll, S['msg'], scr.getmaxyx(), ctl and (ctl.n_sent // 2, ctl.line(), ctl.said))
             if key != drawn:                                        # (drawn again only when something changed)
                 drawn = key; scr.erase(); h, w = scr.getmaxyx()
                 def put(y, x, s, a=0):
                     if 0 <= y < h and x < w - 1: scr.addnstr(y, x, s, w - 1 - x, a)
                 msg = S['msg'] if not S['err'] else S['err']
-                if not snap and not S['err']: put(0, 0, ' LiftLab · looking…'.ljust(w - 1), curses.A_REVERSE)
+                if ctl: draw_control(scr, put, ctl_name, ctl, msg, G, Y, R, C)
+                elif not snap and not S['err']: put(0, 0, ' LiftLab · looking…'.ljust(w - 1), curses.A_REVERSE)
                 elif logs_full and progs:
                     p = progs[sel]; lines = S['logs'].get(unit, [])
                     top = max(0, len(lines) - (h - 2) - scroll)
@@ -606,12 +811,23 @@ def panel():
                         put(y, 0, f"{p['name']}: last log lines", curses.A_BOLD); y += 1
                         if room > 0:
                             for l in S['logs'].get(unit, [])[-room:]: put(y, 2, l); y += 1
-                    put(h - 2, 0, ' ↑↓ (j k) program · s start · x stop · r restart · b boot on/off · l log · a apply · R reboot · P power off · q quit'[:w - 1], curses.A_DIM)
+                    put(h - 2, 0, ' ↑↓ (j k) program · s start · x stop · r restart · b boot on/off · l log · c control · : command · a apply · R reboot · P power off · q quit'[:w - 1], curses.A_DIM)
                     put(h - 1, 0, msg[:w - 1])
                 scr.refresh()
             c = scr.getch()
             if c == -1: continue
             h = scr.getmaxyx()[0]
+            if ctl:                                                 # the control screen
+                if c == ord('q'):                                   # (q alone: a stray Esc, half an arrow key, mustn't stop the sticks)
+                    ctl_stop.set(); ctl_thread.join(2); S['msg'] = f'{ctl_name}: control left, sticks stopped' + (' (it was armed above the bottom throttle: the ESP32\'s failsafe lands it)' if ctl.arm and ctl.thr > 0.05 else ''); ctl = None
+                elif c == ord(':'):
+                    t = prompt(scr, f'{ctl_name} (dfb_pi) > ')
+                    if t: r = dfb_send(ctl.port, t); S['msg'] = f'{t}: ' + (r if r is not None else 'no answer')
+                else:
+                    k = arrows.get(c) or (chr(c) if 0 < c < 256 else '')
+                    m = ctl.key(k) if k else None
+                    if m: S['msg'] = m
+                continue
             if logs_full:
                 if c in (ord('l'), 27, ord('q')): logs_full = False; scroll = 0
                 elif c == curses.KEY_UP: scroll += 1
@@ -624,12 +840,23 @@ def panel():
             if c == ord('q'): stop.set(); kick.set(); return
             elif c in (curses.KEY_UP, ord('k')): sel -= 1
             elif c in (curses.KEY_DOWN, ord('j')): sel += 1
-            elif c == ord('?'): S['msg'] = 's start, x stop, r restart the program; b: start it at boot or not; l: its whole log; a: write liftlab.conf to systemd; R reboots, P powers off this computer'
+            elif c == ord('?'): S['msg'] = 's start, x stop, r restart the program; b: start it at boot or not; l: its whole log; c: control the drone from here (dfb_pi); : a command to dfb_pi; a: write liftlab.conf to systemd; R reboots, P powers off this computer'
             elif p and c == ord('s'): act(f"starting {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('start', u), f'{n}: started')[1])
             elif p and c == ord('x'): act(f"stopping {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('stop', u), f'{n}: stopped')[1])
             elif p and c == ord('r'): act(f"restarting {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('restart', u), f'{n}: restarted')[1])
             elif p and c == ord('b'): act(f"boot setting of {p['name']}", lambda n=p['name'], b=p['boot']: (set_boot(n, not b), f"{n}: {'not ' if b else ''}started at boot from now on")[1])
             elif p and c == ord('l'): logs_full = True; scroll = 0
+            elif p and c in (ord('c'), ord(':')):
+                sv = svc_of(p); port = dfb_port(sv) if sv else None
+                if port is None: S['msg'] = f"{p['name']}: not dfb_pi (its probe isn't 'dfb_pi PORT'): no commands to send it"
+                elif p['state'] != 'active': S['msg'] = f"{p['name']} isn't running: s starts it"
+                elif c == ord(':'):
+                    t = prompt(scr, f"{p['name']} (dfb_pi) > ")
+                    if t: r = dfb_send(port, t); S['msg'] = f'{t}: ' + (r if r is not None else 'no answer')
+                else:
+                    ctl = Control(port); ctl_name = p['name']; ctl_stop = threading.Event()
+                    ctl_thread = threading.Thread(target=ctl.run, args=(ctl_stop,), daemon=True); ctl_thread.start()
+                    S['msg'] = 'control: sending the sticks, disarmed; space twice arms'
             elif c == ord('a'): act('applying liftlab.conf', lambda: '; '.join(apply(quiet=True)) or 'nothing to change')
             elif c == ord('R') and ask(scr, 'Reboot this computer? The drone loses its companion until it is back.'): act('rebooting', lambda: (systemctl('reboot'), 'rebooting')[1])
             elif c == ord('P') and ask(scr, 'Power this computer off? It comes back only when its power is cycled.'): act('powering off', lambda: (systemctl('poweroff'), 'powering off')[1])
@@ -651,6 +878,7 @@ def main(argv=None):
     sub.add_parser('remove').add_argument('name')
     sub.add_parser('apply'); sub.add_parser('build'); sub.add_parser('migrate'); sub.add_parser('panel')
     p = sub.add_parser('watch'); p.add_argument('--every', type=float, default=10)
+    p = sub.add_parser('send'); p.add_argument('name'); p.add_argument('text', nargs='+')
     a = ap.parse_args(argv)
     try:
         if a.cmd in (None, 'panel'):
@@ -673,6 +901,12 @@ def main(argv=None):
         elif a.cmd == 'build': cmd_build()
         elif a.cmd == 'migrate': cmd_migrate(); apply()
         elif a.cmd == 'watch': cmd_watch(a.every)
+        elif a.cmd == 'send':
+            sv = pick(a.name, services())[0]; port = dfb_port(sv)
+            if port is None: raise RuntimeError(f"{sv.name}: not dfb_pi (its probe isn't 'dfb_pi PORT')")
+            r = dfb_send(port, ' '.join(a.text))
+            if r is None: raise RuntimeError(f'{sv.name}: no answer on UDP port {port} (is it running?)')
+            print(r)
     except RuntimeError as e:
         print(f'liftlab: {e}', file=sys.stderr); return 1
     return 0

@@ -178,6 +178,14 @@ typedef struct {
   float lt_alpha[3], test_alpha[3];      /* commanded angular acceleration, averaged with the LTEL gyro */
   float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
   bus *bus; int bt[7];                   /* the board's data bus, if it has one (fc_bus_attach), and this code's topics on it */
+  /* Level (fc_level_*): which way is up when the drone sits level, beyond the airframe's IMU mount (imu_R): a sensor
+   * fitted slightly tilted. imu_M = trim · imu_R turns the IMU's readings into body axes. */
+  int level_kind;                        /* 0 the mount as the airframe says, 1 gravity as the IMU measured it, 2 roll/pitch given */
+  float level_g[3], level_deg[2];        /* 1: gravity in the IMU's axes; 2 (and after any): the trim's roll, pitch [deg] */
+  int level_dirty; float imu_M[9];
+  /* Safety off (fc_safety): no "not level" refusal and no crash cut-off on a big tilt, for bench work with the sensor
+   * out of the drone. Never saved: every start is with them on. */
+  int safety_off;
 } fc_state;
 
 /* Parse an airframe blob. Returns 0 or −1 with F->why set. */
@@ -200,6 +208,14 @@ void fc_keepalive(fc_state *F);
  * 50 ms, then the motors stop (crashed). */
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *out);
 const char *fc_state_name(int s);
+/* Level: the IMU's gravity reading (its own axes, m/s², the drone standing level and still) is level from now on;
+ * or a trim given as roll and pitch [deg] (the drone level reads that much: a sensor fitted tilted); or none.
+ * Each returns 0, or −1 with F->why set (a reading that isn't gravity, a trim over 45°). */
+int fc_level_imu(fc_state *F, const float acc[3]);
+int fc_level_deg(fc_state *F, float roll, float pitch);
+void fc_level_none(fc_state *F);
+/* Safety off (1) or on (0): see safety_off. Turning it off needs it disarmed; on, any time. 0, or −1 with F->why. */
+int fc_safety(fc_state *F, int off);
 /* The learning and supervisor frames (above). Each returns 0, or −1 if the frame doesn't fit this airframe. */
 int fc_exc(fc_state *F, const float *p, int n);
 int fc_payload(fc_state *F, const float *p, int n); /* simulator support input; no physical transport */

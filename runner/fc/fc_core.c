@@ -162,6 +162,7 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len) {
   pid_defaults(F->tuning.accepted, 0);
   memset(F->payload, 0, sizeof F->payload);
   F->A = A;
+  F->level_dirty = 1;                    /* (its IMU mount: the level trim again) */
   F->airframe_crc = crc;
   F->have_airframe = 1;
   F->state = FC_DISARMED;
@@ -208,7 +209,53 @@ int fc_init(fc_state *F, rn_host *H) {
   pid_defaults(F->tuning.accepted, 0);
   F->vref = 16.0f; F->rho = 1; F->cmd.test_motor = -1; F->test_released = 1;
   F->q[0] = 1; qmat(F->R, F->q);
+  F->level_dirty = 1;
   return 0;
+}
+
+/* ── level ── */
+/* The trim from the reading u (unit, body axes) of a level drone: the smallest turn that takes u to straight up. */
+static void level_trim(const float *u, float *T) {
+  float x = u[1], y = -u[0], c = u[2];                       /* axis u × z, cos of the angle */
+  float s2 = x * x + y * y;
+  for (int i = 0; i < 9; i++) T[i] = i % 4 == 0;
+  if (s2 < 1e-12f) return;
+  float k = (1 - c) / s2;                                    /* Rodrigues, with the axis unnormalised */
+  T[0] = c + k * x * x; T[1] = k * x * y;     T[2] = y;
+  T[3] = k * x * y;     T[4] = c + k * y * y; T[5] = -x;
+  T[6] = -y;            T[7] = x;             T[8] = c;
+}
+static void level_update(fc_state *F) {
+  F->level_dirty = 0;
+  float u[3] = { 0, 0, 1 }, T[9];
+  if (F->level_kind == 1) {
+    m3v(u, F->A.imu_R, F->level_g);
+  } else if (F->level_kind == 2) {
+    float r = F->level_deg[0] / 57.2958f, p = F->level_deg[1] / 57.2958f;
+    u[0] = -sinf(p); u[1] = sinf(r) * cosf(p); u[2] = cosf(r) * cosf(p);
+  }
+  float n = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]); for (int i = 0; i < 3; i++) u[i] /= n;
+  if (F->level_kind == 1) { F->level_deg[0] = atan2f(u[1], u[2]) * 57.2958f; F->level_deg[1] = atan2f(-u[0], sqrtf(u[1] * u[1] + u[2] * u[2])) * 57.2958f; }
+  if (!F->level_kind) F->level_deg[0] = F->level_deg[1] = 0;
+  level_trim(u, T);
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) F->imu_M[3 * i + j] = T[3 * i] * F->A.imu_R[j] + T[3 * i + 1] * F->A.imu_R[3 + j] + T[3 * i + 2] * F->A.imu_R[6 + j];
+}
+int fc_level_imu(fc_state *F, const float acc[3]) {
+  float n = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+  if (!(n > 7.0f && n < 12.6f)) { fc_say(F, "level: the accelerometer reads %.1f m/s², not gravity: keep it still", (double)n); return -1; }
+  for (int i = 0; i < 3; i++) F->level_g[i] = acc[i];
+  F->level_kind = 1; F->level_dirty = 1;
+  if (F->have_airframe) { level_update(F); if (F->level_deg[0] * F->level_deg[0] + F->level_deg[1] * F->level_deg[1] > 45 * 45) { fc_level_none(F); fc_say(F, "level: tilted over 45°: not taken as level"); return -1; } }
+  return 0;
+}
+int fc_level_deg(fc_state *F, float roll, float pitch) {
+  if (!(roll >= -45 && roll <= 45 && pitch >= -45 && pitch <= 45)) { fc_say(F, "level: a trim of at most 45°"); return -1; }
+  F->level_deg[0] = roll; F->level_deg[1] = pitch; F->level_kind = 2; F->level_dirty = 1; return 0;
+}
+void fc_level_none(fc_state *F) { F->level_kind = 0; F->level_dirty = 1; }
+int fc_safety(fc_state *F, int off) {
+  if (off && F->state != FC_DISARMED) { fc_say(F, "safety: disarm first"); return -1; }
+  F->safety_off = off ? 1 : 0; fc_say(F, off ? "safety off: no level check when arming, no crash cut-off" : "safety on"); return 0;
 }
 
 /* how far the nominal thrust axis leans from straight up [deg] */
@@ -266,7 +313,7 @@ void fc_command(fc_state *F, const fc_cmd *in) {
   if (c->arm && F->state == FC_DISARMED) {   /* arming takes the switch going on: after any disarm it must be seen off first */
     float tilt = axis_tilt(F);
     const char *no = !F->arm_released ? "turn the arm switch off, then on" : !F->have_airframe ? "no airframe loaded" : !F->sizes_ok ? "the formulas don't match this firmware" :
-      !F->att_ok ? "no gyro, or the attitude isn't settled yet" : tilt > 15 ? "not level" : c->throttle >= 0.05f ? "throttle stick not at the bottom" :
+      !F->att_ok ? "no gyro, or the attitude isn't settled yet" : tilt > 15 && !F->safety_off ? "not level (or: safety off)" : c->throttle >= 0.05f ? "throttle stick not at the bottom" :
       F->batt_wired && !batt_ok(F) ? "the battery reading doesn't fit the pack (check the sense wire and vref)" : 0;
     if (no) fc_say(F, "won't arm: %s", no);
     else {
@@ -357,7 +404,8 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
 
   /* attitude, from the IMU in body axes */
   if (imu->have_gyro) {
-    float g[3], a[3]; m3v(g, A->imu_R, imu->gyro); m3v(a, A->imu_R, imu->acc);
+    if (F->level_dirty) level_update(F);
+    float g[3], a[3]; m3v(g, F->imu_M, imu->gyro); m3v(a, F->imu_M, imu->acc);
     memcpy(F->fb, a, sizeof a); memcpy(F->gb, g, sizeof g); F->have_imu = 1;
     int hm = imu->have_mag && fin(imu->mag[0]) && fin(imu->mag[1]) && fin(imu->mag[2]);
     p.n = 0; p_v(&p, g, 3); p_v(&p, a, 3); p_f(&p, (float)hm); p_v(&p, hm ? imu->mag : (float[3]){ 0, 0, 0 }, 3); p_f(&p, dt);
@@ -422,7 +470,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
     if (F->t - F->test_t > FC_TEST_S || F->t - F->cmd_t > FC_CMD_TIMEOUT) { F->state = FC_DISARMED; fc_say(F, "motor test done"); return 0; }
     o->motor[F->cmd.test_motor] = F->cmd.test_throttle; return 0;
   }
-  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !open && !F->open_loop && F->t >= F->recover_t)   /* (open_loop: a throw's open loop ended this step, its grace starts below) */ { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
+  if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !F->safety_off && !open && !F->open_loop && F->t >= F->recover_t)   /* (open_loop: a throw's open loop ended this step, its grace starts below) */ { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
   if (F->state == FC_ARMED && F->t - F->cmd_t > FC_CMD_TIMEOUT) {
     if (F->cmd.throttle < 0.05f) { F->state = FC_DISARMED; fc_say(F, "no commands, at idle: disarmed"); }   /* on the ground, most likely */
     else { start_descent(F); fc_say(F, "no commands: failsafe descent"); }

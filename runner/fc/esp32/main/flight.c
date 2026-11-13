@@ -146,23 +146,33 @@ static void host_event(void *ctx, int code, const char *what) {
   char s[80]; snprintf(s, sizeof s, "%s%s%s", EVN[code], what ? ": " : "", what ? what : ""); post(s);
 }
 
+/* ── sensor and link tasks → control loop: a level trim to take (1 the IMU's gravity reading, 2 roll and pitch, 3 none)
+ * and safety (1 off, 2 on); the control loop owns F ── */
+static volatile int lvl_req, safety_req; static float lvl_val[3];
+static portMUX_TYPE lvl_mux = portMUX_INITIALIZER_UNLOCKED;
+static void level_ask(int kind, const float *v) { portENTER_CRITICAL(&lvl_mux); if (v) memcpy(lvl_val, v, sizeof lvl_val); lvl_req = kind; portEXIT_CRITICAL(&lvl_mux); }
+
 /* ── sensor task → control loop ── */
 static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static int imu_ok; static float baro_alt; static int baro_new;   /* under imu_mux */
 static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
 static void sensor_task(void *arg) {
-  int period = 1000 / HW.rate_hz; if (period < 1) period = 1;
+  int period = 1000 / HW.rate_hz; if (period < 1) period = 1; int level_done = 0;
   /* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). */
   if (SENS.imu == 1 || SENS.imu == 3) {
     for (int tries = 0; tries < 5; tries++) {
-      double s[3] = { 0 }, s2[3] = { 0 }; int n = 0; fc_imu m;
-      for (int k = 0; k < 500; k++) { if (!hw_imu_read(&m)) { for (int i = 0; i < 3; i++) { s[i] += m.gyro[i]; s2[i] += m.gyro[i] * m.gyro[i]; } n++; } vTaskDelay(pdMS_TO_TICKS(2)); }
+      double s[3] = { 0 }, s2[3] = { 0 }, sa[3] = { 0 }; int n = 0; fc_imu m;
+      for (int k = 0; k < 500; k++) { if (!hw_imu_read(&m)) { for (int i = 0; i < 3; i++) { s[i] += m.gyro[i]; s2[i] += m.gyro[i] * m.gyro[i]; sa[i] += m.acc[i]; } n++; } vTaskDelay(pdMS_TO_TICKS(2)); }
       if (n < 400) break;
       double var = 0; float b[3]; for (int i = 0; i < 3; i++) { b[i] = (float)(s[i] / n); var += s2[i] / n - (double)b[i] * b[i]; }
       char t[80];
-      if (var < 3e-4) { hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t); break; }
+      if (var < 3e-4) { hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
+        if (HW.level_mode == 0) { float g[3] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n) }; level_ask(1, g); level_done = 1; }   /* (level=boot: as it sits now is level) */
+        break; }
       post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
     }
   }
+  if (HW.level_mode == 2) level_ask(2, (float[3]){ HW.level_deg[0], HW.level_deg[1], 0 });
+  else if (HW.level_mode == 0 && !level_done) post("level: not measured (it was moving, or no IMU): the IMU mount as the airframe says; `level` measures it when it's still");
   TickType_t last = xTaskGetTickCount(); int tb = 0,tm=0; float mag[3]={0};int64_t mag_us=-1000000;
   for (;;) {
     vTaskDelayUntil(&last, period);
@@ -232,6 +242,14 @@ static void flight_task(void *arg) {
     float dt = (float)(us - last_us) * 1e-6f; last_us = us; last_seq = seq;
     dt = dt < 0.5f * dt0 ? 0.5f * dt0 : dt > 3 * dt0 ? 3 * dt0 : dt;
     if (keep_new) { keep_new = 0; fc_keepalive(&F); }
+    if (lvl_req) { int k; float v[3]; portENTER_CRITICAL(&lvl_mux); k = lvl_req; memcpy(v, lvl_val, sizeof v); lvl_req = 0; portEXIT_CRITICAL(&lvl_mux);
+      char s[160]; int e = k == 1 ? fc_level_imu(&F, v) : k == 2 ? fc_level_deg(&F, v[0], v[1]) : (fc_level_none(&F), 0);
+      if (e) snprintf(s, sizeof s, "%s", F.why);
+      else if (k == 3) snprintf(s, sizeof s, "level: none, the IMU mount as the airframe says");
+      else if (k == 1 && !F.have_airframe) snprintf(s, sizeof s, "level: taken (the trim shows once an airframe is loaded)");
+      else snprintf(s, sizeof s, "level: trim roll %.1f°, pitch %.1f°%s", (double)F.level_deg[0], (double)F.level_deg[1], k == 1 ? " (to keep it, for a start on a slope: level=ROLL,PITCH, save)" : "");
+      post(s); }
+    if (safety_req) { int k = safety_req; safety_req = 0; fc_safety(&F, k == 1); }   /* (it says so: F.why) */
     if (cmd_new) { fc_cmd c; portENTER_CRITICAL(&mux); c = cmd_box; cmd_new = 0; portEXIT_CRITICAL(&mux);
       int refuse = !outputs_ok && (c.arm || c.test_motor >= 0);
       if (refuse) { c.arm = 0; c.test_motor = -1; }
@@ -336,7 +354,7 @@ static void telemetry(void) {
   for (int k = 0; k < 3; k++) t[5 + k] = F.w[k] * 57.29578f;
   t[8] = F.have_alt ? F.alt_e : 0; t[9] = F.have_alt ? F.vz_e : F.vz_i; t[10] = vbatt;
   t[11] = (float)loop_us; t[12] = (float)loop_max; loop_max = 0;
-  t[13] = (float)((SENS.imu == 1 ? 1 : 0) | (SENS.baro ? 2 : 0) | (F.att_ok ? 4 : 0) | (F.holding ? 8 : 0) | (F.have_airframe ? 16 : 0));
+  t[13] = (float)((SENS.imu == 1 ? 1 : 0) | (SENS.baro ? 2 : 0) | (F.att_ok ? 4 : 0) | (F.holding ? 8 : 0) | (F.have_airframe ? 16 : 0) | (F.safety_off ? 32 : 0) | (F.level_kind ? 64 : 0));
   t[14] = (float)H.act; t[15] = (float)F.trap;
   for (int i = 0; i < FC_MAX_MOTORS; i++) t[16 + i] = OUT.motor[i];
   for (int j = 0; j < FC_MAX_JOINTS; j++) t[28 + j] = OUT.servo[j] * 57.29578f;
@@ -354,7 +372,8 @@ static void setting(const char *line) {
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
     if (memcmp(&HW, &HW_next, sizeof HW)) { strcpy(s, "after a reboot: "); hw_describe(&HW_next, s + 16, sizeof s - 16); report(s); }
     strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
-    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act);
+    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° (%s); safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
+             (double)F.level_deg[0], (double)F.level_deg[1], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", F.safety_off ? "OFF" : "on");
     report(s); return;
   }
   if (!strcmp(line, "peers")) {                       /* the other drones: a line each */
@@ -367,7 +386,23 @@ static void setting(const char *line) {
     uint32_t id = (uint32_t)strtoul(line + 5, 0, 16);
     report(radio_peer_ping(id) ? "no such drone (or peers=off): see peers" : "ping sent: its round trip shows in peers"); return;
   }
+  if (!strcmp(line, "safety on")) { safety_req = 2; report("safety on"); return; }   /* (any time) */
+  if (!strcmp(line, "safety")) { report(F.safety_off ? "safety off: no level check when arming, no crash cut-off (safety on, or a reboot, turns it back on)" : "safety on"); return; }
   if (F.state != FC_DISARMED) { report("disarm first"); return; }
+  if (!strcmp(line, "safety off")) { safety_req = 1; report("safety off until safety on or a reboot: no level check when arming, no crash cut-off"); return; }
+  if (!strcmp(line, "level none")) { level_ask(3, 0); report("level: none, the IMU mount as the airframe says (until a reboot; level=off keeps it)"); return; }
+  if (!strcmp(line, "level")) {                       /* level now: as it sits is level (half a second, still) */
+    double sa[3] = { 0 }, sg = 0; int n = 0; uint32_t seen = 0;
+    for (int k = 0; k < 100; k++) {
+      fc_imu m; uint32_t sq; int ok; portENTER_CRITICAL(&imu_mux); m = imu_now; sq = imu_seq; ok = imu_ok; portEXIT_CRITICAL(&imu_mux);
+      if (ok && sq != seen) { seen = sq; for (int i = 0; i < 3; i++) { sa[i] += m.acc[i]; sg += (double)m.gyro[i] * m.gyro[i]; } n++; }
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (n < 30) { report("level: no IMU readings"); return; }
+    if (sg / n > 0.05 * 0.05) { report("level: it's moving; keep it still and try again"); return; }
+    float g[3] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n) }; level_ask(1, g);
+    report("level: measured; the trim follows (until a reboot: level=boot measures it at every start)"); return;
+  }
   if (!strcmp(line, "accel")) {
     accel_readout sample;
     portENTER_CRITICAL(&imu_mux);

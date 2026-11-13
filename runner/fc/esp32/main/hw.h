@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 13
+#define HW_VERSION 14
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -68,6 +68,13 @@ typedef struct {
    * settings and airframes. −1: the link shares UART0 with the USB port (GPIO 1 and 3 on an ESP32 DevKit). */
   int8_t link_tx, link_rx;
   int8_t link_uart_pad[2];
+  /* Appended in v14 (v13 blobs migrate with boot): which way is level (level=): 0 boot, as it sits when it starts
+   * (the gyro's offset is measured then too: still, and level unless told otherwise); 1 off, the IMU mount as the
+   * airframe says; 2 a trim of level_deg (roll, pitch [deg]: what a level drone reads; the `level` command measures
+   * it), for a drone that starts on a slope. */
+  int8_t level_mode;
+  int8_t level_pad[3];
+  float level_deg[2];
 } hw_config;
 
 void hw_defaults(hw_config *c);

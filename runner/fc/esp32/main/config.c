@@ -205,6 +205,14 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     if (!host_ok(h)) { snprintf(err, errn, "link=mqtt: %s isn't an address or a name", h); return -1; }
     strcpy(c->link_host, h); c->link_port = (uint16_t)port; c->link_mqtt = 1; return 0;
   }
+  if (!strcmp(key, "level")) {                       /* level=boot, level=off, or level=ROLL,PITCH (a trim, degrees) */
+    const char *a = eq + 1; float r, p; char x;
+    if (!strcmp(a, "boot")) { c->level_mode = 0; return 0; }
+    if (!strcmp(a, "off")) { c->level_mode = 1; return 0; }
+    if (sscanf(a, "%f,%f%c", &r, &p, &x) != 2 || !isfinite(r) || !isfinite(p) || fabsf(r) > 45 || fabsf(p) > 45) {
+      snprintf(err, errn, "level=boot (as it sits at power-up), level=off (the IMU mount as set), or level=ROLL,PITCH (a trim, at most 45 degrees)"); return -1; }
+    c->level_mode = 2; c->level_deg[0] = r; c->level_deg[1] = p; return 0;
+  }
   if (!strcmp(key, "link_topic")) {                  /* the topics' prefix: PREFIX/link/to-fc and PREFIX/link/from-fc */
     if (strlen(eq + 1) >= sizeof c->link_prefix || !prefix_ok(eq + 1)) { snprintf(err, errn, "link_topic=PREFIX: up to 47 characters, no spaces, + or #, no / at either end"); return -1; }
     strcpy(c->link_prefix, eq + 1); return 0;
@@ -296,6 +304,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" esc_hz=%d esc_us=%d,%d",c->esc_hz,c->esc_min_us,c->esc_max_us);if(c->esc_stop_us)APP(",%d",c->esc_stop_us);
   if (c->link_mqtt) APP(" link=mqtt,%s,%u link_topic=%s", c->link_host, (unsigned)c->link_port, c->link_prefix); else APP(" link=uart link_topic=%s", c->link_prefix);
   if (c->link_tx >= 0) APP(" link_uart=%d,%d", c->link_tx, c->link_rx); else APP(" link_uart=-1(the USB port's)");
+  if (c->level_mode == 2) APP(" level=%.1f,%.1f", (double)c->level_deg[0], (double)c->level_deg[1]); else APP(" level=%s", c->level_mode ? "off" : "boot");
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }

@@ -24,6 +24,8 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_prog" fc/test_prog.c fc/prog_core.c fc/bus.
 "$T/test_prog" "$T/prog.rnp"
 cc -O2 -Wall -Wextra -I. -o "$T/test_fc" fc/test_fc.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_fc" fc/testdata
+cc -O2 -Wall -Wextra -I. -o "$T/test_level" fc/test_level.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
+"$T/test_level" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_nav" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_cargo" fc/test_cargo.c fc/cargo_core.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm

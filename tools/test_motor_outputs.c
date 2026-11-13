@@ -49,6 +49,7 @@ int main(void){
   old.version=9;old.radio_kind=RLINK_NRF24;old.radio_kbps=250;restored=config();restored.radio2_kind=-1;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,radio2_kind))&&restored.radio_kbps==250&&restored.radio2_kind==-1&&restored.version==HW_VERSION);old.radio_kind=0;
   old.version=10;old.radio2_kind=RLINK_NRF24;restored=config();restored.peer_channel=0;strcpy(restored.fleet,"liftlab");assert(lb_hw_restore(&restored,&old,offsetof(hw_config,peer_channel))&&restored.radio2_kind==RLINK_NRF24&&restored.peer_channel==0&&!strcmp(restored.fleet,"liftlab")&&restored.version==HW_VERSION);old.radio2_kind=0;
   old.version=11;old.peer_channel=6;restored=config();restored.esc_stop_us=0;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,esc_stop_us))&&restored.peer_channel==6&&restored.esc_stop_us==0&&restored.version==HW_VERSION);old.peer_channel=0;
+  old.version=13;old.link_tx=32;old.link_rx=35;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,level_mode))&&restored.link_tx==32&&restored.level_mode==0&&restored.version==HW_VERSION);old.link_tx=old.link_rx=-1;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -58,6 +59,10 @@ int main(void){
   {hw_config w=settings;assert(!hw_set(&w,"motors=4",log,sizeof log)&&hw_outputs_wired(&w)==1);}
   assert(strstr(hw_i2c_name(0x0D),"QMC5883L")&&strstr(hw_i2c_name(0x1E),"HMC5883L")&&strstr(hw_i2c_name(0x68),"MPU")&&strstr(hw_i2c_name(0x77),"BMP180")&&!strcmp(hw_i2c_name(0x50),"unknown"));
   assert(!hw_check(&settings,log,sizeof log));assert(!hw_set(&settings,"motor_driver=1,0,1,0",log,sizeof log));assert(!hw_set(&settings,"motor_max=60,100,70,100",log,sizeof log));assert(!hw_set(&settings,"brushed_hz=30000",log,sizeof log));
+  {hw_config c=settings;char e[200];assert(!hw_set(&c,"level=off",e,sizeof e)&&c.level_mode==1);assert(!hw_set(&c,"level=2.5,-4",e,sizeof e)&&c.level_mode==2&&c.level_deg[0]==2.5f&&c.level_deg[1]==-4.0f);
+    char d[1200];hw_describe(&c,d,sizeof d);assert(strstr(d," level=2.5,-4.0"));
+    const char *badl[]={"level=50,0","level=1","level=up","level=1,2,3"};for(unsigned i=0;i<4;i++){hw_config b=c;assert(hw_set(&c,badl[i],e,sizeof e));assert(!memcmp(&b,&c,sizeof c));}
+    assert(!hw_set(&c,"level=boot",e,sizeof e)&&c.level_mode==0);hw_describe(&c,d,sizeof d);assert(strstr(d," level=boot"));}
   const char *bad[]={"motor_driver=2","motor_driver=0.5","motor_driver=NaN","motor_max=0","motor_max=101","motor_max=10.5","brushed_hz=999","brushed_hz=30001","brushed_hz=20000.5","motor_driver=1,0,1,0,1,0,1,0,1,0,1,0,1","brushed_hz=20000junk"};
   for(unsigned i=0;i<sizeof bad/sizeof *bad;i++){hw_config before=settings;assert(hw_set(&settings,bad[i],log,sizeof log));assert(!memcmp(&settings,&before,sizeof settings));}
   assert(!hw_set(&settings,"motor_driver=",log,sizeof log));assert(settings.motor_driver[0]==0 && settings.motor_driver[11]==0);assert(!hw_set(&settings,"motor_max=",log,sizeof log));assert(settings.motor_max_pct[0]==100);
@@ -117,5 +122,5 @@ int main(void){
 #endif
    assert(!hw_set(&u,"link_uart=-1",log,sizeof log)&&u.link_tx==-1&&!hw_check(&u,log,sizeof log));
    hw_config v12=u;v12.version=12;v12.link_mqtt=1;hw_config r;hw_defaults(&r);assert(lb_hw_restore(&r,&v12,offsetof(hw_config,link_tx))&&r.link_mqtt==1&&r.link_tx==-1&&r.version==HW_VERSION);}
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v12 migration, ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v13 migration, the level setting, ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
 }

@@ -116,6 +116,57 @@ def main():
     assert d['ok'] and 'esp32' not in d
     print("dfb_pi's status: the ESP32, the pilot's link, the sticks; not heard is a problem")
 
+    # the control screen: what it sends, its keys, dfb_pi's answers
+    st = m.ctl_status('angle mode: text sticks arm on, throttle 0.00, roll +0.00, pitch +0.00, yaw +0.00; the ESP32 armed; attitude roll +1.5 pitch -2.5 yaw 90 deg, height 0.12 m, vz +0.00 m/s, flags 31; motors 0.06 0.06 0.06 0.06; wifi with nobody yet: packets sent 0 (0 failed), got 0 (LQ 0%)')
+    assert st['esp32'] == 'armed' and st['source'] == 'this panel' and st['roll'] == 1.5 and st['pitch'] == -2.5 and st['height'] == 0.12 and st['motors'] == [0.06] * 4 and st['angle_mode'], st
+    assert m.ctl_status('disarmed; at 0 0 0')['angle_mode'] is False
+    clock = [100.0]; sent = []
+    def fake(text):
+        sent.append(text)
+        if text == 'status': return 'angle mode: text sticks arm off, throttle 0.00, roll +0.00, pitch +0.00, yaw +0.00; the ESP32 disarmed; attitude roll +0.0 pitch +0.0 yaw 0 deg, height 0.00 m, vz +0.00 m/s, flags 31; motors 0.00 0.00 0.00 0.00'
+        if text.startswith('motor 7'): return 'motor: 7 isn\'t one of this airframe\'s 4 motors'
+        return 'sticks: arm off' if text.startswith('sticks') else 'motor test: ' + text
+    c = m.Control(14560, send=fake, now=lambda: clock[0])
+    assert c.line() == 'sticks 0 0.00 +0.00 +0.00 +0.00', c.line()
+    c.tick(True); assert c.status['esp32'] == 'disarmed' and sent == [c.line(), 'status']
+    c.key('w'); c.key('w'); assert c.thr == 0.1
+    assert 'bottom' in c.key(' ') and not c.arm, 'arming needs the bottom throttle'
+    c.key('0'); assert 'again' in c.key(' ') and not c.arm
+    clock[0] += 3; assert 'again' in c.key(' ') and not c.arm, 'the second press within 2 s'
+    clock[0] += 1; assert c.key(' ') == 'arm' and c.arm and c.line().startswith('sticks 1 0.00')
+    assert 'disarmed' in c.key('1') and c.motor is None, 'no motor test armed'
+    c.key('right'); c.key('up'); c.key('up'); c.key('d'); c.key('h')
+    assert c.line() == 'sticks 1 0.50 +0.10 +0.20 -0.10', c.line()
+    c.key('c'); c.key('x'); assert not c.arm and c.line() == 'sticks 0 0.00 +0.00 +0.00 +0.00', c.line()
+    c.key('t'); assert c.key('2') == 'motor 2 at 0.15' and c.line() == 'motor 2 0.15'
+    assert 'released' in c.key('3') and c.motor is None, 'another motor: the test released first'
+    c.key('2'); assert c.key('2') == 'motor test off' and c.motor is None
+    c.key('7'); assert c.motor is None, 'beyond the airframe\'s motors (from the status)'
+    c.motor = 7; c.tick(False); assert 'isn\'t one' in c.said, 'a refusal shown'
+    c.motor = None; c.arm = True; c.thr = 0.0; sent.clear(); c.leave(); assert sent == ['sticks 0 0'] * 3 + ['sticks off'] and not c.arm, 'leaving on the ground: disarmed, then stopped'
+    c.arm = True; c.thr = 0.5; sent.clear(); c.leave(); assert sent == ['sticks off'], 'leaving in the air: just stopped (the failsafe lands it)'
+    # safety and level: one-off commands, sent before the sticks; the ESP32's word in the status
+    st = m.ctl_status('angle mode: no channels from the radio (nothing sent to the ESP32); the ESP32 disarmed; attitude roll +4.0 pitch -19.8 yaw -5 deg, height -0.32 m, vz +0.18 m/s, flags 87, SAFETY OFF, levelled; motors 0.00 0.00 0.00 0.00; the ESP32 said 3 s ago: disarmed: won\'t arm: not level (or: safety off); wifi with 192.168.2.191:60569: packets sent 5 (0 failed), got 4 (LQ 19%)')
+    assert st['safety_off'] and st['levelled'] and st['pitch'] == -19.8 and st['esp32_said'].startswith("disarmed: won't arm") and st['esp32_said_s'] == 3, st
+    c = m.Control(14560, send=fake, now=lambda: clock[0]); c.status = m.ctl_status('angle mode: no channels; the ESP32 disarmed'); sent.clear()
+    assert 'again' in c.key('!') and not c.queue; assert c.key('!') == 'safety off' and c.queue == ['safety off']
+    c.tick(False); assert sent[:2] == ['safety off', c.line()] and not c.queue, sent
+    c.status['safety_off'] = True; assert c.key('!') == 'safety on' and c.queue == ['safety on']; c.queue.clear()
+    assert 'still' in c.key('L') and c.queue == ['level']; c.queue.clear()
+    c.status['esp32'] = 'armed'; assert 'disarmed only' in c.key('L') and not c.queue; c.status['safety_off'] = False; assert 'disarmed' in c.key('!')
+    print('control: safety off (twice) and on, level now; the ESP32\'s last word and the flags read')
+
+    # dfb_send over UDP, against a stand-in dfb_pi
+    import socket, threading
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(('127.0.0.1', 0)); port = srv.getsockname()[1]
+    def echo():
+        b, a = srv.recvfrom(512); srv.sendto(b'you said ' + b, a)
+    threading.Thread(target=echo, daemon=True).start()
+    assert m.dfb_send(port, 'health') == 'you said health'
+    assert m.dfb_send(port, 'health', timeout=0.2) is None, 'nobody answers: None'
+    assert m.dfb_port(types.SimpleNamespace(probe='dfb_pi 14560')) == 14560 and m.dfb_port(types.SimpleNamespace(probe='tcp 8766')) is None
+    print('control: the sticks it sends, arming twice at the bottom, motor tests disarmed and one at a time, leaving safely; send')
+
     # health
     sy = {'power_raw': 0x50005, 'temp_c': 80, 'mem_avail_mb': 30, 'disk_pct': 95, 'wifi': ('wlan0', 20, -85)}
     progs = [{'name': 'flight', 'installed': True, 'boot': True, 'state': 'failed', 'result': 'exit-code', 'sub': 'failed', 'probe': None, 'up_s': None},

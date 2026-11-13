@@ -70,6 +70,8 @@
  * mode. The radio's sticks go to the ESP32 as they are (fc/rc_core.h rc_stick_cmd, as the simulator's receiver board
  * makes them): the sticks lean it and turn it, the throttle's middle holds the height on the barometer. The estimate,
  * the telemetry, the learning and the supervisor run as before; no channels, no command (the ESP32's failsafe lands).
+ * Without a radio's channels, the sticks can come as text instead (`sticks ARM THROTTLE [ROLL PITCH YAW]`, `motor N
+ * THROTTLE`: the Pi's control panel, liftlab, sends them 20 times a second), each good for half a second.
  * (the files: the simulator's Computers tab -> Export, on the Pi board.)
  */
 #define _DEFAULT_SOURCE
@@ -285,6 +287,38 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
 }
 #include "tuning_store.h"
 
+/* Angle mode's sticks as text, for the control panel (liftlab) and tests: what the radio's sticks would say, renewed
+ * more often than every half second by whoever sends them (stop, and nothing goes: the ESP32's failsafe).
+ *   sticks ARM THROTTLE [ROLL PITCH YAW]   arm 0/1, throttle 0..1 (its middle holds the height), the rest −1..1
+ *   motor N THROTTLE                       a motor test, disarmed: motor N (1, 2, ... in the airframe's order)
+ *   motor off, sticks 0 0                  disarmed, nothing spinning (a test needs this between two motors)
+ *   sticks off                             stop sending */
+static const char *stick_test_said(const float *c) { static char b[32]; if (c[5] < 0) return ""; snprintf(b, sizeof b, ", motor %d test at %.2f", (int)c[5] + 1, (double)c[6]); return b; }
+static void stick_line(const char *s, int angle_mode, int radio_has_it, int n_mot, char (*names)[16], float *c, double *ct, double t, int fc_flying, char *reply, size_t rn) {
+  float a[5] = { 0, 0, 0, 0, 0 }; int motor = s[0] == 'm';
+  const char *arg = s + (motor ? 5 : 6); while (*arg == ' ') arg++;
+  if (!angle_mode) { snprintf(reply, rn, "%s: only in angle mode (dfb_pi --no-navigation); here the navigation flies it (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
+  if (radio_has_it) { snprintf(reply, rn, "%s: the radio's pilot has it (its channels come); nothing taken from here", motor ? "motor" : "sticks"); return; }
+  if (!strcmp(arg, "off") && !motor) { *ct = -1e9; snprintf(reply, rn, "sticks: off, nothing sent (the ESP32's failsafe: disarmed on the ground, else it lands)"); return; }
+  if (motor) {
+    int k = 0;
+    if (!strcmp(arg, "off")) { float z[7] = { 0, 0, 0, 0, 0, -1, 0 }; memcpy(c, z, sizeof z); *ct = t; snprintf(reply, rn, "motor test: off"); return; }
+    if (sscanf(arg, "%d %f", &k, &a[0]) != 2 || !isfinite(a[0])) { snprintf(reply, rn, "motor N THROTTLE (N from 1%s), or motor off", n_mot ? "" : "; this dfb_pi has no --airframe to check N against"); return; }
+    if (k < 1 || (n_mot && k > n_mot) || k > FC_MAX_MOTORS) { snprintf(reply, rn, "motor: %d isn't one of this airframe's %d motors", k, n_mot); return; }
+    if (fc_flying) { snprintf(reply, rn, "motor: not while it's armed (a test disarms it); disarm first"); return; }
+    float z[7] = { 0, 0, 0, 0, 0, (float)(k - 1), a[0] < 0 ? 0 : a[0] > 1 ? 1 : a[0] }; memcpy(c, z, sizeof z); *ct = t;
+    snprintf(reply, rn, "motor test: %d%s%s%s at %.2f", k, names ? " (" : "", names ? names[k - 1] : "", names ? ")" : "", (double)z[6]);
+    return;
+  }
+  int n = sscanf(arg, "%f %f %f %f %f", &a[0], &a[1], &a[2], &a[3], &a[4]);
+  if (n != 2 && n != 5) { snprintf(reply, rn, "sticks ARM THROTTLE [ROLL PITCH YAW] (arm 0/1, throttle 0..1, the rest -1..1), sticks off; motor N THROTTLE, motor off"); return; }
+  for (int i = 0; i < 5; i++) if (!isfinite(a[i])) { snprintf(reply, rn, "sticks: numbers, please"); return; }
+  #define CL_(x, lo, hi) ((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
+  float z[7] = { a[0] > 0.5f ? 1.0f : 0.0f, CL_(a[2], -1, 1), CL_(a[3], -1, 1), CL_(a[4], -1, 1), CL_(a[1], 0, 1), -1, 0 };
+  #undef CL_
+  memcpy(c, z, sizeof z); *ct = t;
+  snprintf(reply, rn, "sticks: arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f", z[0] > 0 ? "on" : "off", (double)z[4], (double)z[1], (double)z[2], (double)z[3]);
+}
 int main(int argc, char **argv) {
   const char *tuning_path = 0;
   const char *mqtt_id = "liftlab-pi";
@@ -378,6 +412,7 @@ int main(int argc, char **argv) {
   static autotune_worker AW;
   autotune_init(&AT, &N, &LS, &SS, tuning_send, &link);
   uint32_t tune_airframe = 0, tune_nav = 0;
+  int n_mot = 0; static char mot_name[FC_MAX_MOTORS][16];   /* the airframe's motors (--airframe), for the test commands */
   float saved_gains[12];
   int restore_tuning = 0;
   double restore_at = 0;
@@ -386,6 +421,7 @@ int main(int argc, char **argv) {
     uint8_t *a = read_file(af_path, &k);
     if (a) {
       tune_airframe = k >= 4 ? rn_crc32(a, k - 4) : 0;
+      static fc_state AFS; if (!fc_airframe_load(&AFS, a, k)) { n_mot = AFS.A.n_motors; for (int i = 0; i < n_mot; i++) snprintf(mot_name[i], sizeof mot_name[i], "%s", AFS.A.mot[i].name); }
     }
   }
   {
@@ -437,6 +473,11 @@ int main(int argc, char **argv) {
   pilot_t P; memset(&P, 0, sizeof P);
   nav_out o; memset(&o, 0, sizeof o);
   double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0, fc_state_t = 0, t_start = now_s(); float fc_state = 0;
+  /* Angle mode's sticks from a text command (`sticks`, `motor`: the control panel, a test): the 7 floats of a pilot's
+   * command, good for TXT_STICK_S from when they came; the radio's channels win while they come. */
+  static float txt_stick[7]; double txt_stick_t = -1e9; const double TXT_STICK_S = 0.5;
+  static float tl[36]; double tl_t = -1e9;          /* the ESP32's last telemetry (RN_LINK_TELEM, flight.c) */
+  static char esp_said[160]; double esp_said_t = -1e9;   /* what the ESP32 said last (an event or a report): status shows it */
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
   static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
@@ -485,7 +526,7 @@ int main(int argc, char **argv) {
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
         if (*s) {
-          char reply[600]; float px, py, pz; int pl = 1;
+          char reply[1000]; float px, py, pz; int pl = 1;
           if (strncmp(s, "autotune", 8) && strcmp(s, "status") && strcmp(s, "learning") &&
               strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet"))
             autotune_stop(&AT, "stopped: another pilot/learning command; "
@@ -514,6 +555,15 @@ int main(int argc, char **argv) {
               else { fleet_engage(&FL, a[1] == 'n', &N, &o, "asked"); FL.said = 0; snprintf(reply, sizeof reply, "%s", FL.msg[0] ? FL.msg : "fleet program off"); in_control = 1; }
             } else snprintf(reply, sizeof reply, "fleet program: %s; %s; target %.1f %.1f %.1f; publishes %d values; messages %u sent, %u in; %u runs, %u failed",
                             have_fleet ? "in the program" : "none", FL.engaged ? "flying it" : "not flying it", FL.go_p[0], FL.go_p[1], FL.go_p[2], FL.npub, (unsigned)FL.sent, (unsigned)FL.got, (unsigned)FL.calls, (unsigned)FL.fails);
+          } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || !strcmp(s, "level") || !strcmp(s, "level none")) {
+            /* a settings line to the ESP32 (esp32 LINE: show, level=boot, save, reboot ...; the shortcuts as they are):
+             * its answer comes as a report, in the log and in status (the ESP32 said: ...) */
+            const char *line = !strncmp(s, "esp32 ", 6) ? s + 6 : s; uint8_t fr[192];
+            uint32_t len = strlen(line) < 127 ? rn_link_frame(fr, sizeof fr, RN_LINK_SETTING, (const uint8_t *)line, (uint32_t)strlen(line)) : 0;
+            if (len) { link_raw(link, fr, len); snprintf(reply, sizeof reply, "to the ESP32: %s (its answer: status, or the log)", line); }
+            else snprintf(reply, sizeof reply, "esp32 LINE: a settings line of at most 126 characters");
+          } else if ((!strncmp(s, "sticks", 6) && (!s[6] || s[6] == ' ')) || (!strncmp(s, "motor", 5) && (!s[5] || s[5] == ' '))) {
+            stick_line(s, no_nav, radio_here && rc_link_ok(&RCI, t), n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
           } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
             float hd = P.sp.heading, c = cosf(hd), sn = sinf(hd), spot[3] = { px - (c * hook[0] - sn * hook[1]), py - (sn * hook[0] + c * hook[1]), pz - hook[2] + 0.03f };
             if (!P.fly) snprintf(reply, sizeof reply, "pickup: take off first");
@@ -533,7 +583,16 @@ int main(int argc, char **argv) {
             fc_cmd sc; int have = radio_here && !rc_stick_cmd(&RCI, t, &sc);
             if (have) snprintf(reply, sizeof reply, "angle mode: sticks arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f; the ESP32 %s",
                                sc.arm ? "on" : "off", (double)sc.throttle, (double)sc.roll, (double)sc.pitch, (double)sc.yaw, fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
+            else if (t - txt_stick_t < TXT_STICK_S) snprintf(reply, sizeof reply, "angle mode: text sticks arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f%s; the ESP32 %s",
+                               txt_stick[0] > 0 ? "on" : "off", (double)txt_stick[4], (double)txt_stick[1], (double)txt_stick[2], (double)txt_stick[3], stick_test_said(txt_stick), fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
             else snprintf(reply, sizeof reply, "angle mode: no channels from the radio (nothing sent to the ESP32); the ESP32 %s", fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
+            if (t - tl_t < 1) {                               /* what it measures: attitude, height, the motors */
+              size_t k2 = strlen(reply); int m = n_mot ? n_mot : 12; while (!n_mot && m > 0 && tl[15 + m] == 0) m--;
+              k2 += (size_t)snprintf(reply + k2, sizeof reply > k2 ? sizeof reply - k2 : 0, "; attitude roll %+.1f pitch %+.1f yaw %.0f deg, height %.2f m, vz %+.2f m/s, flags %d%s%s; motors", (double)tl[2], (double)tl[3], (double)tl[4], (double)tl[8], (double)tl[9], (int)tl[13],
+                                    (int)tl[13] & 32 ? ", SAFETY OFF" : "", (int)tl[13] & 64 ? ", levelled" : "");
+              for (int i = 0; i < m && k2 < sizeof reply; i++) k2 += (size_t)snprintf(reply + k2, sizeof reply - k2, " %.2f", (double)tl[16 + i]);
+            }
+            if (t - esp_said_t < 60) { size_t k2 = strlen(reply); snprintf(reply + k2, sizeof reply > k2 ? sizeof reply - k2 : 0, "; the ESP32 said %.0f s ago: %s", t - esp_said_t, esp_said); }
           }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
@@ -548,7 +607,10 @@ int main(int argc, char **argv) {
     for (ssize_t i = 0; i < n; i++) {
       while (si < mq_nstart && mq_starts[si] == (uint32_t)i) { if (L.state) rn_link_reset(&L); si++; }   /* (a message starts: no half frame before it) */
       int type = rn_link_feed(&L, rx[i]);
-      if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
+      if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) {
+        printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
+        int k = (int)L.len < (int)sizeof esp_said - 1 ? (int)L.len : (int)sizeof esp_said - 1; memcpy(esp_said, L.buf, (size_t)k); esp_said[k] = 0; esp_said_t = t;
+      }
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
       if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */
       if (type == RN_LINK_TLM && radio_here) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
@@ -557,6 +619,7 @@ int main(int argc, char **argv) {
           ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len >= 8)) {
         memcpy(&fc_state, L.buf + 4, 4);
         fc_state_t = t;
+        if (type == RN_LINK_TELEM) { memcpy(tl, L.buf, sizeof tl); tl_t = t; }
       } /* the flight core's state */
       if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) &&
           (have_learn || have_super)) { /* the learning and the supervisor, on every frame */
@@ -736,9 +799,11 @@ int main(int argc, char **argv) {
      * it sends those only while guided commands come). No announcing: a guided command, disarmed, would disarm it. */
     if (no_nav) {
       static double next_stick; fc_cmd sc;
-      if (t >= next_stick && radio_here && !rc_stick_cmd(&RCI, t, &sc)) {
+      int radio_sticks = radio_here && !rc_stick_cmd(&RCI, t, &sc), text_sticks = !radio_sticks && t - txt_stick_t < TXT_STICK_S;
+      if (t >= next_stick && (radio_sticks || text_sticks)) {   /* (neither: nothing goes, and the ESP32's failsafe stands) */
         next_stick = t + 0.02;
         float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
+        if (text_sticks) memcpy(c, txt_stick, sizeof c);
         uint8_t fr[64]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
         link_raw(link, fr, len);
         last_send = t;
