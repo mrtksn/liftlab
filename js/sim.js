@@ -74,7 +74,7 @@ const PRESETS = {
   // The ESC timing is from bench tests (tools/esc-control/README.md); the video stream from docs/a13-wifi-protocol.md.
   toy1s: { label: 'Toy-drone rebuild (1S, ESP32 + Pi Zero, video board)', build() {
     const motor = { tmax: 0.9, prop: 0.045, tau: 0.025, mass: 0.009, fm: 0.6, tmaxC: 100,
-      motorPhysics: { kind: 'brushless', kv: 7000, resistance: 0.2, currentLimit: 8, escEfficiency: 0.9, idleW: 0.05 }, propPhysics: { ct: 0.1 } };
+      motorPhysics: { kind: 'brushless', kv: 7000, resistance: 0.2, currentLimit: 8, escEfficiency: 0.9, idleW: 0.01, friction: 0.0003 }, propPhysics: { ct: 0.1 } };   // (no load, props off: about 0.21 A a motor at full throttle on 1S, 0.05 A at idle, nothing disarmed: bench-measured)
     const at = [['Front left', 0.08, 0.095, 0.012], ['Rear left', -0.08, 0.095, -0.004], ['Rear right', -0.08, -0.095, -0.004], ['Front right', 0.08, -0.095, 0.012]];   // (the rear arms fold out lower)
     const c = at.map(([n, x, y, z], i) => mkMotor(n, x, y, z, { ...motor, motorPhysics: { ...motor.motorPhysics }, propPhysics: { ...motor.propPhysics }, spin: i % 2 ? -1 : 1 }));
     const cam = o => ({ fov: 90, w: 640, h: 352, fps: 20, tilt: 0, pan: 0, ...o });   // MJPEG 640×352; frame rate and lens unmeasured
@@ -82,7 +82,7 @@ const PRESETS = {
       mkMass('Landing feet', 0, 0, -0.03, { mass: 0.006, size: [0.12, 0.15, 0.012] }),   // (inside the motors' footprint: it stands on these)
       mkMass('Perfboard', 0, 0, 0.03, { mass: 0.015, size: [0.09, 0.07, 0.0016] }),
       mkMass('ESP32 DevKit', 0, -0.018, 0.038, { mass: 0.01, size: [0.052, 0.028, 0.012] }),
-      mkMass('Pi Zero', 0, 0.02, 0.036, { mass: 0.009, size: [0.065, 0.03, 0.005], deviceW: 0.8 }),
+      mkMass('Pi Zero', 0, 0.02, 0.036, { mass: 0.009, size: [0.065, 0.03, 0.005] }),   // (its draw is the Pi Zero board's: Computers → Power)
       mkMass('5 V boost converter', -0.04, 0, 0.034, { mass: 0.003, size: [0.022, 0.017, 0.006] }),
       mkMass('Wiring and headers', 0, 0, 0.024, { mass: 0.006, size: [0.04, 0.04, 0.006] }),
       mkMass('Video board (Wi-Fi)', 0.035, 0, 0, { mass: 0.006, size: [0.04, 0.03, 0.006], deviceW: 1 }),
@@ -91,7 +91,7 @@ const PRESETS = {
       mkMass('IR obstacle module (not wired)', 0.05, 0, 0.022, { mass: 0.003, size: [0.02, 0.012, 0.006] }));
     const sn = [mkSensor('imu', 'GY-87 IMU', 0, 0, 0.025), mkSensor('mag', 'GY-87 compass', -0.005, 0, 0.025), mkSensor('baro', 'GY-87 barometer', 0.005, 0.004, 0.025)];
     return { frame: 0.049, comps: c.concat(sn), mode: 'tilt',
-      battery: { ...defaultBattery(), cells: 1, capacity: 1.8, rInt: 0.05, escCut: 3.0, avionicsW: 0.6 } };   // (avionicsW: the ESP32 and sensors; the Pi and the video board add their own)
+      battery: { ...defaultBattery(), cells: 1, capacity: 1.8, rInt: 0.05, escCut: 3.0, maxA: 36, avionicsW: 0.1, drawModel: 2 } };   // (avionicsW: the GY-87; the ESP32 and the Pi draw their own, the video board its part's)
   },
   computers() {   // the default boards; the ESP32's ESC outputs set for the toy's arm ESCs, the GY-87 on its I²C bus
     const C = defaultComputers(), core = C.boards.find(b => b.tasks.includes('core'));
@@ -456,24 +456,24 @@ function dynamics(dt) {
   // Gravity on every body at its own centre of mass.
   MB.bodies.forEach((B, i) => { if (B.I.m > 0) push(i, m3v(RT, run('gravity', B.I.m, G)), posed(i, add(B.pivot, B.I.c))); });
 
-  // Motors: throttle → current → torque → prop speed → thrust. The pack supplies the throttle-weighted current.
-  // The boards and devices draw on the motors' pack, unless the flight controller's board has a pack of its own: then
-  // they drain that one (through their converters) and only the servos and latches stay on the motors' pack.
-  const deviceW = cargo.power ? flightDevicePower() : 0, ownPack = cargo.power ? cargo.boardsPack : null;
-  let Ibatt = (ownPack ? S.servoW : deviceW) / Math.max(1, S.battV);
-  if (ownPack) packStep(ownPack, S.boardW / 0.85, dt);
+  // Motors: throttle → current → torque → prop speed → thrust. Each motor's ESC runs on its own source (the main pack
+  // unless the power list says otherwise) and draws the throttle-weighted current from it; the electronics draw on
+  // theirs (flightDevicePower). Watts per source, then each source steps: the main pack below, the rest in sourceStep.
+  const pm = cargo.pmap, W = new Map(), addW = (id, w) => { if (id != null) W.set(id, (W.get(id) || 0) + w); };
+  if (cargo.power) flightDevicePower(addW); else S.deviceW = 0;
   S.motorW = 0; S.shaftW = 0;
   const lvc = escCutoffStep(dt, acts.some(c => (act.get(c.id) || {}).u > 0)) || !cargo.power;
   const rotors = acts.map(c => {
     const hsc = hsOf(c), st = act.get(c.id), mp0 = heatParams(c, motorParams(c)), dead = hsc.dead;   // the motor as it is at its temperature
     const sp = spreadOf(c), mpx = { ...mp0, kT: mp0.kT * sp.kT, kQ: mp0.kQ * sp.kQ, propThrustScale: mp0.table ? sp.kT : 1, propTorqueScale: mp0.table ? sp.kQ : 1, J: mp0.J * sp.J };   // this particular motor and prop
     const mp = hsc.prop ? { ...mpx, table: null, kT: 0, kQ: 0.03 * mpx.kQ, J: 0.4 * mpx.J } : mpx;                   // a broken prop: a stub, no thrust, almost no drag
-    const off = (isCollective(c) && !(st.u > 0)) || lvc;   // a helicopter's ESC spools the rotor up only once it gets a throttle signal; the low-voltage cutoff stops them all
-    const md = dead || off ? flightCoast(st, mp, dt) : rotorStep(c, st, mp, S.battV, dt);
+    const src = pm ? pm.motor.get(c.id) : null, V = sourceV(src);   // the volts its ESC gets (0: no source, or it's down)
+    const off = (isCollective(c) && !(st.u > 0)) || (lvc && (src === (pm && pm.main) || !cargo.power)) || !(V > 0.5);   // a helicopter's ESC spools the rotor up only once it gets a throttle signal; the low-voltage cutoff stops the main pack's
+    const md = dead || off ? flightCoast(st, mp, dt) : rotorStep(c, st, mp, V, dt);
     if (dead || off) st.esc = 0;
     st.Omega = md.Omega; st.i = md.i; st.tauM = md.tau; st.T = md.T;
-    const watts = Math.max(0, st.esc * S.battV * md.i) / mp.escEfficiency + (cargo.power ? mp.idleW : 0);
-    Ibatt += watts / Math.max(1, S.battV); S.motorW += watts;
+    const watts = Math.max(0, st.esc * V * md.i) / mp.escEfficiency + (cargo.power && V > 0.5 ? mp.idleW : 0);
+    addW(src, watts); S.motorW += watts;
     S.shaftW += Math.max(0, md.tau * md.Omega);
     st.overspeed = mp.maxRpm > 0 && md.Omega * 60 / (2 * Math.PI) > mp.maxRpm;
     heatMotor(c, st, md, mp, dt);
@@ -489,7 +489,10 @@ function dynamics(dt) {
   // The pack and the motors pull on each other within a step (more current, more sag, less current), so the voltage
   // the ESCs see settles through their input capacitors (about 2 ms) rather than jumping each step, which would
   // ring once a nearly empty pack's resistance is high.
-  if (cargo.power) {
+  for (const [id, w] of W) if (pm && id !== pm.main) sourceStep(id, w, dt);
+  if (pm) for (const id of pm.srcs.keys()) if (id !== pm.main && !W.has(id)) sourceStep(id, 0, dt);
+  const Ibatt = pm && pm.main != null ? (W.get(pm.main) || 0) / Math.max(1, S.battV) : 0;
+  if (pm && pm.main != null) {   // (a connected main pack keeps its voltage even when the flight controller, on a source of its own, is off)
     const Vpack = run('batteryModel', S.batt, Math.max(0, Ibatt), dt, battParams());
     S.battV += (Vpack - S.battV) * Math.min(1, dt / 0.002);
     S.battK = steadyX(1, S.battV) ** 2;
@@ -649,7 +652,7 @@ function resetSim() {
   flightLimitCache = new WeakMap();
   thr = null;
   resetHealth(); nb = nominalAxis();   // parts repaired, the supervisor's settings cleared
-  S.packs = new Map();                 // a pack for the boards, charged again (packStep)
+  S.packs = new Map();                 // the other sources' state (sourcesReset, after the power map)
   cargoReset();                        // every part back on board, the items to pick up where they're set
   buildBodies(); cPts = contactPoints();
   const blocked = (x, y) => { for (let z = 0.3; z <= Math.max(0.3, setpoint.z) + 0.01; z += 0.4) if (terrainNear([x, y, z], cReach + 0.4).length) return true; return false; };
@@ -668,6 +671,7 @@ function resetSim() {
   S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.gust = [0, 0, 0]; S.crashed = null; S.t = 0; S.steps = 0; S.tq = null; S.tqRaw = null; S.tqWant = null; S.contactImpulse=null;
   ctl.iPos = [0, 0, 0]; ctl.iAtt = [0, 0, 0]; ctl.vRef = [0, 0, 0]; pend.clear(); act.clear(); jst.clear(); syncRuntime();
   S.batt = { soc: clamp(battCfg().startSoc ?? 1, 0.02, 1) }; S.battV = run('batteryModel', S.batt, 0.5, 0, battParams()); S.battK = steadyX(1, S.battV) ** 2;
+  sourcesReset();                      // every other source charged again
   S.mb = { K: mbKinematics([0, 0, 0, 0, 0, 0]), acc: MB.bodies.map(() => [0, 0, 0, 0, 0, 0]) };
   resetEstimation(); resetLearning(); budgetReset();
   truth = massProps('truth'); model = massProps('model');

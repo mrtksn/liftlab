@@ -69,10 +69,16 @@ function flightApplyLimits(w, voltage, acts = actuators()) {
   for (let i = 0; i < acts.length; i++) out[8 + 3 * i] = source.nextCaps[i];
   if (w.fc_set(n) === 0) source.lastCaps.set(source.nextCaps);
 }
-function flightDevicePower() {
-  const b = battCfg(); let watts = b.avionicsW ?? 8, servoW = 0;
+// What the electronics draw, onto their sources (addW(source id, watts)): each board its own draw through its supply,
+// the Battery settings' other electronics (sensors, receiver, LEDs) on the flight controller's source, each part with a
+// draw on its source, the servos and latches on theirs. Returns the total [W].
+function flightDevicePower(addW = () => {}) {
+  const b = battCfg(), m = cargo.pmap; let total = 0, servoW = 0;
+  const put = (id, w) => { if (!(w > 0)) return; total += w; addW(id, w); };
+  if (m) for (const x of m.board.values()) put(x.src, x.w);
+  put(m ? m.core : null, b.avionicsW ?? 8);
   for (const c of liveComps()) {
-    watts += Math.max(0, c.deviceW || 0);
+    if (c.deviceW > 0) put(m && m.part.has(c.id) ? m.part.get(c.id) : m ? m.core : null, c.deviceW);
     if (c.type === 'joint') {
       const st = jst.get(c.id), p = c.servoPhysics || {};
       if (st && wiredTo(c) === boardOf('core')) {
@@ -84,9 +90,9 @@ function flightDevicePower() {
       const st = cargo.lat.get(c.id); if (st && st.drive != null && Math.abs(st.drive - st.pos) > .01) servoW += c.latchW ?? 2;
     }
   }
-  S.boardW = watts; S.servoW = servoW / (b.becEfficiency ?? .9);
-  S.deviceW = watts + S.servoW;
-  return S.deviceW;
+  put(m ? m.servos : null, servoW / (b.becEfficiency ?? .9));
+  S.deviceW = total;
+  return total;
 }
 function flightCoast(st, mp, dt) {
   const load = FlightPhysics.loadAt(mp, st.Omega || 0, flightAtmosphere().rho, st.airQ || 1, st.airT || 1);

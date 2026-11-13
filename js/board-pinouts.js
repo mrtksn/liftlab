@@ -223,11 +223,11 @@ function groundPinName(C, b) {
   return p ? (M.layout === 'header' ? 'pin ' + p.num + ' (GND)' : 'GND') : 'GND';
 }
 function powerDiagramSvg(C, comps) {
-  // Each pack has a box on the left and a + lane of its own (lanes left of the ESC column, the first pack's the rightmost);
-  // with more than one pack their − meet on a ground spine at the far left.
-  const bats = batteryParts(comps), wired = bats.filter(c => batteryWired(C, c)), packs = bats.length ? bats : [null], np = packs.length, many = np > 1;
+  // Each source has a box on the left and a + lane of its own (lanes left of the middle column, the first source's the
+  // rightmost); with more than one, their − meet on a ground spine at the far left.
+  const srcs = powerSources(C, comps), packs = srcs.length ? srcs : [null], np = packs.length, many = np > 1, idOf = s => s ? s.id : null;
   const dx = 12 * (np - 1) + (many ? 14 : 0), x1 = 12 + (many ? 14 : 0), w1 = 150, xg = 204 + dx, x2 = 226 + dx, w2 = 220, x3 = 506 + dx, w3 = 206, W = 734 + dx, top = 52, out = [];
-  const laneX = new Map(packs.map((c, i) => [c, 186 + dx - 12 * i])), spine = 12;
+  const laneX = new Map(packs.map((s, i) => [idOf(s), 186 + dx - 12 * i])), spine = 12;
   const box = (x, y, w, h, kind, lines) => {
     out.push('<g class="pw-box pd-' + kind + '"><rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="6"/>');
     lines.forEach((t, i) => out.push('<text class="' + (i ? 'pw-sub' : 'pw-t') + '" x="' + (x + 9) + '" y="' + (y + 17 + i * 15) + '">' + pdEsc(t) + '</text>'));
@@ -235,81 +235,78 @@ function powerDiagramSvg(C, comps) {
   };
   const wire = (kind, pts) => out.unshift('<polyline class="pd-lead pd-' + kind + '" fill="none" points="' + pts.map(p => p.join(',')).join(' ') + '"/>');
   const dot = (kind, x, y) => out.push('<circle class="pw-dot pd-' + kind + '" cx="' + x + '" cy="' + y + '" r="3.5"/>');
-  // the packs, stacked on the left
+  const on = s => !!s && sourceOn(C, s), srcOf = key => { const s = consumerSource(C, comps, key); return s && laneX.has(s.id) ? s.id : null; };
+  // the sources, stacked on the left
   const batH = 64, at0 = new Map(); let yp = top;
-  for (const c of packs) { at0.set(c, yp); yp += batH + 14; }
-  const mp = motorPack(C, comps), packOf = b => boardPack(C, b, comps);
-  // the middle column: an ESC or MOSFET stage per motor (on the motors' pack), then a converter per kind and pack
-  const mid = [], motors = comps.filter(c => c.type === 'motor');
-  for (const c of motors) {
+  for (const s of packs) { at0.set(idOf(s), yp); yp += batH + 14; }
+  // the middle column: an ESC or MOSFET stage per motor (on its source), a converter per kind and source, the parts with a draw
+  const mid = [];
+  for (const c of comps.filter(c => c.type === 'motor')) {
     const p = hardwarePart(C, c, comps), owner = hardwareOwner(C, c), brushed = p.driver === 'brushed';
-    mid.push({ kind: 'pwm', pack: mp, lines: [(brushed ? 'MOSFET stage' : 'ESC') + ' → ' + c.name, 'signal ← ' + (owner && p.pin >= 0 ? owner.name + ' ' + boardGpioShort(C, owner, p.pin) : 'not wired')], h: 42 });
+    mid.push({ kind: 'pwm', pack: srcOf('motor:' + c.id), lines: [(brushed ? 'MOSFET stage' : 'ESC') + ' → ' + c.name, 'signal ← ' + (owner && p.pin >= 0 ? owner.name + ' ' + boardGpioShort(C, owner, p.pin) : 'not wired')], h: 42 });
   }
-  const supplies = new Map(C.boards.map(b => [b, boardSupply(C, b, boardCells(C, b, comps))])), conv = new Map();
+  const supplies = new Map(C.boards.map(b => [b, boardSupplyOf(C, b, comps)])), conv = new Map();
   for (const b of C.boards) {
     const S = supplies.get(b); if (S.kind !== 'boost5' && S.kind !== 'reg5') continue;
-    const P = packOf(b), key = S.kind + ':' + (P ? P.id : '-'); if (conv.has(key)) continue;
-    const sp = packSpec(C, P || mainPack(C, comps), comps), lo = (sp.cells * LIPO_MIN).toFixed(1), hi = (sp.cells * LIPO_MAX).toFixed(1);
-    const m = { kind: 'v5', pack: P, lines: [POWER_SUPPLIES[S.kind].short + (many && P ? ' · ' + P.name : ''), S.kind === 'boost5' ? 'in: ' + lo + '–' + hi + ' V · out: 5 V' : 'in: the pack · out: 5 V'], h: 42 };
+    const id = S.src && laneX.has(S.src.id) ? S.src.id : null, key = S.kind + ':' + id; if (conv.has(key)) continue;
+    const m = { kind: 'v5', pack: id, lines: [POWER_SUPPLIES[S.kind].short + (many && S.src ? ' · ' + S.src.name : ''), 'in: ' + S.spec.vmin.toFixed(1) + '–' + S.spec.vmax.toFixed(1) + ' V · out: 5 V'], h: 42 };
     conv.set(key, m); mid.push(m);
   }
+  for (const c of comps.filter(c => c.type === 'mass' && !c.battery && c.deviceW > 0)) mid.push({ kind: 'signal', pack: srcOf('part:' + c.id), lines: [c.name, 'draws ' + c.deviceW + ' W'], h: 42 });
   let y = top; for (const m of mid) { m.y = y; y += m.h + 14; }
   // the right column: the boards
   let yb = top; const at = new Map();
   for (const b of C.boards) { at.set(b, { y: yb, h: 56 }); yb += 56 + 16; }
-  const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core), sense = core && ESP_PROFILES[core.kind] && bus.batteryPin >= 0;
-  const P2 = core && ESP_PROFILES[core.kind] && bus.batteryPin2 >= 0 ? sensedPack2(C, comps) : null;   // a second divider, on the boards' pack
+  const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core), esp = core && ESP_PROFILES[core.kind];
+  const mp = mainPack(C, comps), sense = esp && bus.batteryPin >= 0 && mp && laneX.has(mp.id);
+  const P2 = esp && bus.batteryPin2 >= 0 ? sensedPack2(C, comps) : null;   // a second divider, on another pack
   const divY = yp + 12, divH = 72, divY2 = divY + (sense ? divH + 12 : 0);
   const rail = Math.max(y, yb, P2 ? divY2 + divH + 14 : sense ? divY + divH + 14 : yp, top + batH + 30) + 10, H = rail + 26;
-  // + lanes, one per pack; the ground rail
-  const lanes = new Map(packs.map(c => [c, []])), neg = [];
-  for (const c of packs) {
-    const py = at0.get(c), on = !!c && wired.includes(c), sp = c ? packSpec(C, c, comps) : mainSpec();
-    const name = c ? c.name : 'Battery', sub = sp.cells + 'S · ' + (sp.cells * LIPO_MIN).toFixed(1) + '–' + (sp.cells * LIPO_MAX).toFixed(1) + ' V';
-    box(x1, py, w1, batH, on ? 'vbat' : 'signal', [name, sub, !on ? 'not connected' : many ? '→ ' + PACK_FEEDS[packFeeds(C, c)].short : '+ red · − black']);
-    if (!on) continue;
-    const lx = laneX.get(c); wire('vbat', [[x1 + w1, py + 18], [lx, py + 18]]); lanes.get(c).push(py + 18);
+  // + lanes, one per source; the ground rail
+  const lanes = new Map(packs.map(s => [idOf(s), []])), neg = [];
+  for (const s of packs) {
+    const py = at0.get(idOf(s)), live = on(s), P = s ? sourceSpec(C, s, comps) : { cells: 1, vmin: 3, vmax: 4.2 }, bat = !s || s.kind === 'battery';
+    const sub = bat ? P.cells + 'S · ' + P.vmin.toFixed(1) + '–' + P.vmax.toFixed(1) + ' V' : P.volts + ' V · up to ' + P.maxA + ' A';
+    box(x1, py, w1, batH, live ? (bat ? 'vbat' : 'v5') : 'signal', [s ? s.name : 'Battery', sub, !live ? 'not connected' : !bat ? 'off the drone' : many ? (P.main ? 'main pack' : 'battery') : '+ red · − black']);
+    if (!live) continue;
+    const lx = laneX.get(s.id); wire('vbat', [[x1 + w1, py + 18], [lx, py + 18]]); lanes.get(s.id).push(py + 18);
     if (many) wire('gnd', [[x1, py + batH - 12], [spine, py + batH - 12]]);
   }
   if (many) wire('gnd', [[spine, top + batH - 12], [spine, rail]]); else wire('gnd', [[x1 + 30, top + batH], [x1 + 30, rail]]);
   for (const m of mid) {
     box(x2, m.y, w2, m.h, m.kind, m.lines);
-    const lx = m.pack && laneX.get(m.pack);
+    const lx = m.pack != null && laneX.get(m.pack);
     if (lx) { wire('vbat', [[lx, m.y + 13], [x2, m.y + 13]]); lanes.get(m.pack).push(m.y + 13); dot('vbat', lx, m.y + 13); }
     wire('gnd', [[xg, m.y + m.h - 10], [x2, m.y + m.h - 10]]); neg.push(m.y + m.h - 10); dot('gnd', xg, m.y + m.h - 10);
   }
-  if (sense) {   // the divider reads the motors' pack: the flight controller corrects the throttle for its sag
-    const R = dividerResistors(bus.batteryDivider), sp = mp || mainPack(C, comps), lx = sp && laneX.get(sp);
-    box(x1, divY, w1, divH, 'signal', ['Voltage divider' + (many && sp ? ' · ' + sp.name : ''), 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, bus.batteryPin)]);
-    if (lx) { wire('vbat', [[x1 + w1, divY + 14], [lx, divY + 14]]); lanes.get(sp).push(divY + 14); dot('vbat', lx, divY + 14); }
-    wire('gnd', [[many ? spine : x1 + 60, divY + divH - (many ? 10 : 0)], ...(many ? [[x1, divY + divH - 10]] : [[x1 + 60, rail]])]);
-  }
-  if (P2 && laneX.has(P2)) {
-    const R = dividerResistors(bus.batteryDivider2), lx = laneX.get(P2);
-    box(x1, divY2, w1, divH, 'signal', ['Voltage divider · ' + P2.name, 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, bus.batteryPin2)]);
-    wire('vbat', [[x1 + w1, divY2 + 14], [lx, divY2 + 14]]); lanes.get(P2).push(divY2 + 14); dot('vbat', lx, divY2 + 14);
-    wire('gnd', many ? [[spine, divY2 + divH - 10], [x1, divY2 + divH - 10]] : [[x1 + 60, divY2 + divH], [x1 + 60, rail]]);
-  }
+  const divider = (dy, s, ratio, pin) => {   // a voltage divider from a pack's + to an ADC pin
+    const R = dividerResistors(ratio), lx = laneX.get(s.id);
+    box(x1, dy, w1, divH, 'signal', ['Voltage divider' + (many ? ' · ' + s.name : ''), 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, pin)]);
+    wire('vbat', [[x1 + w1, dy + 14], [lx, dy + 14]]); lanes.get(s.id).push(dy + 14); dot('vbat', lx, dy + 14);
+    wire('gnd', many ? [[spine, dy + divH - 10], [x1, dy + divH - 10]] : [[x1 + 60, dy + divH], [x1 + 60, rail]]);
+  };
+  if (sense) divider(divY, mp, bus.batteryDivider, bus.batteryPin);   // the main pack: the flight controller corrects the throttle for its sag
+  if (P2 && laneX.has(P2.id)) divider(divY2, P2, bus.batteryDivider2, bus.batteryPin2);
   if (neg.length) wire('gnd', [[xg, Math.min(...neg)], [xg, rail]]);
-  // the boards: 5 V from a converter, another board or the pack; their grounds to the rail on the right
+  // the boards: 5 V from a converter, straight from a source, another board's pin, or their USB port; grounds to the right
   const convs = [...conv.values()], lane5 = m => x3 - 48 + 8 * Math.min(2, convs.indexOf(m)), direct = x3 - 24, fromLane = x3 - 12, gx = x3 + w3 + 10, fed = new Map();
   for (const b of C.boards) {
-    const S = supplies.get(b), a = at.get(b), yin = a.y + 30, P = packOf(b);
-    box(x3, a.y, w3, a.h, S.kind === 'usb' ? 'signal' : 'v5', [b.name, S.kind === 'usb' ? 'powered from its USB port' : '5 V in: ' + supplyPinName(C, b) + (S.kind === 'direct' ? ' ← ' + (many && P ? P.name : 'battery') + ' +' : ''), 'GND: ' + groundPinName(C, b)]);
-    const c = (S.kind === 'boost5' || S.kind === 'reg5') && conv.get(S.kind + ':' + (P ? P.id : '-'));
+    const S = supplies.get(b), a = at.get(b), yin = a.y + 30, id = S.src && laneX.has(S.src.id) ? S.src.id : null, own = S.kind === 'usb' || (S.src && S.src.own);
+    box(x3, a.y, w3, a.h, own ? 'signal' : 'v5', [b.name, own ? 'powered from its USB port' : '5 V in: ' + supplyPinName(C, b) + ((S.kind === 'direct' || S.kind === 'direct5') && S.src ? ' ← ' + (many ? S.src.name : 'battery') + ' +' : ''), 'GND: ' + groundPinName(C, b)]);
+    const c = (S.kind === 'boost5' || S.kind === 'reg5') && conv.get(S.kind + ':' + id);
     if (c) { const lx = lane5(c); wire('v5', [[lx, yin], [x3, yin]]); if (!fed.has(c)) fed.set(c, { x: lx, ys: [] }); fed.get(c).ys.push(yin); }
-    if (S.kind === 'direct' && P && laneX.has(P)) { const lx = laneX.get(P); wire('vbat', [[lx, at0.get(P) + 18], [lx, top - 22 + 4 * packs.indexOf(P)], [direct, top - 22 + 4 * packs.indexOf(P)], [direct, yin], [x3, yin]]); }
+    if ((S.kind === 'direct' || S.kind === 'direct5') && id != null) { const lx = laneX.get(id), k = packs.findIndex(s => idOf(s) === id); wire('vbat', [[lx, at0.get(id) + 18], [lx, top - 22 + 4 * k], [direct, top - 22 + 4 * k], [direct, yin], [x3, yin]]); }
     if (S.kind === 'board' && S.from) { const f = at.get(S.from); wire('v5', [[x3, f.y + 30], [fromLane, f.y + 30], [fromLane, yin], [x3, yin]]); }
     wire('gnd', [[x3 + w3, a.y + a.h - 10], [gx, a.y + a.h - 10]]);
   }
-  for (const [c, L] of lanes) if (L.length > 1) wire('vbat', [[laneX.get(c), Math.min(...L)], [laneX.get(c), Math.max(...L)]]);
+  for (const [id, L] of lanes) if (L.length > 1) wire('vbat', [[laneX.get(id), Math.min(...L)], [laneX.get(id), Math.max(...L)]]);
   if (C.boards.length) wire('gnd', [[gx, top + 46], [gx, rail], [many ? spine : x1 + 30, rail]]); else wire('gnd', [[xg, rail], [many ? spine : x1 + 30, rail]]);
   for (const [c, F] of fed) { const yo = c.y + c.h / 2; wire('v5', [[x2 + w2, yo], [F.x, yo], [F.x, Math.min(yo, ...F.ys)], [F.x, Math.max(yo, ...F.ys)]]); }
-  out.push('<text class="pw-rail" x="' + (x1 + 36) + '" y="' + (rail - 5) + '">' + (many ? 'GND: one common ground (every pack\'s −, every ESC and board)' : 'GND: one common ground (battery −, every ESC and board)') + '</text>');
+  out.push('<text class="pw-rail" x="' + (x1 + 36) + '" y="' + (rail - 5) + '">' + (many ? 'GND: one common ground (every source\'s −, every ESC and board)' : 'GND: one common ground (battery −, every ESC and board)') + '</text>');
   out.push('<text class="pd-title" x="' + x1 + '" y="20">Power wiring</text>');
   return '<svg class="pinout-diagram power-diagram" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Power wiring">' + out.join('') + '</svg>';
 }
-const PW_LEGEND = { vbat: 'Battery + (pack voltage)', v5: '5 V', gnd: 'GND', pwm: 'ESC / MOSFET stage', signal: 'Sensing' };
+const PW_LEGEND = { vbat: 'Source + (pack or supply voltage)', v5: '5 V', gnd: 'GND', pwm: 'ESC / MOSFET stage', signal: 'Sensing' };
 function powerDiagramView(C, comps) {
   const box = el('div', { class: 'pd-scroll' }); box.innerHTML = powerDiagramSvg(C, comps);
   return el('div', {}, box, el('div', { class: 'pd-legend' }, ...Object.entries(PW_LEGEND).map(([k, t]) => el('span', {}, el('i', { class: 'pd-swatch pd-' + k }), t))));

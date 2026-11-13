@@ -570,8 +570,10 @@ function updateLive() {
   }
   {   // battery
     const soc = Math.max(0, S.batt.soc ?? 1), b = battCfg();
-    const bp = cargo.boardsPack, bst = bp && S.packs && S.packs.get(bp.id), bsoc = bst ? Math.max(0, bst.soc ?? 1) : 1, low = Math.min(soc, bp ? bsoc : 1);   // (a pack for the boards: its charge too)
-    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S` + (bp ? ` · ${bp.name} ${Math.round(bsoc * 100)}%` : ''), !cargo.power ? 'bad' : low < 0.25 ? 'bad' : low < 0.5 ? 'warn' : 'good', !cargo.power ? 'No power: ' + powerWhy() : null);
+    let other = null;   // the emptiest of the other packs, if there are any
+    if (cargo.pmap) for (const [id, e] of cargo.pmap.srcs) { const st = S.packs && S.packs.get(id); if (id !== cargo.pmap.main && e.src.kind === 'battery' && st && (!other || st.soc < other.soc)) other = { name: e.src.name, soc: Math.max(0, st.soc) }; }
+    const low = Math.min(soc, other ? other.soc : 1);
+    setTile('tileBatt', `${Math.round(soc * 100)}%`, `${(S.battV || 0).toFixed(1)} V · ${b.cells}S` + (other ? ` · ${other.name} ${Math.round(other.soc * 100)}%` : ''), !cargo.power ? 'bad' : low < 0.25 ? 'bad' : low < 0.5 ? 'warn' : 'good', !cargo.power ? 'No power: ' + powerWhy() : null);
     const f = $('#battFill'); if (f) f.setAttribute('width', (10.8 * clamp(cargo.power ? soc : 0, 0, 1)).toFixed(2));
   }
   {   // formulas
@@ -839,7 +841,15 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
   designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }
+// A design from before each board had its own draw: its avionics draw included the flight controller's board, which now
+// draws on its own (Computers → Power), so the avionics draw keeps only the rest (sensors, receiver, LEDs). Once.
+function migratePowerDraw() {
+  const b = battCfg(); if (b.drawModel === 2) return;
+  const core = computers().boards.find(x => x.tasks.includes('core')), w = core ? boardWatts(computers(), core) : 0;
+  b.avionicsW = Math.max(0, +((b.avionicsW ?? 8) - w).toFixed(2)); b.drawModel = 2;
+}
 function afterLoad() {
+  migratePowerDraw();
   frameMassField.refresh(); renderFrameShape();
   truth = null; recomputeProps(); renderBattery(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); if (typeof refreshTuning === 'function') refreshTuning(); save();
 }

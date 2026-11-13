@@ -41,7 +41,7 @@ try{
   // no battery at all: no power; Add a part → Battery fixes it
   cfg.comps=cfg.comps.filter(c=>!c.battery);structural();doReset();save();renderComputers(true);
   check(!cargo.power&&powerWhy()==='no battery on the drone','A drone with no battery still had power');
-  check($('[data-power="none"]').innerText.includes('No battery'),'No-battery card missing');
+  check($('[data-power="none"]').innerText.includes('No power'),'No-power card missing');
   $('#addPart').click();check(!!$('#addPartDlg [data-add="battery"]'),'Add a part has no Battery');
   $('#addPartDlg [data-add="battery"]').click();await wait(50);$('.place-opt').click();doReset();
   check(cargo.power&&batteryParts(cfg.comps).length===1,'Adding a battery did not power the drone');

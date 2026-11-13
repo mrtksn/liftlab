@@ -4,7 +4,10 @@
 // each one mid-flight, and the supervisor's log.
 
 /* ───────── battery settings ───────── */
-function battEdited() { undoKey = 'battery'; recomputeProps(); refreshEnvelope(); renderMass(); save(); renderBattSmall(); for (const refresh of flightBatteryFieldRefs) refresh(); }
+function battEdited() {
+  { const m = typeof mainPack === 'function' ? mainPack(computers(), cfg.comps) : null, b = battCfg();   // (the main pack's own specs follow the Battery settings)
+    if (m && ownSpec(m)) for (const k of PACK_KEYS) if (b[k] !== undefined) m.pack[k] = b[k]; }
+  undoKey = 'battery'; recomputeProps(); refreshEnvelope(); renderMass(); save(); renderBattSmall(); for (const refresh of flightBatteryFieldRefs) refresh(); }
 function renderBattSmall() { const b = battCfg(); $('#battSmall').textContent = `${b.cells}S · ${b.capacity.toFixed(1)} Ah · ${(battMass() * 1000).toFixed(0)} g`; }
 function renderBattery() {
   if (typeof flightBatteryFieldRefs !== 'undefined') flightBatteryFieldRefs.length=0;
@@ -65,13 +68,13 @@ function buildHealth1() {
   if (joints().length) group('Servos');
   for (const j of joints()) list.append(healthRow(j.id, j.name, breakMenu([['jam', 'Jam it'], ['limp', 'Make it go limp']], v => breakDevice(j, v), 'Break ' + j.name, j.id)));
   group('Power');
-  list.append(healthRow('batt', cargo.boardsPack && cargo.boardsPack !== motorPack(computers(), cfg.comps) ? (motorPack(computers(), cfg.comps) || {}).name || 'Battery' : 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
-  const bp = cargo.boardsPack;   // a pack of its own for the boards
-  if (bp) list.append(healthRow('epack', bp.name, breakMenu([['cut', 'Cut out']], () => breakPack(bp), 'Break ' + bp.name, 'epack')));
+  const pm = cargo.pmap, others = pm ? [...pm.srcs].filter(([id]) => id !== pm.main) : [];
+  list.append(healthRow('batt', others.length && pm.main != null ? pm.srcs.get(pm.main).src.name : 'Battery', breakMenu([['cell', 'Lose a cell'], ['cut', 'Cut out']], v => breakBattery(v), 'Break the battery', 'batt')));
+  for (const [id, e] of others) list.append(healthRow('src' + id, e.src.name, breakMenu([['cut', e.src.kind === 'battery' ? 'Cut out' : 'Shut off']], () => breakSource(id), 'Break ' + e.src.name, 'src' + id)));   // every other source
   box.append(list, el('span', { class: 'lbl', text: 'What happened' }), el('ol', { class: 'h-log', id: 'supLog' }));
   HEALTH.sig = healthSig();
 }
-const healthSig = () => actuators().map(c => c.id + c.name + (c.failLoss ?? 50)).join(',') + '|' + joints().map(j => j.id + j.name).join(',') + '|' + (cargo.boardsPack ? cargo.boardsPack.id + cargo.boardsPack.name : '');
+const healthSig = () => actuators().map(c => c.id + c.name + (c.failLoss ?? 50)).join(',') + '|' + joints().map(j => j.id + j.name).join(',') + '|' + (cargo.pmap ? [...cargo.pmap.srcs].map(([id, e]) => id + e.src.name).join(',') + ':' + cargo.pmap.main : '');
 function repairAll() {
   hs.forEach(s => Object.assign(s, { loss: 0, dead: false, prop: false, jam: null, limp: false, cause: '', failT: null, mode: null }));
   Object.assign(hb, { fade: 0, cellsLost: 0, cut: false, cause: '', failT: null });
@@ -112,10 +115,11 @@ function renderHealth(force) {
     put('batt', (hb.T - ambient()) / Math.max(10, b.tmaxC - ambient()), `${Math.round(hb.T)}°`, truth[0], truth[1],
       [['sim', `${Math.round(Math.max(0, soc) * 100)}%`], ['sensor', seen], ['board', sv && sv.cells < b.cells ? `supervisor: counts ${sv.cells} cells` : '']]);
   }
-  if (cargo.boardsPack) {   // the boards' pack: its charge and voltage (not measured on the drone)
-    const st = S.packs && S.packs.get(cargo.boardsPack.id) || { soc: 1, V: 0, I: 0 };
-    put('epack', 0, '', st.cut ? 'cut out' : st.flat ? 'flat' : 'working', st.cut || st.flat ? 'bad' : (st.soc ?? 1) < 0.25 ? 'warn' : '',
-      [['sim', `${Math.round(Math.max(0, st.soc ?? 1) * 100)}% · ${(st.V || 0).toFixed(2)} V · ${((st.I || 0) * 1000).toFixed(0)} mA`], ['sensor', 'not measured']]);
+  if (cargo.pmap) for (const [id, e] of cargo.pmap.srcs) {   // every other source: its charge, voltage and current
+    if (id === cargo.pmap.main) continue;
+    const st = S.packs && S.packs.get(id) || { soc: 1, V: 0, I: 0 }, bat = e.src.kind === 'battery';
+    put('src' + id, 0, '', st.cut ? (bat ? 'cut out' : 'shut off') : st.flat ? 'flat' : 'working', st.cut || st.flat ? 'bad' : bat && (st.soc ?? 1) < 0.25 ? 'warn' : '',
+      [['sim', `${bat ? Math.round(Math.max(0, st.soc ?? 1) * 100) + '% · ' : ''}${(st.V || 0).toFixed(2)} V · ${((st.I || 0) * 1000).toFixed(0)} mA`]]);
   }
   const mode = sv ? sv.mode | 0 : 0, m = MODE_TXT[mode] || MODE_TXT[0], pill = $('#supMode');
   if (pill.className !== 'pill ' + m[1]) pill.className = 'pill ' + m[1]; setText(pill.querySelector('span'), sv ? m[0] : 'Off');

@@ -31,13 +31,17 @@
 // same WebAssembly with the ground program (its formulas: stickInput, groundAlerts). Your keys are its buttons; it
 // sends the channels and commands up, and decodes what comes down for the Ground station.
 
+// watts: a board's typical draw at 5 V, running (the Power settings take a board's own figure instead). The ESP32 and
+// Pi Zero figures are from a bench measurement: an ESP32 DevKit (Wi-Fi off) and a Pi Zero 1.3 with a USB Wi-Fi adapter,
+// running LiftLab, drew 0.48 A together from a 1S pack through a 5 V boost converter (about 1.55 W at 5 V; 0.2 A
+// before the Pi booted, peaks to 0.54 A). The others are typical published figures.
 const BOARD_KINDS = {
-  esp32: { label: 'ESP32', mcu: true, mops: 60, cores: 2, ramKB: 300, note: 'microcontroller, 2 cores at 240 MHz' },
-  s3: { label: 'ESP32-S3', mcu: true, mops: 80, cores: 2, ramKB: 300, note: 'microcontroller, 2 cores at 240 MHz, faster memory' },
-  c3: { label: 'ESP32-C3', mcu: true, mops: 4, cores: 1, ramKB: 280, note: 'microcontroller, 1 core at 160 MHz, no float unit' },
-  pizero: { label: 'Raspberry Pi Zero', mcu: false, mops: 150, cores: 1, ramKB: 512 * 1024, note: 'Linux computer, 1 core at 1 GHz' },
-  pizero2: { label: 'Raspberry Pi Zero 2 W', mcu: false, mops: 600, cores: 4, ramKB: 512 * 1024, note: 'Linux computer, 4 cores at 1 GHz' },
-  pi4: { label: 'Raspberry Pi 4', mcu: false, mops: 2000, cores: 4, ramKB: 4096 * 1024, note: 'Linux computer, 4 cores at 1.8 GHz' },
+  esp32: { label: 'ESP32', mcu: true, mops: 60, cores: 2, ramKB: 300, watts: 0.4, note: 'microcontroller, 2 cores at 240 MHz' },
+  s3: { label: 'ESP32-S3', mcu: true, mops: 80, cores: 2, ramKB: 300, watts: 0.45, note: 'microcontroller, 2 cores at 240 MHz, faster memory' },
+  c3: { label: 'ESP32-C3', mcu: true, mops: 4, cores: 1, ramKB: 280, watts: 0.3, note: 'microcontroller, 1 core at 160 MHz, no float unit' },
+  pizero: { label: 'Raspberry Pi Zero', mcu: false, mops: 150, cores: 1, ramKB: 512 * 1024, watts: 1.15, note: 'Linux computer, 1 core at 1 GHz' },
+  pizero2: { label: 'Raspberry Pi Zero 2 W', mcu: false, mops: 600, cores: 4, ramKB: 512 * 1024, watts: 1.6, note: 'Linux computer, 4 cores at 1 GHz' },
+  pi4: { label: 'Raspberry Pi 4', mcu: false, mops: 2000, cores: 4, ramKB: 4096 * 1024, watts: 3.5, note: 'Linux computer, 4 cores at 1.8 GHz' },
   mac: { label: 'Mac or PC', mcu: false, mops: 5000, cores: 8, ramKB: 8192 * 1024, note: 'a laptop or desktop (macOS or Linux) with a USB serial adapter', groundOnly: true },
 };
 // The command module: the pilot's side of the radio (not on the drone, so not in TASKS: it has one board of its own).

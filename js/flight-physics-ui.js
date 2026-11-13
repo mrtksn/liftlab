@@ -107,7 +107,7 @@ function flightBatteryFields(b) {
   flightBatteryFieldRefs = [];
   const f = (key, label, lo, hi, step, unit, fallback) => flightNumber(b, key, label, lo, hi, step, unit, fallback, battEdited, 'battery-physics');
   return UI.details({title: 'Electrical and thermal model', class: 'fold sub'},
-    f('avionicsW', 'Total board / avionics draw', 0, 200, .5, 'W', 8),
+    f('avionicsW', 'Other electronics on the flight controller (sensors, receiver, LEDs; each board draws its own: Computers → Power)', 0, 200, .1, 'W', 8),
     f('becEfficiency', 'Servo BEC efficiency', .5, 1, .01, '', .9),
     f('heatCapacity', 'Battery heat capacity', 1, 10000, 1, 'J/K', () => 900 * battMass()),
     f('cooling', 'Battery thermal conductance', .01, 100, .05, 'W/K', () => 1.4 * (battMass() / .2) ** (2 / 3)));

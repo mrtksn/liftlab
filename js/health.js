@@ -42,24 +42,45 @@ function battParams() {
   return { cells: Math.max(0, b.cells - hb.cellsLost), capacity: b.capacity * 3600 * (1 - hb.fade), cut: hb.cut,
     rInt: b.rInt * clamp(Math.exp(0.015 * (25 - hb.T)), 0.6, 3) * (1 + 2 * hb.fade) };
 }
-// A pack of its own for the boards (hardware.js: what each pack feeds): it drains with what the boards and devices draw
-// (watts, through their converters) and sags like the main pack (the battery law), with no heating or wear. Once it's
-// flat (3.0 V a cell under load) or cut, the flight controller's board is off: the drone has no power.
-function packStep(c, watts, dt) {
-  const P = packSpec(computers(), c, cfg.comps);
-  let st = S.packs.get(c.id);
-  if (!st) { st = { soc: 1, V: P.cells * 4.2, I: 0 }; S.packs.set(c.id, st); }
+// Every source but the main pack (that one is S.batt, with its heat and wear): its charge, voltage and current, in
+// S.packs by source id. A pack drains with what's on it and sags like the main pack (the battery law), with no heating
+// or wear; a USB port or bench supply holds its voltage. A pack is flat at 3.0 V a cell under load; a USB port shuts
+// off when it's asked for well over its rating for a moment (a bench supply limits its current: it sags instead).
+// Whatever is on a source that's down has no power; on the flight controller's source, the drone is off.
+function sourceInit(id, e) {
+  const { src, spec } = e, st = { soc: src.kind === 'battery' ? clamp(spec.startSoc ?? 1, 0.02, 1) : 1, V: 0, I: 0, overT: 0 };
+  st.V = src.kind === 'battery' ? run('batteryModel', st, 0, 0, { cells: spec.cells, capacity: spec.capacity * 3600, rInt: spec.rInt, cut: false }) : spec.volts;
+  S.packs.set(id, st); return st;
+}
+function sourcesReset() { const m = cargo.pmap; if (m) for (const [id, e] of m.srcs) if (id !== m.main) sourceInit(id, e); }
+function sourceStep(id, watts, dt) {
+  const m = cargo.pmap, e = m && m.srcs.get(id); if (!e) return;
+  const st = S.packs.get(id) || sourceInit(id, e);   // (a source that turned up mid-flight)
+  const { src, spec } = e;
   if (st.cut || st.flat) { st.V = 0; st.I = 0; return; }
   st.I = watts / Math.max(1, st.V);
-  st.V = run('batteryModel', st, st.I, dt, { cells: P.cells, capacity: P.capacity * 3600, rInt: 0.08 * P.cells, cut: false });
-  if (st.V / P.cells < 3.0) { st.flat = true; packOff(c, 'is flat'); }
+  if (src.kind === 'battery') {
+    const V = run('batteryModel', st, st.I, dt, { cells: spec.cells, capacity: spec.capacity * 3600, rInt: spec.rInt, cut: false });
+    st.V += (V - st.V) * Math.min(1, dt / 0.002);
+    if (st.V / spec.cells < 3.0) { st.flat = true; sourceOff(id, 'is flat'); return; }
+  } else if (src.kind === 'bench') st.V = st.I > spec.maxA ? spec.volts * spec.maxA / st.I : spec.volts;   // current limit: it sags
+  else st.V = spec.volts;
+  st.overT = st.I > spec.maxA * (src.kind === 'usb' ? 1.2 : 1) ? st.overT + dt : 0;
+  if (st.overT > 0.3 && !st.overSaid) {
+    st.overSaid = true;
+    if (src.kind === 'usb') { st.cut = true; sourceOff(id, `shut off: asked for ${st.I.toFixed(2)} A, more than its ${spec.maxA} A`); }
+    else healthEvent(`${src.name}: drawing ${st.I.toFixed(1)} A, more than its ${spec.maxA} A rating`, 'warn');
+  }
 }
-function packOff(c, why) {
-  cargo.power = false; cargo.powerT = S.t;
-  healthEvent(`${c.name} ${why}: the boards on it are off. The motors stop.`, 'bad');
-  if (typeof cargoLog === 'function') cargoLog(`${c.name} ${why}: the boards on it are off.`, 'bad');
+// The volts a source gives now (the main pack's S.battV), 0 when it's down or there's none.
+function sourceV(id) { const m = cargo.pmap; if (id == null || !m) return 0; if (id === m.main) return S.battV; const e = m.srcs.get(id); if (!e) return 0; const st = S.packs.get(id) || sourceInit(id, e); return !st.cut && !st.flat ? st.V : 0; }
+function sourceOff(id, why) {
+  const m = cargo.pmap, e = m && m.srcs.get(id), name = e ? e.src.name : 'A source', on = [...m.board.values()].filter(b => b.src === id).map(b => b.name);
+  if (id === m.core) { cargo.power = false; cargo.powerT = S.t; }
+  healthEvent(`${name} ${why}: ${on.length ? on.join(' and ') + (on.length > 1 ? ' are' : ' is') + ' off' : 'what it powers stops'}${id === m.core ? '. The motors stop.' : ''}`, 'bad');
+  if (typeof cargoLog === 'function') cargoLog(`${name} ${why}.`, 'bad');
 }
-function breakPack(c) { let st = S.packs.get(c.id); if (!st) { st = { soc: 1, V: 0, I: 0 }; S.packs.set(c.id, st); } if (st.cut) return; st.cut = true; st.V = 0; packOff(c, 'cut out'); }
+function breakSource(id) { const st = S.packs.get(id); if (!st || st.cut) return; st.cut = true; st.V = 0; sourceOff(id, 'cut out'); }
 // The ESCs' low-voltage cutoff (hardware, not the flight code): every ESC watches the pack voltage it runs on, and
 // once it stays under the cutoff (per cell, under load) for 1.5 s, the ESCs stop their motors. They start
 // again only after the throttle has been at zero (disarmed), as hobby ESCs do. 0 turns it off.

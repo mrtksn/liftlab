@@ -47,39 +47,46 @@ const liveMotors = () => liveComps().filter(c => c.type === 'motor' && !c.cargo)
 const liveJoints = () => liveComps().filter(c => c.type === 'joint');
 const liveUnder = a => liveComps().filter(c => c !== a && isUnder(c, a));
 const isBattery = c => c.type === 'mass' && !!c.battery;
-// Powered: a connected pack on board feeds the motors, and the flight controller's board has power (a pack that feeds
-// boards, through its supply; or USB, on the bench) that hasn't run flat or been cut.
-function boardFed(C, b, comps, seen = new Set()) {
-  if (seen.has(b)) return false; seen.add(b);
-  const s = hardwareBus(C, b);
-  if (s.supply === 'usb') return true;
-  if (s.supply === 'board') { const f = C.boards.find(x => x.id === s.supplyFrom && x !== b); return !!f && boardFed(C, f, comps, seen); }
-  return !!boardPack(C, b, comps);
+// The power map, built at reset and whenever parts come off (a battery that fell off powers nothing): which source each
+// consumer is on (hardware.js), each source's specs, the main pack (the Battery settings: S.batt), and what each board
+// draws from its source through its supply [W].
+function buildPowerMap() {
+  const C = computers(), comps = cfg.comps.filter(onBoard), main = mainPack(C, comps), core = C.boards.find(b => b.tasks.includes('core'));
+  syncMainPack(C, cfg.comps);
+  const srcs = new Map(), at = key => { const s = consumerSource(C, comps, key); if (!s) return null; if (!srcs.has(s.id)) srcs.set(s.id, { src: s, spec: sourceSpec(C, s, comps) }); return s.id; };
+  const m = { main: main && batteryWired(C, main) ? main.id : null, motor: new Map(), board: new Map(), part: new Map(), srcs, core: null, servos: null };
+  for (const c of comps.filter(c => c.type === 'motor')) m.motor.set(c.id, at('motor:' + c.id));
+  for (const b of C.boards) {
+    const S = boardSupplyOf(C, b, comps), id = at('board:' + b.id), P = S.spec;
+    const eff = ['direct', 'direct5', 'usb'].includes(S.kind) ? 1 : P.vmax < 5 ? POWER_SUPPLIES.boost5.eff : P.vmin > 5.5 ? POWER_SUPPLIES.reg5.eff : 1;
+    m.board.set(b.id, { src: id, w: boardWatts(C, b) / eff, name: b.name });
+  }
+  for (const c of comps.filter(c => c.type === 'mass' && !c.battery && c.deviceW > 0)) m.part.set(c.id, at('part:' + c.id));
+  m.servos = at('servos'); m.core = core ? (m.board.get(core.id) || {}).src ?? null : m.main;
+  if (m.main != null && !srcs.has(m.main)) srcs.set(m.main, { src: { id: main.id, kind: 'battery', name: main.name, part: main }, spec: sourceSpec(C, { kind: 'battery', part: main }, comps) });
+  return m;
 }
-// The pack that runs the flight controller's board when it isn't the motors' pack (a pack for the boards), or null.
-function boardsPackNow() {
-  const C = computers(), comps = cfg.comps.filter(onBoard), core = C.boards.find(b => b.tasks.includes('core')), P = core && boardPack(C, core, comps);
-  return P && P !== motorPack(C, comps) ? P : null;
-}
-const packDown = c => { const st = c && S.packs && S.packs.get(c.id); return !!(st && (st.flat || st.cut)); };
+// A source that has run flat, been cut or shut off (an overloaded USB port): what's on it has no power.
+const sourceDown = id => { if (id == null) return true; const st = S.packs && S.packs.get(id); return !!(st && (st.flat || st.cut)); };
+// Powered: the flight controller's board has a source, and it hasn't run flat, been cut or shut off. (A motor whose
+// source is gone only stops that motor.)
 function designPowered() {
-  const C = computers(), comps = cfg.comps.filter(onBoard), core = C.boards.find(b => b.tasks.includes('core'));
-  if (!motorPack(C, comps)) return false;
-  if (core && !boardFed(C, core, comps)) return false;
-  return !packDown(cargo.boardsPack);
+  const m = cargo.pmap; if (!m) return false;
+  if (!m.srcs.size) return false;
+  return !sourceDown(m.core);
 }
 // Why there's no power, in a few words (null when there is).
 function powerWhy() {
   if (cargo.power) return null;
-  const C = computers(), bats = cfg.comps.filter(isBattery), comps = cfg.comps.filter(onBoard), core = C.boards.find(b => b.tasks.includes('core'));
-  if (!bats.length) return 'no battery on the drone';
-  if (!bats.some(c => batteryWired(C, c))) return bats.length > 1 ? 'no pack is connected' : 'the battery isn\'t connected';
-  if (!bats.some(c => batteryWired(C, c) && onBoard(c))) return 'the battery is off the drone';
-  if (!motorPack(C, comps)) return 'no connected pack feeds the motors';
-  if (core && !boardFed(C, core, comps)) return 'no connected pack feeds ' + core.name;
-  const P = cargo.boardsPack, st = P && S.packs && S.packs.get(P.id);
-  if (st && st.cut) return P.name + ' cut out, so ' + (core ? core.name : 'the flight controller') + ' is off';
-  if (st && st.flat) return P.name + ' is flat, so ' + (core ? core.name : 'the flight controller') + ' is off';
+  const C = computers(), bats = cfg.comps.filter(isBattery), core = C.boards.find(b => b.tasks.includes('core')), m = cargo.pmap, fc = core ? core.name : 'the flight controller';
+  const others = powerSources(C, cfg.comps).filter(s => s.kind !== 'battery');
+  if (!bats.length && !others.length) return 'no battery on the drone';
+  if (!others.length && !bats.some(c => batteryWired(C, c))) return bats.length > 1 ? 'no pack is connected' : 'the battery isn\'t connected';
+  if (!others.length && !bats.some(c => batteryWired(C, c) && onBoard(c))) return 'the battery is off the drone';
+  if (m && m.core == null) return 'nothing powers ' + fc;
+  const src = m && m.srcs.get(m.core), st = S.packs && S.packs.get(m.core);
+  if (src && st && st.cut) return src.src.name + (src.src.kind === 'battery' ? ' cut out' : ' shut off') + ', so ' + fc + ' is off';
+  if (src && st && st.flat) return src.src.name + ' is flat, so ' + fc + ' is off';
   return 'the battery is off the drone';
 }
 function cargoLog(msg, tone = 'info') { cargo.log.unshift({ t: S.t, msg, tone }); if (cargo.log.length > 10) cargo.log.pop(); }
@@ -140,7 +147,7 @@ function spawnItems() {
 function cargoReset() {
   cargo.off.clear(); cargo.extra = []; cargo.loose = []; cargo.lat.clear(); cargo.log = []; cargo.rev++; cargo.powerT = null;
   for (const l of latches()) cargo.lat.set(l.id, { pos: l.closed ? 1 : 0, drive: null, holds: true });
-  cargo.boardsPack = boardsPackNow(); cargo.power = designPowered();
+  cargo.pmap = buildPowerMap(); cargo.power = designPowered();
   if (latches().length) spawnItems();   // (only for an airframe that could pick them up: the others' world stays as it was)
 }
 // Something came off or went on: the drone's bodies, mass and contacts again, and its power.
@@ -149,7 +156,7 @@ function cargoChanged() {
   recomputeProps(); cPts = contactPoints(); truth = massProps('truth');
   S.mb = { K: mbKinematics(cat6(S.w, m3v(m3T(qmat(S.q)), S.v))), acc: MB.bodies.map((_, i) => i ? [0, 0, 0, 0, 0, 0] : acc0) };
   cargo.rev++;
-  const was = cargo.power; cargo.boardsPack = boardsPackNow(); cargo.power = designPowered();
+  const was = cargo.power; cargo.pmap = buildPowerMap(); cargo.power = designPowered();
   if (was && !cargo.power) { cargo.powerT = S.t; cargoLog('No battery on board: the power is off. The motors stop and the boards go dark.', 'bad'); }
 }
 
