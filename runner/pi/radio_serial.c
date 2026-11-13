@@ -39,6 +39,9 @@ radio_io *radio_serial_open(const char *dev, int baud, const char *name) {
 #endif
   cfsetispeed(&t, sp); cfsetospeed(&t, sp); t.c_cflag |= CLOCAL | CREAD; t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0;
   tcsetattr(fd, TCSANOW, &t);
+#ifdef __linux__
+  standard = 0;   /* (Linux: the speed by its number too, termios2: a cross-compiler's B-constants needn't be this C library's) */
+#endif
   if (!standard && serial_custom_baud(fd, baud)) { fprintf(stderr, "%s: can't set %d baud\n", dev, baud); close(fd); return 0; }
   tcflush(fd, TCIOFLUSH);
   radio_io *R = calloc(1, sizeof *R); if (!R) { close(fd); return 0; }

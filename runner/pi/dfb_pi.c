@@ -124,6 +124,9 @@ static int open_serial(const char *dev, int baud) {
 #endif
   cfsetispeed(&t, sp); cfsetospeed(&t, sp); t.c_cflag |= CLOCAL | CREAD; t.c_cc[VMIN] = 0; t.c_cc[VTIME] = 0;
   tcsetattr(fd, TCSANOW, &t);
+#ifdef __linux__
+  standard = 0;   /* (Linux: the speed by its number too, termios2: a cross-compiler's B-constants needn't be this C library's) */
+#endif
   if (!standard && serial_custom_baud(fd, baud)) { fprintf(stderr, "%s: can't set %d baud\n", dev, baud); close(fd); return -1; }
   tcflush(fd, TCIOFLUSH);
   return fd;
@@ -525,6 +528,12 @@ int main(int argc, char **argv) {
             PKt.said = 0;
             if (strncmp(s, "status", 6))
               fleet_engage(&FL, 0, &N, &o, "another command");
+          }
+          if (!strncmp(s, "status", 6) && no_nav) {           /* angle mode: what the pilot's sticks say, and the ESP32's state (not the navigation's pilot) */
+            fc_cmd sc; int have = radio_here && !rc_stick_cmd(&RCI, t, &sc);
+            if (have) snprintf(reply, sizeof reply, "angle mode: sticks arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f; the ESP32 %s",
+                               sc.arm ? "on" : "off", (double)sc.throttle, (double)sc.roll, (double)sc.pitch, (double)sc.yaw, fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
+            else snprintf(reply, sizeof reply, "angle mode: no channels from the radio (nothing sent to the ESP32); the ESP32 %s", fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
           }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
           if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
