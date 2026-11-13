@@ -78,6 +78,8 @@ jobs:
           /tmp/test-escsniff
       - name: Wi-Fi bridge (LiftLab's page to a Pi's UDP link)
         run: python3 tools/test_wifi_bridge.py
+      - name: The Pi's LiftLab folder and control panel (runner/pi/suite)
+        run: python3 tools/test_pi_suite.py
       - name: Motor output and legacy wiring tests
         run: |
           for chip in ESP32 ESP32S3 ESP32C3; do

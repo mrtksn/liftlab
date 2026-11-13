@@ -1,0 +1,34 @@
+# LiftLab on this computer: the programs it runs for the drone, one [section] each. `liftlab` shows them and runs
+# them as systemd services (liftlab-NAME); after editing this by hand: liftlab apply
+#
+#   command      the program and its arguments. The program's path is from this folder (bin/dfb_pi, ./liftlab), or a
+#                program on the PATH (python3); the arguments' paths are from workdir.
+#   workdir      where it runs, from this folder (default: this folder)
+#   boot         yes: started when the computer starts
+#   restart      always (default), on-failure or no: started again if it stops
+#   probe        how to ask it how it is: "dfb_pi PORT" (dfb_pi's status over UDP: the ESP32, the pilot's link, the
+#                sticks) or "tcp PORT" (something answers there)
+#   conflicts    programs that can't run beside it (one serial port): starting it stops them
+#   user         who it runs as (default: the owner of this folder, or [liftlab] user =)
+#
+# LiftLab's install guide (the Pi's Install / export…) gives the [flight] command for this design.
+
+[flight]
+description = dfb_pi: the drone's companion (radio, navigation or angle mode, learning, supervisor)
+command = bin/dfb_pi --nav drone.dnc --airframe drone.dfa --pi drone.dlc --radio wifi,sta --bind liftlab
+workdir = design
+boot = yes
+probe = dfb_pi 14560
+
+[monitor]
+description = the health monitor: each change to the journal (liftlab logs monitor)
+command = ./liftlab watch
+boot = yes
+
+# [bench]
+# description = the motor bench panel: http://127.0.0.1:8766 through an SSH tunnel
+# command = python3 -u apps/bench/server.py
+# boot = no
+# restart = on-failure
+# probe = tcp 8766
+# conflicts = flight

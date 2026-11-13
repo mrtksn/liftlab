@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""LiftLab on the drone's computer (a Raspberry Pi): its programs, in one folder, and a control panel.
+
+The folder (~/liftlab, or wherever this file is):
+  liftlab          this program: the panel and the commands below (also /usr/local/bin/liftlab after install.sh)
+  liftlab.conf     the programs it runs, one [section] each (see liftlab.conf.example)
+  bin/             built programs (dfb_pi: `liftlab build`)
+  design/          this design's files from LiftLab (drone.dnc, drone.dfa, drone.dlc, drone.dft)
+  src/runner/      the source, for building here
+  apps/            other tools (the motor bench panel: apps/bench)
+
+Each program in liftlab.conf runs as a systemd service, liftlab-NAME, written by `liftlab apply`: started at boot if
+boot = yes, started again if it stops (restart). Over SSH:
+
+  ssh -t pi@raspberrypi.local liftlab          the panel: every program's state and health, the computer's, logs, keys
+  liftlab status [--json]                      the same, once, as text
+  liftlab check                                problems only; exit status 1 if any (for scripts)
+  liftlab start|stop|restart NAME|all
+  liftlab enable|disable NAME                  start at boot or not (writes liftlab.conf, then apply)
+  liftlab logs NAME [-f] [-n 100]
+  liftlab add NAME --command "bin/prog ARGS" [--boot yes] [--workdir design] [--probe "dfb_pi 14560"] [--conflicts NAME]
+  liftlab remove NAME
+  liftlab apply                                liftlab.conf to systemd (after editing it by hand)
+  liftlab build                                dfb_pi from src/ into bin/ (minutes on a Pi Zero; or tools/deploy_pi.sh from a computer)
+  liftlab migrate                              from the earlier layout (~/dfb and dfb.service, ~/liftlab-bench)
+  liftlab watch [--every 10]                   the health monitor: prints each change (the monitor service runs this)
+
+Health: the programs (running, restarts, a probe: dfb_pi's status over UDP, or a TCP port), and the computer: power
+(the Pi's under-voltage and throttling flags), temperature, memory, disk, Wi-Fi. Starting and stopping use sudo
+(systemctl); reading needs none. Python 3 alone.
+"""
+import argparse, configparser, json, os, re, shlex, shutil, socket, subprocess, sys, time
+from pathlib import Path
+
+ROOT = Path(os.environ.get('LIFTLAB_HOME') or Path(os.path.realpath(__file__)).parent)
+CONF = ROOT / 'liftlab.conf'
+UNIT_DIR = Path(os.environ.get('LIFTLAB_UNIT_DIR') or '/etc/systemd/system')
+PREFIX = 'liftlab-'
+FIELDS = ('description', 'command', 'workdir', 'boot', 'restart', 'probe', 'conflicts', 'user')
+
+# ───────────────────────── the configuration ─────────────────────────
+
+class Service:
+    def __init__(self, name, sec):
+        self.name = name
+        self.description = sec.get('description', '').strip()
+        self.command = sec.get('command', '').strip()
+        self.workdir = sec.get('workdir', '').strip()
+        self.boot = sec.get('boot', 'no').strip().lower() in ('yes', 'true', 'on', '1')
+        self.restart = sec.get('restart', 'always').strip() or 'always'
+        self.probe = sec.get('probe', '').strip()
+        self.conflicts = [c for c in re.split(r'[\s,]+', sec.get('conflicts', '').strip()) if c]
+        self.user = sec.get('user', '').strip()
+
+    @property
+    def unit(self): return PREFIX + self.name + '.service'
+
+def read_conf(path=None):
+    path = Path(path or CONF)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.optionxform = str
+    if path.exists(): cp.read(path)
+    return cp
+
+def services(cp=None):
+    cp = cp if cp is not None else read_conf()
+    out = []
+    for name in cp.sections():
+        if name == 'liftlab': continue
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}', name): raise SystemExit(f'liftlab.conf: [{name}]: a name of letters, digits, - and _')
+        s = Service(name, cp[name])
+        if not s.command: raise SystemExit(f'liftlab.conf: [{name}] has no command')
+        if s.restart not in ('always', 'on-failure', 'no'): raise SystemExit(f'liftlab.conf: [{name}] restart = always, on-failure or no')
+        out.append(s)
+    return out
+
+def write_conf(cp, path=None):
+    path = Path(path or CONF)
+    head = '# LiftLab on this computer: the programs it runs for the drone (see liftlab.conf.example).\n# After editing by hand: liftlab apply\n\n'
+    tmp = path.with_suffix('.tmp')
+    with open(tmp, 'w') as f:
+        f.write(head); cp.write(f)
+    os.replace(tmp, path)
+
+def run_user(cp):
+    u = cp['liftlab'].get('user', '').strip() if cp.has_section('liftlab') else ''
+    if u: return u
+    try:
+        import pwd
+        return pwd.getpwuid((CONF if CONF.exists() else ROOT).stat().st_uid).pw_name
+    except Exception:
+        return os.environ.get('USER', 'pi')
+
+# ───────────────────────── systemd units ─────────────────────────
+
+def sd_quote(a):
+    """An argument as systemd's ExecStart= reads it (double quotes when needed; $ and % doubled)."""
+    a = a.replace('%', '%%').replace('$', '$$')
+    if a and not re.search(r'[\s"\'\\;]', a): return a
+    return '"' + a.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+def exec_start(s, root=None):
+    root = Path(root or ROOT)
+    argv = shlex.split(s.command)
+    prog = argv[0]
+    if '/' in prog: path = prog if prog.startswith('/') else str((root / prog).resolve())
+    else:
+        found = shutil.which(prog)
+        path = found or prog
+    return ' '.join(sd_quote(a) for a in [path] + argv[1:])
+
+def workdir(s, root=None):
+    root = Path(root or ROOT)
+    w = s.workdir or '.'
+    return str(Path(w) if w.startswith('/') else (root / w).resolve())
+
+def unit_text(s, user, root=None, all_names=()):
+    conflicts = ' '.join(PREFIX + c + '.service' for c in s.conflicts if c in all_names or not all_names)
+    return '\n'.join([
+        '# Written by liftlab apply from liftlab.conf: edit that, not this.',
+        '[Unit]',
+        f'Description=LiftLab: {s.name}' + (f' ({s.description})' if s.description else ''),
+        'After=network.target',
+        *( [f'Conflicts={conflicts}'] if conflicts else [] ),
+        '',
+        '[Service]',
+        'Type=simple',
+        f'User={s.user or user}',
+        f'WorkingDirectory={workdir(s, root)}',
+        f'ExecStart={exec_start(s, root)}',
+        f'Restart={s.restart}',
+        'RestartSec=2',
+        'Environment=PYTHONUNBUFFERED=1',
+        f'Environment=LIFTLAB_HOME={Path(root or ROOT)}',
+        '',
+        '[Install]',
+        'WantedBy=multi-user.target',
+        '',
+    ])
+
+def sudo(argv, check=True, input=None):
+    cmd = argv if os.geteuid() == 0 else ['sudo', '-n'] + argv
+    r = subprocess.run(cmd, input=input, capture_output=True, text=True)
+    if check and r.returncode:
+        err = (r.stderr or r.stdout).strip()
+        if 'password' in err.lower(): err = 'needs sudo without a password (or run: sudo liftlab ...)'
+        raise RuntimeError(f'{" ".join(argv[:3])}: {err}')
+    return r
+
+def systemctl(*args, check=True): return sudo(['systemctl', *args], check=check)
+
+def apply(quiet=False):
+    """liftlab.conf to systemd: each program's unit written (when it changed), the ones no longer there removed, boot
+    on or off as set. Running programs keep running; a changed one is restarted."""
+    cp = read_conf(); svcs = services(cp); user = run_user(cp); names = [s.name for s in svcs]
+    said = []
+    changed = []
+    for s in svcs:
+        path = UNIT_DIR / s.unit; text = unit_text(s, user, all_names=names)
+        old = path.read_text() if path.exists() else None
+        if old != text:
+            sudo(['tee', str(path)], input=text); changed.append(s); said.append(f'{s.unit}: written')
+    existing = [p.name for p in UNIT_DIR.glob(PREFIX + '*.service')] if UNIT_DIR.exists() else []
+    for u in existing:
+        if u[len(PREFIX):-len('.service')] not in names:
+            systemctl('disable', '--now', u, check=False); sudo(['rm', '-f', str(UNIT_DIR / u)]); said.append(f'{u}: removed')
+    systemctl('daemon-reload')
+    for s in svcs:
+        st = unit_state([s]).get(s.unit, {})
+        enabled = st.get('UnitFileState') == 'enabled'
+        active = st.get('ActiveState') == 'active'
+        if s.boot and not enabled: systemctl('enable', s.unit); said.append(f'{s.name}: starts at boot')
+        if not s.boot and enabled: systemctl('disable', s.unit); said.append(f'{s.name}: not at boot')
+        if s in changed and active: systemctl('restart', s.unit); said.append(f'{s.name}: restarted (its unit changed)')
+        elif s.boot and not active and (s in changed or not enabled): systemctl('start', s.unit); said.append(f'{s.name}: started')   # (new, or newly at boot: running now too; one stopped by hand stays stopped)
+    if not quiet:
+        for x in said or ['nothing to change']: print(x)
+    return said
+
+# ───────────────────────── what is going on ─────────────────────────
+
+SHOW = ('Id', 'ActiveState', 'SubState', 'UnitFileState', 'NRestarts', 'MainPID', 'MemoryCurrent', 'ActiveEnterTimestampMonotonic', 'ExecMainStatus', 'Result')
+
+def unit_state(svcs):
+    if not svcs: return {}
+    r = subprocess.run(['systemctl', 'show', *[s.unit for s in svcs], '-p', ','.join(SHOW)], capture_output=True, text=True)
+    out, cur = {}, {}
+    for line in r.stdout.splitlines() + ['']:
+        if not line.strip():
+            if cur.get('Id'): out[cur['Id']] = cur
+            cur = {}; continue
+        k, _, v = line.partition('='); cur[k] = v
+    return out
+
+CGROUP = Path(os.environ.get('LIFTLAB_CGROUP') or '/sys/fs/cgroup/system.slice')
+_SLOW = {'t': -1e9, 'st': {}}
+
+def live_state(svcs, max_age=15):
+    """Each program's state, cheaply: on a Pi Zero one look at systemd (systemctl show) takes about a second, so it's
+    kept for max_age s (and taken again after an action: forget_state); in between, what the kernel says is laid
+    over it: the service's processes (its cgroup) and whether it starts at boot (its link in multi-user.target.wants)."""
+    now = time.monotonic()
+    if now - _SLOW['t'] > max_age or not set(s.unit for s in svcs) <= set(_SLOW['st']):
+        _SLOW['st'] = unit_state(svcs); _SLOW['t'] = now
+    out = {}
+    for s in svcs:
+        u = dict(_SLOW['st'].get(s.unit, {'Id': s.unit}))
+        procs = read(CGROUP / s.unit / 'cgroup.procs', None)
+        if CGROUP.is_dir():                                          # (cgroup v2: the processes it has now)
+            pids = [p for p in (procs or '').split() if p.isdigit()]
+            if pids:
+                u['ActiveState'] = 'active'; u['SubState'] = 'running'
+                if u.get('MainPID') not in pids: u['MainPID'] = pids[0]
+            elif u.get('ActiveState') in ('active', 'activating', 'deactivating', None): u['ActiveState'] = 'inactive'; u['SubState'] = 'dead'
+        if (UNIT_DIR / s.unit).exists(): u['UnitFileState'] = 'enabled' if (UNIT_DIR / 'multi-user.target.wants' / s.unit).exists() else 'disabled'
+        out[s.unit] = u
+    return out
+
+def forget_state(): _SLOW['t'] = -1e9
+
+def proc_up_s(pid):
+    """How long a process has run [s], from its start in /proc (clock ticks since boot)."""
+    st = read(f'/proc/{pid}/stat') if pid and pid != '0' else ''
+    try: start = int(st.rsplit(')', 1)[1].split()[19]) / os.sysconf('SC_CLK_TCK')
+    except (IndexError, ValueError): return None
+    return max(0.0, uptime_s() - start)
+
+def read(path, default=''):
+    try: return Path(path).read_text()
+    except Exception: return default
+
+def uptime_s():
+    try: return float(read('/proc/uptime').split()[0])
+    except Exception: return 0.0
+
+THROTTLE_BITS = {0: 'under-voltage now', 1: 'CPU slowed (frequency capped)', 2: 'throttled now', 3: 'at the temperature limit',
+                 16: 'under-voltage since boot', 17: 'frequency capped since boot', 18: 'throttled since boot', 19: 'temperature limit since boot'}
+
+def power():
+    """The Pi's under-voltage and throttling flags (vcgencmd get_throttled): (raw, [what they say])."""
+    if not shutil.which('vcgencmd'): return None, []
+    try:
+        r = subprocess.run(['vcgencmd', 'get_throttled'], capture_output=True, text=True, timeout=2)
+        v = int(r.stdout.strip().split('=')[1], 16)
+    except Exception:
+        return None, []
+    return v, [t for b, t in THROTTLE_BITS.items() if v >> b & 1]
+
+def wifi():
+    """The Wi-Fi link from /proc/net/wireless: (interface, quality %, signal dBm) or None."""
+    for line in read('/proc/net/wireless').splitlines()[2:]:
+        parts = line.split()
+        if len(parts) >= 4:
+            try:
+                q = float(parts[2].rstrip('.')); lvl = float(parts[3].rstrip('.'))
+                return parts[0].rstrip(':'), round(q / 70 * 100), lvl
+            except ValueError:
+                continue
+    return None
+
+_IP = {'t': -1e9, 'ip': []}
+
+def system():
+    t = read('/sys/class/thermal/thermal_zone0/temp').strip()
+    mem = dict(re.findall(r'^(\w+):\s+(\d+)', read('/proc/meminfo'), re.M))
+    du = shutil.disk_usage('/')
+    raw, flags = power()
+    if time.monotonic() - _IP['t'] > 30:                              # (the address seldom changes: looked at twice a minute)
+        try: _IP['ip'] = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2).stdout.split()
+        except Exception: _IP['ip'] = []
+        _IP['t'] = time.monotonic()
+    ip = _IP['ip']
+    return {
+        'host': socket.gethostname(), 'ip': ip[:2], 'uptime_s': uptime_s(),
+        'temp_c': round(int(t) / 1000, 1) if t.isdigit() else None,
+        'load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None,
+        'mem_avail_mb': int(mem.get('MemAvailable', 0)) // 1024, 'mem_total_mb': int(mem.get('MemTotal', 0)) // 1024,
+        'disk_pct': round(du.used / du.total * 100) if du.total else None,
+        'power_raw': raw, 'power': flags, 'wifi': wifi(),
+    }
+
+def probe(s, timeout=0.4):
+    """A program's own answer: 'dfb_pi PORT' asks dfb_pi for its status over UDP; 'tcp PORT' checks a port answers."""
+    if not s.probe: return None
+    kind, _, arg = s.probe.partition(' ')
+    try:
+        port = int(arg.strip())
+    except ValueError:
+        return {'ok': False, 'text': f'probe "{s.probe}": a port number'}
+    if kind == 'dfb_pi':
+        u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.settimeout(timeout)
+        try:
+            u.sendto(b'status', ('127.0.0.1', port)); txt = u.recv(2048).decode('utf-8', 'replace').strip()
+        except Exception:
+            return {'ok': False, 'text': 'no answer to status'}
+        finally:
+            u.close()
+        return dfb_status(txt)
+    if kind == 'tcp':
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=timeout): return {'ok': True, 'text': f'port {port} answers'}
+        except Exception:
+            return {'ok': False, 'text': f'port {port} does not answer'}
+    return {'ok': False, 'text': f'probe "{s.probe}": dfb_pi PORT or tcp PORT'}
+
+def dfb_status(txt):
+    """dfb_pi's status line, the parts that matter: the ESP32's state, the pilot's link, the sticks (angle mode)."""
+    d = {'ok': True, 'raw': txt}
+    m = re.search(r'the ESP32 ([\w ]+?)(?:;|$)', txt)
+    if m: d['esp32'] = m.group(1).strip()
+    m = re.search(r'wifi with (\S+): packets sent.*?got (\d+) \(LQ (\d+)%\)', txt)
+    if m: d['peer'] = m.group(1); d['lq'] = int(m.group(3)); d['got'] = int(m.group(2))
+    if 'nobody yet' in txt: d['peer'] = None
+    m = re.search(r'sticks arm (on|off), throttle ([\d.]+)', txt)
+    if m: d['arm'] = m.group(1) == 'on'; d['throttle'] = float(m.group(2))
+    if 'no channels from the radio' in txt: d['channels'] = False
+    elif 'sticks arm' in txt: d['channels'] = True
+    bits = []
+    if 'esp32' in d: bits.append(f"ESP32 {d['esp32']}")
+    if d.get('peer'): bits.append(f"pilot {d['peer']} LQ {d.get('lq', '?')}%")
+    elif 'peer' in d: bits.append('no pilot connected')
+    if 'arm' in d: bits.append(f"sticks: arm {'on' if d['arm'] else 'off'}, throttle {d['throttle']:.2f}")
+    d['text'] = ' · '.join(bits) or txt[:80]
+    if d.get('esp32') == 'not heard yet': d['ok'] = False
+    return d
+
+def rss_mb(pid):
+    """A process's memory in use (VmRSS), where systemd doesn't account it (the Pi's kernel, by default)."""
+    m = re.search(r'^VmRSS:\s+(\d+)', read(f'/proc/{pid}/status'), re.M) if pid and pid != '0' else None
+    return round(int(m.group(1)) / 1024, 1) if m else None
+
+def snapshot():
+    svcs = services(); st = live_state(svcs); up = uptime_s()
+    progs = []
+    for s in svcs:
+        u = st.get(s.unit, {})
+        active = u.get('ActiveState') == 'active'
+        since = int(u.get('ActiveEnterTimestampMonotonic') or 0) / 1e6
+        mem = u.get('MemoryCurrent', '')
+        progs.append({
+            'name': s.name, 'description': s.description, 'unit': s.unit, 'boot': s.boot,
+            'installed': (UNIT_DIR / s.unit).exists(),
+            'state': u.get('ActiveState', 'unknown'), 'sub': u.get('SubState', ''),
+            'enabled': u.get('UnitFileState') == 'enabled', 'restarts': int(u.get('NRestarts') or 0),
+            'up_s': (proc_up_s(u.get('MainPID')) or (max(0, up - since) if since else None)) if active else None,
+            'mem_mb': round(int(mem) / 1048576, 1) if mem.isdigit() else rss_mb(u.get('MainPID')),
+            'probe': probe(s) if active else None, 'conflicts': s.conflicts, 'result': u.get('Result', ''),
+        })
+    return {'time': time.time(), 'system': system(), 'programs': progs}
+
+def problems(snap):
+    """What's wrong now, most serious first: (level 2 alarm / 1 warning, text)."""
+    out = []
+    sy = snap['system']
+    if sy['power_raw'] is not None:
+        if sy['power_raw'] & 1: out.append((2, 'power: under-voltage now: the supply sags (the Pi slows, the SD card and USB misbehave)'))
+        elif sy['power_raw'] & (1 << 16): out.append((1, 'power: there was under-voltage since boot'))
+        if sy['power_raw'] & 0b1100: out.append((1, 'temperature: throttled'))
+    if sy['temp_c'] is not None and sy['temp_c'] >= 75: out.append((1, f"temperature {sy['temp_c']} °C"))
+    if sy['mem_avail_mb'] and sy['mem_avail_mb'] < 40: out.append((1, f"memory: {sy['mem_avail_mb']} MB free"))
+    if sy['disk_pct'] is not None and sy['disk_pct'] >= 90: out.append((1, f"disk {sy['disk_pct']}% full"))
+    if sy['wifi'] and sy['wifi'][1] < 30: out.append((1, f"Wi-Fi weak: {sy['wifi'][1]}% ({sy['wifi'][2]:.0f} dBm)"))
+    for p in snap['programs']:
+        if not p['installed']: out.append((1, f"{p['name']}: not set up in systemd (liftlab apply)")); continue
+        if p['boot'] and p['state'] != 'active': out.append((2, f"{p['name']}: {p['state']} ({p['result'] or p['sub']})"))
+        pr = p['probe']
+        if pr and not pr['ok'] and (p['up_s'] or 0) > 8: out.append((2, f"{p['name']}: {pr['text']}"))
+    out.sort(key=lambda x: -x[0])
+    return out
+
+# ───────────────────────── text ─────────────────────────
+
+def dur(s):
+    if s is None: return '-'
+    s = int(s)
+    return f'{s // 86400}d{s // 3600 % 24:02d}h' if s >= 86400 else f'{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}' if s >= 3600 else f'{s // 60}:{s % 60:02d}'
+
+def system_line(sy):
+    bits = [f"{sy['host']} {' '.join(sy['ip'])}".strip(), f"up {dur(sy['uptime_s'])}"]
+    if sy['temp_c'] is not None: bits.append(f"{sy['temp_c']:.0f} °C")
+    if sy['load'] is not None: bits.append(f"load {sy['load']:.1f}")
+    bits.append(f"mem {sy['mem_avail_mb']} MB free")
+    if sy['disk_pct'] is not None: bits.append(f"disk {sy['disk_pct']}%")
+    if sy['wifi']: bits.append(f"Wi-Fi {sy['wifi'][1]}%")
+    if sy['power_raw'] is not None: bits.append('power OK' if not sy['power_raw'] else 'power: ' + ', '.join(sy['power']))
+    return ' · '.join(bits)
+
+def prog_row(p):
+    state = p['state'] if p['installed'] else 'not set up'
+    return f"{p['name']:<10} {state:<12} {'yes' if p['boot'] else 'no':<4} {dur(p['up_s']):>8} {p['restarts']:>4} {(str(p['mem_mb']) + ' MB') if p['mem_mb'] is not None else '':>8}"
+
+def print_status(snap):
+    print('LiftLab on ' + system_line(snap['system']))
+    print(f"\n{'PROGRAM':<10} {'STATE':<12} {'BOOT':<4} {'UP':>8} {'RST':>4} {'MEM':>8}")
+    for p in snap['programs']:
+        print(prog_row(p))
+        if p['probe']: print(f"{'':<11}{p['probe']['text']}")
+    pr = problems(snap)
+    print('\n' + ('\n'.join(('ALARM: ' if l == 2 else 'warning: ') + t for l, t in pr) if pr else 'no problems'))
+
+# ───────────────────────── commands ─────────────────────────
+
+def pick(name, svcs):
+    if name == 'all': return svcs
+    for s in svcs:
+        if s.name == name: return [s]
+    raise SystemExit(f'no program "{name}" in liftlab.conf ({", ".join(s.name for s in svcs) or "none yet"})')
+
+def cmd_ctl(verb, name):
+    for s in pick(name, services()):
+        systemctl(verb, s.unit); print(f'{s.name}: {verb}ed' if verb != 'stop' else f'{s.name}: stopped')
+
+def set_boot(name, on):
+    cp = read_conf(); pick(name, services(cp))
+    for n in ([s.name for s in services(cp)] if name == 'all' else [name]): cp[n]['boot'] = 'yes' if on else 'no'
+    write_conf(cp); apply()
+
+def cmd_add(a):
+    cp = read_conf()
+    if not cp.has_section(a.name): cp.add_section(a.name)
+    for k in FIELDS:
+        v = getattr(a, k, None)
+        if v is not None: cp[a.name][k] = v
+    services(cp)                                                     # (checks it)
+    write_conf(cp); apply()
+
+def cmd_remove(name):
+    cp = read_conf(); pick(name, services(cp)); cp.remove_section(name); write_conf(cp); apply()
+
+def cmd_logs(name, follow, n):
+    s = pick(name, services())[0]
+    os.execvp('journalctl', ['journalctl', '-a', '-u', s.unit, '-n', str(n), '-o', 'short', '--no-pager'] + (['-f'] if follow else []))
+
+def cmd_build():
+    src = ROOT / 'src' / 'runner' / 'pi'
+    if not (src / 'build.sh').exists(): raise SystemExit(f'no source in {src}: copy runner/ there (tools/deploy_pi.sh does)')
+    print('building dfb_pi (a few minutes on a Pi Zero)…', flush=True)
+    subprocess.run(['sh', str(src / 'build.sh')], check=True)
+    (ROOT / 'bin').mkdir(exist_ok=True)
+    tmp = ROOT / 'bin' / 'dfb_pi.new'; shutil.copy2(src / 'dfb_pi', tmp); os.replace(tmp, ROOT / 'bin' / 'dfb_pi')
+    print('bin/dfb_pi updated: liftlab restart flight (or whichever program runs it)')
+
+def cmd_migrate(home=None, old_unit=None):
+    """From the earlier layout of LiftLab's install guide: ~/dfb (the source, the design files, dfb_pi) and
+    dfb.service; ~/liftlab-bench (the motor bench panel). Nothing is deleted: ~/dfb stays as it was."""
+    home = Path(home or Path.home()); old_unit = Path(old_unit or UNIT_DIR / 'dfb.service')
+    said = []
+    for d in ('bin', 'design', 'apps', 'src'): (ROOT / d).mkdir(parents=True, exist_ok=True)
+    old = home / 'dfb'
+    if old.is_dir():
+        for f in sorted(old.glob('drone.*')):
+            if not (ROOT / 'design' / f.name).exists(): shutil.copy2(f, ROOT / 'design' / f.name); said.append(f'design/{f.name} from ~/dfb')
+        if (old / 'runner' / 'pi' / 'dfb_pi').exists() and not (ROOT / 'bin' / 'dfb_pi').exists():
+            shutil.copy2(old / 'runner' / 'pi' / 'dfb_pi', ROOT / 'bin' / 'dfb_pi'); said.append('bin/dfb_pi from ~/dfb')
+        if (old / 'runner').is_dir() and not (ROOT / 'src' / 'runner').exists():
+            shutil.copytree(old / 'runner', ROOT / 'src' / 'runner', symlinks=True); said.append('src/runner from ~/dfb')
+    bench = home / 'liftlab-bench'
+    if bench.is_dir() and not bench.is_symlink() and not (ROOT / 'apps' / 'bench').exists():
+        shutil.move(str(bench), ROOT / 'apps' / 'bench'); bench.symlink_to(ROOT / 'apps' / 'bench'); said.append('apps/bench from ~/liftlab-bench (left a link there)')
+    cp = read_conf()
+    if old_unit.exists() and not cp.has_section('flight'):
+        m = re.search(r'^ExecStart=(.*)$', old_unit.read_text(), re.M)
+        if m:
+            argv = shlex.split(m.group(1))
+            args = [a for a in argv[1:]]
+            cp.add_section('flight')
+            cp['flight']['description'] = "dfb_pi: the drone's companion (radio, navigation or angle mode, learning, supervisor)"
+            cp['flight']['command'] = ' '.join(shlex.quote(x) for x in ['bin/dfb_pi'] + args)
+            cp['flight']['workdir'] = 'design'
+            cp['flight']['boot'] = 'yes'
+            cp['flight']['probe'] = f"dfb_pi {next((args[i + 1] for i, x in enumerate(args[:-1]) if x == '--port'), '14560')}"
+            said.append('[flight] from dfb.service: ' + ' '.join(args))
+    if (ROOT / 'apps' / 'bench' / 'server.py').exists() and not cp.has_section('bench'):
+        cp.add_section('bench')
+        cp['bench']['description'] = 'the motor bench panel: http://127.0.0.1:8766 through an SSH tunnel'
+        cp['bench']['command'] = 'python3 -u apps/bench/server.py'
+        cp['bench']['boot'] = 'no'; cp['bench']['restart'] = 'on-failure'; cp['bench']['probe'] = 'tcp 8766'
+        cp['bench']['conflicts'] = 'flight' if cp.has_section('flight') else ''
+        said.append('[bench] the motor bench panel (not at boot; it stops flight: one serial port)')
+    if not cp.has_section('monitor'):
+        cp.add_section('monitor')
+        cp['monitor']['description'] = 'the health monitor: each change to the journal (liftlab logs monitor)'
+        cp['monitor']['command'] = './liftlab watch'
+        cp['monitor']['boot'] = 'yes'
+        said.append('[monitor] the health monitor')
+    write_conf(cp)
+    if old_unit.exists() and old_unit.parent == UNIT_DIR:
+        systemctl('disable', '--now', old_unit.name, check=False); sudo(['rm', '-f', str(old_unit)], check=False); said.append('dfb.service stopped and removed (flight replaces it)')
+    for x in said or ['nothing to migrate']: print(x)
+    return said
+
+def cmd_watch(every):
+    """The monitor: what's wrong, printed when it changes (to the journal, as a service)."""
+    seen = None
+    print('watching: the programs and the computer, every %g s' % every, flush=True)
+    while True:
+        try:
+            snap = snapshot(); now = {t: l for l, t in problems(snap)}
+        except Exception as e:
+            now = {f'the monitor itself: {e}': 1}
+        if seen is None:
+            print('now: ' + ('; '.join(now) if now else 'no problems'), flush=True)
+        else:
+            for t in now:
+                if t not in seen: print(('ALARM: ' if now[t] == 2 else 'warning: ') + t, flush=True)
+            for t in seen:
+                if t not in now: print('cleared: ' + t, flush=True)
+        seen = now
+        time.sleep(every)
+
+# ───────────────────────── the panel ─────────────────────────
+
+def panel():
+    """The full-screen panel. What it shows is gathered in a thread of its own (on a Pi Zero, a look at systemd and
+    the journal takes about a second), every 2 s, the log lines every 6 s or when another program is picked; the
+    keys are answered at once, and their actions run beside it too."""
+    os.environ.setdefault('ESCDELAY', '50')                      # (an arrow key is Esc and two more: read them as one)
+    import curses, threading
+
+    def journal(unit, n):
+        r = subprocess.run(['journalctl', '-a', '-u', unit, '-n', str(n), '-o', 'short', '--no-pager'], capture_output=True, text=True, errors='replace')
+        return [l for l in r.stdout.splitlines() if not l.startswith('-- ')]
+
+    S = {'snap': None, 'err': '', 'logs': {}, 'unit': None, 'full': None, 'msg': 'q quits · ? help', 'busy': '', 'v': 0}
+    kick, stop = threading.Event(), threading.Event()
+
+    def gather():
+        next_logs = 0
+        while not stop.is_set():
+            try: S['snap'] = snapshot(); S['err'] = ''
+            except SystemExit as e: S['err'] = str(e)
+            except Exception as e: S['err'] = f'looking: {e}'
+            u, full = S['unit'], S['full']
+            if u and (time.time() >= next_logs or u not in S['logs'] or full):
+                S['logs'][u] = journal(u, 400 if full else 40); next_logs = time.time() + 6
+            S['v'] += 1
+            kick.wait(2); kick.clear()
+
+    def act(label, fn):
+        """An action (systemctl, apply) beside the panel: its result in the message line; then a fresh look."""
+        if S['busy']: S['msg'] = f"wait: {S['busy']}…"; return
+        S['busy'] = label; S['msg'] = label + '…'; S['v'] += 1
+        def run():
+            try: S['msg'] = fn() or label + ': done'; forget_state()
+            except (RuntimeError, SystemExit, subprocess.SubprocessError) as e: S['msg'] = str(e)
+            S['busy'] = ''; kick.set()
+        threading.Thread(target=run, daemon=True).start()
+
+    def ask(scr, q):
+        h, w = scr.getmaxyx(); scr.addnstr(h - 1, 0, (q + ' [y/N] ').ljust(w - 1), w - 1, curses.A_REVERSE); scr.refresh()
+        scr.timeout(-1); c = scr.getch(); scr.timeout(100); return c in (ord('y'), ord('Y'))
+
+    def main(scr):
+        curses.curs_set(0); scr.timeout(100); scr.keypad(True)
+        try: curses.set_escdelay(50)
+        except (AttributeError, curses.error): pass
+        try:
+            curses.start_color(); curses.use_default_colors()
+            for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_CYAN), 1): curses.init_pair(i, c, -1)
+        except curses.error:
+            pass
+        G, Y, R, C = (curses.color_pair(i) for i in (1, 2, 3, 4))
+        sel, logs_full, scroll, drawn = 0, False, 0, None
+        threading.Thread(target=gather, daemon=True).start()
+        while True:
+            snap = S['snap']; progs = snap['programs'] if snap else []
+            sel = max(0, min(sel, len(progs) - 1))
+            unit = progs[sel]['unit'] if progs else None
+            if unit != S['unit'] or bool(logs_full) != bool(S['full']):  # (its log comes with the next look: within 2 s)
+                S['unit'] = unit; S['full'] = unit if logs_full else None
+            key = (S['v'], sel, logs_full, scroll, S['msg'], scr.getmaxyx())
+            if key != drawn:                                        # (drawn again only when something changed)
+                drawn = key; scr.erase(); h, w = scr.getmaxyx()
+                def put(y, x, s, a=0):
+                    if 0 <= y < h and x < w - 1: scr.addnstr(y, x, s, w - 1 - x, a)
+                msg = S['msg'] if not S['err'] else S['err']
+                if not snap and not S['err']: put(0, 0, ' LiftLab · looking…'.ljust(w - 1), curses.A_REVERSE)
+                elif logs_full and progs:
+                    p = progs[sel]; lines = S['logs'].get(unit, [])
+                    top = max(0, len(lines) - (h - 2) - scroll)
+                    put(0, 0, f" {p['name']}: its log (↑↓ PgUp PgDn scroll, End follows, l or Esc back) ".ljust(w - 1), curses.A_REVERSE)
+                    for i, l in enumerate(lines[top:top + h - 2]): put(1 + i, 0, l)
+                    put(h - 1, 0, msg[:w - 1])
+                else:
+                    put(0, 0, (' LiftLab · ' + (system_line(snap['system']) if snap else 'no liftlab.conf yet')).ljust(w - 1), curses.A_REVERSE)
+                    put(2, 0, f"  {'PROGRAM':<10} {'STATE':<12} {'BOOT':<4} {'UP':>8} {'RST':>4} {'MEM':>8}  HEALTH", curses.A_BOLD)
+                    y = 3
+                    for i, p in enumerate(progs):
+                        st = p['state'] if p['installed'] else 'not set up'
+                        col = G if p['state'] == 'active' else R if p['boot'] or p['state'] == 'failed' else 0
+                        pr = p['probe']; ht = pr['text'] if pr else (p['description'] if p['state'] != 'active' else '')
+                        line = ('> ' if i == sel else '  ') + prog_row(p) + '  '
+                        put(y, 0, line, curses.A_REVERSE if i == sel else 0)
+                        put(y, 2 + 11, f'{st:<12}', (curses.A_REVERSE if i == sel else 0) | col)
+                        put(y, len(line), ht, (R if pr and not pr['ok'] else C) if pr else curses.A_DIM)
+                        y += 1
+                    if snap and not progs: put(y, 2, 'No programs yet: liftlab migrate, or liftlab add NAME --command ...'); y += 1
+                    y += 1
+                    pr = problems(snap) if snap else []
+                    put(y, 0, 'Health', curses.A_BOLD); y += 1
+                    for l, t in pr[:4]: put(y, 2, ('ALARM ' if l == 2 else 'warn  ') + t, R if l == 2 else Y); y += 1
+                    if snap and not pr: put(y, 2, 'no problems', G); y += 1
+                    y += 1
+                    if progs:
+                        p = progs[sel]; room = h - y - 3
+                        put(y, 0, f"{p['name']}: last log lines", curses.A_BOLD); y += 1
+                        if room > 0:
+                            for l in S['logs'].get(unit, [])[-room:]: put(y, 2, l); y += 1
+                    put(h - 2, 0, ' ↑↓ (j k) program · s start · x stop · r restart · b boot on/off · l log · a apply · R reboot · P power off · q quit'[:w - 1], curses.A_DIM)
+                    put(h - 1, 0, msg[:w - 1])
+                scr.refresh()
+            c = scr.getch()
+            if c == -1: continue
+            h = scr.getmaxyx()[0]
+            if logs_full:
+                if c in (ord('l'), 27, ord('q')): logs_full = False; scroll = 0
+                elif c == curses.KEY_UP: scroll += 1
+                elif c == curses.KEY_DOWN: scroll = max(0, scroll - 1)
+                elif c == curses.KEY_PPAGE: scroll += h - 3
+                elif c == curses.KEY_NPAGE: scroll = max(0, scroll - (h - 3))
+                elif c == curses.KEY_END: scroll = 0
+                continue
+            p = progs[sel] if progs else None
+            if c == ord('q'): stop.set(); kick.set(); return
+            elif c in (curses.KEY_UP, ord('k')): sel -= 1
+            elif c in (curses.KEY_DOWN, ord('j')): sel += 1
+            elif c == ord('?'): S['msg'] = 's start, x stop, r restart the program; b: start it at boot or not; l: its whole log; a: write liftlab.conf to systemd; R reboots, P powers off this computer'
+            elif p and c == ord('s'): act(f"starting {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('start', u), f'{n}: started')[1])
+            elif p and c == ord('x'): act(f"stopping {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('stop', u), f'{n}: stopped')[1])
+            elif p and c == ord('r'): act(f"restarting {p['name']}", lambda u=p['unit'], n=p['name']: (systemctl('restart', u), f'{n}: restarted')[1])
+            elif p and c == ord('b'): act(f"boot setting of {p['name']}", lambda n=p['name'], b=p['boot']: (set_boot(n, not b), f"{n}: {'not ' if b else ''}started at boot from now on")[1])
+            elif p and c == ord('l'): logs_full = True; scroll = 0
+            elif c == ord('a'): act('applying liftlab.conf', lambda: '; '.join(apply(quiet=True)) or 'nothing to change')
+            elif c == ord('R') and ask(scr, 'Reboot this computer? The drone loses its companion until it is back.'): act('rebooting', lambda: (systemctl('reboot'), 'rebooting')[1])
+            elif c == ord('P') and ask(scr, 'Power this computer off? It comes back only when its power is cycled.'): act('powering off', lambda: (systemctl('poweroff'), 'powering off')[1])
+
+    try: curses.wrapper(main)
+    except KeyboardInterrupt: pass
+
+# ───────────────────────── main ─────────────────────────
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='liftlab', description=__doc__.split('\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
+    sub = ap.add_subparsers(dest='cmd')
+    p = sub.add_parser('status'); p.add_argument('--json', action='store_true')
+    sub.add_parser('check')
+    for v in ('start', 'stop', 'restart', 'enable', 'disable'): sub.add_parser(v).add_argument('name')
+    p = sub.add_parser('logs'); p.add_argument('name'); p.add_argument('-f', action='store_true'); p.add_argument('-n', type=int, default=100)
+    p = sub.add_parser('add'); p.add_argument('name')
+    for k in FIELDS: p.add_argument('--' + k)
+    sub.add_parser('remove').add_argument('name')
+    sub.add_parser('apply'); sub.add_parser('build'); sub.add_parser('migrate'); sub.add_parser('panel')
+    p = sub.add_parser('watch'); p.add_argument('--every', type=float, default=10)
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd in (None, 'panel'):
+            if sys.stdout.isatty(): panel()
+            else: print_status(snapshot())
+        elif a.cmd == 'status':
+            s = snapshot()
+            print(json.dumps(s, indent=1, default=str)) if a.json else print_status(s)
+        elif a.cmd == 'check':
+            pr = problems(snapshot())
+            for l, t in pr: print(('ALARM: ' if l == 2 else 'warning: ') + t)
+            if not pr: print('no problems')
+            return 1 if pr else 0
+        elif a.cmd in ('start', 'stop', 'restart'): cmd_ctl(a.cmd, a.name)
+        elif a.cmd in ('enable', 'disable'): set_boot(a.name, a.cmd == 'enable')
+        elif a.cmd == 'logs': cmd_logs(a.name, a.f, a.n)
+        elif a.cmd == 'add': cmd_add(a)
+        elif a.cmd == 'remove': cmd_remove(a.name)
+        elif a.cmd == 'apply': apply()
+        elif a.cmd == 'build': cmd_build()
+        elif a.cmd == 'migrate': cmd_migrate(); apply()
+        elif a.cmd == 'watch': cmd_watch(a.every)
+    except RuntimeError as e:
+        print(f'liftlab: {e}', file=sys.stderr); return 1
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())

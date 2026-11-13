@@ -16,10 +16,12 @@ Use the normal Computers → Install workflow to export matching `drone.dfa`, `d
 and `drone.dlc`. Both boards must use the same airframe. On the Pi, build and run:
 
 ```sh
-cd ~/dfb
-sh runner/pi/build.sh
-./runner/pi/dfb_pi --nav drone.dnc --airframe drone.dfa --pi drone.dlc --tuning drone.dft --gps /dev/ttyUSB0
+liftlab build                      # (or, from your computer: sh tools/deploy_pi.sh pi@HOST)
+liftlab stop flight 2>/dev/null; cd ~/liftlab/design
+../bin/dfb_pi --nav drone.dnc --airframe drone.dfa --pi drone.dlc --tuning drone.dft --gps /dev/ttyUSB0
 ```
+
+(The Pi's LiftLab folder, `~/liftlab`, and its `liftlab` control panel: [pi-suite.md](pi-suite.md).)
 
 Keep the existing `--link`, GPS baud and radio arguments for your wiring. The
 flight UART must match on both ends, at 460800 baud or faster (921600 is the default);

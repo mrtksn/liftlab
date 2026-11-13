@@ -561,8 +561,8 @@ function piInputs(fields, onChange) {
   return box;
 }
 // The design's files as one block to paste into the Pi's terminal: each file in base64, checked with its SHA-256.
-async function pastePack(files, after) {
-  const lines = ['mkdir -p ~/dfb && cd ~/dfb'];
+async function pastePack(files, after, dir = '~/dfb') {
+  const lines = [`mkdir -p ${dir} && cd ${dir}`];
   for (const f of files) {
     lines.push(`base64 -d > ${f.pi} <<'EOF'`, ...b64(f.data).match(/.{1,76}/g), 'EOF');
   }
@@ -596,7 +596,7 @@ function piGuide(t, K) {
   if (radio && rk === 'ble') notes.push('Bluetooth LE needs an ESP32-S3 or C3 on the drone: a Pi can\'t be its drone end here (dfb_pi refuses it). Put the Telemetry & radio task on the S3 or C3.');
   if (radio && rk === 'espnow') notes.push('ESP-NOW needs an ESP32: a Pi can\'t be its drone end (dfb_pi refuses it). Put the Telemetry & radio task on the ESP32, or pick Wi-Fi in the Ground tab: the Pi\'s own Wi-Fi works.');
   if (radio && rk === 'wifi') notes.push(radioCfg.sta ? 'Wi-Fi, the Pi joining a network: set its network up as usual (nmcli device wifi connect …); the command module joins the same one and talks to this Pi\'s address.' : `Wi-Fi, the Pi making the network: set up a hotspot on channel ${radioCfg.channel} (hostapd, or NetworkManager: nmcli device wifi hotspot ssid liftlab password … channel ${radioCfg.channel} band bg); the command module joins it.`);
-  out.push(instPara(`The Pi runs <code>dfb_pi</code>: ${tasks.map(x => TASKS[x].label.toLowerCase()).join(', ') || 'the navigation'}, the same C as this simulator's ${t.name}. It's built on the Pi from the source, and this design's files go in beside it. You need Raspberry Pi OS (Lite is fine) with its network and SSH working: everything below is typed into <code>ssh ${'<span class="inst-host"></span>'}</code>, except where it says your computer.`));
+  out.push(instPara(`The Pi runs <code>dfb_pi</code>: ${tasks.map(x => TASKS[x].label.toLowerCase()).join(', ') || 'the navigation'}, the same C as this simulator's ${t.name}. Everything for the drone lives in one folder on it, <code>~/liftlab</code> (the program, this design's files, the source), with a control panel: <code>liftlab</code>. You need Raspberry Pi OS (Lite is fine) with its network and SSH working: everything below is typed into <code>ssh ${'<span class="inst-host"></span>'}</code>, except where it says your computer.`));
   for (const n of notes) out.push(el('p', { class: 'inst-note', text: n }));
   const inputs = piInputs(fields, () => refresh());
   out.push(el('div', { class: 'inst-safety' }, el('b', { text: 'Your Pi' }), inputs));
@@ -617,29 +617,31 @@ function piGuide(t, K) {
   const mosq = mqttLink && mqttBus.mqttBroker === 'here' ? '\nsudo apt install -y mosquitto\nprintf "listener %s\\nallow_anonymous true\\n" ' + mqttBus.mqttPort + ' | sudo tee /etc/mosquitto/conf.d/liftlab.conf    # on the network, no login: a closed drone network only\nsudo systemctl restart mosquitto' : '';
   out.push(instStep(2, 'Prepare its interfaces', instPara(gpioSerial ? 'Free the Pi GPIO UART from the login console and Bluetooth, grant GPIO/serial access, then restart.' : 'Grant GPIO/USB serial access, then restart. The saved USB connections do not need the Pi GPIO UART.'), cmds.serial));
   cmds.copy = cmdBox('', 'the copy command'); cmds.clone = cmdBox('', 'the clone command');
-  out.push(instStep(3, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder (where <code>index.html</code> is):'), cmds.copy,
+  cmds.deploy = cmdBox('', 'the deploy command');
+  out.push(instStep(3, 'Copy the source code to it', instPara('<b>On your computer</b>, in this repository\'s folder (where <code>index.html</code> is). With <a href="https://ziglang.org" target="_blank" rel="noopener">zig</a> there (<code>brew install zig</code>), this builds dfb_pi on your computer in seconds, copies it with the source, and does step 4 too:'), cmds.deploy,
+    instPara('Or copy only the source, and build on the Pi (step 4):', 'hint'), cmds.copy,
     instPara('Or, if the Pi can reach the repository itself (a private one needs your GitHub login on the Pi):', 'hint'), cmds.clone));
   cmds.build = cmdBox('', 'the build commands');
-  out.push(instStep(4, 'Build it', instPara('The compiler first (it may already be there), then dfb_pi: a single compile, about a minute on a Pi Zero. It ends with <code>built dfb_pi</code>.'), cmds.build));
+  out.push(instStep(4, 'Set up its folder and build it', instPara('The compiler first (it may already be there). Then <code>install.sh</code> sets up <code>~/liftlab</code> and the panel (an earlier <code>~/dfb</code> setup moves in), and <code>liftlab build</code> builds dfb_pi: a few minutes on a Pi Zero. It ends with <code>bin/dfb_pi updated</code>.'), cmds.build));
   cmds.files = cmdBox('', 'the design files block');
   const dmsg = UI.status( { class: 'hint inst-msg', role: 'status' });
   const dl = el('div', { class: 'inst-row' }, ...need.map(w => UI.button( { class: 'btn', type: 'button', text: `${designBase()}${w === 'nav' ? '.dnc' : w === 'airframe' ? '.dfa' : '.dlc'}`, title: 'Download it', onclick: () => instDownload(w, t, dmsg) })));
-  out.push(instStep(5, 'Put this design on it', instPara(`One block with the files inside it: paste it into the Pi's terminal. It writes them to <code>~/dfb</code> and checks each arrived whole (<code>OK</code>). ${need.length > 1 ? '<code>drone.dnc</code>: where its sensors sit, for the navigation; <code>drone.dfa</code>: the airframe, as the flight controller has it, for the learning and the supervisor to start from; <code>drone.dlc</code>: where the IMU sits, each motor\'s heat model and the battery.' : '<code>drone.dnc</code>: the mass and where its sensors sit, for the navigation.'}`), cmds.files,
+  out.push(instStep(5, 'Put this design on it', instPara(`One block with the files inside it: paste it into the Pi's terminal. It writes them to <code>~/liftlab/design</code> and checks each arrived whole (<code>OK</code>). ${need.length > 1 ? '<code>drone.dnc</code>: where its sensors sit, for the navigation; <code>drone.dfa</code>: the airframe, as the flight controller has it, for the learning and the supervisor to start from; <code>drone.dlc</code>: where the IMU sits, each motor\'s heat model and the battery.' : '<code>drone.dnc</code>: the mass and where its sensors sit, for the navigation.'}`), cmds.files,
     instPara('Do this again whenever the design changes. Or download them and copy them across with <code>scp</code>, renamed to <code>drone.dnc</code>…:', 'hint'), dl, dmsg));
   cmds.run = cmdBox('', 'the run command');
-  out.push(instStep(6, 'Try it', instPara('With the flight controller on (props off). It says what it found (the link, the GPS) and takes commands as you type: <code>status</code>, <code>health</code>, <code>learning</code>. Ctrl+C stops it.'), cmds.run));
-  cmds.svc = cmdBox('', 'the service commands');
-  out.push(instStep(7, 'Start it at power-up', instPara('As a service, it starts when the Pi boots and again if it ever stops. Its commands then come over UDP (port 14560) instead of the keyboard.'), cmds.svc,
-    instPara('Its output: <code>journalctl -u dfb -f</code>. A command: <code>echo status | nc -u -w1 127.0.0.1 14560</code>. After a new design (step 5): <code>sudo systemctl restart dfb</code>. After new code (steps 3 and 4): the same.', 'hint')));
+  out.push(instStep(6, 'Try it', instPara('With the flight controller on (props off). It says what it found (the link, the GPS) and takes commands as you type: <code>status</code>, <code>health</code>, <code>learning</code>. Ctrl+C stops it. (If it already runs as a service, step 7, it\'s stopped first: one program on the port at a time.)'), cmds.run));
+  cmds.svc = cmdBox('', 'the service command');
+  out.push(instStep(7, 'Start it at power-up', instPara('One command: dfb_pi becomes the <b>flight</b> program of the Pi\'s LiftLab folder, started when the Pi boots and again if it ever stops, with a health monitor beside it. Its commands then come over UDP (port 14560) instead of the keyboard.'), cmds.svc,
+    instPara('The control panel, from your computer: <code>ssh -t <span class="inst-host"></span> liftlab</code>. It shows each program (running, restarts, memory, what dfb_pi says: the flight controller, the pilot\'s link), the Pi itself (power: under-voltage, temperature, Wi-Fi, memory, disk) and the logs; its keys start, stop and restart them, and set which start at boot. The same as commands: <code>liftlab status</code>, <code>liftlab restart flight</code>, <code>liftlab logs flight -f</code>, <code>liftlab check</code>. After a new design (step 5) or new code (steps 3 and 4): <code>liftlab restart flight</code>.', 'hint')));
   if (tasks.includes('learn') && tasks.includes('super')) out.push(instStep(8, 'Calibrate and tune in flight',
     instPara('Update the ESP32 flight firmware too: older builds cannot acknowledge PID tuning. First establish a stable guided hover with the normal pilot controls, release the controls, then send each command when the previous step finishes. These tests move the aircraft; physical-flight validation is still pending.'),
-    cmdBox('cd ~/dfb\npython3 runner/pi/control.py 127.0.0.1 calibrate\n# Wait for accepted calibration (query learning), then:\npython3 runner/pi/control.py 127.0.0.1 autotune attitude\npython3 runner/pi/control.py 127.0.0.1 autotune status', 'calibration and attitude measurement'),
+    cmdBox('cd ~/liftlab/src\npython3 runner/pi/control.py 127.0.0.1 calibrate\n# Wait for accepted calibration (query learning), then:\npython3 runner/pi/control.py 127.0.0.1 autotune attitude\npython3 runner/pi/control.py 127.0.0.1 autotune status', 'calibration and attitude measurement'),
     instPara('Wait for <code>review</code>, inspect the proposed gains with <code>autotune status</code>, then send <code>autotune apply</code> to repeat the tests. After <code>done</code>, repeat with <code>autotune position</code> and <code>autotune apply</code>. <code>autotune stop</code> cancels a test; pilot takeover also cancels it. After landing, <code>autotune save</code> writes verified gains to <code>drone.dft</code> for this design.'),
     instPara('<code>keep on</code>/<code>keep off</code> separately enable/disable passive actuator-model learning; they do not tune PID. Autotune suspends this preference during tests. The browser Tune buttons still control the simulator. Use the bundled standard controller, fixed motors, tilt mode and no hanging load. Full instructions: <a href="docs/hardware-tuning.md" target="_blank" rel="noopener">hardware tuning guide</a>.', 'hint')));
   out.push(UI.details({ class: 'inst-manual', title: 'Good to know' },
     instPara('<b>Power.</b> Cutting the drone\'s battery cuts the Pi without warning, which can damage what it was writing on the SD card. Design files are read during startup; <code>autotune save</code> explicitly writes the tuning file. Save after landing and shut down cleanly. A read-only overlay (<code>sudo raspi-config</code> → Performance → Overlay file system) prevents saving; turn it off to change the design or save gains.'),
     instPara('<b>Boot time.</b> A Pi Zero takes 20–30 s to start. The ESP32 flies without it meanwhile (angle mode), and the navigation, learning and supervisor join in when it\'s up.'),
-    instPara('<b>Where things are.</b> <code>~/dfb/runner</code>: the source and <code>runner/pi/dfb_pi</code>; <code>~/dfb/drone.*</code>: the design; <code>/etc/systemd/system/dfb.service</code>: the service. <code>runner/pi/fly.py</code> talks to the ESP32 from the Pi too (stop the service first: one program on the port at a time).')));
+    instPara('<b>Where things are.</b> <code>~/liftlab</code>: <code>liftlab</code> (the panel), <code>liftlab.conf</code> (its programs: what each runs, at boot or not, how to ask it how it is), <code>bin/dfb_pi</code>, <code>design/drone.*</code> (this design; <code>autotune save</code> writes <code>drone.dft</code> there), <code>src/runner</code> (the source). Each program is a systemd service, <code>liftlab-NAME</code>, written from <code>liftlab.conf</code> by <code>liftlab apply</code>. <code>src/runner/pi/fly.py</code> talks to the ESP32 from the Pi too (<code>liftlab stop flight</code> first: one program on the port at a time).')));
   const refresh = async () => {
     const host = v('host') || 'pi@raspberrypi.local';
     out[0].querySelectorAll('.inst-host').forEach(n => { n.textContent = host; });
@@ -656,16 +658,17 @@ function piGuide(t, K) {
       ...(mosq ? [mosq.slice(1)] : []),
       'sudo usermod -aG dialout,gpio $USER',
       'sudo reboot'].join('\n');
-    cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/dfb"\nscp -r runner ${host}:~/dfb/`;
-    cmds.clone.code.textContent = `git clone --depth 1 https://github.com/mrtksn/liftlab.git ~/dfb`;
-    cmds.build.code.textContent = 'sudo apt update && sudo apt install -y build-essential\ncd ~/dfb && sh runner/pi/build.sh';
+    cmds.deploy.code.textContent = `sh tools/deploy_pi.sh ${host}`;
+    cmds.copy.code.textContent = `ssh ${host} "mkdir -p ~/liftlab/src"\nscp -r runner ${host}:~/liftlab/src/`;
+    cmds.clone.code.textContent = `git clone --depth 1 https://github.com/mrtksn/liftlab.git ~/liftlab/src`;
+    cmds.build.code.textContent = 'sudo apt update && sudo apt install -y build-essential python3\nsh ~/liftlab/src/runner/pi/suite/install.sh\nliftlab build';
     let files = []; try { files = need.map(w => instFile(w, t)); } catch (e) { cmds.files.code.textContent = '# This design can\'t be exported: ' + e.message; }
-    if (files.length) cmds.files.code.textContent = await pastePack(files, 'sudo systemctl restart dfb 2>/dev/null; true');
+    if (files.length) cmds.files.code.textContent = await pastePack(files, 'liftlab restart flight 2>/dev/null; true', '~/liftlab/design');
     const args = ['--nav drone.dnc', ...(tasks.includes('nav') ? [] : ['--no-navigation']), ...(learnOrSuper ? ['--airframe drone.dfa --pi drone.dlc'] : []), ...(tasks.includes('learn') && tasks.includes('super') ? ['--tuning drone.dft'] : []), ...(v('link') && v('link') !== '/dev/serial0' ? ['--link ' + v('link')] : []),
       ...(!tasks.includes('learn') && learnOrSuper ? ['--no-learning'] : []), ...(!tasks.includes('super') && learnOrSuper ? ['--no-supervisor'] : []),
       ...(fix ? ['--gps ' + v('gps')] : []), ...(cargo ? ['--latch ' + v('latch')] : []), ...(radio && rk === 'elrs' ? ['--crsf ' + v('crsf') + ' --radio ' + rlines[0].slice(6)] : []), ...(radio && rk === 'wifi' ? [`--radio ${rlines[0].slice(6)} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && rk === 'serial' ? [`--radio ${rlines[0].slice(6)} --radio-dev ${v('crsf')} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && rk === 'nrf24' ? [`--radio ${rlines[0].slice(6)} --nrf-spi ${hardwareBus(computers(),t).nrfSpi || '/dev/spidev0.0'} --nrf-ce ${hardwareBus(computers(),t).nrfCe ?? 25} --bind ${shq(radioCfg.bind)}`] : []), ...(radio && radioTwo() ? [`--radio2 ${radioSpec(radioCfg2)}${['serial', 'elrs'].includes(radioCfg2.kind) ? ' --radio2-dev /dev/ttyUSB2' : ''}${radioCfg2.kind === 'nrf24' && rk !== 'nrf24' ? ` --nrf-spi ${hardwareBus(computers(),t).nrfSpi || '/dev/spidev0.0'} --nrf-ce ${hardwareBus(computers(),t).nrfCe ?? 25}` : ''}${rk === 'elrs' && radioCfg2.kind !== 'elrs' ? ` --bind ${shq(radioCfg.bind)}` : ''}`] : [])].join(' ');
-    cmds.run.code.textContent = `cd ~/dfb && ./runner/pi/dfb_pi ${args}`;
-    cmds.svc.code.textContent = `sudo tee /etc/systemd/system/dfb.service > /dev/null <<EOF\n[Unit]\nDescription=LiftLab: dfb_pi\nAfter=network.target\n\n[Service]\nUser=$USER\nWorkingDirectory=$HOME/dfb\nExecStart=$HOME/dfb/runner/pi/dfb_pi ${args}\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=multi-user.target\nEOF\nsudo systemctl daemon-reload\nsudo systemctl enable --now dfb`;
+    cmds.run.code.textContent = `liftlab stop flight 2>/dev/null; cd ~/liftlab/design && ../bin/dfb_pi ${args}`;
+    cmds.svc.code.textContent = `liftlab add flight --workdir design --boot yes --probe "dfb_pi 14560" --command ${shq('bin/dfb_pi ' + args)}`;
   };
   refresh();
   return out;
