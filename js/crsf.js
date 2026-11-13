@@ -21,6 +21,7 @@ const TLM_ITEMS = {
   11: { key: 'parts', list: true },
   12: { key: 'link', fields: ['rssi', 'lq', 'snr', 'lost'] },
   13: { key: 'cargo', list: true },   // each latch: 1 closed, 2 loaded, 4 moving, 8 has a load switch
+  14: { key: 'packs', fields: ['volts2'] },   // a second pack's voltage (battery2=: a pack of its own for the boards)
 };
 
 function crsfCrc8(b, from, to) {

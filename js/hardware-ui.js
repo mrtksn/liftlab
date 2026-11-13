@@ -131,6 +131,13 @@ function renderHardware() {
       pinPicker(core,'Battery ADC GPIO','hw-battery-'+core.id,bus.batteryPin,'battery',ESP_PROFILES[core.kind].adc,v=>editBoard(core,{batteryPin:Number(v)},'battery')),
       hardwareDetails('battery'+core.id,'Voltage divider',hardwareNumber('Battery divider ratio',bus.batteryDivider,v=>editBoard(core,{batteryDivider:v},'divider'),1,30),el('p',{class:'hint',text:'Ratio = battery voltage / voltage at the ADC pin. Connect the pack through a suitable resistor divider, never directly to a GPIO.'}))));
     auxiliary.lastChild.dataset.hwRole='battery';
+    const P2=sensedPack2(C,cfg.comps);
+    if(P2||bus.batteryPin2>=0){   // a second pack (one for the boards): its voltage on an ADC pin of its own, reported only
+      auxiliary.append(hardwareBoardCard(core,(P2?P2.name:'Second pack')+' voltage','Voltage sensor','Analog ADC · resistor divider',el('p',{class:'hw-owner',text:'Board: '+core.name}),
+        pinPicker(core,'Second pack ADC GPIO','hw-battery2-'+core.id,bus.batteryPin2??-1,'battery2',ESP_PROFILES[core.kind].adc,v=>editBoard(core,{batteryPin2:Number(v)},'battery2')),
+        hardwareDetails('battery2'+core.id,'Voltage divider',hardwareNumber('Second pack divider ratio',bus.batteryDivider2,v=>editBoard(core,{batteryDivider2:v},'divider2'),1,30),el('p',{class:'hint',text:'Ratio = pack voltage / voltage at the ADC pin: 2 (two equal resistors) suits a 1S pack. The flight controller reports this pack\'s voltage in the telemetry (battery2=, flight firmware with wiring version 15); its sag correction and arming check stay on the motors\' pack.'}))));
+      auxiliary.lastChild.dataset.hwRole='battery';
+    }
   }
   for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){
     const bus=hardwareBus(C,b),mqtt=bus.linkTransport==='mqtt',coreB=C.boards.find(x=>x.tasks.includes('core')),coreBus=coreB&&hardwareBus(C,coreB);

@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 14
+#define HW_VERSION 15
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -75,6 +75,12 @@ typedef struct {
   int8_t level_mode;
   int8_t level_pad[3];
   float level_deg[2];
+  /* Appended in v15 (v14 blobs migrate with none): a second pack's voltage (battery2=PIN,DIVIDER; −1: none), as a pack
+   * of its own for the boards. It is only reported (telemetry item "packs"): the throttle's sag correction and the
+   * arming check stay on the motors' pack (battery=). */
+  int8_t batt2_pin;
+  int8_t batt2_pad[3];
+  float batt2_divider;
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -128,5 +134,7 @@ void hw_outputs_safe(void);   /* ESC minimum pulses, MOSFETs at zero duty */
 /* battery: pack volts, 0 if not wired */
 int hw_battery_init(const hw_config *c);
 float hw_battery_read(void);
+/* the second pack (battery2=): its volts, 0 if not wired. hw_battery_init sets it up too. */
+float hw_battery2_read(void);
 
 #endif

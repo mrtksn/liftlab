@@ -197,7 +197,7 @@ static volatile int64_t guided_us = -10000000;   /* when the last guided command
 /* what the navigation flies on (RN_LINK_NAV), from the control loop at 100 Hz */
 static float nav_box[16]; static volatile int nav_new;
 static uint8_t af_box[AIRFRAME_CAP]; static volatile uint32_t af_len; static volatile int af_new, af_result;
-static volatile float vbatt;
+static volatile float vbatt, vbatt2;   /* the motors' pack (battery=), a second pack (battery2=): 0 not wired */
 
 /* the learning's and the supervisor's frames (link task → control loop), and LTEL (control loop → link task) */
 static float exc_box[8 + FC_MAX_MOTORS + FC_MAX_JOINTS], set_box[6 + 3 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS], model_box[FC_MODEL_MAX];
@@ -544,7 +544,7 @@ static void link_task(void *arg) {
         say("dropped a damaged or oversized frame");
     }
     now = esp_timer_get_time();
-    if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); }
+    if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); vbatt2 = hw_battery2_read(); }
     int guided = now - guided_us < 1000000;
     if (guided && nav_new) { float nb[16]; portENTER_CRITICAL(&mux); memcpy(nb, nav_box, sizeof nb); nav_new = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_NAV, nb, sizeof nb); }
     if (ltel_n) {
@@ -592,7 +592,7 @@ static void radio_task(void *arg) {
     }
     if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
-    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (HW.batt2_pin >= 0) { float pv2[1] = { vbatt2 }; tlm_put(&TS, TLM_PACKS, pv2, 1, t); } if (radio) tlm_from_link(&TS, &RCI, t); }
     if (now >= next_peer) {                                  /* the other drones: what we publish, 10 times a second */
       float pv[3] = { (float)Fs->state, batt_pct(Fs->vbatt), Fs->have_alt ? Fs->alt_e : 0 };
       next_peer = now + 100000; radio_peer_poll(pv, 3);
@@ -652,7 +652,7 @@ void app_main(void) {
   printf("compass: %s\n",SENS.mag ? SENS.mag_name : "none");
   if (SENS.imu == 2) printf("The LIS3DH has no gyro: this board can't fly (it won't arm). Motor tests and telemetry work. Add an MPU-6050 (GY-521) for flying.\n");
   if (se) printf("no IMU: it won't arm\n");
-  if (HW.batt_pin >= 0 && hw_battery_init(&HW)) printf("battery: GPIO %d isn't an ADC1 pin\n", HW.batt_pin);
+  if ((HW.batt_pin >= 0 || HW.batt2_pin >= 0) && hw_battery_init(&HW)) printf("battery: GPIO %d / %d isn't an ADC1 pin\n", HW.batt_pin, HW.batt2_pin);
 
   /* The pilot's radio before the program slots: Wi-Fi takes its memory first (the slots fit in what's left; one
    * slot fewer for programs from the Pi, maybe, but the drone can still be flown). Its news comes after the link starts. */

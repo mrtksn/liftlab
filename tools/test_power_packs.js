@@ -6,7 +6,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const ctx=vm.createContext({console,atob,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},Map,Set});
 for(const file of ['board-hardware','hardware','driver-presets','boards','part-geometry','designs','board-pinouts']) vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
 // the Battery settings: the main pack is 1S 1.8 Ah
-vm.runInContext('var battCfg=()=>({cells:1,capacity:1.8});this.api={powerIssues,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,boardSupply,hardwareOverview,powerDiagramSvg}',ctx);
+vm.runInContext('var battCfg=()=>({cells:1,capacity:1.8});this.api={hardwarePlan,hardwareSettings,sensedPack2,powerIssues,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,boardSupply,hardwareOverview,powerDiagramSvg}',ctx);
 const A=ctx.api;
 const C={ground:{kind:'mac',name:'Laptop'},boards:[{id:1,kind:'esp32',name:'Flight controller',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi Zero',tasks:['nav']}],wiring:{parts:{},boards:{}}};
 const motors=Array.from({length:4},(_,i)=>({id:i+1,type:'motor',name:'M'+i,pos:[0,0,0]}));
@@ -49,6 +49,17 @@ assert.ok(svg.includes('>Battery<')&&svg.includes('>Board pack<'),'a box per pac
 assert.ok(svg.includes('→ motors')&&svg.includes('→ boards'),'what each pack feeds');
 assert.ok(svg.includes('every pack')&&svg.includes('5 V boost converter · Board pack'),'the converter on the boards\' pack, one common ground');
 assert.equal((svg.match(/>5 V boost converter/g)||[]).length,1,'one converter for both boards');
+// a second sense input reads the boards' pack: the battery2= line (only once set), its pin claimed, its divider checked
+assert.equal(A.sensedPack2(C,comps),small);
+let plan=A.hardwarePlan(C,motors,C.boards[0]);assert.ok(!A.hardwareSettings(plan).some(l=>l.startsWith('battery2')),'no battery2= until it is set (older firmware still installs)');
+C.wiring.boards[1]={batteryPin:34,batteryDivider:2,batteryPin2:35,batteryDivider2:2};
+plan=A.hardwarePlan(C,motors,C.boards[0]);assert.equal(plan.errors.length,0,plan.errors.join());assert.ok(A.hardwareSettings(plan).includes('battery2=35,2'));
+assert.match(A.hardwareOverview(C,comps).groups.find(g=>g.id===1).rows.find(r=>/Board pack voltage/.test(r.device)).connection,/GPIO 35/);
+assert.ok(A.powerDiagramSvg(C,comps).includes('Voltage divider · Board pack')&&A.powerDiagramSvg(C,comps).includes('ADC pin'),'its divider drawn on the boards\' pack');
+C.wiring.boards[1].batteryPin2=34;assert.ok(A.hardwarePlan(C,motors,C.boards[0]).errors.some(e=>/Second pack ADC|more than once|Battery ADC/.test(e)),'one pin for both packs');
+C.wiring.boards[1].batteryPin2=35;C.wiring.boards[1].batteryDivider2=1;assert.ok(A.powerIssues(C,comps).errors.some(e=>/Board pack voltage: .*4\.20 V, more than the chip takes/.test(e)),'1S straight on the pin: 4.2 V, over the chip\'s 3.3 V');
+C.wiring.boards[1].batteryPin2=-1;assert.ok(A.hardwareSettings(A.hardwarePlan(C,motors,C.boards[0])).includes('battery2=-1'),'unset again: turned off on the board');
+C.wiring.boards[1]={};
 // one pack: the drawing as before
 const one=A.powerDiagramSvg({...C,wiring:{parts:{},boards:{}}},[...motors,main]);assert.ok(one.includes('+ red · − black')&&one.includes('battery −, every ESC'));
-console.log('Power pack checks passed: what each pack feeds, a board\'s pack (chosen, fallback, through another board), each pack\'s cells for its converter, no pack for the motors or the boards, packs in parallel, the wiring list and the drawing.');
+console.log('Power pack checks passed: what each pack feeds, a board\'s pack (chosen, fallback, through another board), each pack\'s cells for its converter, the second pack\'s sense input (battery2=), no pack for the motors or the boards, packs in parallel, the wiring list and the drawing.');

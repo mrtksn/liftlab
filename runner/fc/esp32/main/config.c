@@ -19,7 +19,7 @@ void hw_defaults(hw_config *c) {
   c->esc_hz = 400; c->esc_min_us = 1000; c->esc_max_us = 2000;
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
   c->sda = LB_SDA; c->scl = LB_SCL;
-  c->batt_pin = -1; c->batt_divider = 11.0f;
+  c->batt_pin = -1; c->batt_divider = 11.0f; c->batt2_pin = -1; c->batt2_divider = 11.0f;
   c->rate_hz = LB_RATE; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
   c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
   c->crsf_rx = c->crsf_tx = -1; c->elrs_rate = 250; c->elrs_ratio = 4;
@@ -97,7 +97,7 @@ static int pin_ok(int p) { return p == -1 || lb_output_pin(p); }
 int hw_check(const hw_config *c, char *err, int errn) {
   for (int i = 0; i < FC_MAX_MOTORS; i++) if (!pin_ok(c->motor_pin[i])) { snprintf(err, errn, "reserved motor pin"); return -1; }
   for (int i = 0; i < FC_MAX_JOINTS; i++) if (!pin_ok(c->servo_pin[i])) { snprintf(err, errn, "reserved servo pin"); return -1; }
-  if (!lb_output_pin(c->sda) || !lb_output_pin(c->scl) || (c->batt_pin >= 0 && !lb_adc_pin(c->batt_pin)) ||
+  if (!lb_output_pin(c->sda) || !lb_output_pin(c->scl) || (c->batt_pin >= 0 && !lb_adc_pin(c->batt_pin)) || (c->batt2_pin >= 0 && !lb_adc_pin(c->batt2_pin)) ||
       (c->crsf_rx >= 0 && !lb_input_pin(c->crsf_rx)) || (c->crsf_tx >= 0 && !lb_output_pin(c->crsf_tx))) {
     snprintf(err, errn, "reserved sensor or radio pin"); return -1;
   }
@@ -151,7 +151,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   #define USE(p, what) do { int p_ = (p); if (p_ >= 0 && p_ < SOC_GPIO_PIN_COUNT) { if (used[p_]) { snprintf(err, errn, "GPIO %d is used twice (%s)", p_, what); return -1; } used[p_] = 1; } } while (0)
   for (int i = 0; i < FC_MAX_MOTORS; i++) USE(c->motor_pin[i], "motor");
   for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
-  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
+  USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->batt2_pin, "battery 2"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
   for (int i = 0; i < 5; i++) USE(c->nrf_pin[i], "nRF24L01");
   USE(c->link_tx, "companion link"); USE(c->link_rx, "companion link");
   #undef USE
@@ -259,6 +259,10 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     if (n == 1 && v[0] == -1) c->batt_pin = -1;
     else if (n != 2 || !lb_adc_pin((int)v[0]) || v[1] < 1 || v[1] > 30) { snprintf(err, errn, "battery=pin,divider with a free ADC1 pin (or battery=-1)"); return -1; }
     else { c->batt_pin = (int8_t)v[0]; c->batt_divider = v[1]; }
+  } else if (!strcmp(key, "battery2")) {
+    if (n == 1 && v[0] == -1) c->batt2_pin = -1;
+    else if (n != 2 || !lb_adc_pin((int)v[0]) || v[1] < 1 || v[1] > 30) { snprintf(err, errn, "battery2=pin,divider with a free ADC1 pin (or battery2=-1)"); return -1; }
+    else { c->batt2_pin = (int8_t)v[0]; c->batt2_divider = v[1]; }
   } else if (!strcmp(key, "rate")) {
     if (n != 1 || (v[0] != 250 && v[0] != 500 && v[0] != 1000)) { snprintf(err, errn, "rate: 250, 500 or 1000 Hz"); return -1; }
     c->rate_hz = (int16_t)v[0];
@@ -307,6 +311,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   if (c->level_mode == 2) APP(" level=%.1f,%.1f", (double)c->level_deg[0], (double)c->level_deg[1]); else APP(" level=%s", c->level_mode ? "off" : "boot");
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
+  if (c->batt2_pin >= 0) APP(" battery2=%d,%.1f", c->batt2_pin, (double)c->batt2_divider); else APP(" battery2=-1");
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }
   if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");
   /* the packet links' settings: the binding phrase and the password masked (show goes wherever the link goes) */

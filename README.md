@@ -1043,7 +1043,7 @@ The tuning has its own checks:
 - 50 Hz, 1500 µs ±500 µs for ±45°, adjustable per servo.
 - Default pins: servos on GPIO 16, 17, 18, 19, 23.
 
-**Battery (optional):** a resistor divider to an ADC1 pin (32–39), set with `battery=34,11`. `vref` is the pack voltage the airframe's thrust is for: 16 V (4S) as in the simulator; set `vref=12` for a 3S pack.
+**Battery (optional):** a resistor divider to an ADC1 pin (32–39), set with `battery=34,11`. A second pack (one of its own for the boards) is read on another ADC1 pin with `battery2=35,2`: its voltage is reported in the telemetry ("packs"), while the sag correction and the arming check stay on `battery=`, the motors' pack. `vref` is the pack voltage the airframe's thrust is for: 16 V (4S) as in the simulator; set `vref=12` for a 3S pack.
 
 **ExpressLRS receiver (optional):** set with `crsf=RX,TX`: the GPIO its TX goes to (an input-only pin, 34–39, works), then the one its RX goes to (`crsf=-1` for none). By default every output pin has a motor or servo, so free one first: on a quad, `motors=25,26,27,14` frees 32, 33, 4 and 13, then `crsf=35,33`. `radio=elrs,250,4` (or `elrs=250,4`) must match the packet rate and telemetry ratio set on the radio, so the telemetry fits. Bind the receiver and set it to CRSF output as usual. Wiring saved by older firmware is kept, with no receiver.
 

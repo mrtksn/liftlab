@@ -38,6 +38,7 @@ enum {
   TLM_SUPER_M,       /* motor count, then each motor's effectiveness (−1: taken out) */
   TLM_LINK,          /* what the drone hears: uplink RSSI [dBm], LQ [%], SNR [dB], radio link lost (0/1) */
   TLM_CARGO,         /* latch count, then each latch's bits: 1 closed, 2 loaded, 4 moving, 8 has a load switch (cargo) */
+  TLM_PACKS,         /* a second pack's voltage [V] (flight core, battery2=: a pack of its own for the boards; sent only when wired) */
   TLM_ITEMS
 };
 typedef struct {

@@ -103,6 +103,17 @@ int main(void) {
     const tlm_slot *s = tlm_get(&B, TLM_POS);
     CHECK(s && s->n == 6 && s->v[1] == -2.5f && B.qn == 1 && !strcmp(B.q[B.qh].s, "from the Pi") && tlm_pack(&A, buf, 256) == 0, "packed on one board, unpacked on another (%d floats), sent once", n);
   }
+  {   /* a second pack's voltage: through the board link and the radio; an item this build doesn't know is skipped */
+    static tlm_store A, B; tlm_init(&A); tlm_init(&B);
+    float v2[1] = { 3.87f }; tlm_put(&A, TLM_PACKS, v2, 1, 1);
+    float buf[64]; int n = tlm_pack(&A, buf, 64); tlm_unpack(&B, buf, n, 1.0);
+    const tlm_slot *s = tlm_get(&B, TLM_PACKS);
+    float odd[] = { (float)(TLM_ITEMS + 3), 2, 1, 2, (float)TLM_ATT, 3, 0.1f, 0.2f, 0.3f }; static tlm_store C; tlm_init(&C); tlm_unpack(&C, odd, 9, 1.0);
+    const tlm_slot *a = tlm_get(&C, TLM_ATT);
+    uint8_t out[64]; int k = tlm_crsf.item(&A, TLM_PACKS, out); ground G; memset(&G, 0, sizeof G); ground_read(&G, out, k);
+    CHECK(s && s->n == 1 && fabsf(s->v[0] - 3.87f) < 1e-6f && a && a->n == 3 && G.item_id == TLM_PACKS && fabsf(G.item_v[0] - 3.87f) < 0.006f,
+          "a second pack's voltage over the link and the radio (%.2f V); an unknown item skipped, the next still read", G.item_v[0]);
+  }
 
   printf("messages through an ExpressLRS receiver's queue\n");
   {

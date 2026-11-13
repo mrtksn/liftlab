@@ -15,6 +15,7 @@ const tlm_def tlm_defs[TLM_ITEMS] = {
   [TLM_SUPER_M] = { TLM_SUPER_M, 13, 2.0f, 3, 0, "parts" },
   [TLM_LINK] = { TLM_LINK, 4, 1.0f, 3, 0, "link" },
   [TLM_CARGO] = { TLM_CARGO, 9, 2.0f, 1, 1, "cargo" },
+  [TLM_PACKS] = { TLM_PACKS, 1, 1.0f, 2, 0, "packs" },
 };
 float tlm_scale(int id, int k) {
   switch (id) {
@@ -85,7 +86,8 @@ void tlm_unpack(tlm_store *T, const float *in, int n, double t) {
       char s[TLM_TEXT + 1]; for (int j = 0; j < len; j++) s[j] = (char)(int)in[k + 3 + j]; s[len] = 0;
       push(T->q, &T->qh, &T->qn, sev, s); k += 3 + len; continue;
     }
-    int m = (int)in[k + 1]; if (id <= 0 || id >= TLM_ITEMS || m < 0 || m > TLM_NV || k + 2 + m > n) return;
+    int m = (int)in[k + 1]; if (id <= 0 || m < 0 || m > TLM_NV || k + 2 + m > n) return;
+    if (id >= TLM_ITEMS) { k += 2 + m; continue; }   /* an item a newer board knows: skipped, the rest still read */
     tlm_put(T, id, in + k + 2, m, t); T->it[id].dirty_link = 0; k += 2 + m;
   }
 }

@@ -258,8 +258,9 @@ function powerDiagramSvg(C, comps) {
   let yb = top; const at = new Map();
   for (const b of C.boards) { at.set(b, { y: yb, h: 56 }); yb += 56 + 16; }
   const core = C.boards.find(b => b.tasks.includes('core')), bus = core && hardwareBus(C, core), sense = core && ESP_PROFILES[core.kind] && bus.batteryPin >= 0;
-  const divY = yp + 12, divH = 72;
-  const rail = Math.max(y, yb, sense ? divY + divH + 14 : yp, top + batH + 30) + 10, H = rail + 26;
+  const P2 = core && ESP_PROFILES[core.kind] && bus.batteryPin2 >= 0 ? sensedPack2(C, comps) : null;   // a second divider, on the boards' pack
+  const divY = yp + 12, divH = 72, divY2 = divY + (sense ? divH + 12 : 0);
+  const rail = Math.max(y, yb, P2 ? divY2 + divH + 14 : sense ? divY + divH + 14 : yp, top + batH + 30) + 10, H = rail + 26;
   // + lanes, one per pack; the ground rail
   const lanes = new Map(packs.map(c => [c, []])), neg = [];
   for (const c of packs) {
@@ -282,6 +283,12 @@ function powerDiagramSvg(C, comps) {
     box(x1, divY, w1, divH, 'signal', ['Voltage divider' + (many && sp ? ' · ' + sp.name : ''), 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, bus.batteryPin)]);
     if (lx) { wire('vbat', [[x1 + w1, divY + 14], [lx, divY + 14]]); lanes.get(sp).push(divY + 14); dot('vbat', lx, divY + 14); }
     wire('gnd', [[many ? spine : x1 + 60, divY + divH - (many ? 10 : 0)], ...(many ? [[x1, divY + divH - 10]] : [[x1 + 60, rail]])]);
+  }
+  if (P2 && laneX.has(P2)) {
+    const R = dividerResistors(bus.batteryDivider2), lx = laneX.get(P2);
+    box(x1, divY2, w1, divH, 'signal', ['Voltage divider · ' + P2.name, 'R1 ' + R.r1 + ' kΩ: + → mid', 'R2 ' + R.r2 + ' kΩ: mid → GND', 'mid → ADC pin ' + boardGpioShort(C, core, bus.batteryPin2)]);
+    wire('vbat', [[x1 + w1, divY2 + 14], [lx, divY2 + 14]]); lanes.get(P2).push(divY2 + 14); dot('vbat', lx, divY2 + 14);
+    wire('gnd', many ? [[spine, divY2 + divH - 10], [x1, divY2 + divH - 10]] : [[x1 + 60, divY2 + divH], [x1 + 60, rail]]);
   }
   if (neg.length) wire('gnd', [[xg, Math.min(...neg)], [xg, rail]]);
   // the boards: 5 V from a converter, another board or the pack; their grounds to the rail on the right

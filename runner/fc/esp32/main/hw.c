@@ -248,30 +248,38 @@ int hw_mag_read(float mag[3]) {
 }
 
 /* ───────── battery ───────── */
-static adc_oneshot_unit_handle_t adc; static adc_cali_handle_t cali; static adc_channel_t batt_ch; static float divider, vf;
-int hw_battery_init(const hw_config *c) {
-  if (c->batt_pin < 0) return 0;
+/* One ADC1 unit for both packs: battery= (the motors', read for the flight core) and battery2= (a second pack's). */
+typedef struct { adc_channel_t ch; adc_cali_handle_t cali; float divider, vf; int on; } batt_in;
+static adc_oneshot_unit_handle_t adc; static batt_in B1, B2;
+static int batt_setup(batt_in *b, int pin, float divider) {
   adc_unit_t unit;
-  if (adc_oneshot_io_to_channel(c->batt_pin, &unit, &batt_ch) != ESP_OK || unit != ADC_UNIT_1) return -1;
-  adc_oneshot_unit_init_cfg_t uc = { .unit_id = ADC_UNIT_1 };
-  if (adc_oneshot_new_unit(&uc, &adc) != ESP_OK) return -1;
+  if (adc_oneshot_io_to_channel(pin, &unit, &b->ch) != ESP_OK || unit != ADC_UNIT_1) return -1;
+  if (!adc) { adc_oneshot_unit_init_cfg_t uc = { .unit_id = ADC_UNIT_1 }; if (adc_oneshot_new_unit(&uc, &adc) != ESP_OK) { adc = NULL; return -1; } }
   adc_oneshot_chan_cfg_t cc = { .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
-  adc_oneshot_config_channel(adc, batt_ch, &cc);
+  adc_oneshot_config_channel(adc, b->ch, &cc);
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-  adc_cali_curve_fitting_config_t ccali = { .unit_id = ADC_UNIT_1, .chan = batt_ch, .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
-  if (adc_cali_create_scheme_curve_fitting(&ccali, &cali) != ESP_OK) cali = NULL;
+  adc_cali_curve_fitting_config_t ccali = { .unit_id = ADC_UNIT_1, .chan = b->ch, .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
+  if (adc_cali_create_scheme_curve_fitting(&ccali, &b->cali) != ESP_OK) b->cali = NULL;
 #elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
   adc_cali_line_fitting_config_t lc = { .unit_id = ADC_UNIT_1, .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_DEFAULT };
-  if (adc_cali_create_scheme_line_fitting(&lc, &cali) != ESP_OK) cali = NULL;
+  if (adc_cali_create_scheme_line_fitting(&lc, &b->cali) != ESP_OK) b->cali = NULL;
 #endif
-  divider = c->batt_divider; return 0;
+  b->divider = divider; b->on = 1; return 0;
 }
-float hw_battery_read(void) {
-  if (!adc) return 0;
+int hw_battery_init(const hw_config *c) {
+  int r = 0;
+  if (c->batt_pin >= 0 && batt_setup(&B1, c->batt_pin, c->batt_divider)) r = -1;
+  if (c->batt2_pin >= 0 && batt_setup(&B2, c->batt2_pin, c->batt2_divider)) r = -1;
+  return r;
+}
+static float batt_read(batt_in *b) {
+  if (!adc || !b->on) return 0;
   int mv = 0, raw = 0;
-  if (cali) { if (adc_oneshot_get_calibrated_result(adc, cali, batt_ch, &mv) != ESP_OK) return vf; }
-  else { if (adc_oneshot_read(adc, batt_ch, &raw) != ESP_OK) return vf; mv = raw * 3300 / 4095; }
-  float v = mv / 1000.0f * divider;
-  vf = vf == 0 ? v : vf + (v - vf) * 0.2f;   /* called at 20 Hz: ~0.25 s smoothing */
-  return vf;
+  if (b->cali) { if (adc_oneshot_get_calibrated_result(adc, b->cali, b->ch, &mv) != ESP_OK) return b->vf; }
+  else { if (adc_oneshot_read(adc, b->ch, &raw) != ESP_OK) return b->vf; mv = raw * 3300 / 4095; }
+  float v = mv / 1000.0f * b->divider;
+  b->vf = b->vf == 0 ? v : b->vf + (v - b->vf) * 0.2f;   /* called at 20 Hz: ~0.25 s smoothing */
+  return b->vf;
 }
+float hw_battery_read(void) { return batt_read(&B1); }
+float hw_battery2_read(void) { return batt_read(&B2); }

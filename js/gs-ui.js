@@ -152,6 +152,10 @@ function buildGsContent() {
   GS_UI.vN = -1;
   W.vSpark = GSW.sparkline('Voltage, last minute (empty to full)', { dp: 1, n: 120, min: () => 3.2 * cells(), max: () => 4.2 * cells() });
   b.append(W.batPct.el, grid(W.volts.el, W.amps.el, W.mah.el), W.vSpark.el);
+  {   // a second pack (one for the boards): its voltage, when the flight controller reads it (battery2=)
+    const C = computers(), P2 = typeof sensedPack2 === 'function' ? sensedPack2(C, cfg.comps) : null;
+    if (P2) { const n = packSpec(C, P2, cfg.comps).cells; W.volts2 = GSW.value(P2.name + ' voltage', { unit: 'V', dp: 2, tone: v => v < 3.3 * n ? 'bad' : v < 3.6 * n ? 'warn' : '' }); b.append(grid(W.volts2.el)); }
+  }
 
   // map
   const m = sec('Map', 'from home, north up');
@@ -322,6 +326,7 @@ function renderLinkLog(has) {
 function renderGs(force) {
   if ($('#paneGs').hidden) return;
   const now = performance.now(); if (!force && now < GS_UI.next) return; GS_UI.next = now + 200;
+  { const P2 = typeof sensedPack2 === 'function' ? sensedPack2(computers(), cfg.comps) : null, k = P2 ? P2.id + P2.name : ''; if (GS_UI.pack2 !== k) { GS_UI.pack2 = k; GS_UI.built = false; } }   // (a second pack added or gone: its readout)
   if (!GS_UI.built) buildGs();
   const W = GS_UI.w, t = brt.t, has = hasTask('tlm');
   const gk = computers().ground, gname = `${gk.name === 'Command module' ? '' : gk.name + ', '}${BOARD_KINDS[gk.kind].label}`;
@@ -366,6 +371,7 @@ function renderGs(force) {
     if (v.super && v.super.soc >= 0) W.batPct.set(v.battery.pct, at.battery);
     if (gs.vN !== GS_UI.vN) { GS_UI.vN = gs.vN; W.vSpark.set(gs.vHist, at.battery); }   // (one point per battery frame, kept by gsRead)
   }
+  if (v.packs && W.volts2) W.volts2.set(v.packs.volts2, at.packs);
   if (v.pos || v.nav) W.map.set({ track: gs.trackXY || [], pos: v.pos ? [v.pos.x, v.pos.y] : null, target: v.nav ? [v.nav.tx, v.nav.ty] : null, heading: v.attitude ? v.attitude.yaw : 0 }, at.pos ?? at.nav);
   if (v.motors) W.motors.set(v.motors.values, at.motors, actuators().map(c => c.name), v.parts ? v.parts.values : null);
   if (v.super) { W.sup.set((SUP_MODE[v.super.mode] || `mode ${v.super.mode}`) + (v.super.why ? ': ' + (SUP_WHY[v.super.why] || `reason ${v.super.why}`) : ''), at.super); W.margin.set(v.super.margin, at.super); }

@@ -78,6 +78,12 @@ function boardPack(C, b, comps, seen = new Set()) {
   const bats = batteryParts(comps).filter(c => batteryWired(C, c) && packFeedsBoards(C, c));
   return bats.find(c => c.id === s.pack) || bats[0] || null;
 }
+// The pack a second sense input reads (battery2=, on the flight controller): the flight controller's board's pack when
+// it isn't the motors' (a pack for the boards), else the first other connected pack; null: there's no second pack.
+function sensedPack2(C, comps) {
+  const mp = motorPack(C, comps), core = C.boards.find(b => b.tasks.includes('core')), P = core && boardPack(C, core, comps);
+  return P && P !== mp ? P : batteryParts(comps).find(c => c !== mp && batteryWired(C, c)) || null;
+}
 const boardCells = (C, b, comps) => packSpec(C, boardPack(C, b, comps) || mainPack(C, comps), comps).cells;
 const packLabel = (C, c, comps) => { const P = packSpec(C, c, comps); return P.cells + 'S · ' + (P.cells * LIPO_MIN).toFixed(1) + '–' + (P.cells * LIPO_MAX).toFixed(1) + ' V'; };
 // What feeds each board's 5 V (wiring.boards[id].supply; 'auto': a boost converter on a 1S pack, a 5 V regulator above).
@@ -129,6 +135,17 @@ function powerIssues(C, comps) {
     else if (v > 2.45) warnings.push('Battery voltage: at full charge the ADC pin sees ' + v.toFixed(2) + ' V; the ESP32 reads accurately only up to about 2.45 V. A ratio of ' + best + ' keeps it in range.');
     else if (v < 1.2) warnings.push('Battery voltage: at full charge the ADC pin sees only ' + v.toFixed(2) + ' V of its range, so it reads coarsely. A ratio of ' + best + ' suits a ' + cells + 'S pack.');
   }
+  // the second sense input: the boards' pack (only reported; it doesn't touch the flight)
+  if (core && ESP_PROFILES[core.kind] && bus.batteryPin2 >= 0) {
+    const P2 = sensedPack2(C, comps);
+    if (!P2) warnings.push('Second pack voltage: there is no second connected pack for it to read.');
+    else if (bus.batteryDivider2 >= 1) {
+      const c2 = packSpec(C, P2, comps).cells, v = c2 * LIPO_MAX / bus.batteryDivider2, best = Math.max(1, Math.ceil(c2 * LIPO_MAX / 2.2 * 2) / 2);
+      if (v > 3.3) errors.push(P2.name + ' voltage: at full charge the ADC pin would see ' + v.toFixed(2) + ' V, more than the chip takes (3.3 V). Use a divider ratio of at least ' + best + '.');
+      else if (v > 2.45) warnings.push(P2.name + ' voltage: at full charge the ADC pin sees ' + v.toFixed(2) + ' V; the ESP32 reads accurately only up to about 2.45 V. A ratio of ' + best + ' keeps it in range.');
+      else if (v < 1.2) warnings.push(P2.name + ' voltage: at full charge the ADC pin sees only ' + v.toFixed(2) + ' V of its range, so it reads coarsely. A ratio of ' + best + ' suits a ' + c2 + 'S pack.');
+    }
+  }
   return { errors, warnings };
 }
 // Resistors for a divider ratio: R1 (battery + to the midpoint) 100 kΩ, R2 (midpoint to GND) to suit, both in kΩ.
@@ -163,7 +180,7 @@ function boardLinks(C, comps = typeof cfg !== 'undefined' ? cfg.comps : []) {
 }
 function hardwareBus(C,b) {
   const p = ESP_PROFILES[b.kind], s = C.wiring && C.wiring.boards && C.wiring.boards[b.id] || {};
-  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 1, escCellsMax: 8, batteryPin:-1, batteryDivider:11, crsfRx:-1, crsfTx:-1, fcLinkTx:-1, fcLinkRx:-1, nrfPins:[-1,-1,-1,-1,-1],
+  return { sda: p ? p.i2c[0] : 2, scl: p ? p.i2c[1] : 3, brushedHz:20000, escHz: 400, escMin: 1000, escMax: 2000, escStop: 0, escCellsMin: 1, escCellsMax: 8, batteryPin:-1, batteryDivider:11, batteryDivider2:2, crsfRx:-1, crsfTx:-1, fcLinkTx:-1, fcLinkRx:-1, nrfPins:[-1,-1,-1,-1,-1],
     linkTransport: 'serial', mqttHost: '', mqttPort: 1883, mqttPrefix: 'liftlab', mqttBroker: 'here', net: b.kind !== 'pizero', wifiSsid: '', ...s };
 }
 // The link between a companion board and the flight controller: the serial line (UART wires or a USB adapter), or an
@@ -196,7 +213,7 @@ function mqttLinkErrors(C, b) {   // the companion's end of an MQTT link: its se
 function hardwareInputPins(kind) { const p=ESP_PROFILES[kind];return !p?PI_GPIO_PINS:kind==='esp32'?[...p.pins,34,35,36,37,38,39]:p.pins; }
 function hardwarePinClaims(C,comps,b) {
   const bus=hardwareBus(C,b),claims=[];
-  if(ESP_PROFILES[b.kind]) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'},{pin:bus.batteryPin,name:'Battery ADC',key:'battery'},{pin:bus.crsfRx,name:'Receiver RX',key:'rx'},{pin:bus.crsfTx,name:'Receiver TX',key:'tx'});
+  if(ESP_PROFILES[b.kind]) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'},{pin:bus.batteryPin,name:'Battery ADC',key:'battery'},{pin:bus.batteryPin2??-1,name:'Second pack ADC',key:'battery2'},{pin:bus.crsfRx,name:'Receiver RX',key:'rx'},{pin:bus.crsfTx,name:'Receiver TX',key:'tx'});
   if(ESP_PROFILES[b.kind]&&b.tasks.includes('core')){const fl=fcLinkPins(C,b);if(fl.own)claims.push({pin:fl.tx,name:'Companion link TX',key:'fcLinkTx'},{pin:fl.rx,name:'Companion link RX',key:'fcLinkRx'});}
   else { if(comps.some(c=>c.type==='sensor' && ['imu','baro','mag'].includes(c.kind) && hardwareOwner(C,c)===b)) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'});
     if(b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)) && bus.linkTransport!=='mqtt' && (!bus.linkPort || bus.linkPort==='/dev/serial0')) claims.push({pin:14,name:'Flight-controller serial TX',key:'linkTx'},{pin:15,name:'Flight-controller serial RX',key:'linkRx'});
@@ -258,6 +275,8 @@ function hardwarePlan(C, comps, b) {
     if (!profile.pins.includes(bus.sda) || !profile.pins.includes(bus.scl) || bus.sda === bus.scl) errors.push('I²C needs two distinct available GPIOs');
     if(bus.batteryPin>=0 && !profile.adc.includes(bus.batteryPin))errors.push('Battery voltage: choose an available ADC1 GPIO');
     if(!Number.isFinite(bus.batteryDivider)||bus.batteryDivider<1||bus.batteryDivider>30)errors.push('Battery voltage: divider ratio must be 1–30');
+    if(bus.batteryPin2>=0 && !profile.adc.includes(bus.batteryPin2))errors.push('Second pack voltage: choose an available ADC1 GPIO');
+    if(bus.batteryPin2>=0 && (!Number.isFinite(bus.batteryDivider2)||bus.batteryDivider2<1||bus.batteryDivider2>30))errors.push('Second pack voltage: divider ratio must be 1–30');
     if((bus.crsfRx>=0)!==(bus.crsfTx>=0))errors.push('Receiver: assign both RX and TX, or disconnect both');
     if(bus.crsfRx>=0 && (!hardwareInputPins(b.kind).includes(bus.crsfRx)||!profile.pins.includes(bus.crsfTx)))errors.push('Receiver: unavailable RX/TX GPIO');
     const seen = new Set();
@@ -361,6 +380,8 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   if(typeof designVref==='function')lines.push('vref='+designVref());   // the pack voltage the exported airframe's tables are for
   lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
+  // a second pack's voltage (flight firmware with wiring version 15): only once set, so a design without one still installs on older firmware
+  if(bus.batteryPin2>=0)lines.push('battery2='+bus.batteryPin2+','+bus.batteryDivider2);else if(bus.batteryPin2===-1)lines.push('battery2=-1');
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
   if(bus.fcLinkTx>=0 && bus.fcLinkRx>=0)lines.push('link_uart='+bus.fcLinkTx+','+bus.fcLinkRx);
   if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
@@ -394,7 +415,7 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors,PACK_FEEDS,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells};
+if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors,PACK_FEEDS,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,sensedPack2};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
@@ -431,6 +452,7 @@ function hardwareOverview(C, comps) {
   }
   for(const b of C.boards){
     const g=groups.find(g=>g.id===b.id),bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
+    if(esp&&b.id===core?.id&&(bus.batteryPin2>=0||batteryParts(comps).length>1)){const P2=sensedPack2(C,comps);g.rows.push({device:(P2?P2.name:'Second pack')+' voltage',connection:pin(bus.batteryPin2??-1)+(bus.batteryPin2>=0?' ← resistor divider midpoint':''),note:bus.batteryPin2>=0?'Divider ratio '+bus.batteryDivider2+' · divider GND → board GND · reported only':'Optional ADC input for the second pack'});}
     if(esp&&b.id===core?.id)g.rows.push({device:'Battery voltage',connection:pin(bus.batteryPin)+(bus.batteryPin>=0?' ← resistor divider midpoint':''),note:bus.batteryPin>=0?'Divider ratio '+bus.batteryDivider+' · divider GND → board GND':'Optional ADC input'});
     if(b.kind.startsWith('pi')){
       const port=bus.linkPort||'/dev/serial0',fl=fcLinkPins(C,core),link=fl&&[fl.tx,fl.rx];

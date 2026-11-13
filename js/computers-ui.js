@@ -413,7 +413,7 @@ function renderComputerDetail(){
     if(typeof powerDiagramView==='function')box.append(powerDiagramView(C,comps));
     const I=powerIssues(C,comps);for(const m of I.errors)box.append(el('p',{class:'bad',text:m}));for(const m of I.warnings)box.append(el('p',{class:'hint',text:m}));
     const mp=motorPack(C,comps);
-    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the voltage of the pack that runs the motors'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' The flight firmware reads one pack: a board-only pack isn\'t measured on the drone yet, so check it with a meter or a cheap LiPo alarm.':'')}));
+    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the voltage of the pack that runs the motors'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' A second input below reads the boards\' pack: the flight controller reports its voltage to the ground station (battery2=, flight firmware with wiring version 15).':'')}));
     mountHardware(box,'[data-hw-role="battery"]');computerWiringIssues(box,boardOf('core'));return;
   }
   if(view.kind==='link'){
