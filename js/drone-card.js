@@ -9,6 +9,8 @@
 //                its text commands (level, level none, safety off, esp32 show …: docs/pi-suite.md), an ESP32 that is
 //                the radio as its settings lines; in the simulator the boards answer the same way (boards.js
 //                droneText). The answer comes back down as a message: the card shows it under the line.
+//   upload       Upload design: the design's files to the drone's Pi, its wiring and airframe on to the ESP32 (below:
+//                cardUpload), up the radio; shown when the radio is on a Pi. Pressed again while it runs, it stops
 //   disconnect   leave the real drone (shown only while connected)
 // confirm: the first press asks, a second within 3 s does it. In the simulator the switches take over from the
 // simulator's pilot (who arms and takes off by itself after a reset) until the next reset.
@@ -30,6 +32,7 @@ function cardShown(b) {
   const nav = hasTask('nav');
   if (b.act === 'home') return nav;
   if (b.act === 'disconnect') return cardLive();
+  if (b.act === 'upload') return !!cardRadioPi();
   if (b.act === 'fly') return !(cardLive() && !nav && live.gp);       // (angle mode with a gamepad: its throttle stick takes off)
   return true;
 }
@@ -45,15 +48,18 @@ function cardSimFly() {
   if (cardSwitchOn('fly')) { P.fly = 0; P.phase = 'landing'; P.t = 0; P.stillT = 0; if (!nav) P.thr = 0.3; linkLog('↑', 'switch', 'FLY off', 'the drone card: landing', ''); return; }
   Object.assign(P, { phase: 'takeoff', t: 0, fly: nav ? 1 : 0, thr: nav ? 0 : 0.85, alt0: null }); linkLog('↑', 'switch', 'FLY on', 'the drone card: taking off', '');
 }
-// A line for the drone: up through this page's command module (the simulator's, or live.js's own).
-function cardSend(line) {
-  line = String(line || '').trim(); if (!line) return 'type a command first';
+// A line for the drone: up through this page's command module (the simulator's, or live.js's own). '' when it went.
+function cardTextOut(line) {
   const g = cardLive() ? live.g : brt.gnd;
   if (!g) return hasTask('tlm') ? 'the command module isn\'t running (see the Ground tab)' : 'this design has no radio: give a board the Telemetry & radio task (Computers tab)';
   if (line.length > CARD_TEXT_MAX || /[^\x20-\x7e]/.test(line)) return `a command is up to ${CARD_TEXT_MAX} plain characters`;
   if (typeof g.gnd_text !== 'function') return 'this page\'s flight computers are older than the card: reload the page';
   txtIn(g, line); const r = g.gnd_text();
-  if (r) return r === -1 ? 'too many commands waiting for the link: try again in a moment' : 'not sent: 1 to 57 plain characters';
+  return r ? r === -1 ? 'too many commands waiting for the link: try again in a moment' : 'not sent: 1 to 57 plain characters' : '';
+}
+function cardSend(line) {
+  line = String(line || '').trim(); if (!line) return 'type a command first';
+  const why = cardTextOut(line); if (why) return why;
   card.sent = { text: line, t: cardClock(), n: gs.nmsg || 0 };
   linkLog('↑', 'cmd', `text: ${line}`, 'the drone card', '');
   return '';
@@ -61,7 +67,7 @@ function cardSend(line) {
 function cardPress(i, el) {
   const b = cardButtons()[i]; if (!b) return;
   const now = performance.now();
-  if (b.confirm && !(card.ask && card.ask.i === i && now < card.ask.until)) { card.ask = { i, until: now + 3000 }; cardRender(true); return; }
+  if (b.confirm && !(b.act === 'upload' && cardUp.on) && !(card.ask && card.ask.i === i && now < card.ask.until)) { card.ask = { i, until: now + 3000 }; cardRender(true); return; }
   card.ask = null;
   let why = '';
   const L = cardLive();
@@ -71,9 +77,127 @@ function cardPress(i, el) {
   else if (b.act === 'home') radioHome();
   else if (b.act === 'disconnect') { if (L) why = liveStopPress(); }
   else if (b.act === 'send') why = cardSend(b.cmd);
+  else if (b.act === 'upload') { if (cardUp.on) { cardUp.stop = true; why = ''; } else why = cardUploadStart(); }
   cardNote(why || '', why ? 'bad' : '');
   if (why && el) flashEl(el);
   cardRender(true);
+}
+/* ───────── Upload design: the design onto the drone, through its Pi ───────── */
+// The design's files go up the radio as text commands (runner/fc/file_rx.h: file NAME SIZE CRC, fd OFF BASE64, file
+// end; the Pi lists the pieces that didn't come, and they go again) into the Pi's folder (dfb_pi's design/): wiring.txt
+// (the flight controller's settings lines, as Install gives them), drone.dfa (the airframe), drone.dnc (the navigation's
+// config) and, with the learning or the supervisor, drone.dlc. A file the Pi has already, the same, isn't sent. Then
+// `wiring` puts the settings on the ESP32 and saves them (the lines that carry the Pi's own link to it stay as they
+// are: a wrong one there would cut the drone off until USB), `esp32 reboot` starts it with them, and `airframe` gives
+// it the airframe, which it checks against its wiring and keeps in flash. The Pi's own files are used from dfb_pi's
+// next start (`restart`). Disarmed only. The simulator's Pi answers the same (boards.js piText).
+const cardUp = { on: false, stop: false, said: '' };
+const cardRadioPi = () => { const b = boardOf('tlm'); return b && BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].mcu ? b : null; };
+function cardUploadFiles() {
+  const core = boardOf('core'), files = [];
+  if (core && BOARD_KINDS[core.kind].mcu && typeof boardWiringPlan === 'function') {
+    const plan = boardWiringPlan(core);
+    if (plan.errors.length) throw new Error('the wiring has problems (Computers tab): ' + plan.errors.join('; '));
+    files.push({ name: 'wiring.txt', data: new TextEncoder().encode(hardwareSettings(plan).join('\n') + '\n') });
+  }
+  files.push({ name: 'drone.dfa', data: fcAirframeBlob() }, { name: 'drone.dnc', data: navConfigBlob() });
+  if (hasTask('learn') || hasTask('super')) files.push({ name: 'drone.dlc', data: piConfigBlob() });
+  return files.map(f => ({ ...f, data: f.data instanceof Uint8Array ? f.data : new Uint8Array(f.data) }));
+}
+function cardUploadStart() {
+  if (!cardRadioPi()) return 'Upload design goes through the drone\'s Pi, and this design\'s radio isn\'t on one (with no Pi: Computers → Install, by USB)';
+  if (cardLive() ? live.state !== 'up' : !brt.ready) return cardLive() ? 'not connected to the drone yet' : 'the simulator isn\'t running yet';
+  if (cardLive() ? live.arm : simArmed()) return 'disarm first';
+  let files; try { files = cardUploadFiles(); } catch (e) { return 'can\'t make the files: ' + e.message; }
+  Object.assign(cardUp, { on: true, stop: false, said: 'Upload design: starting' });
+  linkLog('↑', 'cmd', 'upload design', files.map(f => `${f.name} ${f.data.length} B`).join(', '), '');
+  cardUpload(files).then(r => { cardUp.on = false; cardNote(r.text, r.tone); linkLog('↓', 'cmd', 'upload design', r.text, r.tone === 'bad' ? 'bad' : ''); cardRender(true); });
+  return '';
+}
+// (time as the drone's clock goes: the simulator's stops with the page, and so do the waits)
+const cardUpTick = () => new Promise(r => setTimeout(r, 40));
+async function cardUpSleep(s) { const t0 = cardClock(); while (cardClock() - t0 < s) { if (cardUp.stop) throw new Error('stopped'); await cardUpTick(); } }
+function cardUpSay(s) { cardUp.said = s; cardRender(true); }
+async function cardUpSend(line) {
+  const t0 = cardClock();
+  for (;;) {
+    if (cardUp.stop) throw new Error('stopped');
+    if (cardLive() && live.state !== 'up') throw new Error('the link to the drone is gone');
+    const why = cardTextOut(line);
+    if (!why) return;
+    if (!/too many commands/.test(why) || cardClock() - t0 > 15) throw new Error(why);
+    await cardUpTick();
+  }
+}
+// The first message (oldest first) since n0 that matches re: its text, or '' after s seconds.
+async function cardUpWait(n0, re, s) {
+  const t0 = cardClock();
+  for (;;) {
+    const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0), got = gs.log.slice(0, Math.max(0, k)).reverse().find(m => re.test(m.text));
+    if (got) return got.text;
+    if (cardClock() - t0 > s) return '';
+    if (cardUp.stop) throw new Error('stopped');
+    await cardUpTick();
+  }
+}
+const cardUpB64 = b => { let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
+const cardUpEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+async function cardUpFile(f) {
+  const PIECE = 36, all = [], crc = crc32(f.data).toString(16), name = cardUpEsc(f.name);
+  for (let o = 0; o < f.data.length; o += PIECE) all.push(o);
+  let n0 = gs.nmsg || 0; await cardUpSend(`file ${f.name} ${f.data.length} ${crc}`);
+  const first = await cardUpWait(n0, new RegExp(`^file ${name}: |^file: `), 8);
+  if (!first) throw new Error(`no answer from the Pi about ${f.name}: is its dfb_pi new enough (it takes files since this LiftLab)?`);
+  if (/the same is here/.test(first)) return 'same';
+  if (!/send them/.test(first)) throw new Error(first);
+  let todo = all;
+  for (let round = 1; round <= 8; round++) {
+    for (let i = 0; i < todo.length; i++) {
+      cardUpSay(`Upload design: ${f.name}, ${round > 1 ? 'again, ' : ''}${i + 1} of ${todo.length} pieces`);
+      await cardUpSend(`fd ${todo[i]} ${cardUpB64(f.data.subarray(todo[i], todo[i] + PIECE))}`);
+    }
+    n0 = gs.nmsg || 0; await cardUpSend('file end');
+    const r = await cardUpWait(n0, new RegExp(`^file ${name}: (saved|missing|damaged|couldn't|done)|^file end: `), 10);
+    if (/: saved/.test(r)) return 'saved';
+    if (/: missing/.test(r)) { todo = (r.split(':').pop().match(/\d+/g) || []).map(Number).filter(o => all.includes(o)); if (!todo.length) todo = all; continue; }
+    if (/: damaged/.test(r)) { todo = all; continue; }
+    throw new Error(r || `no answer when ${f.name} was all sent`);
+  }
+  throw new Error(`${f.name}: pieces kept going missing; is the link weak?`);
+}
+async function cardUpload(files) {
+  const sim = !cardLive(), saved = {};
+  try {
+    for (const f of files) saved[f.name] = await cardUpFile(f);
+    if (files.some(f => f.name === 'wiring.txt')) {
+      cardUpSay('Upload design: the wiring to the ESP32');
+      let n0 = gs.nmsg || 0; await cardUpSend('wiring wiring.txt');
+      const w = await cardUpWait(n0, /^wiring: /, 8);
+      if (!/settings lines/.test(w)) throw new Error(w || 'no answer to wiring from the Pi');
+      const e = await cardUpWait(n0, /^esp32: (saved|couldn't save)/, 10);
+      if (!/: saved/.test(e)) throw new Error(e || 'the ESP32 didn\'t say it saved the wiring: is it connected to the Pi?');
+      const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0), bad = gs.log.slice(0, Math.max(0, k)).reverse().find(m => /^esp32: /.test(m.text) && !/^esp32: (saved|set )/.test(m.text));
+      if (bad) throw new Error(`the ESP32 refused a wiring line (it saved the rest; nothing restarted): ${bad.text.replace(/^esp32: /, '')}`);   // (its answers but "set …": dfb_pi holds those back)
+      if (cardLive() ? live.arm : simArmed()) throw new Error('it was armed: the ESP32 wasn\'t restarted (its new wiring is saved for its next start)');
+      cardUpSay('Upload design: restarting the ESP32 with it');
+      await cardUpSend('esp32 reboot'); await cardUpSleep(sim ? 0.5 : 6);
+    }
+    let a = '';
+    for (let k = 0; k < 3 && !/loaded/.test(a); k++) {
+      cardUpSay('Upload design: the airframe to the ESP32');
+      const n0 = gs.nmsg || 0; await cardUpSend('airframe drone.dfa');
+      const p = await cardUpWait(n0, /^airframe /, 8);
+      if (!/motors/.test(p)) throw new Error(p || 'no answer to airframe from the Pi');
+      a = await cardUpWait(n0, /^esp32: airframe/, 6);
+      if (!/loaded/.test(a) && k < 2) await cardUpSleep(3);            // (the ESP32 may still be starting)
+    }
+    if (!/loaded and saved/.test(a)) throw new Error(a ? a.replace(/^esp32: /, 'the ESP32: ') : 'the ESP32 didn\'t say it took the airframe');
+    const pi = files.filter(f => f.name !== 'wiring.txt' && f.name !== 'drone.dfa' && saved[f.name] === 'saved').map(f => f.name);
+    const same = files.filter(f => saved[f.name] === 'same').length;
+    return { text: `Uploaded: the ESP32 has the wiring and the airframe${same ? ` (${same} of the files were on the Pi already)` : ''}${pi.length ? `. The Pi's ${pi.join(' and ')}: used from dfb_pi's next start (send restart)` : ''}`, tone: 'good' };
+  } catch (e) {
+    return { text: `Upload design ${e.message === 'stopped' ? 'stopped' : 'failed: ' + e.message}`, tone: e.message === 'stopped' ? '' : 'bad' };
+  }
 }
 function cardNote(s, tone) { card.msg = s; card.msgTone = tone || ''; card.msgT = performance.now(); }
 
@@ -112,6 +236,7 @@ function cardRender(force) {
   cardRenderSaid();
   if (card.edit && $('#cardEditor').dataset.sig !== JSON.stringify(cardButtons())) cardRenderEditor();   // (an undo, another tab's edit)
   const nav = hasTask('nav'), pad = L && !!live.gp, slow = L && live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : '';
+  if (cardUp.on) cardNote(cardUp.said, '');                           // (its progress stays while it runs)
   let note = card.msg && now - card.msgT < 6000 ? card.msg.charAt(0).toUpperCase() + card.msg.slice(1) + '.' : '';
   if (!note) note = L ? (!nav && !pad ? `Angle mode: ${live.landing ? 'landing (it sinks until the height stops changing).' : live.fly ? 'W/S climb and sink (let go: it holds the height), A/D turn, the arrows lean.' : 'Arm, then Take off: the keys and pads fly it, W/S climb.'}`
     : `${pad ? `Gamepad: ${live.gp.replace(/\s*\(.*$/, '')}. ` : ''}${nav ? 'The keys and pads move it; Space holds, H flies home.' : ''}`) + slow
@@ -128,7 +253,7 @@ function cardRenderButtons() {
     box.dataset.sig = sig; box.textContent = '';
     list.forEach((b, i) => {
       const x = el('button', { class: 'btn' + (b.act === 'arm' || b.act === 'fly' ? ' tog' : '') + (b.act === 'arm' ? ' live-arm' : ''), type: 'button', 'data-i': i,
-        title: b.act === 'send' ? `Sends "${b.cmd}" to the drone${b.confirm ? ' (press twice)' : ''}` : { arm: 'The arm switch', fly: 'The fly switch: take off, and land when off', hold: 'Hold where it is (Space)', home: 'Fly home (H)', disconnect: 'Leave the real drone: the simulation comes back' }[b.act] });
+        title: b.act === 'send' ? `Sends "${b.cmd}" to the drone${b.confirm ? ' (press twice)' : ''}` : { upload: 'Puts this design on the drone through its Pi: the Pi\'s files, and the ESP32\'s wiring and airframe (it restarts the ESP32). Disarmed only', arm: 'The arm switch', fly: 'The fly switch: take off, and land when off', hold: 'Hold where it is (Space)', home: 'Fly home (H)', disconnect: 'Leave the real drone: the simulation comes back' }[b.act] });
       x.addEventListener('mousedown', e => e.preventDefault());       // (a click leaves the keyboard where it was: Space mustn't press it again)
       x.addEventListener('click', () => cardPress(i, x));
       box.append(x);
@@ -141,7 +266,7 @@ function cardRenderButtons() {
     if (b.act === 'arm' || b.act === 'fly') x.setAttribute('aria-pressed', String(on));
     const asking = card.ask && card.ask.i === i;
     x.classList.toggle('is-asking', !!asking);
-    setText(x, asking ? `${b.label}? Again` : b.act === 'disconnect' && cardLive() && live.stopAsk && now < live.stopAsk ? 'Really disconnect?' : on && b.on ? b.on : b.label);
+    setText(x, asking ? `${b.label}? Again` : b.act === 'upload' && cardUp.on ? 'Stop upload' : b.act === 'disconnect' && cardLive() && live.stopAsk && now < live.stopAsk ? 'Really disconnect?' : on && b.on ? b.on : b.label);
   });
   if (cardLive() && live.stopAsk && now > live.stopAsk) live.stopAsk = 0;
 }
@@ -188,7 +313,7 @@ function cardDrag(e) {
 }
 
 /* ───────── editing the buttons ───────── */
-const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Send a command', disconnect: 'Disconnect (live)' };
+const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Send a command', upload: 'Upload design', disconnect: 'Disconnect (live)' };
 function cardSetButtons(list) {
   const C = computers(); C.ground.buttons = fixCardButtons(list);
   undoKey = 'cardButtons'; save(); $('#cardEditor').dataset.sig = JSON.stringify(cardButtons()); cardRender(true);

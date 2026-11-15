@@ -971,6 +971,7 @@ html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100
 .live-btns .live-arm[aria-pressed="true"]{border-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
 .live-note{margin:0;font-size:var(--text-xs);color:var(--muted)}
 .live-note[data-tone="bad"]{color:var(--bad)}
+.live-note[data-tone="good"]{color:var(--good)}
 /* the drone card (drone-card.js): the live bar, in the simulator too; it moves and folds */
 .drone-card{z-index:8;left:auto;right:12px;top:56px;width:min(380px,calc(100% - 24px));min-width:0;border-color:var(--line);box-shadow:0 4px 18px rgb(0 0 0 / .08)}
 .drone-card.is-live{border-color:var(--good)}

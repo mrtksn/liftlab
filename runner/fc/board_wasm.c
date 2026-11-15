@@ -39,6 +39,7 @@
 #include "bus.h"
 #include "prog_core.h"
 #include "fc_text.h"
+#include "file_rx.h"
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -437,9 +438,24 @@ EXPORT("fleet_view") int fleet_view(void) {
   return k;
 }
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
-/* The radio's text commands (rc_core.h RC_CMD_TEXT): how many came, the latest (into txt) */
+/* The radio's text commands (rc_core.h RC_CMD_TEXT): how many came */
 EXPORT("rc_text_n") int rc_text_n(void) { return (int)RCI.text_n; }
-EXPORT("rc_text") char *rc_text(void) { int i = 0; for (; i < RC_TEXT && RCI.text[i]; i++) txt[i] = RCI.text[i]; txt[i] = 0; return txt; }
+/* the nth text command (from 1, as rc_text_n: the last RC_TEXTQ are kept, rc_core.h rc_text_at), in txt; empty if it's gone */
+EXPORT("rc_text") char *rc_text(uint32_t n) { const char *s = rc_text_at(&RCI, n); int i = 0; for (; s && i < RC_TEXT && s[i]; i++) txt[i] = s[i]; txt[i] = 0; return txt; }
+/* A file up the radio (file_rx.h), as the drone's Pi takes it (dfb_pi): the line in txt, the answer in txt; 0 not one of
+ * these, 1 taken, 2 the file is whole (file_ptr, file_size; its name: file_name, in txt). */
+static file_rx FRX;
+EXPORT("file_line") int file_line(void) { char l[RC_TEXT + 8]; int i = 0; for (; i < (int)sizeof l - 1 && txt[i]; i++) l[i] = txt[i]; l[i] = 0; return file_rx_line(&FRX, l, txt, 200); }
+EXPORT("file_ptr") uint8_t *file_ptr(void) { return FRX.buf; }
+EXPORT("file_size") int file_size(void) { return FRX.active == 2 ? (int)FRX.size : 0; }
+EXPORT("file_name") char *file_name(void) { int i = 0; for (; FRX.name[i]; i++) txt[i] = FRX.name[i]; txt[i] = 0; return txt; }
+/* An airframe in blob checked as the flight core would take it (fc_airframe_load), changing nothing: its motors + 256 ×
+ * its servo joints, or −1 (why in txt). */
+EXPORT("af_check") int af_check(uint32_t n) {
+  static fc_state A; if (n > BLOB_CAP) n = BLOB_CAP;
+  if (fc_airframe_load(&A, blob, n)) { int i = 0; for (; i < 199 && A.why[i]; i++) txt[i] = A.why[i]; txt[i] = 0; return -1; }
+  return A.A.n_motors + 256 * A.A.n_joints;
+}
 /* a message for the pilot (in txt), down with the telemetry: severity 0–7 (6 information) */
 EXPORT("tlm_say") void tlm_say(int sev) { tlm_text(&TS, sev, txt); }
 /* what goes to the receiver now (into rbuf): returns the bytes */

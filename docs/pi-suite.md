@@ -96,6 +96,23 @@ module on a computer sends one with `drone LINE` (`runner/ground/dfb_ground`).
 
 `level` takes `level R,P[,Y]` and `level yaw Y` too (a trim until a reboot: [hardware-wiring.md](hardware-wiring.md#which-way-is-level)).
 
+### The design's files, over the radio
+
+LiftLab's drone card has **Upload design**: the design's files go up the radio into `~/liftlab/design` (`dfb_pi`'s
+working folder), and from there to the ESP32. Underneath, these are `dfb_pi` text commands too (from the radio, its UDP
+port or its standard input):
+
+| | |
+|---|---|
+| `file NAME SIZE CRC`, `fd OFFSET DATA`, `file end` | a file (`runner/fc/file_rx.h`): its name (no folders), size and CRC-32 in hex; then its pieces, base64, 36 bytes each at their offsets, in any order; then `file end` writes it (the one before stays as `NAME.old`), or lists the pieces that didn't come, to send again. If the same file is here already, the first line says so and nothing need come |
+| `wiring [NAME]` | the settings lines in `NAME` (`wiring.txt`) to the ESP32, then `save`; it uses them after `esp32 reboot`. `link_uart=` and `baud=` stay as they are: they carry this link, so a wrong one would cut the drone off (change those by USB). Its answer to each line isn't sent down, only what it refused and `saved` |
+| `airframe [NAME]` | the airframe in `NAME` (`--airframe`'s, or `drone.dfa`) to the ESP32, checked here first; it checks it against its wiring, keeps it in its flash and says `airframe loaded and saved` |
+| `restart` | `dfb_pi` stops, and its service starts it again a couple of seconds later with this folder's files (`drone.dnc`, `drone.dlc`) |
+
+`wiring`, `airframe` and `restart` need the drone disarmed. The card sends them in that order, with `esp32 reboot`
+between the wiring and the airframe (an airframe with more motors than the old wiring has outputs is refused until
+then); it leaves `restart` to you.
+
 `sticks ARM THROTTLE [ROLL PITCH YAW]` (arm 0/1, throttle 0..1, the rest −1..1, yaw as the flight controller's: negative
 turns right), `motor N THROTTLE` (N from 1 in the airframe's order; `--airframe` lets `dfb_pi` check it), `motor off`.
 

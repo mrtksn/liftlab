@@ -38,9 +38,12 @@ enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD,
  *   FLEET  on (1) or off (0): let the fleet program fly the drone (fleet.h), or not; the same things stop it
  *   TEXT   a line of text (up to RC_TEXT characters, in place of the values): a command for whichever board takes
  *          the radio's text (the Pi's dfb_pi: its text commands; the ESP32: its settings lines; fc_text.h). It is
- *          not one of the pilot's commands: rc_input keeps it apart (text, text_n), the pilot's command as it was */
+ *          not one of the pilot's commands: rc_input keeps it apart (text, text_n), the pilot's command as it was,
+ *          and the last RC_TEXTQ of them (rc_text_at), for a reader that takes one a step when several came at once
+ *          (a packet link's repeats come together: a file's pieces, file_rx.h) */
 enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4, RC_CMD_FLEET = 5, RC_CMD_TEXT = 6 };
 #define RC_TEXT 57
+#define RC_TEXTQ 16
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 #define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'
@@ -52,7 +55,10 @@ typedef struct rc_input {
   float up_rssi, up_lq, up_snr, down_rssi, down_lq; int rf_mode, tx_power; double t_link;
   int cmd; float cmd_v[6]; uint32_t cmd_seq; double t_cmd;   /* the latest ground-station command (cmd_seq counts them), and when it came */
   char text[RC_TEXT + 1]; uint32_t text_n; int text_seq; double t_text;   /* the latest TEXT command, how many came, its sequence, when */
+  char textq[RC_TEXTQ][RC_TEXT + 1];                    /* the last RC_TEXTQ of them: the nth (from 1) at (n − 1) % RC_TEXTQ */
 } rc_input;
+/* The nth TEXT command (counting from 1, as text_n), or 0 if it's gone (more than RC_TEXTQ came since) or not come. */
+static inline const char *rc_text_at(const rc_input *in, uint32_t n) { return n >= 1 && n <= in->text_n && in->text_n - n < RC_TEXTQ ? in->textq[(n - 1) % RC_TEXTQ] : 0; }
 static inline int rc_lq_lost(const rc_input *in, double t) { return in->t_link > 0 && t - in->t_link < RC_LOST_S && !(in->up_lq > 0); }
 static inline int rc_link_ok(const rc_input *in, double t) { return in->frames > 0 && t - in->t_ch < RC_LOST_S && !rc_lq_lost(in, t); }
 

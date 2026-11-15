@@ -87,12 +87,12 @@ function computers() {
 }
 // The drone card's buttons (drone-card.js), the command module's: what each does (act), its label (and its label while
 // on, for the switches), the text a "send" sends up the radio, and whether a second press is wanted (confirm).
-const CARD_ACTS = ['arm', 'fly', 'hold', 'home', 'send', 'disconnect'];
+const CARD_ACTS = ['arm', 'fly', 'hold', 'home', 'send', 'upload', 'disconnect'];
 const CARD_TEXT_MAX = 57;                                            // (rc_core.h RC_TEXT)
 const CARD_BUTTONS_DEFAULT = [
   { label: 'Arm', on: 'Armed', act: 'arm' }, { label: 'Take off', on: 'Land', act: 'fly' }, { label: 'Hold', act: 'hold' }, { label: 'Home', act: 'home' },
   { label: 'Level here', act: 'send', cmd: 'level', confirm: true }, { label: 'Safety off', act: 'send', cmd: 'safety off', confirm: true },
-  { label: 'Safety on', act: 'send', cmd: 'safety on' }, { label: 'Disconnect', act: 'disconnect' },
+  { label: 'Safety on', act: 'send', cmd: 'safety on' }, { label: 'Upload design', act: 'upload', confirm: true }, { label: 'Disconnect', act: 'disconnect' },
 ];
 function fixCardButtons(list) {
   if (!Array.isArray(list)) return null;
@@ -724,15 +724,79 @@ function boardsControl(dt) {
 const txtIn = (w, s) => { const b = new TextEncoder().encode(String(s).slice(0, 400) + '\0'); new Uint8Array(w.memory.buffer, w.txt_ptr(), b.length).set(b); };
 // A line that came up the radio to the receiver's board, as the drone's Pi (runner/pi/dfb_pi.c) takes it: level and
 // safety (and esp32 LINE, the ESP32's settings lines) go to the flight core's board, whose answer (fc_text.c: what
-// the ESP32's settings lines answer) goes back down the radio as a message. The Pi's other commands are the Pi's.
+// the ESP32's settings lines answer) goes back down the radio as a message. The Pi's other commands are the Pi's:
+// here the design's files (piText). Each answer goes down as dfb_pi's do; a file's pieces say nothing.
 function droneText(tlmB, tw, coreB, line) {
   let s = line.trim(); const esp = s.startsWith('esp32 '); if (esp) s = s.slice(6).trim();
   const cw = coreB && brt.inst.get(coreB.id);
+  const say = (r, sev = 6) => { txtIn(tw, r.length > 168 ? r.slice(0, 165) + '...' : r); tw.tlm_say(sev); };
+  const pi = tlmB && BOARD_KINDS[tlmB.kind] && !BOARD_KINDS[tlmB.kind].mcu;
+  const own = pi && !esp ? piText(tw, s) : null;
+  if (own) {
+    if (own.log) linkLog('↑', 'cmd', `text: ${line}`, `${tlmB.name} answered: ${own.say.join(' · ')}`, '');
+    for (const r of own.say) say(r);
+    return;
+  }
+  if (esp && s === 'reboot') {                                         // (as flight.c's: there's no ESP32 here to start again)
+    linkLog('↑', 'cmd', `text: ${line}`, `${tlmB.name} passed it on: the simulator's flight core runs on`, '');
+    say('esp32: rebooting (the simulator\'s flight core runs on)'); return;
+  }
   let reply;
   if (!cw) reply = 'no flight core on the drone';
   else { txtIn(cw, s); reply = cw.fc_text() ? cstr(cw, cw.txt_ptr(), 200) : `the simulator doesn't have "${s}": it has level, level none, level R,P[,Y], level yaw Y, safety on|off, safety, status`; }
   linkLog('↑', 'cmd', `text: ${line}`, `${tlmB.name} took it; ${coreB && coreB.id !== tlmB.id ? coreB.name + ' answered' : 'it answered'}: ${reply}`, '');
-  txtIn(tw, reply.length > 168 ? reply.slice(0, 165) + '...' : reply); tw.tlm_say(6);
+  say(reply);
+}
+// The CRC-32 the files are checked with (runner/rn.c rn_crc32, zlib's).
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+// The simulated Pi's folder: the files sent up (file_rx.h), kept until the page is closed, as the real Pi's are on its disk.
+const simPiFiles = new Map();
+const simArmed = () => brt.fcState === 1 || brt.fcState === 2;        // (the flight core armed or in its failsafe: fc_core.h)
+const WIRING_KEEP = ['link_uart', 'baud'];                           // (dfb_pi's KEEP_KEYS: its own link to the ESP32)
+// The Pi's own commands for the design's files, as dfb_pi.c design_line answers them: { say: [answers], log } or null
+// (not one of them). The ESP32's side of them as the simulator has it: its settings are the design's, its flight core
+// already flies the design's airframe, so wiring and airframe are checked and said, not applied.
+function piText(tw, s) {
+  const m = /^file (\S+) (\d+) ([0-9a-fA-F]{1,8})$/.exec(s), have = m && simPiFiles.get(m[1]);
+  if (have && have.length === +m[2] && crc32(have) === parseInt(m[3], 16)) return { say: [`file ${m[1]}: the same is here already`], log: true };
+  if ((/^file( |$)/.test(s) || s.startsWith('fd ')) && tw.file_line) {
+    txtIn(tw, s); const r = tw.file_line(), said = cstr(tw, tw.txt_ptr(), 200);
+    if (r === 2) {
+      const n = tw.file_size(), name = cstr(tw, tw.file_name(), 40);
+      simPiFiles.set(name, new Uint8Array(tw.memory.buffer, tw.file_ptr(), n).slice());
+      return { say: [`file ${name}: saved, ${n} bytes`], log: true };
+    }
+    return { say: said ? [said] : [], log: !s.startsWith('fd ') || !!said };
+  }
+  let a;
+  if ((a = /^wiring(?: (.*))?$/.exec(s))) {
+    const name = (a[1] || '').trim() || 'wiring.txt', f = simPiFiles.get(name);
+    if (simArmed()) return { say: ['wiring: disarm first'], log: true };
+    if (!f) return { say: [`wiring: no ${name} here (send it first)`], log: true };
+    const kept = new Set(); let n = 0, bad = 0;
+    for (const raw of new TextDecoder().decode(f).split('\n')) {
+      const l = raw.trim(); if (!l || l[0] === '#') continue;
+      const k = l.indexOf('='); if (k < 0 || l.length > 126) { bad++; continue; }
+      if (WIRING_KEEP.includes(l.slice(0, k))) { kept.add(l.slice(0, k)); continue; }
+      n++;
+    }
+    if (!n) return { say: [`wiring: no settings lines in ${name}`], log: true };
+    return { say: [`wiring: ${n} settings lines to the ESP32, then save${kept.size ? ` (kept as they are: ${[...kept].join(', ')})` : ''}${bad ? ' (skipped lines that aren\'t KEY=VALUE)' : ''}; it uses them after esp32 reboot`,
+      'esp32: saved; reboot to use them (the simulator\'s wiring is the design\'s)'], log: true };
+  }
+  if ((a = /^airframe(?: (.*))?$/.exec(s))) {
+    const name = (a[1] || '').trim() || 'drone.dfa', f = simPiFiles.get(name);
+    if (simArmed()) return { say: ['airframe: disarm first'], log: true };
+    if (!f) return { say: [`airframe: no ${name} here (send it first)`], log: true };
+    if (f.length > 4096) return { say: [`airframe ${name}: not one the flight controller takes: over 4096 bytes`], log: true };
+    new Uint8Array(tw.memory.buffer, tw.blob_ptr(), f.length).set(f);
+    const k = tw.af_check(f.length);
+    if (k < 0) return { say: [`airframe ${name}: not one the flight controller takes: ${cstr(tw, tw.txt_ptr(), 120)}`], log: true };
+    return { say: [`airframe ${name}: ${k & 255} motors, ${k >> 8} servos, to the ESP32 (it says when it has it)`, 'esp32: airframe loaded and saved (the simulator flies the design\'s)'], log: true };
+  }
+  if (s === 'restart') return { say: [simArmed() ? 'restart: disarm first' : 'restart: the simulator\'s Pi runs the design\'s files already'], log: true };
+  return null;
 }
 
 /* ───────── the radio: the receiver on the telemetry task's board ───────── */
@@ -770,7 +834,8 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     let k = 0; for (; k < radio.toBoard.length; k++) { const f = radio.toBoard[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
     radio.toBoard = radio.toBoard.slice(k); tw.radio_in(n, brt.t);   // (what didn't fit goes next step)
   }
-  const tn = tw.rc_text_n(); if (tn !== brt.textN) { brt.textN = tn; droneText(tlmB, tw, coreB, cstr(tw, tw.rc_text(), 64)); }
+  { const tn = tw.rc_text_n(); if (tn < brt.textN) brt.textN = tn;   // each text command that came, in turn (several at once: a packet link's repeats)
+    while (brt.textN < tn) { brt.textN = Math.max(brt.textN + 1, tn - 15); droneText(tlmB, tw, coreB, cstr(tw, tw.rc_text(brt.textN), 64)); } }
   if (brt.t >= brt.nextPub - 1e-9) {
     brt.nextPub += 0.01;
     const pack = brt.t >= brt.nextPack - 1e-9; if (pack) brt.nextPack += 0.05;

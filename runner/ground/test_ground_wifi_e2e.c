@@ -9,7 +9,10 @@
  * calibration from the radio, that a text command ("drone esp32 show") reaches the ESP32 and its answer comes back down
  * as a message, that the telemetry comes back and the uplink's quality is counted (about 85% through
  * the loss, 100% after), and that when the air is cut the drone flies home and lands by itself and the command module
- * raises its alarm. Then it starts a command module with another binding phrase: nothing it sends is taken (the
+ * raises its alarm. Before the take-off it puts the design's files on the Pi as LiftLab's drone card does (Upload
+ * design: file_rx.h's text commands through 15% loss): an airframe, written in dfb_pi's folder and sent to the ESP32
+ * whole (airframe), the same file again (it's there already), and a wiring file whose lines go to the ESP32 but
+ * link_uart's, then save (wiring), the ESP32's answers coming down but its "set ..." for each line. Then it starts a command module with another binding phrase: nothing it sends is taken (the
  * drone doesn't arm), nothing of the drone's reaches it, and both ends say the phrase doesn't match. And dfb_pi
  * refuses ESP-NOW (it needs an ESP32), dfb_ground ESP-NOW without the bridge's port.
  *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_wifi_e2e test_ground_wifi_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
@@ -23,7 +26,13 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#ifdef __APPLE__
+#include <util.h>
+#else
 #include <pty.h>
+#endif
+#include <limits.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -57,10 +66,12 @@ static void step_ms(void) {
 }
 static int udp; static struct sockaddr_in to;
 static void say(const char *s) { sendto(udp, s, strlen(s), 0, (struct sockaddr *)&to, sizeof to); }
+static const char *spawn_dir;   /* (where the next program runs: dfb_pi writes the files it's sent there) */
 static pid_t spawn(const char *prog, char *const argv[], int *out_fd) {
   int p[2]; if (pipe(p)) return -1;
+  char path[PATH_MAX]; if (!realpath(prog, path)) snprintf(path, sizeof path, "%s", prog);
   pid_t pid = fork();
-  if (!pid) { int nul = open("/dev/null", O_RDONLY); dup2(nul, 0); dup2(p[1], 1); dup2(p[1], 2); execv(prog, argv); _exit(1); }
+  if (!pid) { int nul = open("/dev/null", O_RDONLY); dup2(nul, 0); dup2(p[1], 1); dup2(p[1], 2); if (spawn_dir && chdir(spawn_dir)) _exit(1); execv(path, argv); _exit(1); }
   close(p[1]); fcntl(p[0], F_SETFL, O_NONBLOCK); *out_fd = p[0];
   return pid;
 }
@@ -84,13 +95,19 @@ static int refuses(const char *prog, char *const argv[], const char *want) {
 }
 
 static int esp_setting, esp_answer_down, pi_text_line;
+static int up_saved, up_same, w_saved, af_down, af_got, af_said, wiring_said, w_lines, w_link_uart, w_save, w_set_down, saved_down, piece_lines;
 static int learn_line, cal_line, lost_line, landed_line, alarm_line, prog_line, pi_peer_line, pi_bad_line, gnd_bad_line, pi_radio_lines;
 static void on_pi(const char *s) {
   learn_line |= strstr(s, "learning command 1") != 0; cal_line |= strstr(s, "calibrating") != 0; lost_line |= strstr(s, "radio link lost: flying home") != 0;
   landed_line |= strstr(s, "landed by itself") != 0; pi_peer_line += strstr(s, "the command module is at") != 0;
   pi_bad_line += strstr(s, "fail the binding phrase") != 0; pi_radio_lines += !strncmp(s, "radio: ", 7); pi_text_line |= strstr(s, "radio text: esp32 show") != 0;
+  piece_lines += strstr(s, "radio text: fd ") != 0;   /* (a file's pieces aren't each logged) */
 }
-static void on_gnd(const char *s) { esp_answer_down |= strstr(s, "esp32: fake settings for show") != 0; alarm_line |= strstr(s, "ALARM: no telemetry") != 0; prog_line += strstr(s, "drone: ") != 0; gnd_bad_line += strstr(s, "fail the binding phrase") != 0; }
+static void on_gnd(const char *s) {
+  up_saved |= strstr(s, "file up.dfa: saved") != 0; up_same |= strstr(s, "file up.dfa: the same is here") != 0; w_saved |= strstr(s, "file w.txt: saved") != 0;
+  af_said |= strstr(s, "airframe up.dfa: 4 motors") != 0; af_down |= strstr(s, "esp32: airframe loaded and saved") != 0;
+  wiring_said |= strstr(s, "wiring: 2 settings lines") != 0; w_set_down += strstr(s, "esp32: set ") != 0; saved_down |= strstr(s, "esp32: saved; reboot") != 0;
+  esp_answer_down |= strstr(s, "esp32: fake settings for show") != 0; alarm_line |= strstr(s, "ALARM: no telemetry") != 0; prog_line += strstr(s, "drone: ") != 0; gnd_bad_line += strstr(s, "fail the binding phrase") != 0; }
 
 /* ── the air: a UDP proxy between the command module and the drone ── */
 static int sg = -1, sd = -1; static struct sockaddr_in g_addr, d_addr; static int have_g;
@@ -132,10 +149,16 @@ int main(void) {
   char drone[32]; snprintf(drone, sizeof drone, "127.0.0.1:%d", PROXY_PORT);
   int pi_out, gnd_out;
   char *pa[] = { "dfb_pi", "--link", lname, "--nav", "/tmp/test_wifi.dnc", "--airframe", "/tmp/test_wifi.dfa", "--pi", "/tmp/test_wifi.dlc", "--port", ports[0], "--gps", gname,
-                 "--radio", "wifi,ap,6", "--radio-port", ports[1], "--bind", "test phrase", 0 };
+                 "--radio", "wifi,ap,6", "--radio-port", ports[1], "--bind", "test phrase",
+#ifdef __APPLE__
+                 "--baud", "115200",   /* (a macOS pty takes only the standard speeds; a pty's speed is nothing anyway) */
+#endif
+                 0 };
   char *ga[] = { "dfb_ground", "--radio", "wifi", "--drone", drone, "--bind", "test phrase", "--port", ports[2], "--status", 0 };
-  pid_t pi = spawn("../pi/dfb_pi", pa, &pi_out), gnd = spawn("./dfb_ground", ga, &gnd_out);
-  fcntl(lm, F_SETFL, O_NONBLOCK);
+  char pi_dir[] = "/tmp/test_wifi_pi.XXXXXX"; if (!mkdtemp(pi_dir)) { perror("mkdtemp"); return 1; }
+  spawn_dir = pi_dir; pid_t pi = spawn("../pi/dfb_pi", pa, &pi_out); spawn_dir = 0;
+  pid_t gnd = spawn("./dfb_ground", ga, &gnd_out);
+  fcntl(lm, F_SETFL, O_NONBLOCK); fcntl(gm, F_SETFL, O_NONBLOCK);   /* (a GPS port nobody reads mustn't stop the test) */
   udp = socket(AF_INET, SOCK_DGRAM, 0); to.sin_family = AF_INET; to.sin_port = htons(GND_CMD_PORT); to.sin_addr.s_addr = htonl(INADDR_LOOPBACK); fcntl(udp, F_SETFL, O_NONBLOCK);
   static uint8_t lbuf[8192]; rn_link L; rn_link_init(&L, lbuf, sizeof lbuf);
   static tlm_store TS; static tlm_watch TW; tlm_init(&TS); tlm_watch_init(&TW);
@@ -144,7 +167,7 @@ int main(void) {
   double armed_at = 0, goto_at = 0, fwd_at = 0, cal_at = 0, quiet_at = 0, wrong_at = 0; float x0 = 0, x1 = 0;
   char status[600] = "", status_loss[600] = "", status_wrong[600] = "";
   int ok_takeoff = 0, ok_goto = 0, wrong_armed = 0, radio_lines_before = 0; long up_before = 0, down_before = 0;
-  while (now_s() - t0 < 95) {
+  while (now_s() - t0 < 160) {
     double el = now_s() - t0;
     lines(pi_out, pbuf, &pn, "pi", on_pi); lines(gnd_out, gbuf, &gn, "ground", on_gnd);
     { char r[600]; struct sockaddr_in f; socklen_t fl = sizeof f; ssize_t n = recvfrom(udp, r, sizeof r - 1, 0, (struct sockaddr *)&f, &fl);
@@ -159,6 +182,11 @@ int main(void) {
       else if (type == RN_LINK_MODEL) fc_model(&F, (const float *)L.buf, (int)(L.len / 4));
       else if (type == RN_LINK_SET) fc_set(&F, (const float *)L.buf, (int)(L.len / 4));
       else if (type == RN_LINK_SETTING && L.len == 4 && !memcmp(L.buf, "show", 4)) { esp_setting = 1; send_frame(lm, RN_LINK_REPORT, "fake settings for show", 22); }   /* (as flight.c setting())*/
+      else if (type == RN_LINK_SETTING && L.len == 4 && !memcmp(L.buf, "save", 4)) { w_save++; send_frame(lm, RN_LINK_REPORT, "saved; reboot to use them", 25); }
+      else if (type == RN_LINK_SETTING) {
+        char m[160]; snprintf(m, sizeof m, "set %.*s (save, then reboot, to use it)", (int)L.len, (char *)L.buf); send_frame(lm, RN_LINK_REPORT, m, (uint32_t)strlen(m));
+        if (L.len >= 9 && !memcmp(L.buf, "link_uart", 9)) w_link_uart++; else w_lines++;
+      } else if (type == RN_LINK_AIRFRAME) { af_got = L.len == lq && !memcmp(L.buf, quad, lq); send_frame(lm, RN_LINK_REPORT, "airframe loaded and saved", 25); }
     }
     while (now_s() < next) { air(); usleep(200); }                     /* (the air passes the datagrams as they come) */
     next += 0.01;
@@ -178,7 +206,29 @@ int main(void) {
     }
     /* the pilot's script, over UDP */
     { static int sent; if (el > 1.5 && !sent) { say("drone esp32 show"); sent = 1; } }   /* a text command up the radio, to the ESP32 */
-    if (el > 2 && !armed_at) { say("press arm"); armed_at = el; }
+    /* the design's files up the radio, as the drone card's Upload design (js/drone-card.js), through 15% loss; then the take-off */
+    static int up_phase, up_done; static double up_next, up_phase_t; static uint32_t up_off;
+    if (el > 2 && !up_done && el >= up_next) {
+      static const char wiring[] = "motors=25,26,27,14\nlink_uart=32,35\n\nesc_hz=490\n";
+      const uint8_t *fb = up_phase < 4 ? quad : (const uint8_t *)wiring; uint32_t fn = up_phase < 4 ? lq : (uint32_t)strlen(wiring); const char *nm = up_phase < 4 ? "up.dfa" : "w.txt";
+      char line[96]; up_next = el + 0.16;
+      if (up_phase == 0 || up_phase == 4) { loss_pct = 15; snprintf(line, sizeof line, "drone file %s %u %x", nm, (unsigned)fn, (unsigned)rn_crc32(fb, fn)); say(line); up_off = 0; up_phase++; up_phase_t = el; }
+      else if (up_phase == 1 || up_phase == 5) {
+        if (up_off < fn) {
+          static const char *A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; char d[64]; int k = 0;
+          uint32_t m = fn - up_off < 36 ? fn - up_off : 36; const uint8_t *p = fb + up_off;
+          for (uint32_t i = 0; i < m; i += 3) { uint32_t v = (uint32_t)p[i] << 16 | (i + 1 < m ? (uint32_t)p[i + 1] << 8 : 0) | (i + 2 < m ? p[i + 2] : 0);
+            d[k++] = A[v >> 18 & 63]; d[k++] = A[v >> 12 & 63]; d[k++] = i + 1 < m ? A[v >> 6 & 63] : '='; d[k++] = i + 2 < m ? A[v & 63] : '='; }
+          d[k] = 0; snprintf(line, sizeof line, "drone fd %u %s", (unsigned)up_off, d); say(line); up_off += 36;
+        } else { say("drone file end"); up_phase++; up_phase_t = el; }
+      }
+      else if (up_phase == 2) { if (up_saved || el - up_phase_t > 8) { loss_pct = 0; snprintf(line, sizeof line, "drone file up.dfa %u %x", (unsigned)lq, (unsigned)rn_crc32(quad, lq)); say(line); up_phase++; up_phase_t = el; } }
+      else if (up_phase == 3) { if (up_same || el - up_phase_t > 5) { say("drone airframe up.dfa"); up_phase = 31; up_phase_t = el; } }
+      else if (up_phase == 31) { if (af_down || el - up_phase_t > 5) up_phase = 4; }
+      else if (up_phase == 6) { if (w_saved || el - up_phase_t > 8) { loss_pct = 0; say("drone wiring w.txt"); up_phase++; up_phase_t = el; } }
+      else if (up_phase == 7) { if (saved_down || el - up_phase_t > 6) { up_done = 1; printf("  the upload took %.1f s\n", el - 2); } }
+    }
+    if (up_done && !armed_at) { say("press arm"); armed_at = el; }
     { static int flew; if (armed_at && !flew && el > armed_at + 1) { say("press fly"); flew = 1; } }
     if (armed_at && !goto_at && el > armed_at + 13) {
       ok_takeoff = B.p[2] > 1.2 && F.state == FC_ARMED; printf("  after take-off: z %.2f, %s\n", B.p[2], fc_state_name(F.state));
@@ -210,6 +260,10 @@ int main(void) {
   printf("  status through the loss: %s\n  status after it: %s\n  status with another phrase: %s\n", status_loss, status, status_wrong);
   printf("  packets up %ld (%ld dropped), down %ld (%ld dropped); with another phrase: %ld up, %ld down; the stick moved it %.2f m forward\n", up_pk, up_dropped, down_pk, down_dropped, up_pk - up_before, down_pk - down_before, x1 - x0);
   printf("  a text command: the Pi took it %d, the ESP32 got it %d, its answer came down %d\n", pi_text_line, esp_setting, esp_answer_down);
+  char up_path[64]; snprintf(up_path, sizeof up_path, "%s/up.dfa", pi_dir); uint32_t un = 0; uint8_t *ub = read_file(up_path, &un); int up_file = ub && un == lq && !memcmp(ub, quad, lq);
+  int ok_upload = up_saved && up_file && up_same && af_said && af_got && af_down && w_saved && wiring_said && w_lines == 2 && !w_link_uart && w_save == 1 && saved_down && !w_set_down && !piece_lines;
+  printf("  the upload: saved %d, on disk whole %d, the same again %d; airframe said %d, the ESP32 got it whole %d, its answer down %d; wiring file %d, said %d, lines %d (link_uart %d), save %d, saved down %d, \"set\" down %d; pieces logged %d\n",
+         up_saved, up_file, up_same, af_said, af_got, af_down, w_saved, wiring_said, w_lines, w_link_uart, w_save, saved_down, w_set_down, piece_lines);
   printf("  Pi: peer %d, lost %d, landed %d, phrase warnings %d, radio lines with another phrase %d; command module: alarm %d, phrase warnings %d; armed with another phrase %d\n",
          pi_peer_line, lost_line, landed_line, pi_bad_line, pi_radio_lines - radio_lines_before, alarm_line, gnd_bad_line, wrong_armed);
   int ok_flight = ok_takeoff && ok_goto && x1 - x0 > 1.5 && learn_line && cal_line && strstr(status, "telemetry |") && strstr(status, "uplink 100%") && strstr(status, "POSHOLD")
@@ -217,8 +271,8 @@ int main(void) {
   int ok_cut = lost_line && landed_line && alarm_line && hypot(B.p[0], B.p[1]) < 1.0 && B.p[2] < 0.2;
   int ok_wrong = wrong_at > 0 && !wrong_armed && F.state == FC_DISARMED && up_pk - up_before > 200 && down_pk - down_before > 50 && pi_radio_lines == radio_lines_before
         && pi_bad_line > 0 && gnd_bad_line > 0 && strstr(status_wrong, "NO TELEMETRY") && strstr(status_wrong, "uplink 0%");
-  int ok = ok_refuse && ok_flight && ok_cut && ok_wrong;
-  printf(ok ? "command module over Wi-Fi end-to-end: ok\n" : "command module over Wi-Fi end-to-end: FAIL (refusals %d; take-off %d, goto %d, stick %d, learning %d/%d, status %d, uplink through loss %d%%, telemetry %ld; cut: lost %d, landed %d, alarm %d; another phrase: %d)\n",
-         ok_refuse, ok_takeoff, ok_goto, x1 - x0 > 1.5, learn_line, cal_line, strstr(status, "POSHOLD") != 0, lq_loss, down_pk, lost_line, landed_line, alarm_line, ok_wrong);
+  int ok = ok_refuse && ok_flight && ok_cut && ok_wrong && ok_upload;
+  printf(ok ? "command module over Wi-Fi end-to-end: ok\n" : "command module over Wi-Fi end-to-end: FAIL (refusals %d, upload %d; take-off %d, goto %d, stick %d, learning %d/%d, status %d, uplink through loss %d%%, telemetry %ld; cut: lost %d, landed %d, alarm %d; another phrase: %d)\n",
+         ok_refuse, ok_upload, ok_takeoff, ok_goto, x1 - x0 > 1.5, learn_line, cal_line, strstr(status, "POSHOLD") != 0, lq_loss, down_pk, lost_line, landed_line, alarm_line, ok_wrong);
   return ok ? 0 : 1;
 }

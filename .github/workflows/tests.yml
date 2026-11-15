@@ -62,6 +62,8 @@ jobs:
           /tmp/test-esp-radio
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_bus.c runner/fc/bus.c -o /tmp/test-bus
           /tmp/test-bus
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_file_rx.c runner/fc/file_rx.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_builtin.c -lm -o /tmp/test-file-rx
+          /tmp/test-file-rx
           node tools/prog_test_data.js /tmp/prog
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner runner/fc/test_prog.c runner/fc/prog_core.c runner/fc/bus.c runner/rn_host.c runner/rn.c -lm -o /tmp/test-prog
           /tmp/test-prog /tmp/prog/prog.rnp

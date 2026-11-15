@@ -70,6 +70,7 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
         if (p[2] == in->text_seq) return CRSF_EXT;                    /* (a repeat) */
         int k = 0; for (; k < n - 3 && k < RC_TEXT && p[3 + k]; k++) in->text[k] = (char)p[3 + k];
         in->text[k] = 0; in->text_seq = p[2]; in->text_n++; in->t_text = t;
+        for (int i = 0; i <= k; i++) in->textq[(in->text_n - 1) % RC_TEXTQ][i] = in->text[i];
         return CRSF_EXT;
       }
       if (n >= 3 && p[0] == CRSF_EXT_CMD) {                       /* a ground-station command: cmd, seq, values (16-bit, /100 or /1000) */
