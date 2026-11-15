@@ -15,7 +15,9 @@ static const char *hex(const char *s, uint32_t *v) {
   s = sp(s); uint32_t x = 0; int n = 0;
   for (;; s++, n++) {
     int d = *s >= '0' && *s <= '9' ? *s - '0' : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 : *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
-    if (d < 0) break; if (n == 8) return 0; x = x << 4 | (uint32_t)d;
+    if (d < 0) break;
+    if (n == 8) return 0;
+    x = x << 4 | (uint32_t)d;
   }
   if (!n) return 0; *v = x; return s;
 }

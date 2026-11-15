@@ -75,6 +75,7 @@ int main(void) {
   file_rx_line(&R, "file end", r, sizeof r);
   CHECK(strlen(r) <= FILE_RX_SAY && strstr(r, "missing 101 of 101: 0 36"), "the missing list fits one message (%d): %s", (int)strlen(r), r);
 
-  printf(fails ? "file_rx: %d FAILED\n" : "file_rx: ok (%u pieces of %d bytes)\n", fails ? fails : (unsigned)np, FILE_RX_PIECE);
+  if (fails) printf("file_rx: %d FAILED\n", fails);
+  else printf("file_rx: ok (%u pieces of %d bytes)\n", (unsigned)np, FILE_RX_PIECE);
   return fails != 0;
 }
