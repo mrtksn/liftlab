@@ -265,21 +265,16 @@ static void flight_task(void *arg) {
     if (af_new) {                                     /* a new airframe: only while disarmed */
       if (F.state != FC_DISARMED) { af_result = -2; }
       else {
-        /* loaded into a copy, which then is the state: just what fc_airframe_load makes of it, as in the simulator
-         * (the old airframe's learned model and the supervisor's settings go with it); refused, nothing changes */
-        /* (the copy on the heap, for the moment it takes: kept in static DRAM it was the 8 KB that left the classic
-         * ESP32 none for FreeRTOS's idle tasks) */
-        fc_state *G = malloc(sizeof *G); int e;
-        if (!G) { snprintf(F.why, sizeof F.why, "airframe: no memory to load it"); e = -3; }
-        else {
-          *G = F; e = fc_airframe_load(G, af_box, af_len);
-          if (!e) {
-            char why[64];
-            if (!hw_outputs_ok(G->A.n_motors, G->A.n_joints, why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
-            else { F = *G; outputs_ok = 1; }
-          } else strcpy(F.why, G->why);
-          free(G);
-        }
+        /* just what fc_airframe_load makes of it, as in the simulator (the old airframe's learned model and the
+         * supervisor's settings go with it). It reads the whole file before it changes anything, so refused, nothing
+         * changes; the outputs it needs are checked first, from its header (magic, version, motors, joints). (No
+         * copy of the state to load it into: 8.5 KB the classic ESP32's heap doesn't have with the Pi's UART open.) */
+        uint32_t hd[4] = { 0 }; int e = 0; char why[64];
+        if (af_len >= 24) memcpy(hd, af_box, sizeof hd);
+        if (hd[0] == 0x41424644u && hd[1] == 1 && /* ("DFBA", version 1: fc_core.c) */
+            hd[2] >= 1 && hd[2] <= FC_MAX_MOTORS && hd[3] <= FC_MAX_JOINTS
+            && !hw_outputs_ok((int)hd[2], (int)hd[3], why, sizeof why)) { snprintf(F.why, sizeof F.why, "%s", why); e = -3; }
+        else if (!(e = fc_airframe_load(&F, af_box, af_len))) outputs_ok = 1;
         af_result = e;
       }
       af_new = 0;
