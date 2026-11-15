@@ -284,7 +284,8 @@ function frameFields(f) {
       if (p[0] === CRSF.EXT_TEXT) out.push(['subtype', '0xF1 (status text)'], ['severity', `${p[1]} (${['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'][p[1]] || '?'})`], ['text', `"${cstrBytes(p, 2)}"`]);
       else if (p[0] === CRSF.EXT_ITEM) { out.push(['subtype', '0xD0 (telemetry item)'], ['item', `${p[1]} (${(TLM_ITEMS[p[1]] || { key: '?' }).key})`], ['values', `${p[2]}`]);
         const d = TLM_ITEMS[p[1]]; for (let k = 0; k < p[2]; k++) out.push([d && d.fields ? d.fields[k] || `v${k}` : d && d.list ? (k ? `#${k}` : 'count') : `v${k}`, `${be16s(p, 3 + 2 * k)} (int16, × the item's scale)`]); }
-      else if (p[0] === CRSF.EXT_CMD) { out.push(['subtype', '0xD1 (ground-station command)'], ['command', `${p[1]} (${{ 1: 'GOTO', 2: 'LEARN', 3: 'LATCH', 4: 'PICKUP', 5: 'FLEET' }[p[1]] || '?'})`], ['sequence', `${p[2]}`]);
+      else if (p[0] === CRSF.EXT_CMD && p[1] === 6) out.push(['subtype', '0xD1 (ground-station command)'], ['command', '6 (TEXT)'], ['sequence', `${p[2]}`], ['text', `"${cstrBytes(p, 3)}"`]);
+      else if (p[0] === CRSF.EXT_CMD) { out.push(['subtype', '0xD1 (ground-station command)'], ['command', `${p[1]} (${{ 1: 'GOTO', 2: 'LEARN', 3: 'LATCH', 4: 'PICKUP', 5: 'FLEET', 6: 'TEXT' }[p[1]] || '?'})`], ['sequence', `${p[2]}`]);
         for (let i = 3, k = 0; i + 1 < p.length; i += 2, k++) { const v = be16s(p, i); out.push([p[1] === 1 ? ['x', 'y', 'z', 'heading'][k] || `value ${k + 1}` : p[1] === 2 ? 'code' : `value ${k + 1}`, p[1] === 1 ? `${v} → ${k < 3 ? (v / 100).toFixed(2) + ' m' : (v / 1000 * R2D).toFixed(1) + '°'}` : p[1] === 2 ? `${v} (${Object.keys(LN_CMD).find(n => LN_CMD[n] === v) || '?'})` : `${v}`]); } }
       break;
   }
@@ -297,6 +298,7 @@ function cmdDesc(f) {   // a command frame as data (the command module's scaling
   const p = f.subarray(3, f.length - 1);
   if (p[0] !== CRSF.EXT_CMD) return `EXT 0x${p[0].toString(16)}`;
   const cmd = p[1], seq = p[2], v = []; for (let i = 3; i + 1 < p.length; i += 2) v.push(be16s(p, i));
+  if (cmd === 6) return `TEXT "${cstrBytes(p, 3)}" #${seq}`;
   if (cmd === 1) return `GOTO x ${(v[0] / 100).toFixed(1)} y ${(v[1] / 100).toFixed(1)} z ${(v[2] / 100).toFixed(1)} hdg ${Math.round(v[3] / 1000 * R2D)}° #${seq}`;
   if (cmd === 2) return `LEARN ${Object.keys(LN_CMD).find(k => LN_CMD[k] === v[0]) || v[0]} #${seq}`;
   if (cmd === 3) return `LATCH ${v[0] < 0 ? 'all' : v[0] + 1} ${['open', 'close', 'toggle'][v[1]] || v[1]} #${seq}`;

@@ -40,6 +40,14 @@ static void switch_said(const gnd_state *G, const gnd_text_in *I, int b, char *r
 
 int gnd_text(gnd_state *G, gnd_text_in *I, char *s, double t, char *reply, int rn) {
   char *w[10], *save = 0; int n = 0;
+  if (!strncmp(s, "drone ", 6)) {                    /* a line for the drone, as it is (its spaces kept) */
+    char *d = s + 6; while (*d == ' ') d++; size_t k = strlen(d); while (k && (d[k - 1] == '\n' || d[k - 1] == '\r' || d[k - 1] == ' ')) d[--k] = 0;
+    int r = gnd_send_text(G, d);
+    if (r == -2) snprintf(reply, (size_t)rn, "drone LINE: 1 to %d printable characters: not sent", GND_TEXT);
+    else if (r) snprintf(reply, (size_t)rn, "too many commands waiting: not sent");
+    else snprintf(reply, (size_t)rn, "to the drone: %s (its answer comes as a message)", d);
+    return 1;
+  }
   for (char *p = strtok_r(s, " \t\r\n", &save); p && n < 10; p = strtok_r(0, " \t\r\n", &save)) w[n++] = p;
   reply[0] = 0; if (!n) return 1;
   if ((!strcmp(w[0], "press") || !strcmp(w[0], "release") || !strcmp(w[0], "tap")) && n >= 2) {

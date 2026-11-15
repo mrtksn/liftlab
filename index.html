@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=56d856fc7d">
+<link rel="stylesheet" href="css/style.css?v=5c0112f543">
 </head>
 <body>
 <div class="app">
@@ -376,18 +376,24 @@
         <div class="liftoff-sub" id="liftoffSub"></div>
         <ol class="liftoff-steps" id="liftoffSteps"></ol>
       </div>
-      <div class="live-bar" id="liveBar" role="region" aria-label="The real drone" hidden>
-        <div class="live-head"><span class="live-dot" aria-hidden="true"></span><b>Live</b><span id="liveName"></span><span class="live-state" id="liveState" role="status"></span></div>
-        <div class="live-read" id="liveRead"></div>
-        <div class="live-alert" id="liveAlert" role="alert" hidden></div>
-        <div class="live-btns">
-          <button class="btn tog live-arm" type="button" id="liveArm" aria-pressed="false" title="The arm switch">Arm</button>
-          <button class="btn tog" type="button" id="liveFly" aria-pressed="false" title="The fly switch: take off, and land when off">Take off</button>
-          <button class="btn" type="button" id="liveHold" title="Hold where it is (Space)">Hold</button>
-          <button class="btn" type="button" id="liveHome" title="Fly home (H)">Home</button>
-          <button class="btn" type="button" id="liveStop" title="Leave the real drone: the simulation comes back">Disconnect</button>
+      <div class="live-bar drone-card" id="liveBar" role="region" aria-label="The drone" hidden>
+        <div class="live-head card-head" id="cardHead" title="Drag to move the card">
+          <span class="live-dot" aria-hidden="true"></span><b id="cardKind">Sim</b><span id="liveName"></span><span class="live-state" id="liveState" role="status"></span>
+          <button class="card-ic" type="button" id="cardEdit" aria-pressed="false" title="Edit the buttons" aria-label="Edit the buttons"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 2.3a1.6 1.6 0 0 1 2.3 2.3L5.9 12.3 2.8 13.2l.9-3.1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+          <button class="card-ic" type="button" id="cardFold" aria-expanded="true" aria-controls="cardBody" title="Fold the card" aria-label="Fold the card"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
-        <p class="live-note" id="liveNote"></p>
+        <div class="card-body" id="cardBody">
+          <div class="live-read" id="liveRead"></div>
+          <div class="live-alert" id="liveAlert" role="alert" hidden></div>
+          <div class="live-btns" id="cardBtns"></div>
+          <form class="card-cmd" id="cardCmd" autocomplete="off">
+            <input type="text" id="cardCmdIn" maxlength="57" spellcheck="false" placeholder="A command: level, safety off, esp32 show…" aria-label="A command for the drone">
+            <button class="btn" type="submit">Send</button>
+          </form>
+          <ol class="card-said" id="cardSaid" aria-live="polite"></ol>
+          <p class="live-note" id="liveNote"></p>
+          <div class="card-editor" id="cardEditor" hidden></div>
+        </div>
       </div>
       <div class="live-bar usb-bar" id="usbBar" role="region" aria-label="The board on USB" hidden>
         <div class="live-head"><span class="live-dot" aria-hidden="true"></span><b>USB</b><span id="usbName"></span><span class="live-state" id="usbState" role="status"></span></div>
@@ -651,35 +657,36 @@
 <script src="js/designs.js?v=d4557d0384"></script>
 <script src="js/share.js?v=626dfa369f"></script>
 <script src="js/board-hardware.js?v=e559b18bd8"></script>
-<script src="js/hardware.js?v=f6f6a41588"></script>
+<script src="js/hardware.js?v=0f6eef4f44"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/board-pinouts.js?v=db86fc7b77"></script>
-<script src="js/hardware-ui.js?v=e07c127ed3"></script>
+<script src="js/hardware-ui.js?v=35f404d564"></script>
 <script src="js/install-ui.js?v=489ee11726"></script>
 <script src="js/editor.js?v=353d66287c"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
-<script src="js/board-wasm.js?v=47f8814944"></script>
+<script src="js/board-wasm.js?v=c80ae4d231"></script>
 <script src="js/crsf.js?v=15ea9287eb"></script>
-<script src="js/link.js?v=5fc51c9fc6"></script>
+<script src="js/link.js?v=924573b83b"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
 <script src="js/link-packet.js?v=e182da6569"></script>
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
 <script src="js/peer-air.js?v=82475d500b"></script>
-<script src="js/boards.js?v=b619a49ce4"></script>
+<script src="js/boards.js?v=0098f639af"></script>
 <script src="js/programs.js?v=66a0fde1e7"></script>
 <script src="js/wasm-meter.js?v=3e6eded09b"></script>
 <script src="js/apps.js?v=93c0cbb01e"></script>
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
-<script src="js/live.js?v=d108f8c463"></script>
+<script src="js/live.js?v=6f175c9171"></script>
+<script src="js/drone-card.js?v=846d327b46"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
 <script src="js/gs-ui.js?v=dab03162d4"></script>
 <script src="js/agent.js?v=df7f044dda"></script>
 <script src="js/agent-tools.js?v=6fe4ba418f"></script>
 <script src="js/agent-tools-more.js?v=9b996aefba"></script>
 <script src="js/agent-flight.js?v=fafa971389"></script>
-<script src="js/agent-hardware.js?v=349858e93a"></script>
+<script src="js/agent-hardware.js?v=b443e8a749"></script>
 <script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>

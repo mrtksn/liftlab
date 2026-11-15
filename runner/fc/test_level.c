@@ -1,14 +1,18 @@
-/* Tests for the level trim and safety off (fc_core.c: fc_level_imu, fc_level_deg, fc_level_none, fc_safety), on
+/* Tests for the level trim and safety off (fc_core.c: fc_level_imu, fc_level_deg, fc_level_yaw, fc_level_none,
+ * fc_safety; fc_text.c, the text commands for them), on
  * test_fc.c's plant: the quad standing level on the ground with its IMU fitted tilted (its readings turned).
  *   - fitted 20° off and no trim: it believes it's tilted, won't arm ("not level");
  *   - levelled from the IMU's own gravity reading: it believes it's level, arms; the same trim given as roll and
  *     pitch (what the ESP32 reports, to keep as a setting) is the same turn; none again: back as it was;
- *   - a reading that isn't gravity, or over 45°, is refused;
+ *   - stood on its edge (90°): levelled the same way, its axes the board's; a yaw turns them about straight up;
+ *   - the text commands (level, level R,P,Y, level yaw, level none, safety, status) do the same;
+ *   - a reading that isn't gravity, or upside down, is refused;
  *   - safety off: arms tilted, and a big tilt doesn't cut the motors (on: crashed, motors off); not turned off armed.
- *   cc -O2 -I.. -o test_level test_level.c fc_core.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_level testdata */
+ *   cc -O2 -I.. -o test_level test_level.c fc_core.c fc_text.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_level testdata */
 #define main main_fc
 #include "test_fc.c"
 #undef main
+#include "fc_text.h"
 
 static double Rs[9];                                   /* how the IMU is fitted: its readings are Rsᵀ · body */
 static void fit(double roll_deg, double pitch_deg) {
@@ -51,21 +55,56 @@ int main(int argc, char **argv) {
   CHECK(fc_level_imu(&F, g_avg) == 0, "taken: trim roll %.1f°, pitch %.1f°", F.level_deg[0], F.level_deg[1]);
   { float a[3]; for (int k = 0; k < 3; k++) a[k] = F.imu_M[3 * k] * g_avg[0] + F.imu_M[3 * k + 1] * g_avg[1] + F.imu_M[3 * k + 2] * g_avg[2];
     CHECK(fabsf(a[0]) < 0.01f && fabsf(a[1]) < 0.01f && fabsf(a[2] - 9.81f) < 0.02f, "its gravity reading, in body axes: straight up (%.3f %.3f %.3f)", a[0], a[1], a[2]); }
-  fly_fitted(20);   /* (the estimate follows within seconds; its gyro-bias term takes longer to let go of the jump) */
+  fly_fitted(1);
   CHECK(est_tilt() < 1, "it believes it's level: %.2f°", est_tilt());
   arm_try();
   CHECK(F.state == FC_ARMED, "arms: %s", F.why);
   C.arm = 0; fly_fitted(0.2);
   { float M1[9]; memcpy(M1, F.imu_M, sizeof M1); float r = F.level_deg[0], p = F.level_deg[1];
-    fc_level_deg(&F, r, p); fly_fitted(0.01); float d = 0; for (int i = 0; i < 9; i++) d = fmaxf(d, fabsf(F.imu_M[i] - M1[i]));
+    fc_level_deg(&F, r, p, 0); fly_fitted(0.01); float d = 0; for (int i = 0; i < 9; i++) d = fmaxf(d, fabsf(F.imu_M[i] - M1[i]));
     CHECK(d < 1e-4f, "the same trim as roll %.2f, pitch %.2f (the setting level=%.2f,%.2f): the same turn (off by %.1e)", r, p, r, p, d); }
   fc_level_none(&F); fly_fitted(8);
   CHECK(est_tilt() > 17, "none: tilted again (%.1f°)", est_tilt());
 
   printf("refused\n");
   { float a[3] = { 0, 0, 3 }; CHECK(fc_level_imu(&F, a) < 0 && F.level_kind == 0, "a reading that isn't gravity: %s", F.why); }
-  { float a[3] = { 0, 9.81f * sinf(0.9f), 9.81f * cosf(0.9f) }; CHECK(fc_level_imu(&F, a) < 0 && F.level_kind == 0, "52° off: %s", F.why); }
-  CHECK(fc_level_deg(&F, 50, 0) < 0, "a trim over 45°: %s", F.why);
+  { float a[3] = { 0, 9.81f * sinf(3.0f), 9.81f * cosf(3.0f) }; CHECK(fc_level_imu(&F, a) < 0 && F.level_kind == 0, "172° off (upside down): %s", F.why); }
+  CHECK(fc_level_deg(&F, 175, 0, 0) < 0, "a trim of 175°: %s", F.why);
+  CHECK(fc_level_deg(&F, 0, 0, 200) < 0, "a yaw of 200°: %s", F.why);
+
+  printf("stood on its edge\n");
+  start(quad, lq); fit(0, 90); fly_fitted(3);
+  arm_try();
+  CHECK(F.state == FC_DISARMED && strstr(F.why, "not level"), "no trim: won't arm (%s)", F.why);
+  C.arm = 0; fly_fitted(1);
+  { char r[200]; CHECK(fc_text(&F, "level", g_avg, 1, r, sizeof r) && F.level_kind == 1, "the text command level: %s", r); }
+  { float d = 0; for (int i = 0; i < 9; i++) d = fmaxf(d, fabsf(F.imu_M[i] - (float)Rs[i]));
+    CHECK(d < 0.01f, "its axes as the board's in the drone (off by %.4f)", d); }
+  fly_fitted(1);   /* (the attitude estimate starts again in the new axes) */
+  CHECK(est_tilt() < 1, "within a second it believes it's level: %.2f°", est_tilt());
+  arm_try();
+  CHECK(F.state == FC_ARMED, "arms: %s", F.why);
+  { char r[200]; CHECK(fc_text(&F, "level 1,2", 0, 1, r, sizeof r) && strstr(r, "disarm first") && F.level_kind == 1, "armed: a trim refused (%s)", r);
+    CHECK(fc_text(&F, "status", 0, 1, r, sizeof r) && strstr(r, "armed") && strstr(r, "trim roll"), "status: %s", r); }
+  C.arm = 0; fly_fitted(0.2);
+
+  printf("a yaw\n");
+  { char r[200]; float M0[9]; memcpy(M0, F.imu_M, sizeof M0);
+    CHECK(fc_text(&F, "level yaw 90", 0, 1, r, sizeof r) && F.level_deg[2] == 90, "level yaw 90: %s", r); fly_fitted(0.01);
+    float d = 0; for (int j = 0; j < 3; j++) { d = fmaxf(d, fabsf(F.imu_M[j] + M0[3 + j])); d = fmaxf(d, fabsf(F.imu_M[3 + j] - M0[j])); d = fmaxf(d, fabsf(F.imu_M[6 + j] - M0[6 + j])); }
+    CHECK(d < 1e-4f, "the axes turned a quarter about straight up: x is y (off by %.1e)", d);
+    CHECK(fc_text(&F, "level", g_avg, 1, r, sizeof r) && F.level_deg[2] == 90, "measured again: the yaw stays (%s)", r);
+    CHECK(fc_text(&F, "level 10, -5, 30", 0, 1, r, sizeof r) && F.level_kind == 2 && F.level_deg[0] == 10 && F.level_deg[1] == -5 && F.level_deg[2] == 30, "level 10, -5, 30: %s", r);
+    CHECK(fc_text(&F, "level 1", 0, 1, r, sizeof r) && F.level_deg[0] == 10, "level 1 (half a trim): %s", r);
+    CHECK(fc_text(&F, "level", g_avg, 0, r, sizeof r) && strstr(r, "moving"), "level while moving: %s", r);
+    CHECK(fc_text(&F, "level none", 0, 1, r, sizeof r) && F.level_kind == 0 && F.level_deg[2] == 0, "level none: %s", r);
+    CHECK(!fc_text(&F, "levels", 0, 1, r, sizeof r) && !fc_text(&F, "arm", 0, 1, r, sizeof r), "not its commands: levels, arm");
+    CHECK(fc_text(&F, "safety off", 0, 1, r, sizeof r) && F.safety_off && fc_text(&F, "safety", 0, 1, r, sizeof r) && strstr(r, "off"), "safety off, then safety: %s", r);
+    CHECK(fc_text(&F, "safety on", 0, 1, r, sizeof r) && !F.safety_off, "safety on: %s", r); }
+
+  printf("upside down\n");
+  start(quad, lq); fit(180, 0); fly_fitted(1);
+  CHECK(fc_level_imu(&F, g_avg) < 0 && F.level_kind == 0 && strstr(F.why, "upside down"), "refused: %s", F.why);
 
   printf("safety off\n");
   start(quad, lq); fit(12, -16); fly_fitted(3);

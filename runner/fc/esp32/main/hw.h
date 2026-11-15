@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 15
+#define HW_VERSION 16
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -81,6 +81,9 @@ typedef struct {
   int8_t batt2_pin;
   int8_t batt2_pad[3];
   float batt2_divider;
+  /* Appended in v16 (v15 blobs migrate with 0): the IMU board turned about straight up (level_yaw=DEG, −180…180,
+   * counter-clockwise seen from above), on top of level= (fc_core.h fc_level_yaw): gravity can't tell it, so it's set. */
+  float level_yaw;
 } hw_config;
 
 void hw_defaults(hw_config *c);

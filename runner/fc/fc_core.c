@@ -227,7 +227,7 @@ static void level_trim(const float *u, float *T) {
 }
 static void level_update(fc_state *F) {
   F->level_dirty = 0;
-  float u[3] = { 0, 0, 1 }, T[9];
+  float u[3] = { 0, 0, 1 }, T[9], M[9];
   if (F->level_kind == 1) {
     m3v(u, F->A.imu_R, F->level_g);
   } else if (F->level_kind == 2) {
@@ -236,23 +236,50 @@ static void level_update(fc_state *F) {
   }
   float n = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]); for (int i = 0; i < 3; i++) u[i] /= n;
   if (F->level_kind == 1) { F->level_deg[0] = atan2f(u[1], u[2]) * 57.2958f; F->level_deg[1] = atan2f(-u[0], sqrtf(u[1] * u[1] + u[2] * u[2])) * 57.2958f; }
-  if (!F->level_kind) F->level_deg[0] = F->level_deg[1] = 0;
+  if (!F->level_kind) F->level_deg[0] = F->level_deg[1] = F->level_deg[2] = 0;
   level_trim(u, T);
-  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) F->imu_M[3 * i + j] = T[3 * i] * F->A.imu_R[j] + T[3 * i + 1] * F->A.imu_R[3 + j] + T[3 * i + 2] * F->A.imu_R[6 + j];
+  float y = F->level_deg[2] / 57.2958f, cy = cosf(y), sy = sinf(y);   /* then the turn about straight up: Rz(yaw) · T */
+  for (int j = 0; j < 3; j++) { M[j] = cy * T[j] - sy * T[3 + j]; M[3 + j] = sy * T[j] + cy * T[3 + j]; M[6 + j] = T[6 + j]; }
+  float d = 0;
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+    float v = M[3 * i] * F->A.imu_R[j] + M[3 * i + 1] * F->A.imu_R[3 + j] + M[3 * i + 2] * F->A.imu_R[6 + j];
+    d = fmaxf(d, fabsf_(v - F->imu_M[3 * i + j])); F->imu_M[3 * i + j] = v;
+  }
+  /* turned more than a little, on the ground: the attitude estimate starts again from the next readings (its memory,
+   * a gyro bias learned in the old axes among it, would take tens of seconds to let go of a quarter turn) */
+  if (d > 0.02f && F->state == FC_DISARMED && F->H && F->f_att >= 0) { rn_host_forget(F->H, F->f_att); F->att_t = 0; F->att_ok = 0; }
 }
+/* how far a trim's "up" is from straight up [deg] */
+static float level_tilt(float roll, float pitch) { return acosf(clampf(cosf(roll / 57.2958f) * cosf(pitch / 57.2958f), -1, 1)) * 57.2958f; }
 int fc_level_imu(fc_state *F, const float acc[3]) {
   float n = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
   if (!(n > 7.0f && n < 12.6f)) { fc_say(F, "level: the accelerometer reads %.1f m/s², not gravity: keep it still", (double)n); return -1; }
+  float was[3] = { F->level_g[0], F->level_g[1], F->level_g[2] }; int kind_was = F->level_kind;
   for (int i = 0; i < 3; i++) F->level_g[i] = acc[i];
   F->level_kind = 1; F->level_dirty = 1;
-  if (F->have_airframe) { level_update(F); if (F->level_deg[0] * F->level_deg[0] + F->level_deg[1] * F->level_deg[1] > 45 * 45) { fc_level_none(F); fc_say(F, "level: tilted over 45°: not taken as level"); return -1; } }
+  if (F->have_airframe) {
+    float d[3]; m3v(d, F->A.imu_R, acc);
+    float tilt = acosf(clampf(d[2] / n, -1, 1)) * 57.2958f;
+    if (tilt > FC_LEVEL_MAX) {
+      for (int i = 0; i < 3; i++) F->level_g[i] = was[i];
+      F->level_kind = kind_was;
+      fc_say(F, "level: upside down (%.0f°): turn the IMU's mount in the design (Airframe: the IMU part), not here", (double)tilt); return -1;
+    }
+    level_update(F);
+  }
   return 0;
 }
-int fc_level_deg(fc_state *F, float roll, float pitch) {
-  if (!(roll >= -45 && roll <= 45 && pitch >= -45 && pitch <= 45)) { fc_say(F, "level: a trim of at most 45°"); return -1; }
-  F->level_deg[0] = roll; F->level_deg[1] = pitch; F->level_kind = 2; F->level_dirty = 1; return 0;
+int fc_level_deg(fc_state *F, float roll, float pitch, float yaw) {
+  if (!(roll >= -180 && roll <= 180 && pitch >= -90 && pitch <= 90 && yaw >= -180 && yaw <= 180)) { fc_say(F, "level: roll −180…180°, pitch −90…90°, yaw −180…180°"); return -1; }
+  if (level_tilt(roll, pitch) > FC_LEVEL_MAX) { fc_say(F, "level: a trim of at most %.0f° from straight up (upside down: the IMU's mount in the design)", (double)FC_LEVEL_MAX); return -1; }
+  F->level_deg[0] = roll; F->level_deg[1] = pitch; F->level_deg[2] = yaw; F->level_kind = 2; F->level_dirty = 1; return 0;
 }
-void fc_level_none(fc_state *F) { F->level_kind = 0; F->level_dirty = 1; }
+int fc_level_yaw(fc_state *F, float yaw) {
+  if (!(yaw >= -180 && yaw <= 180)) { fc_say(F, "level: yaw −180…180°"); return -1; }
+  if (!F->level_kind) { F->level_deg[0] = F->level_deg[1] = 0; F->level_kind = 2; }
+  F->level_deg[2] = yaw; F->level_dirty = 1; return 0;
+}
+void fc_level_none(fc_state *F) { F->level_kind = 0; F->level_deg[2] = 0; F->level_dirty = 1; }
 int fc_safety(fc_state *F, int off) {
   if (off && F->state != FC_DISARMED) { fc_say(F, "safety: disarm first"); return -1; }
   F->safety_off = off ? 1 : 0; fc_say(F, off ? "safety off: no level check when arming, no crash cut-off" : "safety on"); return 0;

@@ -35,8 +35,12 @@ enum { RC_ROLL = 0, RC_PITCH, RC_THR, RC_YAW, RC_ARM, RC_LEVEL, RC_FLY, RC_HOLD,
  *   PICKUP x y z [m from home], heading [rad], latch: fly the hub to x y z (below the floor if need be), facing
  *          heading, hold still and have the cargo task close the latch, then climb (pickup_core.h). The sticks,
  *          hold, home, a go-to or the link lost stop it
- *   FLEET  on (1) or off (0): let the fleet program fly the drone (fleet.h), or not; the same things stop it */
-enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4, RC_CMD_FLEET = 5 };
+ *   FLEET  on (1) or off (0): let the fleet program fly the drone (fleet.h), or not; the same things stop it
+ *   TEXT   a line of text (up to RC_TEXT characters, in place of the values): a command for whichever board takes
+ *          the radio's text (the Pi's dfb_pi: its text commands; the ESP32: its settings lines; fc_text.h). It is
+ *          not one of the pilot's commands: rc_input keeps it apart (text, text_n), the pilot's command as it was */
+enum { RC_CMD_GOTO = 1, RC_CMD_LEARN = 2, RC_CMD_LATCH = 3, RC_CMD_PICKUP = 4, RC_CMD_FLEET = 5, RC_CMD_TEXT = 6 };
+#define RC_TEXT 57
 float rc_cmd_scale(int cmd, int k);
 #define RC_LOST_S 1.0                     /* no channels for this long: the link is lost */
 #define RC_STALE_S 0.1                    /* no channels for this long: the sticks count as centred (as receivers'
@@ -47,6 +51,7 @@ typedef struct rc_input {
   float ch[16]; double t_ch; uint32_t frames;          /* the channels, and when they last came */
   float up_rssi, up_lq, up_snr, down_rssi, down_lq; int rf_mode, tx_power; double t_link;
   int cmd; float cmd_v[6]; uint32_t cmd_seq; double t_cmd;   /* the latest ground-station command (cmd_seq counts them), and when it came */
+  char text[RC_TEXT + 1]; uint32_t text_n; int text_seq; double t_text;   /* the latest TEXT command, how many came, its sequence, when */
 } rc_input;
 static inline int rc_lq_lost(const rc_input *in, double t) { return in->t_link > 0 && t - in->t_link < RC_LOST_S && !(in->up_lq > 0); }
 static inline int rc_link_ok(const rc_input *in, double t) { return in->frames > 0 && t - in->t_ch < RC_LOST_S && !rc_lq_lost(in, t); }

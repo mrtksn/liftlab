@@ -89,6 +89,13 @@ The screen also shows what the ESP32 said last (why it won't arm, for one), and 
 `safety on|off`, `level`, `level none` and `esp32 LINE` (any settings line: `show`, `level=boot`, `save` ...) go to the
 ESP32 the same way; its answer shows in `status` and the log.
 
+The same text commands come up the radio from LiftLab's drone card (its buttons and its command line: `RC_CMD_TEXT`,
+in turn with the ground station's other commands, sent again until taken): `dfb_pi` answers each down the radio as
+messages, and for 5 s after one passes on what the ESP32 says. Its log shows each (`radio text: …`). A command
+module on a computer sends one with `drone LINE` (`runner/ground/dfb_ground`).
+
+`level` takes `level R,P[,Y]` and `level yaw Y` too (a trim until a reboot: [hardware-wiring.md](hardware-wiring.md#which-way-is-level)).
+
 `sticks ARM THROTTLE [ROLL PITCH YAW]` (arm 0/1, throttle 0..1, the rest −1..1, yaw as the flight controller's: negative
 turns right), `motor N THROTTLE` (N from 1 in the airframe's order; `--airframe` lets `dfb_pi` check it), `motor off`.
 

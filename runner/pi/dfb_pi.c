@@ -514,14 +514,17 @@ int main(int argc, char **argv) {
       more = n == (int)sizeof b;
     }
     if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
-    for (int k = 2; k < 4; k++) if (pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot */
+    static uint32_t text_seen; static double radio_text_t = -1e9;   /* the radio's text commands (rc_core.h RC_CMD_TEXT): the last taken, when */
+    for (int k = 2; k < 5; k++) if (k == 4 ? RCI.text_n != text_seen : pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot: standard input, UDP, the radio's text */
       static char in[512]; static int in_n; char dg[512]; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
       char *buf = k == 2 ? in : dg; int have = k == 2 ? in_n : 0, cap = k == 2 ? (int)sizeof in : (int)sizeof dg;
-      if (k == 2) n = read(0, buf + have, (size_t)(cap - 1 - have)); else n = recvfrom(udp, buf, (size_t)cap - 1, 0, (struct sockaddr *)&from, &fl);
+      if (k == 2) n = read(0, buf + have, (size_t)(cap - 1 - have));
+      else if (k == 3) n = recvfrom(udp, buf, (size_t)cap - 1, 0, (struct sockaddr *)&from, &fl);
+      else { text_seen = RCI.text_n; radio_text_t = t; n = snprintf(dg, sizeof dg, "%s", RCI.text); printf("radio text: %s\n", RCI.text); }
       if (n == 0 && k == 2) in_fd = -1;                                 /* the end of standard input (a service, /dev/null): no more of it */
       if (n <= 0) continue;
       have += (int)n; buf[have] = 0;
-      if (k == 3 && buf[have - 1] != '\n') buf[have++] = '\n';            /* a datagram is a whole line (or several) */
+      if (k >= 3 && buf[have - 1] != '\n') buf[have++] = '\n';            /* a datagram (or the radio's text) is a whole line (or several) */
       char *s = buf, *nl;
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
@@ -555,8 +558,9 @@ int main(int argc, char **argv) {
               else { fleet_engage(&FL, a[1] == 'n', &N, &o, "asked"); FL.said = 0; snprintf(reply, sizeof reply, "%s", FL.msg[0] ? FL.msg : "fleet program off"); in_control = 1; }
             } else snprintf(reply, sizeof reply, "fleet program: %s; %s; target %.1f %.1f %.1f; publishes %d values; messages %u sent, %u in; %u runs, %u failed",
                             have_fleet ? "in the program" : "none", FL.engaged ? "flying it" : "not flying it", FL.go_p[0], FL.go_p[1], FL.go_p[2], FL.npub, (unsigned)FL.sent, (unsigned)FL.got, (unsigned)FL.calls, (unsigned)FL.fails);
-          } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || !strcmp(s, "level") || !strcmp(s, "level none")) {
-            /* a settings line to the ESP32 (esp32 LINE: show, level=boot, save, reboot ...; the shortcuts as they are):
+          } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || (!strncmp(s, "level", 5) && (!s[5] || s[5] == ' '))) {
+            /* a settings line to the ESP32 (esp32 LINE: show, level=boot, save, reboot ...; the shortcuts as they are:
+             * safety, level, level none, level R,P[,Y], level yaw Y):
              * its answer comes as a report, in the log and in status (the ESP32 said: ...) */
             const char *line = !strncmp(s, "esp32 ", 6) ? s + 6 : s; uint8_t fr[192];
             uint32_t len = strlen(line) < 127 ? rn_link_frame(fr, sizeof fr, RN_LINK_SETTING, (const uint8_t *)line, (uint32_t)strlen(line)) : 0;
@@ -595,7 +599,12 @@ int main(int argc, char **argv) {
             if (t - esp_said_t < 60) { size_t k2 = strlen(reply); snprintf(reply + k2, sizeof reply > k2 ? sizeof reply - k2 : 0, "; the ESP32 said %.0f s ago: %s", t - esp_said_t, esp_said); }
           }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
-          if (k == 2) printf("%s\n", reply); else sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
+          if (k == 2) printf("%s\n", reply);
+          else if (k == 3) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
+          else {                                               /* the radio's: the answer goes down as messages (the first 3, ~170 characters) */
+            printf("radio text answer: %s\n", reply);
+            if (radio_here) { if (strlen(reply) > 3 * TLM_TEXT) memcpy(reply + 3 * TLM_TEXT - 3, "...", 4); tlm_text(&TS, 6, reply); }
+          }
         }
         s = nl + 1;
       }
@@ -610,6 +619,7 @@ int main(int argc, char **argv) {
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) {
         printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
         int k = (int)L.len < (int)sizeof esp_said - 1 ? (int)L.len : (int)sizeof esp_said - 1; memcpy(esp_said, L.buf, (size_t)k); esp_said[k] = 0; esp_said_t = t;
+        if (radio_here && t - radio_text_t < 5) { char e[3 * TLM_TEXT + 8]; snprintf(e, sizeof e, "esp32: %s", esp_said); tlm_text(&TS, 6, e); }   /* (its answer to the radio's text) */
       }
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
       if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */

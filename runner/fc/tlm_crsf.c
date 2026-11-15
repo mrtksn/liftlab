@@ -66,6 +66,12 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
       return CRSF_LINK_STATS;
     }
     case CRSF_EXT:
+      if (n >= 3 && p[0] == CRSF_EXT_CMD && p[1] == RC_CMD_TEXT) {   /* a line of text: kept apart from the pilot's commands */
+        if (p[2] == in->text_seq) return CRSF_EXT;                    /* (a repeat) */
+        int k = 0; for (; k < n - 3 && k < RC_TEXT && p[3 + k]; k++) in->text[k] = (char)p[3 + k];
+        in->text[k] = 0; in->text_seq = p[2]; in->text_n++; in->t_text = t;
+        return CRSF_EXT;
+      }
       if (n >= 3 && p[0] == CRSF_EXT_CMD) {                       /* a ground-station command: cmd, seq, values (16-bit, /100 or /1000) */
         int cmd = p[1], seq = p[2], m = (n - 3) / 2;
         if ((uint32_t)seq == in->cmd_seq) return CRSF_EXT;          /* (a repeat: the ground numbers them 1–255) */
@@ -78,6 +84,13 @@ int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t) {
       return CRSF_EXT;
   }
   return 0;
+}
+/* A TEXT command frame (rc_core.h): the line, up to RC_TEXT characters. */
+int tlm_crsf_text(uint8_t *out, int seq, const char *s) {
+  uint8_t p[3 + RC_TEXT]; int n = 0;
+  p[n++] = CRSF_EXT_CMD; p[n++] = RC_CMD_TEXT; p[n++] = (uint8_t)seq;
+  for (int k = 0; s[k] && k < RC_TEXT; k++) p[n++] = (uint8_t)s[k];
+  return crsf_frame(out, CRSF_ADDR_FC, CRSF_EXT, p, n);
 }
 /* A ground-station command frame (what the ground sends up): rc_core.h's commands, values scaled by rc_cmd_scale. */
 int tlm_crsf_cmd(uint8_t *out, int cmd, int seq, const float *v, int nv) {

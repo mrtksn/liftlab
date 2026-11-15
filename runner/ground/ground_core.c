@@ -37,7 +37,7 @@ int gnd_init(gnd_state *G, rn_host *H, const gnd_config *c) {
 
 /* what a command's values must be: numbers, each within its 16 bits once scaled (tlm_crsf_cmd would saturate it) */
 static int cmd_ok(int cmd, const float *v, int n) {
-  if (cmd < 1 || cmd > 255 || n < 0 || n > 6) return 0;
+  if (cmd < 1 || cmd > 255 || cmd == RC_CMD_TEXT || n < 0 || n > 6) return 0;   /* (text: gnd_text) */
   for (int i = 0; i < n; i++) { float x = v[i] * rc_cmd_scale(cmd, i); if (!fin(x) || x > 32767 || x < -32767) return 0; }
   return 1;
 }
@@ -46,6 +46,16 @@ int gnd_command(gnd_state *G, int cmd, const float *v, int n) {
   if (G->qn >= GND_QN) return -1;
   int k = (G->qh + G->qn) % GND_QN; G->q[k].cmd = cmd; G->q[k].n = n; G->q[k].t = G->t_now;
   for (int i = 0; i < n; i++) G->q[k].v[i] = v[i];
+  G->qn++;
+  return 0;
+}
+_Static_assert(GND_TEXT == RC_TEXT, "a text command's length");
+int gnd_send_text(gnd_state *G, const char *s) {
+  int n = 0; while (s[n]) { if (s[n] < 32 || s[n] > 126 || n >= RC_TEXT) return -2; n++; }
+  if (!n) return -2;
+  if (G->qn >= GND_QN) return -1;
+  int k = (G->qh + G->qn) % GND_QN; G->q[k].cmd = RC_CMD_TEXT; G->q[k].n = 0; G->q[k].t = G->t_now;
+  for (int i = 0; i <= n; i++) G->q[k].s[i] = s[i];
   G->qn++;
   return 0;
 }
@@ -151,7 +161,7 @@ int gnd_step(gnd_state *G, const gnd_input *in, double t, float dt, uint8_t *out
   if (t >= G->t_rc_next - 1e-6 && cap >= CRSF_MAX_FRAME) {
     if (G->qn && t - G->t_cmd >= G->C.cmd_gap && gnd_link_up(G, t)) {
       G->seq = G->seq % 255 + 1;
-      n = tlm_crsf_cmd(out, G->q[G->qh].cmd, G->seq, G->q[G->qh].v, G->q[G->qh].n);
+      n = G->q[G->qh].cmd == RC_CMD_TEXT ? tlm_crsf_text(out, G->seq, G->q[G->qh].s) : tlm_crsf_cmd(out, G->q[G->qh].cmd, G->seq, G->q[G->qh].v, G->q[G->qh].n);
       G->qh = (G->qh + 1) % GND_QN; G->qn--; G->t_cmd = t;
     } else n = crsf_rc(out, CRSF_ADDR_TX, G->ch);
     G->t_rc_next += G->C.rc_period; if (G->t_rc_next < t) G->t_rc_next = t + G->C.rc_period;

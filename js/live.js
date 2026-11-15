@@ -7,7 +7,8 @@
 // and come back as notifications of DOWN; INFO says the connection's MTU, which a page can't ask its own Bluetooth.
 // While connected the simulation stands still and everything that shows the simulated drone shows the real one: the
 // 3D view (its attitude and position from the telemetry), the Ground tab (the command module's view, alerts, link log),
-// and the keys, the on-screen pads and a gamepad are its sticks. Arm, take off, hold and home are the bar's switches.
+// and the keys, the on-screen pads and a gamepad are its sticks. Arm, take off, hold and home are the drone card's
+// switches (drone-card.js), with its other buttons and typed commands.
 //
 // Or over Wi-Fi (the Ground tab's link set to Wi-Fi: the drone's Pi running dfb_pi --radio wifi,...): a browser can't
 // send UDP, so the packets go through runner/ground/wifi_bridge.py on this computer, one WebSocket message a packet,
@@ -117,7 +118,7 @@ function liveStart(dev, G, url) {
   brt.gnd = G.g; brt.gndOk = !G.why; brt.gndErr = G.why ? `This page's command module: ${G.why}` : ''; brt.t = 1; radio.t = 1;
   if (dev) dev.addEventListener('gattserverdisconnected', liveDropped);
   document.querySelector('.view').classList.add('live'); document.body.classList.add('live-on'); $('#livePaused').hidden = false;
-  $('#liveBar').hidden = false; liveRenderBar(true); liveRenderBtn();
+  liveRenderBar(true); liveRenderBtn();
   linkLog('↕', 'link', `connecting to ${live.name}`, wifi ? `Wi-Fi through the bridge at ${live.url}` : 'Bluetooth LE from this browser', 'warn');
   live.timer = setInterval(liveTick, 4);
   if (wifi) liveWs(); else liveGatt();
@@ -188,7 +189,6 @@ function liveStop() {
   if (d) { d.removeEventListener('gattserverdisconnected', liveDropped); try { if (d.gatt.connected) d.gatt.disconnect(); } catch (e) {} }
   live.g = null;
   document.querySelector('.view').classList.remove('live'); document.body.classList.remove('live-on'); $('#livePaused').hidden = true;
-  $('#liveBar').hidden = true;
   doReset();                                                         // (the simulator's command module and link back)
   running = live.wasRunning; renderRun();
   liveRenderBtn();
@@ -299,32 +299,7 @@ function liveView() {
   S.t = live.t;
   liveRenderBar();
 }
-function liveRenderBar(force) {
-  if (!live.on) return;
-  const now = performance.now(); if (!force && now < (live.barNext || 0)) return; live.barNext = now + 200;
-  const v = gs.v, L = gs.link, a = gs.alert, conn = LIVE_MODEL.connected();
-  setText($('#liveName'), live.name);
-  const st = $('#liveState');
-  setText(st, live.state === 'up' ? (conn ? 'connected' : 'connected, nothing coming') : live.state === 'lost' ? 'reconnecting…' : 'connecting…');
-  st.dataset.tone = live.state === 'up' && conn ? 'good' : live.state === 'up' ? 'warn' : 'bad';
-  const bits = [];
-  if (L) bits.push(`LQ ↑${Math.round(L.upLq)}% ↓${Math.round(L.downLq)}%`);
-  if (v.battery) bits.push(`${v.battery.volts.toFixed(1)} V${v.battery.pct ? ` ${Math.round(v.battery.pct)}%` : ''}`);
-  if (v.pos) bits.push(`height ${v.pos.z.toFixed(1)} m`); else if (v.baro) bits.push(`height ${v.baro.alt.toFixed(1)} m`);
-  if (v.mode) bits.push(v.mode.mode);
-  setText($('#liveRead'), bits.join(' · ') || 'no telemetry yet');
-  const al = $('#liveAlert'), show = a && a.level > 0 && live.state !== 'connecting';
-  al.hidden = !show; if (show) { setText(al, a.text.charAt(0).toUpperCase() + a.text.slice(1)); al.dataset.tone = a.level >= 2 ? 'bad' : 'warn'; }
-  const nav = hasTask('nav'), pad = !!live.gp;
-  $('#liveFly').hidden = !nav && pad;                                 // (angle mode on the keys: Take off engages the throttle)
-  $('#liveHome').hidden = !nav;
-  $('#liveArm').setAttribute('aria-pressed', String(live.arm)); $('#liveArm').textContent = live.arm ? 'Armed' : 'Arm';
-  $('#liveFly').setAttribute('aria-pressed', String(live.fly)); $('#liveFly').textContent = live.fly ? 'Land' : 'Take off';
-  const stop = $('#liveStop'); if (live.stopAsk && now > live.stopAsk) live.stopAsk = 0;
-  stop.textContent = live.stopAsk ? 'Really disconnect?' : 'Disconnect';
-  setText($('#liveNote'), !nav && !pad ? `Angle mode: ${live.landing ? 'landing (it sinks until the height stops changing).' : live.fly ? 'W/S climb and sink (let go: it holds the height), A/D turn, the arrows lean.' : 'Arm, then Take off: the keys and pads fly it, W/S climb.'}${live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : ''}`
-    : `${pad ? `Gamepad: ${live.gp.replace(/\s*\(.*$/, '')}. ` : ''}${nav ? 'The keys and pads move it; Space holds, H flies home.' : ''}${live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : ''}`);
-}
+const liveRenderBar = force => { if (typeof cardRender === 'function') cardRender(force); };
 function liveRenderBtn() {
   const b = $('#liveBtn'); if (!b) return;
   b.classList.toggle('on', live.on); b.setAttribute('aria-pressed', String(live.on));
@@ -333,17 +308,29 @@ function liveRenderBtn() {
 }
 function liveArmToggle() {
   if (!live.arm) {
-    const p = livePad(); if (!hasTask('nav') && p && p[2] > -0.9) { linkLog('↕', 'link', 'not armed', 'throttle stick down first', 'bad'); flashEl($('#liveNote')); return; }
+    const p = livePad(); if (!hasTask('nav') && p && p[2] > -0.9) { linkLog('↕', 'link', 'not armed', 'throttle stick down first', 'bad'); flashEl($('#liveNote')); return 'throttle stick down first'; }
   }
   live.arm = !live.arm; if (!live.arm) { live.fly = false; live.landing = 0; }
   linkLog('↑', 'switch', `ARM ${live.arm ? 'on' : 'off'}`, 'this page\'s switch', live.arm ? 'warn' : '');
   liveRenderBar(true);
 }
+function liveFlyToggle() {
+  if (!live.arm && !live.fly) { linkLog('↕', 'link', 'not taking off', 'arm first', 'bad'); return 'arm first'; }
+  live.fly = !live.fly;
+  if (!live.fly && !hasTask('nav') && !live.gp) { live.landing = live.t; live.stillT = 0; }   // (angle mode on the keys: Land sinks it until it is down)
+  linkLog('↑', 'switch', `FLY ${live.fly ? 'on' : 'off'}`, 'this page\'s switch', ''); liveRenderBar(true);
+}
+// Disconnect: armed and connected, it asks again first (the drone's failsafe lands it once it's left).
+function liveStopPress() {
+  const flying = gs.v.state && gs.v.state.state >= 1 && LIVE_MODEL.connected();
+  if (flying && !live.stopAsk) { live.stopAsk = performance.now() + 4000; linkLog('↕', 'link', 'the drone is armed', 'disconnecting leaves it to its failsafe (it lands): press again to disconnect', 'warn'); liveRenderBar(true); return 'armed: press again to disconnect'; }
+  liveStop();
+}
 function flashEl(e) { if (!e) return; e.classList.remove('flash'); void e.offsetWidth; e.classList.add('flash'); }
 
 /* ───────── the page ───────── */
 function liveOpen() {
-  if (live.on) { $('#liveStop').focus(); return; }
+  if (live.on) { cardFocus(); return; }
   const via = liveVia(), ok = via === 'wifi' || liveSupported(), dlg = $('#liveDlg');
   setText($('#livePhrase'), radioCfg.bind);
   setText($('#liveHow'), via === 'wifi' ? `Wi-Fi, to the drone's Pi running dfb_pi --radio wifi,${radioCfg.sta ? 'sta' : 'ap,' + (radioCfg.channel || 1)} (this computer on its network).`
@@ -367,16 +354,5 @@ function liveBridgeCmd() {
   $('#liveBridge').addEventListener('input', e => { instSave('liveBridge', e.target.value.trim()); liveBridgeCmd(); });
   $('#liveFind').addEventListener('click', liveFind);
   $('#liveClose').addEventListener('click', () => $('#liveDlg').close());
-  $('#liveArm').addEventListener('click', liveArmToggle);
-  $('#liveFly').addEventListener('click', () => { if (!live.arm && !live.fly) { linkLog('↕', 'link', 'not taking off', 'arm first', 'bad'); return; } live.fly = !live.fly;
-    if (!live.fly && !hasTask('nav') && !live.gp) { live.landing = live.t; live.stillT = 0; }   /* (angle mode on the keys: Land sinks it until it is down) */ linkLog('↑', 'switch', `FLY ${live.fly ? 'on' : 'off'}`, 'this page\'s switch', ''); liveRenderBar(true); });
-  $('#liveHold').addEventListener('click', () => radioHold());
-  $('#liveHome').addEventListener('click', () => radioHome());
-  $('#liveStop').addEventListener('click', () => {
-    const flying = gs.v.state && gs.v.state.state >= 1 && LIVE_MODEL.connected();
-    if (flying && !live.stopAsk) { live.stopAsk = performance.now() + 4000; linkLog('↕', 'link', 'the drone is armed', 'disconnecting leaves it to its failsafe (it lands): press again to disconnect', 'warn'); liveRenderBar(true); return; }
-    liveStop();
-  });
-  document.querySelectorAll('#liveBar button').forEach(x => x.addEventListener('mousedown', e => e.preventDefault()));   // (a click leaves the keyboard where it was: Space mustn't press Arm again)
   liveRenderBtn();
 })();

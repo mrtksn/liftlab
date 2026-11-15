@@ -38,6 +38,7 @@
 #include "cargo_core.h"
 #include "bus.h"
 #include "prog_core.h"
+#include "fc_text.h"
 
 #define ARENA_CAP 131072
 #define CODE_CAP 65536
@@ -184,9 +185,16 @@ EXPORT("fc_command") void command(void) {
   fc_cmd c = { (int)cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], (int)cmd[5], cmd[6], cmd[7] > 0.5f, { cmd[8], cmd[9], cmd[10] }, cmd[11] };
   fc_command(&F, &c);
 }
+/* The accelerometer over the last half second, and whether it stood still meanwhile (the gyro): what `level` takes. */
+static float acc_avg[3], gyro_ms; static double still_t;
 EXPORT("fc_tick") void fc_tick(void) {
   fc_imu m = { { io[0], io[1], io[2] }, { io[3], io[4], io[5] }, io[6] > 0.5f, io[9], io[10] > 0.5f, { io[11], io[12], io[13] }, io[14] > 0.5f };
   float dt = io[7];
+  if (m.have_gyro && dt > 0) {
+    float k = dt / 0.5f > 1 ? 1 : dt / 0.5f, g2 = m.gyro[0] * m.gyro[0] + m.gyro[1] * m.gyro[1] + m.gyro[2] * m.gyro[2];
+    for (int i = 0; i < 3; i++) acc_avg[i] += (m.acc[i] - acc_avg[i]) * k;
+    gyro_ms += (g2 - gyro_ms) * k; still_t = gyro_ms < 0.05f * 0.05f ? still_t + dt : 0;
+  }
   fc_out o;
   fc_step(&F, &m, dt, io[8], &o);
   float *p = io + IO_IN;
@@ -196,6 +204,11 @@ EXPORT("fc_tick") void fc_tick(void) {
   for (int k = 0; k < 3; k++) *p++ = F.w[k];
   *p++ = (float)F.trap; *p++ = F.rho; *p++ = (float)F.att_ok; *p++ = F.yaw_sp; *p++ = F.az_f; *p++ = F.iAz; *p++ = F.have_alt ? F.vz_e : F.vz_i; *p++ = F.alt_e; *p++ = (float)F.have_alt;
   for (int k = 0; k < 3; k++) *p++ = F.tau_des[k];
+}
+/* A text command for the flight core (fc_text.h), in txt: its answer in txt; 1 if it was one, 0 if not. */
+EXPORT("fc_text") int fc_text_(void) {
+  char line[RC_TEXT + 1]; int i = 0; for (; i < RC_TEXT && txt[i]; i++) line[i] = txt[i]; line[i] = 0;
+  return fc_text(&F, line, still_t > 0 || acc_avg[2] != 0 ? acc_avg : 0, still_t > 0.5, txt, 200);
 }
 /* The learning task: the airframe in blob, the config in lcfg. */
 EXPORT("learn_setup") int learn_setup(uint32_t af_len, uint32_t cfg_len) {
@@ -424,6 +437,11 @@ EXPORT("fleet_view") int fleet_view(void) {
   return k;
 }
 EXPORT("radio_in") void radio_in(int n, double t) { for (int i = 0; i < n; i++) tlm_crsf_input(&CP, rbuf[i], &RCI, t); }
+/* The radio's text commands (rc_core.h RC_CMD_TEXT): how many came, the latest (into txt) */
+EXPORT("rc_text_n") int rc_text_n(void) { return (int)RCI.text_n; }
+EXPORT("rc_text") char *rc_text(void) { int i = 0; for (; i < RC_TEXT && RCI.text[i]; i++) txt[i] = RCI.text[i]; txt[i] = 0; return txt; }
+/* a message for the pilot (in txt), down with the telemetry: severity 0–7 (6 information) */
+EXPORT("tlm_say") void tlm_say(int sev) { tlm_text(&TS, sev, txt); }
 /* what goes to the receiver now (into rbuf): returns the bytes */
 static const rlink_cfg *budget_link(double t) {                     /* (two links: as radio_mux.c radio_mux_link) */
   if (!mx_on) return &RL;
@@ -498,6 +516,7 @@ EXPORT("gnd_pickup") int gnd_pickup_(float hx, float hy, float hz, float x, floa
   float top[3] = { x, y, z }; GND.C.hook[0] = hx; GND.C.hook[1] = hy; GND.C.hook[2] = hz; return gnd_pickup(&GND, top, latch, t);
 }
 EXPORT("gnd_command") int gnd_command_(int cmd, int n) { return gnd_command(&GND, cmd, fr, n); }   /* values in fr */
+EXPORT("gnd_text") int gnd_text_(void) { return gnd_send_text(&GND, txt); }   /* a line for the drone, in txt (gnd_send_text) */
 /* a latching button (gnd_setup's latch) set on or off, whatever its button last did: the state, or −1 */
 EXPORT("gnd_latch") int gnd_latch_(int b, int on) { return gnd_latch(&GND, b, on); }
 /* the buttons sent on in the last step (GB bits): what to pass back as gnd_setup's resume */

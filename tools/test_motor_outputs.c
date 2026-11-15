@@ -51,6 +51,7 @@ int main(void){
   old.version=11;old.peer_channel=6;restored=config();restored.esc_stop_us=0;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,esc_stop_us))&&restored.peer_channel==6&&restored.esc_stop_us==0&&restored.version==HW_VERSION);old.peer_channel=0;
   old.version=13;old.link_tx=32;old.link_rx=35;restored=config();assert(lb_hw_restore(&restored,&old,offsetof(hw_config,level_mode))&&restored.link_tx==32&&restored.level_mode==0&&restored.version==HW_VERSION);old.link_tx=old.link_rx=-1;
   old.version=14;old.level_mode=1;restored=config();restored.batt2_pin=-1;restored.batt2_divider=11;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,batt2_pin))&&restored.level_mode==1&&restored.batt2_pin==-1&&restored.batt2_divider==11&&restored.version==HW_VERSION);old.level_mode=0;
+  old.version=15;old.batt2_pin=34;restored=config();restored.level_yaw=0;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,level_yaw))&&restored.batt2_pin==34&&restored.level_yaw==0&&restored.version==HW_VERSION);old.batt2_pin=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -62,7 +63,9 @@ int main(void){
   assert(!hw_check(&settings,log,sizeof log));assert(!hw_set(&settings,"motor_driver=1,0,1,0",log,sizeof log));assert(!hw_set(&settings,"motor_max=60,100,70,100",log,sizeof log));assert(!hw_set(&settings,"brushed_hz=30000",log,sizeof log));
   {hw_config c=settings;char e[200];assert(!hw_set(&c,"level=off",e,sizeof e)&&c.level_mode==1);assert(!hw_set(&c,"level=2.5,-4",e,sizeof e)&&c.level_mode==2&&c.level_deg[0]==2.5f&&c.level_deg[1]==-4.0f);
     char d[1200];hw_describe(&c,d,sizeof d);assert(strstr(d," level=2.5,-4.0"));
-    const char *badl[]={"level=50,0","level=1","level=up","level=1,2,3"};for(unsigned i=0;i<4;i++){hw_config b=c;assert(hw_set(&c,badl[i],e,sizeof e));assert(!memcmp(&b,&c,sizeof c));}
+    assert(!hw_set(&c,"level=-81,39",e,sizeof e)&&c.level_deg[0]==-81.0f);   /* (a board on its edge) */
+    assert(!hw_set(&c,"level_yaw=90",e,sizeof e)&&c.level_yaw==90.0f);hw_describe(&c,d,sizeof d);assert(strstr(d," level_yaw=90"));
+    const char *badl[]={"level=175,0","level=0,95","level=1","level=up","level=1,2,3","level_yaw=200","level_yaw=x","level_yaw="};for(unsigned i=0;i<8;i++){hw_config b=c;assert(hw_set(&c,badl[i],e,sizeof e));assert(!memcmp(&b,&c,sizeof c));}
     assert(!hw_set(&c,"level=boot",e,sizeof e)&&c.level_mode==0);hw_describe(&c,d,sizeof d);assert(strstr(d," level=boot"));}
   {hw_config c=settings;char e[200],d[1200];assert(c.batt2_pin==-1);hw_describe(&c,d,sizeof d);assert(strstr(d," battery2=-1"));   /* a second pack's voltage */
     int a1=-1,a2=-1;for(int p=0;p<SOC_GPIO_PIN_COUNT&&a2<0;p++)if(lb_adc_pin(p)&&p!=c.sda&&p!=c.scl){if(a1<0)a1=p;else a2=p;}
@@ -130,5 +133,5 @@ int main(void){
 #endif
    assert(!hw_set(&u,"link_uart=-1",log,sizeof log)&&u.link_tx==-1&&!hw_check(&u,log,sizeof log));
    hw_config v12=u;v12.version=12;v12.link_mqtt=1;hw_config r;hw_defaults(&r);assert(lb_hw_restore(&r,&v12,offsetof(hw_config,link_tx))&&r.link_mqtt==1&&r.link_tx==-1&&r.version==HW_VERSION);}
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v14 migration, the level setting, a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v15 migration, the level setting, a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
 }

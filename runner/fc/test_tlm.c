@@ -144,6 +144,10 @@ int main(void) {
     CHECK(rc_stick_cmd(&in, 2.1, &c) == -1, "1.1 s without channels: nothing sent");
     float go[4] = { 3, -2, 4.5f, 1.0f }; n = tlm_crsf_cmd(f, RC_CMD_GOTO, 7, go, 4); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 2.2);
     CHECK(in.cmd == RC_CMD_GOTO && in.cmd_seq == 7 && fabsf(in.cmd_v[2] - 4.5f) < 0.01f && fabsf(in.cmd_v[3] - 1) < 0.002f, "ground-station go-to: (%.2f %.2f %.2f) heading %.3f", in.cmd_v[0], in.cmd_v[1], in.cmd_v[2], in.cmd_v[3]);
+    n = tlm_crsf_text(f, 8, "safety off"); for (int r = 0; r < 2; r++) for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 2.3);
+    CHECK(in.text_n == 1 && !strcmp(in.text, "safety off") && in.cmd == RC_CMD_GOTO && in.cmd_seq == 7, "a text command, sent twice: taken once (\"%s\"), the go-to still the last command", in.text);
+    { char longer[80]; memset(longer, 'x', 70); longer[70] = 0; n = tlm_crsf_text(f, 9, longer); for (int i = 0; i < n; i++) tlm_crsf_input(&P, f[i], &in, 2.4);
+      CHECK(in.text_n == 2 && strlen(in.text) == RC_TEXT, "a longer line: its first %d characters", RC_TEXT); }
     /* the navigation's set point */
     static nav_state N; memset(&N, 0, sizeof N); nav_out o; memset(&o, 0, sizeof o); o.have_home = 1; o.p[2] = 2;
     rc_pilot RP; rc_pilot_init(&RP); nav_sp sp; memset(&sp, 0, sizeof sp);

@@ -14,7 +14,10 @@ const settings=A.hardwareSettings(p);assert.ok(settings.indexOf('esc_hz=50')<set
 assert.ok(settings.includes('level=boot'));   // (the default: as it sits at power-up is level)
 {const W=JSON.parse(JSON.stringify(C));
   for(const [v,line] of [['off','level=off'],['2.5,-4','level=2.5,-4'],['boot','level=boot']]){W.wiring.parts[5].level=v;const q=A.hardwarePlan(W,parts,W.boards[0]);assert.equal(q.errors.length,0,q.errors.join());assert.ok(A.hardwareSettings(q).includes(line),line);}
-  for(const v of ['50,0','1','up']){W.wiring.parts[5].level=v;assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/level trim/.test(e)),v);}}
+  for(const v of ['175,0','0,95','1','up']){W.wiring.parts[5].level=v;assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/level trim/.test(e)),v);}
+  W.wiring.parts[5].level='-81,39';{const q=A.hardwarePlan(W,parts,W.boards[0]);assert.equal(q.errors.length,0,q.errors.join());assert.ok(A.hardwareSettings(q).includes('level=-81,39'));assert.ok(!A.hardwareSettings(q).some(l=>l.startsWith('level_yaw')),'no yaw: no level_yaw= line (older firmware)');}
+  W.wiring.parts[5].levelYaw=90;{const q=A.hardwarePlan(W,parts,W.boards[0]);assert.ok(A.hardwareSettings(q).includes('level_yaw=90'));}
+  W.wiring.parts[5].levelYaw=200;assert.ok(A.hardwarePlan(W,parts,W.boards[0]).errors.some(e=>/level yaw/.test(e)));delete W.wiring.parts[5].levelYaw;W.wiring.parts[5].level='boot';}
 {const W=JSON.parse(JSON.stringify(C));vm.runInContext('this.esc={ESC_PRESETS,escPresetOf,escDutyPct}',ctx);const E=ctx.esc;
   assert.equal(E.escPresetOf(A.hardwarePlan(W,parts,W.boards[0]).bus),'custom');   // (a design's old defaults: no preset)
   const {label,note,...toy}=E.ESC_PRESETS.toyStop;void label;void note;W.wiring.boards[1]={...W.wiring.boards[1],...toy};

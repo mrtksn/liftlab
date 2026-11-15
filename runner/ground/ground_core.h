@@ -62,6 +62,7 @@ typedef struct {
 void gnd_config_default(gnd_config *c);
 
 #define GND_QN 8             /* commands waiting */
+#define GND_TEXT 57          /* a text command's characters (rc_core.h RC_TEXT) */
 #define GND_MSGS 16          /* messages kept */
 #define GND_CMD_WAIT 10.0    /* [s] a command that waited this long for the link is dropped, not sent late */
 enum { GND_WHY_SWITCH = 11, GND_WHY_N = 12 };
@@ -87,7 +88,7 @@ typedef struct {
   uint32_t seen_off, blocked;                          /* the switch warning: arm, fly seen off since the start; held back now */
   int stepped, level;                                  /* level: 0 gentle, 1 normal, 2 sport */
   float stick[GND_AXES], ch[16];
-  struct { int cmd, n; float v[6]; double t; } q[GND_QN]; int qh, qn, seq; double t_cmd, t_rc_next, t_now;
+  struct { int cmd, n; float v[6]; double t; char s[GND_TEXT + 1]; } q[GND_QN]; int qh, qn, seq; double t_cmd, t_rc_next, t_now;
   uint32_t dropped;                                    /* commands dropped after waiting GND_CMD_WAIT for the link */
   int alert, alert_why, f_lvl, f_why; double t_alert_step;   /* f_: what groundAlerts said */
   crsf_parser P; gnd_view V;
@@ -106,6 +107,9 @@ void gnd_from_radio(gnd_state *G, const uint8_t *b, int n, double t);
 /* Queue a command (rc_core.h RC_CMD_*, 1–255; up to 6 values, each within what its 16 bits hold at rc_cmd_scale).
  * Returns 0, −1 when the queue is full, −2 when the command or a value can't go (out of range, not a number). */
 int gnd_command(gnd_state *G, int cmd, const float *v, int n);
+/* A line of text for the drone (rc_core.h RC_CMD_TEXT: the drone card's buttons, a typed command), in turn with the
+ * commands. Printable characters, 1 to RC_TEXT of them. Returns as gnd_command. */
+int gnd_send_text(gnd_state *G, const char *s);
 /* A go-to replaces one still waiting to go (only the newest target matters). x, y, z within ±GND_GOTO_MAX m (what
  * the command's centimetres hold), heading [rad] any finite angle. Returns as gnd_command. */
 #define GND_GOTO_MAX 327.0f

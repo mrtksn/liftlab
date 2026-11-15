@@ -12,6 +12,8 @@
  *   pickup X Y Z [LATCH]                   fly the hook onto a thing whose top is at X Y Z [m] from home and close
  *                                          the latch (1 by default; open it first): gnd_pickup, gnd_config.hook
  *   cmd ID V1 V2 …                         any command (rc_core.h): ID 1–255, up to 6 values
+ *   drone LINE                             a line of text for the drone (rc_core.h RC_CMD_TEXT): the Pi's text
+ *                                          commands (level, safety off, esp32 show …); its answer comes as a message
  * A value that isn't a number (or is out of range) is refused with a reply saying why; nothing is sent.
  *   status, messages, quit
  * Sticks and the stick buttons set this way lapse a second after they were last sent, like a radio's channels: a

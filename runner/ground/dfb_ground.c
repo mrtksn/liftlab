@@ -52,7 +52,7 @@
  *
  * Text commands (ground_text.h), one per line, from the terminal or as UDP datagrams (replies go back to the
  * sender): press/release/tap NAME, stick AXIS V, goto X Y Z [HEADING], calibrate, fleet on|off, latch N open|close, pickup X Y Z [LATCH],
- * cmd ID V…, status, messages, quit. --hook DX,DY,DZ: where the drone's hook is from its hub, for pickup (0,0,-0.06).
+ * cmd ID V…, drone LINE (a text command for the drone), status, messages, quit. --hook DX,DY,DZ: where the drone's hook is from its hub, for pickup (0,0,-0.06).
  * Sticks and stick buttons sent this way lapse after a second unless sent again: if a script stops, the sticks centre.
  *
  * Wiring. A module with separate CRSF TX and RX pads (a full UART): a USB-serial adapter at 3.3 V, its TX to the
@@ -128,7 +128,7 @@ static void command(char *s, char *reply, size_t rn, double t) {
   char cp[256]; snprintf(cp, sizeof cp, "%s", s);
   int r = gnd_text(&G, &IN, s, t, reply, (int)rn);
   if (r == 2) running = 0;
-  else if (!r) snprintf(reply, rn, "unknown: %.40s (press, release, tap, stick, goto, calibrate, latch, pickup, cmd, status, messages, quit)", cp);
+  else if (!r) snprintf(reply, rn, "unknown: %.40s (press, release, tap, stick, goto, calibrate, latch, pickup, cmd, drone, status, messages, quit)", cp);
 }
 
 /* ── the terminal's keys ── */

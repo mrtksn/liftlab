@@ -6,4 +6,5 @@
 #include "crsf.h"
 int tlm_crsf_input(crsf_parser *P, uint8_t b, rc_input *in, double t);
 int tlm_crsf_cmd(uint8_t *out, int cmd, int seq, const float *v, int nv);
+int tlm_crsf_text(uint8_t *out, int seq, const char *s);
 #endif

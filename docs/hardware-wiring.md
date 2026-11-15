@@ -48,12 +48,23 @@ The IMU's card has **Level**: which way up the flight controller takes as level.
   at power-up to measure the gyro's offset. It also takes the gravity it reads then as straight up. A sensor fitted
   slightly tilted is trimmed out; start it on a level surface. If it was moving, there is no trim and it says so.
 - **The mount as set in Airframe** (`level=off`): no trim. A sensor fitted tilted shows as a tilt.
-- **A fixed trim** (`level=ROLL,PITCH`, degrees, at most 45 each): what a level drone reads. Use it to start on a
-  slope, where "as it sits" would be wrong. Measure it once on level ground: the `level` command (the Pi panel's `L`)
-  reports the trim; enter those numbers here.
+- **A fixed trim** (`level=ROLL,PITCH`, degrees: roll −180…180, pitch −90…90, at most 170° from straight up): what a
+  level drone reads. Use it to start on a slope, where "as it sits" would be wrong. Measure it once on level ground:
+  the `level` command (the drone card's **Level here**, the Pi panel's `L`) reports the trim; enter those numbers here.
 
-`level` (a settings line, or `liftlab send flight level`) re-levels it now, disarmed and still, until a reboot;
-`level none` drops the trim. The ESP32's `show` lists the trim in use. Needs flight firmware with wiring version 14.
+A sensor board stood on its edge is fine: the trim is the smallest turn that takes the gravity it reads to straight
+up, so a board hinged up by 90° comes out right. What gravity can't tell is a board also turned about straight up
+(its X arrow pointing sideways): **Board turned about straight up** (`level_yaw=DEG`, counter-clockwise seen from
+above) turns it back. To check, connect LiftLab and tilt the drone by hand: the 3D view should tilt the same way.
+Nose down: the drone card's P goes up (positive), R stays near 0; right side down: R goes up. If roll and pitch
+swap, set 90 or −90; if both turn the wrong way, 180. Upside down (over 170°) the
+trim refuses: give the IMU part its mount in Airframe instead. A new trim restarts the attitude estimate (disarmed),
+so it is level again within a second.
+
+`level` (a settings line, the drone card, or `liftlab send flight level`) re-levels it now, disarmed and still, until
+a reboot; `level R,P[,Y]` sets a trim and `level yaw Y` the yaw alone, until a reboot; `level none` drops the trim.
+The ESP32's `show` lists the trim in use. Needs flight firmware with wiring version 16 for `level_yaw` and trims
+over 45° (14 for the rest).
 
 ### Safety off
 

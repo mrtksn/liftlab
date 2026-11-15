@@ -85,12 +85,33 @@ function computers() {
   if (!cfg.computers || !Array.isArray(cfg.computers.boards) || !cfg.computers.boards.length) cfg.computers = defaultComputers();
   return cfg.computers;
 }
+// The drone card's buttons (drone-card.js), the command module's: what each does (act), its label (and its label while
+// on, for the switches), the text a "send" sends up the radio, and whether a second press is wanted (confirm).
+const CARD_ACTS = ['arm', 'fly', 'hold', 'home', 'send', 'disconnect'];
+const CARD_TEXT_MAX = 57;                                            // (rc_core.h RC_TEXT)
+const CARD_BUTTONS_DEFAULT = [
+  { label: 'Arm', on: 'Armed', act: 'arm' }, { label: 'Take off', on: 'Land', act: 'fly' }, { label: 'Hold', act: 'hold' }, { label: 'Home', act: 'home' },
+  { label: 'Level here', act: 'send', cmd: 'level', confirm: true }, { label: 'Safety off', act: 'send', cmd: 'safety off', confirm: true },
+  { label: 'Safety on', act: 'send', cmd: 'safety on' }, { label: 'Disconnect', act: 'disconnect' },
+];
+function fixCardButtons(list) {
+  if (!Array.isArray(list)) return null;
+  const txt = (s, n) => String(s ?? '').replace(/[^\x20-\x7e]/g, '').trim().slice(0, n);
+  return list.filter(b => b && CARD_ACTS.includes(b.act)).slice(0, 24).map(b => {
+    const o = { label: txt(b.label, 24) || b.act, act: b.act };
+    if ((b.act === 'arm' || b.act === 'fly') && txt(b.on, 24)) o.on = txt(b.on, 24);
+    if (b.act === 'send') o.cmd = txt(b.cmd, CARD_TEXT_MAX);
+    if (b.confirm) o.confirm = true;
+    return o;
+  });
+}
 // Keep it valid: known kinds, one flight core on a microcontroller, the Pi's tasks on Linux computers, each task on one board.
 function fixComputers(C) {
   C = C && Array.isArray(C.boards) ? JSON.parse(JSON.stringify(C)) : defaultComputers();
   C.boards = C.boards.filter(b => BOARD_KINDS[b.kind] && !BOARD_KINDS[b.kind].groundOnly).slice(0, BOARD_MAX);
   const g = C.ground && BOARD_KINDS[C.ground.kind] ? C.ground : { kind: 'esp32' };
-  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24), ...(g.wiring?{wiring:g.wiring}:{}) };
+  const btns = fixCardButtons(g.buttons);
+  C.ground = { kind: g.kind, name: String(g.name || 'Command module').slice(0, 24), ...(g.wiring?{wiring:g.wiring}:{}), ...(btns ? { buttons: btns } : {}) };
   if (!C.boards.some(b => BOARD_KINDS[b.kind].mcu)) { C.boards = C.boards.slice(0, BOARD_MAX - 1); C.boards.unshift({ id: 0, kind: 'esp32', name: 'Flight controller', tasks: [] }); }   // (room made for it)
   const ids = new Set(); let id = Math.max(Number.isInteger(C.nextBoardId)?C.nextBoardId:1, ...C.boards.map(b => Number.isInteger(b.id)?b.id+1:1)); for (const b of C.boards) { if (!Number.isInteger(b.id) || b.id < 1 || ids.has(b.id)) { while (ids.has(id)) id++; b.id = id++; } ids.add(b.id); b.name = String(b.name || BOARD_KINDS[b.kind].label).slice(0, 24); b.tasks = (b.tasks || []).filter(t => TASKS[t]); }
   C.nextBoardId = Math.max(id,...C.boards.map(b=>b.id+1));
@@ -241,9 +262,9 @@ function boardsStart() {
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.mqttRng = null; brt.mqttLast = {}; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
-  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
+  brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; brt.textN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
   brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
-  Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false });
+  Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false, manual: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
   const C = computers();
@@ -699,6 +720,21 @@ function boardsControl(dt) {
   else { est.p = S.p.slice(); est.v = [0, 0, brt.out.vz]; est.havePos = false; }
 }
 
+/* ───────── text commands: the drone card's buttons, a typed line ───────── */
+const txtIn = (w, s) => { const b = new TextEncoder().encode(String(s).slice(0, 400) + '\0'); new Uint8Array(w.memory.buffer, w.txt_ptr(), b.length).set(b); };
+// A line that came up the radio to the receiver's board, as the drone's Pi (runner/pi/dfb_pi.c) takes it: level and
+// safety (and esp32 LINE, the ESP32's settings lines) go to the flight core's board, whose answer (fc_text.c: what
+// the ESP32's settings lines answer) goes back down the radio as a message. The Pi's other commands are the Pi's.
+function droneText(tlmB, tw, coreB, line) {
+  let s = line.trim(); const esp = s.startsWith('esp32 '); if (esp) s = s.slice(6).trim();
+  const cw = coreB && brt.inst.get(coreB.id);
+  let reply;
+  if (!cw) reply = 'no flight core on the drone';
+  else { txtIn(cw, s); reply = cw.fc_text() ? cstr(cw, cw.txt_ptr(), 200) : `the simulator doesn't have "${s}": it has level, level none, level R,P[,Y], level yaw Y, safety on|off, safety, status`; }
+  linkLog('↑', 'cmd', `text: ${line}`, `${tlmB.name} took it; ${coreB && coreB.id !== tlmB.id ? coreB.name + ' answered' : 'it answered'}: ${reply}`, '');
+  txtIn(tw, reply.length > 168 ? reply.slice(0, 165) + '...' : reply); tw.tlm_say(6);
+}
+
 /* ───────── the radio: the receiver on the telemetry task's board ───────── */
 // Each control step: the link's packets (link.js, and its model); what the receiver got goes to its board's UART; what the
 // board wrote goes down. The tasks put their telemetry in every 10 ms; boards without the radio send theirs over
@@ -734,6 +770,7 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     let k = 0; for (; k < radio.toBoard.length; k++) { const f = radio.toBoard[k]; if (n + f.length > 2048) break; rb.set(f, n); n += f.length; }
     radio.toBoard = radio.toBoard.slice(k); tw.radio_in(n, brt.t);   // (what didn't fit goes next step)
   }
+  const tn = tw.rc_text_n(); if (tn !== brt.textN) { brt.textN = tn; droneText(tlmB, tw, coreB, cstr(tw, tw.rc_text(), 64)); }
   if (brt.t >= brt.nextPub - 1e-9) {
     brt.nextPub += 0.01;
     const pack = brt.t >= brt.nextPack - 1e-9; if (pack) brt.nextPack += 0.05;
@@ -782,6 +819,7 @@ function gsSyncTarget() {
 function autoPilot(dt, navigated) {
   const P = brt.pilot; P.t += dt;
   const att = brt.out && brt.out.attOk, throwing = !!thr;
+  if (P.manual) { manualPilot(P, navigated, dt); return; }                // (the drone card's switches have it: drone-card.js)
   if (P.phase === 'ground' && P.t > 0.3 && att) { P.arm = 1; P.phase = 'arming'; P.t = 0; }
   if (P.phase === 'arming' && (P.t > 0.2 || (brt.fcState === 1 && P.t > 0.02))) {   // (on as soon as it's armed)
     if (brt.fcState !== 1) { if (P.t > 2) { P.phase = 'ground'; P.arm = 0; P.t = 0; } return; }   // didn't arm (the reason is shown): switch off and try again
@@ -803,6 +841,22 @@ function autoPilot(dt, navigated) {
   P.downT = P.phase === 'flying' && hb.lvc && S.p[2] - (terrain.boxes.length ? surfaceBelow(S.p) : 0) < 0.4 && nrm(S.v) < 0.2 ? (P.downT || 0) + dt : 0;
   if (P.downT > 2) { P.phase = 'landed'; P.arm = 0; P.fly = 0; P.thr = 0; P.flat = true; }
 }
+// The switches as the drone card set them (arm, take off, land), the rest as the simulator's pilot: armed, it idles on
+// the ground until Take off; Land (angle mode) sinks it until it sits still on something, then idles; with navigation
+// the navigation lands it. It didn't arm (the flight core's reason shows): the switch goes off again.
+function manualPilot(P, navigated, dt) {
+  if (P.phase === 'armed' && P.t > 2 && brt.fcState !== 1) { P.arm = 0; P.phase = 'ground'; P.t = 0; return; }
+  if (P.phase === 'takeoff') {
+    if (navigated) { if (brt.navOut && brt.navOut.fly && est.havePos && est.p[2] > (brt.home ? brt.home[2] : 0) + 0.5 * (setpoint.z - (brt.home ? brt.home[2] : 0))) P.phase = 'flying'; }
+    else if (brt.out && brt.out.haveAlt ? brt.out.alt - (P.alt0 ?? (P.alt0 = brt.out.alt)) > 0.6 * setpoint.z : P.t > 0.9) { P.thr = 0.5; P.phase = 'flying'; }
+  } else P.alt0 = null;
+  if (P.phase === 'landing') {
+    const sits = S.p[2] - (terrain.boxes.length ? surfaceBelow(S.p) : 0) < 0.25 && nrm(S.v) < 0.2;
+    P.stillT = sits ? (P.stillT || 0) + dt : 0;
+    if ((navigated && brt.navOut && brt.navOut.landed) || P.stillT > 1 || P.t > 30) { P.phase = 'landed'; P.thr = 0; P.fly = 0; }
+  }
+  if (brt.fcState === 0 && P.arm && P.phase !== 'armed' && P.phase !== 'ground') { P.phase = 'landed'; P.arm = 0; P.fly = 0; P.thr = 0; }   // (it disarmed itself)
+}
 // The sticks from the pilot keys (angle mode): the arrows lean, A/D turn, W/S climb or sink around the middle.
 function stickCommand() {
   const P = brt.pilot, k = c => isHeld(c) ? 1 : 0, s = { gentle: 0.4, normal: 0.7, sport: 1 }[pilot.level] || 0.7;
@@ -810,5 +864,5 @@ function stickCommand() {
   return { arm: P.arm, pitch: s * (k('fwd') - k('back')), roll: s * (k('right') - k('left')), yaw: k('yawL') - k('yawR'),
     throttle: P.thr > 0 ? clamp((flying ? 0.5 : P.thr) + 0.35 * (k('up') - k('down')), 0.06, 1) : 0 };
 }
-const flightPhaseText = () => !brt.ready ? (brt.err || 'starting') : { ground: 'on the ground', arming: 'arming', takeoff: brt.navOut && !brt.navOut.ready ? 'waiting for its position to settle' : 'taking off', flying: 'flying', landed: brt.pilot.flat ? 'down: the battery is flat' : 'landed',
+const flightPhaseText = () => !brt.ready ? (brt.err || 'starting') : { ground: 'on the ground', arming: 'arming', armed: 'armed on the ground', landing: 'landing', takeoff: brt.navOut && !brt.navOut.ready ? 'waiting for its position to settle' : 'taking off', flying: 'flying', landed: brt.pilot.flat ? 'down: the battery is flat' : 'landed',
   hand: !thr || thr.phase === 'free' ? 'thrown' : thr.phase === 'toss' ? 'being thrown' : brt.navOut && !brt.navOut.ready ? 'in the hand, waiting for its position' : 'in the hand, motors off' }[brt.pilot.phase] || '';

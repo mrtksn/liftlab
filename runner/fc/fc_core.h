@@ -179,9 +179,11 @@ typedef struct {
   float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
   bus *bus; int bt[7];                   /* the board's data bus, if it has one (fc_bus_attach), and this code's topics on it */
   /* Level (fc_level_*): which way is up when the drone sits level, beyond the airframe's IMU mount (imu_R): a sensor
-   * fitted slightly tilted. imu_M = trim · imu_R turns the IMU's readings into body axes. */
+   * fitted tilted, or stood on its edge. imu_M = Rz(yaw) · trim · imu_R turns the IMU's readings into body axes: the
+   * trim the smallest turn that takes the level drone's "up" to straight up, then a turn about straight up (a board
+   * turned on the frame: gravity can't tell that one, so it is given). */
   int level_kind;                        /* 0 the mount as the airframe says, 1 gravity as the IMU measured it, 2 roll/pitch given */
-  float level_g[3], level_deg[2];        /* 1: gravity in the IMU's axes; 2 (and after any): the trim's roll, pitch [deg] */
+  float level_g[3], level_deg[3];        /* 1: gravity in the IMU's axes; 2 (and after any): the trim's roll, pitch; its yaw [deg] */
   int level_dirty; float imu_M[9];
   /* Safety off (fc_safety): no "not level" refusal and no crash cut-off on a big tilt, for bench work with the sensor
    * out of the drone. Never saved: every start is with them on. */
@@ -208,11 +210,15 @@ void fc_keepalive(fc_state *F);
  * 50 ms, then the motors stop (crashed). */
 void fc_step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *out);
 const char *fc_state_name(int s);
-/* Level: the IMU's gravity reading (its own axes, m/s², the drone standing level and still) is level from now on;
- * or a trim given as roll and pitch [deg] (the drone level reads that much: a sensor fitted tilted); or none.
- * Each returns 0, or −1 with F->why set (a reading that isn't gravity, a trim over 45°). */
+/* Level: the IMU's gravity reading (its own axes, m/s², the drone standing level and still) is level from now on
+ * (the yaw stays as it was); or a trim given as roll, pitch and yaw [deg] (the drone level reads roll and pitch that
+ * much; yaw: the board turned that much about straight up, counter-clockwise seen from above); or the yaw alone; or
+ * none (the yaw too). Up to FC_LEVEL_MAX from straight up (a board on its edge is 90°; upside down: the airframe's
+ * IMU mount says it). Each returns 0, or −1 with F->why set (a reading that isn't gravity, a trim too big). */
+#define FC_LEVEL_MAX 170.0f
 int fc_level_imu(fc_state *F, const float acc[3]);
-int fc_level_deg(fc_state *F, float roll, float pitch);
+int fc_level_deg(fc_state *F, float roll, float pitch, float yaw);
+int fc_level_yaw(fc_state *F, float yaw);
 void fc_level_none(fc_state *F);
 /* Safety off (1) or on (0): see safety_off. Turning it off needs it disarmed; on, any time. 0, or −1 with F->why. */
 int fc_safety(fc_state *F, int off);

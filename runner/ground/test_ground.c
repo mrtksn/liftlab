@@ -101,6 +101,14 @@ int main(void) {
     gnd_goto(&G, 1, 0, 2, 0); gnd_goto(&G, 2, 0, 2, 0); gnd_goto(&G, 7, 0, 2, 0);   /* a dragged target: three before a step */
     for (int k = 0; k < 150; k++) { t += dt; int n = gnd_step(&G, &in, t, dt, out, sizeof out); uint32_t sb = RI.cmd_seq; drone_reads(out, n, t); if (RI.cmd_seq != sb && RI.cmd == RC_CMD_GOTO) { gotos++; lastx = RI.cmd_v[0]; } }
     CHECK(gotos == 1 && fabsf(lastx - 7) < 0.01f && RI.cmd_seq != s0, "three go-tos while one waits: one goes, the latest (x %.1f; %d sent)", lastx, gotos); }
+  { uint32_t s0 = RI.cmd_seq; int c0 = RI.cmd; float v0 = RI.cmd_v[0];
+    CHECK(gnd_send_text(&G, "level") == 0 && gnd_send_text(&G, "esp32 level=10.5,-3") == 0, "two text commands queued");
+    CHECK(gnd_send_text(&G, "") == -2 && gnd_send_text(&G, "bad\nline") == -2 && gnd_send_text(&G, "123456789012345678901234567890123456789012345678901234567890") == -2, "an empty line, a control character, 60 characters: refused");
+    float bogus = 1; CHECK(gnd_command(&G, RC_CMD_TEXT, &bogus, 1) == -2, "TEXT as a numbered command: refused (gnd_send_text)");
+    uint32_t n0 = RI.text_n; char first[64] = "";
+    for (int k = 0; k < 150; k++) { t += dt; int n = gnd_step(&G, &in, t, dt, out, sizeof out); uint32_t tn = RI.text_n; drone_reads(out, n, t); if (RI.text_n != tn && !first[0]) snprintf(first, sizeof first, "%s", RI.text); }
+    CHECK(RI.text_n == n0 + 2 && !strcmp(first, "level") && !strcmp(RI.text, "esp32 level=10.5,-3"), "the drone gets each once, in order: \"%s\", then \"%s\"", first, RI.text);
+    CHECK(RI.cmd_seq == s0 && RI.cmd == c0 && RI.cmd_v[0] == v0, "the pilot's last command as it was (not a new one)"); }
   printf("the telemetry, as it comes down\n");
   host(); gnd_init(&G, &H, NULL);
   tlm_store T; tlm_init(&T);

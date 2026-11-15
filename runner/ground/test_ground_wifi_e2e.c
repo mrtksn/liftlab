@@ -6,7 +6,8 @@
  * and can drop a share of them (loss) or all (the cut).
  * It drives dfb_ground over UDP as a script would ("press arm", "press fly", "goto" through 15% loss, "press fwd",
  * "calibrate", "status"), and checks the drone takes off, goes there, follows the stick, starts the learning's
- * calibration from the radio, that the telemetry comes back and the uplink's quality is counted (about 85% through
+ * calibration from the radio, that a text command ("drone esp32 show") reaches the ESP32 and its answer comes back down
+ * as a message, that the telemetry comes back and the uplink's quality is counted (about 85% through
  * the loss, 100% after), and that when the air is cut the drone flies home and lands by itself and the command module
  * raises its alarm. Then it starts a command module with another binding phrase: nothing it sends is taken (the
  * drone doesn't arm), nothing of the drone's reaches it, and both ends say the phrase doesn't match. And dfb_pi
@@ -82,13 +83,14 @@ static int refuses(const char *prog, char *const argv[], const char *want) {
   return ok;
 }
 
+static int esp_setting, esp_answer_down, pi_text_line;
 static int learn_line, cal_line, lost_line, landed_line, alarm_line, prog_line, pi_peer_line, pi_bad_line, gnd_bad_line, pi_radio_lines;
 static void on_pi(const char *s) {
   learn_line |= strstr(s, "learning command 1") != 0; cal_line |= strstr(s, "calibrating") != 0; lost_line |= strstr(s, "radio link lost: flying home") != 0;
   landed_line |= strstr(s, "landed by itself") != 0; pi_peer_line += strstr(s, "the command module is at") != 0;
-  pi_bad_line += strstr(s, "fail the binding phrase") != 0; pi_radio_lines += !strncmp(s, "radio: ", 7);
+  pi_bad_line += strstr(s, "fail the binding phrase") != 0; pi_radio_lines += !strncmp(s, "radio: ", 7); pi_text_line |= strstr(s, "radio text: esp32 show") != 0;
 }
-static void on_gnd(const char *s) { alarm_line |= strstr(s, "ALARM: no telemetry") != 0; prog_line += strstr(s, "drone: ") != 0; gnd_bad_line += strstr(s, "fail the binding phrase") != 0; }
+static void on_gnd(const char *s) { esp_answer_down |= strstr(s, "esp32: fake settings for show") != 0; alarm_line |= strstr(s, "ALARM: no telemetry") != 0; prog_line += strstr(s, "drone: ") != 0; gnd_bad_line += strstr(s, "fail the binding phrase") != 0; }
 
 /* ── the air: a UDP proxy between the command module and the drone ── */
 static int sg = -1, sd = -1; static struct sockaddr_in g_addr, d_addr; static int have_g;
@@ -156,6 +158,7 @@ int main(void) {
       else if (type == RN_LINK_EXC) fc_exc(&F, (const float *)L.buf, (int)(L.len / 4));
       else if (type == RN_LINK_MODEL) fc_model(&F, (const float *)L.buf, (int)(L.len / 4));
       else if (type == RN_LINK_SET) fc_set(&F, (const float *)L.buf, (int)(L.len / 4));
+      else if (type == RN_LINK_SETTING && L.len == 4 && !memcmp(L.buf, "show", 4)) { esp_setting = 1; send_frame(lm, RN_LINK_REPORT, "fake settings for show", 22); }   /* (as flight.c setting())*/
     }
     while (now_s() < next) { air(); usleep(200); }                     /* (the air passes the datagrams as they come) */
     next += 0.01;
@@ -174,6 +177,7 @@ int main(void) {
       (void)!write(gm, g, strlen(g)); (void)!write(gm, rm, strlen(rm));
     }
     /* the pilot's script, over UDP */
+    { static int sent; if (el > 1.5 && !sent) { say("drone esp32 show"); sent = 1; } }   /* a text command up the radio, to the ESP32 */
     if (el > 2 && !armed_at) { say("press arm"); armed_at = el; }
     { static int flew; if (armed_at && !flew && el > armed_at + 1) { say("press fly"); flew = 1; } }
     if (armed_at && !goto_at && el > armed_at + 13) {
@@ -205,10 +209,11 @@ int main(void) {
   int lq_loss = -1; { const char *u = strstr(status_loss, "uplink "); if (u) lq_loss = atoi(u + 7); }
   printf("  status through the loss: %s\n  status after it: %s\n  status with another phrase: %s\n", status_loss, status, status_wrong);
   printf("  packets up %ld (%ld dropped), down %ld (%ld dropped); with another phrase: %ld up, %ld down; the stick moved it %.2f m forward\n", up_pk, up_dropped, down_pk, down_dropped, up_pk - up_before, down_pk - down_before, x1 - x0);
+  printf("  a text command: the Pi took it %d, the ESP32 got it %d, its answer came down %d\n", pi_text_line, esp_setting, esp_answer_down);
   printf("  Pi: peer %d, lost %d, landed %d, phrase warnings %d, radio lines with another phrase %d; command module: alarm %d, phrase warnings %d; armed with another phrase %d\n",
          pi_peer_line, lost_line, landed_line, pi_bad_line, pi_radio_lines - radio_lines_before, alarm_line, gnd_bad_line, wrong_armed);
   int ok_flight = ok_takeoff && ok_goto && x1 - x0 > 1.5 && learn_line && cal_line && strstr(status, "telemetry |") && strstr(status, "uplink 100%") && strstr(status, "POSHOLD")
-        && down_pk > 500 && prog_line > 0 && pi_peer_line >= 1 && lq_loss >= 65 && lq_loss <= 97;
+        && down_pk > 500 && prog_line > 0 && pi_text_line && esp_setting && esp_answer_down && pi_peer_line >= 1 && lq_loss >= 65 && lq_loss <= 97;
   int ok_cut = lost_line && landed_line && alarm_line && hypot(B.p[0], B.p[1]) < 1.0 && B.p[2] < 0.2;
   int ok_wrong = wrong_at > 0 && !wrong_armed && F.state == FC_DISARMED && up_pk - up_before > 200 && down_pk - down_before > 50 && pi_radio_lines == radio_lines_before
         && pi_bad_line > 0 && gnd_bad_line > 0 && strstr(status_wrong, "NO TELEMETRY") && strstr(status_wrong, "uplink 0%");
