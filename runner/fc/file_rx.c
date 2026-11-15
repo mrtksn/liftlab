@@ -3,8 +3,16 @@
 #include "fc_core.h"     /* fc_fmt */
 #include "../rn.h"       /* rn_crc32 */
 
-static const char *after(const char *s, const char *p) { while (*p) if (*s++ != *p++) return 0; return s; }
-static const char *sp(const char *s) { while (*s == ' ') s++; return s; }
+static const char *after(const char *s, const char *p) {
+  while (*p) {
+    if (*s++ != *p++) return 0;
+  }
+  return s;
+}
+static const char *sp(const char *s) {
+  while (*s == ' ') s++;
+  return s;
+}
 static int eq(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
 static const char *dec(const char *s, uint32_t *v) {
   s = sp(s); if (*s < '0' || *s > '9') return 0;
@@ -19,17 +27,26 @@ static const char *hex(const char *s, uint32_t *v) {
     if (n == 8) return 0;
     x = x << 4 | (uint32_t)d;
   }
-  if (!n) return 0; *v = x; return s;
+  if (!n) return 0;
+  *v = x;
+  return s;
 }
 static int b64v(char c) { return c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 : c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' ? 62 : c == '/' ? 63 : -1; }
 /* base64 to bytes: how many, or −1 if it isn't base64 or won't fit */
 static int unb64(const char *s, uint8_t *out, int cap) {
   int n = 0, bits = 0; uint32_t acc = 0;
   for (; *s && *s != ' '; s++) {
-    if (*s == '=') { while (*s == '=') s++; break; }
+    if (*s == '=') {
+      while (*s == '=') s++;
+      break;
+    }
     int v = b64v(*s); if (v < 0) return -1;
     acc = acc << 6 | (uint32_t)v; bits += 6;
-    if (bits >= 8) { bits -= 8; if (n >= cap) return -1; out[n++] = (uint8_t)(acc >> bits); }
+    if (bits >= 8) {
+      bits -= 8;
+      if (n >= cap) return -1;
+      out[n++] = (uint8_t)(acc >> bits);
+    }
   }
   return *sp(s) ? -1 : n;
 }
