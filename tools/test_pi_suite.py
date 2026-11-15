@@ -124,8 +124,8 @@ def main():
     def fake(text):
         sent.append(text)
         if text == 'status': return 'angle mode: text sticks arm off, throttle 0.00, roll +0.00, pitch +0.00, yaw +0.00; the ESP32 disarmed; attitude roll +0.0 pitch +0.0 yaw 0 deg, height 0.00 m, vz +0.00 m/s, flags 31; motors 0.00 0.00 0.00 0.00'
-        if text.startswith('motor 7'): return 'motor: 7 isn\'t one of this airframe\'s 4 motors'
-        return 'sticks: arm off' if text.startswith('sticks') else 'motor test: ' + text
+        if text.startswith('motors 0 0 0 0 '): return 'motors: this airframe has 4 motors'
+        return 'sticks: arm off' if text.startswith('sticks') else 'motor test: ' + text + ' (idle is 0.06)'
     c = m.Control(14560, send=fake, now=lambda: clock[0])
     assert c.line() == 'sticks 0 0.00 +0.00 +0.00 +0.00', c.line()
     c.tick(True); assert c.status['esp32'] == 'disarmed' and sent == [c.line(), 'status']
@@ -134,16 +134,29 @@ def main():
     c.key('0'); assert 'again' in c.key(' ') and not c.arm
     clock[0] += 3; assert 'again' in c.key(' ') and not c.arm, 'the second press within 2 s'
     clock[0] += 1; assert c.key(' ') == 'arm' and c.arm and c.line().startswith('sticks 1 0.00')
-    assert 'disarmed' in c.key('1') and c.motor is None, 'no motor test armed'
+    assert 'disarmed' in c.key('1') and not c.tests, 'no motor test armed'
     c.key('right'); c.key('up'); c.key('up'); c.key('d'); c.key('h')
     assert c.line() == 'sticks 1 0.50 +0.10 +0.20 -0.10', c.line()
     c.key('c'); c.key('x'); assert not c.arm and c.line() == 'sticks 0 0.00 +0.00 +0.00 +0.00', c.line()
-    c.key('t'); assert c.key('2') == 'motor 2 at 0.15' and c.line() == 'motor 2 0.15'
-    assert 'released' in c.key('3') and c.motor is None, 'another motor: the test released first'
-    c.key('2'); assert c.key('2') == 'motor test off' and c.motor is None
-    c.key('7'); assert c.motor is None, 'beyond the airframe\'s motors (from the status)'
-    c.motor = 7; c.tick(False); assert 'isn\'t one' in c.said, 'a refusal shown'
-    c.motor = None; c.arm = True; c.thr = 0.0; sent.clear(); c.leave(); assert sent == ['sticks 0 0'] * 3 + ['sticks off'] and not c.arm, 'leaving on the ground: disarmed, then stopped'
+    # motor tests: at idle for a moment, kept by Enter or a throttle change, several at once
+    assert 'idle for 3 s' in c.key('2') and c.line() == 'motors 0 idle' and c.motor == 2
+    c.tick(False); assert c.idle == 0.06 and c.test_thr(2) == 0.06, 'the idle as dfb_pi says it'
+    clock[0] += 2.9; c.tick(False); assert c.tests, 'still within its 3 s'
+    clock[0] += 0.2; c.tick(False); assert not c.tests and c.line().startswith('sticks 0') and 'stopped after 3 s' in c.note, 'a short test stops by itself'
+    c.key('2'); assert 'kept' in c.key('\n') and c.tests[2]['until'] is None
+    clock[0] += 60; c.tick(False); assert c.line() == 'motors 0 idle', 'kept: it spins until stopped'
+    c.key('4'); assert c.line() == 'motors 0 idle 0 idle' and c.motor == 4, 'another motor joins; the first keeps spinning'
+    assert c.key('t') == 'motor 4 at 0.11, kept spinning' and c.line() == 'motors 0 idle 0 0.11', 'the throttle keys: the last one started'
+    clock[0] += 60; c.tick(False); assert c.line() == 'motors 0 idle 0 0.11', 'a throttle change keeps it'
+    assert 'picked' in c.key('2') and c.key('w') == 'motor 2 at 0.11, kept spinning' and c.key('W') == 'motor 2 at 0.12, kept spinning'
+    assert c.key('0') == 'motor 2 at idle, kept spinning' and c.line() == 'motors 0 idle 0 0.11'
+    assert c.key('2').startswith('motor 2 stopped (4 still') and c.line() == 'motors 0 0 0 0.11' and c.motor == 4
+    assert 'disarm' not in c.key(' ') and not c.tests and c.line().startswith('sticks 0'), 'space stops the tests'
+    c.key('1'); c.key('3'); assert c.key('m') == 'motor test stopped: 1, 3' and not c.tests
+    c.key('7'); assert not c.tests, 'beyond the airframe\'s motors (from the status)'
+    c.tests = {5: {'thr': None, 'until': None}}; c.tick(False); assert 'has 4 motors' in c.said, 'a refusal shown'
+    c.key('x'); assert not c.tests
+    c.key('3'); c.arm = True; c.thr = 0.0; sent.clear(); c.leave(); assert sent == ['sticks 0 0'] * 3 + ['sticks off'] and not c.arm and not c.tests, 'leaving on the ground: disarmed, tests off, then stopped'
     c.arm = True; c.thr = 0.5; sent.clear(); c.leave(); assert sent == ['sticks off'], 'leaving in the air: just stopped (the failsafe lands it)'
     # safety and level: one-off commands, sent before the sticks; the ESP32's word in the status
     st = m.ctl_status('angle mode: no channels from the radio (nothing sent to the ESP32); the ESP32 disarmed; attitude roll +4.0 pitch -19.8 yaw -5 deg, height -0.32 m, vz +0.18 m/s, flags 87, SAFETY OFF, levelled; motors 0.00 0.00 0.00 0.00; the ESP32 said 3 s ago: disarmed: won\'t arm: not level (or: safety off); wifi with 192.168.2.191:60569: packets sent 5 (0 failed), got 4 (LQ 19%)')
@@ -165,7 +178,7 @@ def main():
     assert m.dfb_send(port, 'health') == 'you said health'
     assert m.dfb_send(port, 'health', timeout=0.2) is None, 'nobody answers: None'
     assert m.dfb_port(types.SimpleNamespace(probe='dfb_pi 14560')) == 14560 and m.dfb_port(types.SimpleNamespace(probe='tcp 8766')) is None
-    print('control: the sticks it sends, arming twice at the bottom, motor tests disarmed and one at a time, leaving safely; send')
+    print('control: the sticks it sends, arming twice at the bottom, motor tests disarmed, short unless kept, several at once; leaving safely; send')
 
     # health
     sy = {'power_raw': 0x50005, 'temp_c': 80, 'mem_avail_mb': 30, 'disk_pct': 95, 'wifi': ('wlan0', 20, -85)}

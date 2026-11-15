@@ -12,7 +12,8 @@ int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c) {
   int fresh = t - in->t_ch < RC_STALE_S;                         /* (stale: level and keep the heading, throttle as it was) */
   c->arm = in->ch[RC_ARM] > 0; c->roll = fresh ? in->ch[RC_ROLL] : 0; c->pitch = fresh ? in->ch[RC_PITCH] : 0; c->yaw = fresh ? -in->ch[RC_YAW] : 0;   /* (yaw stick right: turn right, the flight core's negative yaw) */
   c->throttle = clampf_((in->ch[RC_THR] + 1) * 0.5f, 0, 1); c->test_motor = -1; c->test_throttle = 0; c->guided = 0;
-  c->acc[0] = c->acc[1] = c->acc[2] = 0; c->heading = 0;
+  c->acc[0] = c->acc[1] = c->acc[2] = 0; c->heading = 0; c->test_multi = 0;
+  for (int i = 0; i < FC_MAX_MOTORS; i++) c->test_values[i] = 0;
   return 0;
 }
 

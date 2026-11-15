@@ -4,6 +4,7 @@
  *   - the ESP32 gets them as the pilot's commands (RN_LINK_CMD of 28 bytes), 50 a second while they're renewed;
  *   - motor 2 at 0.1 runs that motor alone (the flight core's motor test), a motor the airframe hasn't is refused,
  *     and so is a test while it's armed;
+ *   - motors idle 0 0.2 runs motors 1 and 3 at once, each at its own (RN_LINK_BENCH_TEST), and says the idle;
  *   - arm on the bottom throttle arms it, and status says the text sticks, the ESP32's state and its telemetry;
  *   - when they stop coming, the commands stop within a second and the ESP32's failsafe disarms it (on the ground).
  *   sh build.sh && cc -O2 -I.. -I../fc -o test_pi_sticks_e2e test_pi_sticks_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
@@ -77,11 +78,11 @@ int main(void) {
   static uint8_t lbuf[8192]; rn_link L; rn_link_init(&L, lbuf, sizeof lbuf);
   char pbuf[4096]; int pn = 0;
   double t0 = now_s(), next = t0, last_cmd = -1, next_tl = 0, next_say = 0;
-  long n28 = 0, n48 = 0, cmds_test = 0; float m2_max = 0, other_max = 0; int tested = 0, armed = 0, idle_ok = 0;
+  long n28 = 0, n48 = 0, n_bench = 0, cmds_test = 0; float bench_max[4] = { 0 }; int bench_said = 0, bench_many = 0; float m2_max = 0, other_max = 0; int tested = 0, armed = 0, idle_ok = 0;
   int got_setting = 0, setting_said = 0;
   int bad_motor = 0, armed_test_refused = 0, status_ok = 0, stop_disarmed = 0; double stop_at = 0;
   const char *phase = "";
-  while (now_s() - t0 < 12) {
+  while (now_s() - t0 < 14) {
     double el = now_s() - t0;
     lines(pi_out, pbuf, &pn);
     uint8_t rx[1024]; ssize_t n = read(lm, rx, sizeof rx);
@@ -89,6 +90,10 @@ int main(void) {
       int type = rn_link_feed(&L, rx[i]);
       if (type == RN_LINK_SETTING) { char line[128]; int k = L.len < 127 ? (int)L.len : 127; memcpy(line, L.buf, (size_t)k); line[k] = 0;   /* (as flight.c's setting()) */
         got_setting = !strcmp(line, "safety off"); if (got_setting) { fc_safety(&F, 1); send_frame(lm, RN_LINK_REPORT, "safety off until safety on or a reboot", 38); } continue; }
+      if (type == RN_LINK_BENCH_TEST) {                      /* (as flight.c) */
+        fc_cmd c; memset(&c, 0, sizeof c); c.test_motor = 0; c.test_multi = 1; memcpy(c.test_values, L.buf, L.len); n_bench++; last_cmd = el;
+        fc_command(&F, &c); continue;
+      }
       if (type != RN_LINK_CMD) continue;
       if (L.len == 48) { n48++; continue; }
       if (L.len != 28) continue;
@@ -100,19 +105,22 @@ int main(void) {
     while (now_s() < next) usleep(200);
     next += 0.01;
     for (int k = 0; k < 10; k++) step_ms();
-    if (F.state == FC_TESTING) { tested = 1; if (O.motor[1] > m2_max) m2_max = O.motor[1]; for (int j = 0; j < 4; j++) if (j != 1 && O.motor[j] > other_max) other_max = O.motor[j]; }
+    if (F.state == FC_TESTING && F.cmd.test_multi) for (int j = 0; j < 4; j++) { if (O.motor[j] > bench_max[j]) bench_max[j] = O.motor[j]; }
+    else if (F.state == FC_TESTING) { tested = 1; if (O.motor[1] > m2_max) m2_max = O.motor[1]; for (int j = 0; j < 4; j++) if (j != 1 && O.motor[j] > other_max) other_max = O.motor[j]; }
     if (el >= next_tl) {                                    /* the ESP32's telemetry, 20 a second (flight.c's layout) */
       next_tl = el + 0.05; float tl[36] = { 0 }; tl[0] = (float)F.t; tl[1] = (float)F.state; tl[2] = 1.5f; tl[3] = -2.5f; tl[4] = 90; tl[8] = 0.12f; tl[13] = (float)(31 | (F.safety_off ? 32 : 0));
       for (int j = 0; j < 4; j++) tl[16 + j] = O.motor[j];
       send_frame(lm, RN_LINK_TELEM, tl, sizeof tl);
     }
     /* the panel's script: 20 a second, as liftlab sends them */
-    const char *now_phase = el < 1 ? "" : el < 2 ? "sticks 0 0" : el < 3.5 ? "motor 2 0.1" : el < 4.5 ? "motor off" : el < 7 ? "sticks 1 0" : "";
+    const char *now_phase = el < 1 ? "" : el < 2 ? "sticks 0 0" : el < 3.5 ? "motor 2 0.1" : el < 4.5 ? "motor off" : el < 6 ? "motors idle 0 0.2" : el < 6.5 ? "sticks 0 0" : el < 9 ? "sticks 1 0" : "";
     if (strcmp(now_phase, phase)) {
       phase = now_phase;
-      if (!strcmp(phase, "sticks 0 0")) { ask("safety off"); bad_motor = strstr(ask("motor 9 0.1"), "isn't one of this airframe's 4 motors") != 0; idle_ok = 1; }
+      if (!strcmp(phase, "sticks 0 0") && el < 2.5) { ask("safety off"); bad_motor = strstr(ask("motor 9 0.1"), "isn't one of this airframe's 4 motors") != 0; idle_ok = 1; }
+      if (!strcmp(phase, "motors idle 0 0.2")) { char w[40]; snprintf(w, sizeof w, "(idle is %.2f)", (double)FC_IDLE); bench_said = strstr(ask(phase), w) && strstr(last_reply, "1 at 0.06, 3 at 0.20"); bench_many = strstr(ask("motors 0 0 0 0 0.1"), "has 4 motors") != 0; }
+      if (!strcmp(phase, "sticks 1 0")) printf("  several at once: %.2f %.2f %.2f %.2f (%ld frames)\n", bench_max[0], bench_max[1], bench_max[2], bench_max[3], n_bench);
       if (!strcmp(phase, "sticks 1 0")) printf("  motor test: motor 2 at most %.2f, the others %.2f (%ld test commands)\n", m2_max, other_max, cmds_test);
-      if (!*phase && el > 6) { stop_at = el; printf("  the sticks stop at %.1f s (%s)\n", el, fc_state_name(F.state)); }
+      if (!*phase && el > 8) { stop_at = el; printf("  the sticks stop at %.1f s (%s)\n", el, fc_state_name(F.state)); }
     }
     static int asked_safety; if (el > 1.7 && !asked_safety && got_setting) { asked_safety = 1; const char *st = ask("status"); setting_said = strstr(st, "SAFETY OFF") && strstr(st, "the ESP32 said") && strstr(st, "safety off until"); }
     if (*phase && el >= next_say) { next_say = el + 0.05; say(phase); }
@@ -131,7 +139,9 @@ int main(void) {
   printf("  commands: %ld angle, %ld guided; the last %.2f s after the stop; ESP32 now %s\n", n28, n48, last_cmd - stop_at, fc_state_name(F.state));
   printf("  safety off: the ESP32 got it %d, status says it %d\n", got_setting, setting_said);
   int ok = got_setting && setting_said && n28 > 250 && n48 == 0 && idle_ok && bad_motor && tested && m2_max > 0.09f && other_max == 0 && armed && status_ok && armed_test_refused
-        && stop_at > 0 && last_cmd < stop_at + 0.7 && stop_disarmed;
+        && stop_at > 0 && last_cmd < stop_at + 0.7 && stop_disarmed
+        && n_bench > 15 && bench_said && bench_many && bench_max[0] == FC_IDLE && bench_max[1] == 0 && bench_max[2] > 0.19f && bench_max[3] == 0;
+  printf("  several at once: said %d, too many refused %d\n", bench_said, bench_many);
   printf("  bad motor refused %d, tested %d, armed %d, status %d, test refused armed %d, disarmed after the stop %d\n", bad_motor, tested, armed, status_ok, armed_test_refused, stop_disarmed);
   printf(ok ? "text sticks on the Pi end-to-end: ok\n" : "text sticks on the Pi end-to-end: FAIL\n");
   return ok ? 0 : 1;

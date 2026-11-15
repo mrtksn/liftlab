@@ -370,33 +370,73 @@ class Control:
 
     Keys (Control.KEYS): arming needs the throttle at the bottom (the flight core's rule) and the key twice; a motor test
     only disarmed. The sticks are levels: they stay where the keys put them (a terminal says when a key is pressed,
-    not when it's let go)."""
-    STEP, THR_STEP = 0.1, 0.05
+    not when it's let go).
+
+    Motor tests (dfb_pi's `motors`: several at once, each at its own throttle): a motor's key starts it at the flight
+    core's idle for BRIEF_S seconds, then it stops by itself; Enter keeps it spinning, and so does changing its
+    throttle (t g, w s), until it's stopped (its key again, m, space or x). Another motor's key starts that one too,
+    and the throttle keys go to the last one started (or picked with its key)."""
+    STEP, THR_STEP, BRIEF_S = 0.1, 0.05, 3.0
     KEYS = ('space arm (twice) / disarm · w s throttle ±0.05 (W S ±0.01) · 0 bottom · h middle (holds height) · '
-            '←→ roll ↑↓ pitch · a d yaw · c centre · 1-9 test that motor, t g its throttle, m stop · x all stop · '
+            '←→ roll ↑↓ pitch · a d yaw · c centre · 1-9 a motor test: at idle for 3 s, Enter keeps it, t g (w s) its '
+            'throttle, more motors at once, its key again or m stops · x all stop · '
             '! safety off/on · L level: as it sits now is level · : a command · q leave')
 
     def __init__(self, port, send=None, now=time.monotonic):
         self.port, self.now = port, now
         self.arm, self.thr, self.roll, self.pitch, self.yaw = False, 0.0, 0.0, 0.0, 0.0
-        self.motor, self.test_thr, self.arm_ask = None, 0.10, -1e9
+        self.tests, self.focus, self.idle, self.note, self.arm_ask = {}, None, None, '', -1e9; self.test_since = 0.0   # motor tests: {motor: {'thr': None (idle) or 0..1, 'until': stop time or None (kept)}}
         self.status, self.said, self.n_sent, self.on = ctl_status(''), '', 0, False
         self.safety_ask, self.queue = -1e9, []                    # (one-off commands: the sending thread sends them)
         self._u = None; self._send = send
 
     # what goes out
     def line(self):
-        if self.motor is not None: return f'motor {self.motor} {self.test_thr:.2f}'
+        if self.tests:
+            n = max(self.tests)
+            return 'motors ' + ' '.join(('idle' if self.tests[i]['thr'] is None else f"{self.tests[i]['thr']:.2f}") if i in self.tests else '0' for i in range(1, n + 1))
         return f'sticks {int(self.arm)} {self.thr:.2f} {self.roll:+.2f} {self.pitch:+.2f} {0.0 - self.yaw:+.2f}'   # (yaw: d turns right, the flight core's negative)
 
     def armed(self): return self.status.get('esp32') in ('armed', 'failsafe')
 
+    @property
+    def motor(self):
+        """The motor the throttle keys change (the last one started or picked), or None with no test."""
+        return self.focus if self.focus in self.tests else None
+
+    def test_thr(self, n):
+        """A test's throttle now: its own, or the idle (as dfb_pi said it; None until it has)."""
+        t = self.tests.get(n)
+        return None if not t else t['thr'] if t['thr'] is not None else self.idle
+
+    def stop_tests(self, which=None):
+        for n in ([which] if which else list(self.tests)): self.tests.pop(n, None)
+        if self.focus not in self.tests: self.focus = max(self.tests) if self.tests else None
+
+    def expire(self):
+        """Short tests whose time is up stop (the sending thread and each key call it)."""
+        done = [n for n, t in self.tests.items() if t['until'] is not None and self.now() >= t['until']]
+        for n in done: self.stop_tests(n)
+        if done: self.note = f"motor {', '.join(map(str, done))} stopped after {self.BRIEF_S:.0f} s (Enter, or a throttle change, keeps a test spinning)"
+
     def key(self, k):
         """One key (a character, or 'left' 'right' 'up' 'down'); returns what to say, or None."""
         cl = lambda v, lo, hi: round(min(hi, max(lo, v)), 2)
+        self.expire()
+        if self.tests:                                            # a motor test: the throttle keys are its, Enter keeps it
+            f = self.motor
+            if k in ('\n', '\r'):
+                brief = [n for n, t in self.tests.items() if t['until'] is not None]
+                for n in brief: self.tests[n]['until'] = None
+                return f"motor {', '.join(map(str, brief))} kept spinning: its key again, m or space stops it" if brief else 'already spinning until stopped (m or space stops them all)'
+            if k in ('t', 'g', 'w', 's', 'W', 'S', '0') and f is not None:
+                if k == '0': self.tests[f] = {'thr': None, 'until': None}; return f'motor {f} at idle, kept spinning'
+                base = self.test_thr(f) or 0.0
+                v = cl(base + {'t': self.THR_STEP, 'g': -self.THR_STEP, 'w': self.THR_STEP, 's': -self.THR_STEP, 'W': 0.01, 'S': -0.01}[k], 0, 1)
+                self.tests[f] = {'thr': v, 'until': None}; return f'motor {f} at {v:.2f}, kept spinning'
+            if k in (' ', 'm'): n = sorted(self.tests); self.stop_tests(); return f"motor test stopped: {', '.join(map(str, n))}"
         if k == ' ':
-            if self.arm: self.arm = False; self.motor = None; return 'disarm'
-            if self.motor is not None: return 'stop the motor test first (m)'
+            if self.arm: self.arm = False; return 'disarm'
             if self.thr > 0.05: return 'arming needs the throttle at the bottom: 0 first'
             if self.now() - self.arm_ask > 2: self.arm_ask = self.now(); return 'space again to arm: the motors will spin'
             self.arm = True; self.arm_ask = -1e9; return 'arm'
@@ -415,16 +455,18 @@ class Control:
         if k == 'L':
             if self.arm or self.armed(): return 'level: disarmed only'
             self.queue.append('level'); return 'level: as it sits now is level (keep it still for half a second)'
-        if k == 'x': self.arm = False; self.motor = None; self.thr = self.roll = self.pitch = self.yaw = 0.0; return 'all stop: disarmed, sticks centred, throttle 0'
-        if k == 'm': self.motor = None; return 'motor test off'
-        if k in ('t', 'g'): self.test_thr = cl(self.test_thr + (self.THR_STEP if k == 't' else -self.THR_STEP), 0, 1); return f'test throttle {self.test_thr:.2f}'
+        if k == 'x': self.arm = False; self.stop_tests(); self.thr = self.roll = self.pitch = self.yaw = 0.0; return 'all stop: disarmed, no motor test, sticks centred, throttle 0'
+        if k == 'm': return 'no motor test on (1-9 starts one)'
+        if k in ('t', 'g', '\n', '\r'): return 'no motor test on: 1-9 starts one at idle'
         if k.isdigit() and k != '0':
             n = int(k); nm = len(self.status.get('motors') or [])
             if self.arm or self.armed(): return 'a motor test only disarmed'
             if nm and n > nm: return f'this airframe has {nm} motors'
-            if self.motor == n: self.motor = None; return 'motor test off'
-            if self.motor is not None: self.motor = None; return 'motor test off: press again for the next one (the flight controller wants one released first)'
-            self.motor = n; return f'motor {n} at {self.test_thr:.2f}'
+            if n in self.tests and self.focus != n: self.focus = n; return f'motor {n} picked: t g (w s) change its throttle; {n} again stops it'
+            if n in self.tests: self.stop_tests(n); return f'motor {n} stopped' + (f" ({', '.join(map(str, sorted(self.tests)))} still spinning)" if self.tests else '')
+            if not self.tests: self.test_since = self.now()
+            self.tests[n] = {'thr': None, 'until': self.now() + self.BRIEF_S}; self.focus = n; self.note = ''
+            return f'motor {n} at idle for {self.BRIEF_S:.0f} s: Enter keeps it spinning, t g (w s) its throttle, {n} again stops it'
         return None
 
     # the sending thread
@@ -440,7 +482,10 @@ class Control:
         while self.queue:
             q = self.queue.pop(0); r = self._io(q)
             if r: self.said = r
+        self.expire()
         r = self._io(self.line()); self.n_sent += 1
+        m = re.search(r'idle is ([\d.]+)', r or '')
+        if m: self.idle = float(m.group(1))
         if r and not (r.startswith('sticks: arm') or r.startswith('motor test:')): self.said = r
         elif r: self.said = self.said if self.said and not self.said.startswith(('sticks', 'motor')) else ''
         if ask_status:
@@ -462,7 +507,7 @@ class Control:
         the ESP32's failsafe lands it."""
         try:
             if not (self.arm and self.thr > 0.05):
-                self.arm = False; self.motor = None
+                self.arm = False; self.stop_tests()
                 for _ in range(3): self._io('sticks 0 0')
             self._io('sticks off')
         except OSError:
@@ -724,7 +769,7 @@ def panel():
         put(0, 0, f' {name} · control: the sticks from here, as a radio would (props off to test!) · q leaves '.ljust(w - 1), curses.A_REVERSE)
         fresh = time.monotonic() - st.get('t', -1e9) < 1.5
         es = st.get('esp32', 'no answer') if fresh else 'no answer from dfb_pi'
-        put(2, 0, 'ESP32', curses.A_BOLD); put(2, 12, es.upper(), (R if es in ('armed', 'failsafe', 'testing') else G if es == 'disarmed' else Y) | curses.A_BOLD)
+        put(2, 0, 'ESP32', curses.A_BOLD); put(2, 12, es.upper(), (R if es in ('armed', 'failsafe', 'motor test') else G if es == 'disarmed' else Y) | curses.A_BOLD)
         if fresh and st.get('safety_off'): put(2, 22, 'SAFETY OFF', R | curses.A_BOLD | curses.A_REVERSE)
         put(2, 34, f"sticks from: {st.get('source', '?')}" + ('' if st.get('angle_mode', True) or not fresh else '  (not angle mode: start dfb_pi with --no-navigation)'), C)
         y = 3
@@ -744,7 +789,17 @@ def panel():
         put(y, 21, f"throttle {bar(ctl.thr, 0, 1, 20, 0.5)} {ctl.thr:.2f}" + ('  holds height' if abs(ctl.thr - 0.5) < 0.01 else ''), 0); y += 1
         put(y, 12, f"roll {ctl.roll:+.2f}  pitch {ctl.pitch:+.2f}  yaw {ctl.yaw:+.2f}   ({ctl.n_sent} sent)"); y += 1
         put(y, 0, 'motor test', curses.A_BOLD)
-        put(y, 12, f"motor {ctl.motor} at {ctl.test_thr:.2f}" if ctl.motor else f"none (1-9 tests one at {ctl.test_thr:.2f}; t g change it)", Y if ctl.motor else 0); y += 2
+        if not ctl.tests:
+            put(y, 12, f'none: 1-9 spins one at idle for {ctl.BRIEF_S:.0f} s (Enter keeps it, t g its throttle; several at once)'); y += 1
+        for n in sorted(ctl.tests):
+            t = ctl.tests[n]; v = ctl.test_thr(n)
+            thr = ('idle' + (f' {v:.2f}' if v is not None else '')) if t['thr'] is None else f"{t['thr']:.2f}"
+            left = f"stops in {max(0.0, t['until'] - ctl.now()):.1f} s: Enter keeps it" if t['until'] is not None else 'kept spinning: its key again, m or space stops it'
+            put(y, 12, f"{'>' if n == ctl.motor else ' '} motor {n}  {bar(v or 0, 0, 1)} {thr:<9} {left}", (Y if t['until'] is not None else R) | (curses.A_BOLD if n == ctl.motor else 0)); y += 1
+        if ctl.tests and fresh and es != 'motor test' and ctl.now() - ctl.test_since > 1:
+            put(y, 12, f'the ESP32 says {es}, not testing: is its firmware new enough for motors at once? (dfb_pi below)', Y); y += 1
+        if ctl.note: put(y, 12, ctl.note[:max(0, w - 13)], 0); y += 1
+        y += 1
         if fresh and st.get('esp32_said'): put(y, 0, 'ESP32 said', curses.A_BOLD); put(y, 12, f"{st['esp32_said']}  ({st['esp32_said_s']} s ago)"[:max(0, w - 13)], R if 'won\'t' in st['esp32_said'] or 'refused' in st['esp32_said'] else 0); y += 1
         if ctl.said: put(y, 0, 'dfb_pi', curses.A_BOLD); put(y, 12, ctl.said[:max(0, w - 13)], Y); y += 1
         keys = Control.KEYS; lines_ = []
@@ -824,7 +879,7 @@ def panel():
                     t = prompt(scr, f'{ctl_name} (dfb_pi) > ')
                     if t: r = dfb_send(ctl.port, t); S['msg'] = f'{t}: ' + (r if r is not None else 'no answer')
                 else:
-                    k = arrows.get(c) or (chr(c) if 0 < c < 256 else '')
+                    k = arrows.get(c) or ('\n' if c in (curses.KEY_ENTER, 10, 13) else chr(c) if 0 < c < 256 else '')
                     m = ctl.key(k) if k else None
                     if m: S['msg'] = m
                 continue

@@ -32,7 +32,8 @@
  *   - tilted past FC_CRASH_DEG while flying (failsafe included), or the formulas failing: motors off (crashed);
  *   - arming needs the arm switch seen off first, so nothing re-arms by itself after a disarm;
  *   - disarmed, the motors get throttle 0 (the ESC's minimum pulse); a motor test spins one motor at a set
- *     throttle (at most 0.3) only while disarmed, for FC_TEST_S s from when it starts.
+ *     throttle, or several at once at their own (test_multi), only while disarmed and while its commands keep
+ *     coming (FC_CMD_TIMEOUT: whoever sends them decides how long; dfb_pi's control panel stops a short one itself).
  */
 #ifndef FC_CORE_H
 #define FC_CORE_H
@@ -48,7 +49,6 @@
 #define FC_MAX_BASIS 9          /* 3^FC_MAX_CHAIN */
 #define FC_CMD_TIMEOUT 0.5f
 #define FC_CRASH_DEG 75.0f
-#define FC_TEST_S 3.0f
 #define FC_IDLE 0.06f           /* throttle while armed with the stick at the bottom */
 
 /* The airframe, from the simulator (Airframe tab → Export for the flight controller): the controller's model
@@ -88,6 +88,8 @@ typedef struct {
    * acceleration wanted [m/s², x north/forward at take-off, y left, z up; gravity not included] and the heading
    * [rad]. The throttle still says whether to fly: below 0.05 the motors idle (on the ground, before take-off). */
   int guided; float acc[3], heading;
+  /* a test of several motors at once (disarmed only): each motor's throttle 0…1, 0 still; test_motor is 0 with it */
+  int test_multi; float test_values[FC_MAX_MOTORS];
 } fc_cmd;
 typedef struct { float motor[FC_MAX_MOTORS]; float servo[FC_MAX_JOINTS]; } fc_out;   /* throttles 0–1, servo angles [rad] */
 

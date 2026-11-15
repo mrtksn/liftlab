@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=256589c230">
+<link rel="stylesheet" href="css/style.css?v=7e145a7646">
 </head>
 <body>
 <div class="app">
@@ -387,7 +387,8 @@
           <div class="live-alert" id="liveAlert" role="alert" hidden></div>
           <div class="live-btns" id="cardBtns"></div>
           <form class="card-cmd" id="cardCmd" autocomplete="off">
-            <input type="text" id="cardCmdIn" maxlength="57" spellcheck="false" placeholder="A command: level, safety off, esp32 show…" aria-label="A command for the drone">
+            <span class="card-cmd-in"><input type="text" id="cardCmdIn" maxlength="57" spellcheck="false" list="cardCmdList" placeholder="A command: level, safety off, esp32 show…" aria-label="A one-off command for the drone" aria-describedby="cardCmdTo"><span class="card-to" id="cardCmdTo"></span></span>
+            <datalist id="cardCmdList"></datalist>
             <button class="btn" type="submit">Send</button>
           </form>
           <ol class="card-said" id="cardSaid" aria-live="polite"></ol>
@@ -664,7 +665,7 @@
 <script src="js/install-ui.js?v=489ee11726"></script>
 <script src="js/editor.js?v=353d66287c"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
-<script src="js/board-wasm.js?v=0683f0e0ee"></script>
+<script src="js/board-wasm.js?v=3f190b9e83"></script>
 <script src="js/crsf.js?v=15ea9287eb"></script>
 <script src="js/link.js?v=924573b83b"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
@@ -679,7 +680,7 @@
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=50b08c3d91"></script>
 <script src="js/live.js?v=6f175c9171"></script>
-<script src="js/drone-card.js?v=6e0d83e6eb"></script>
+<script src="js/drone-card.js?v=21f208152b"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
 <script src="js/gs-ui.js?v=dab03162d4"></script>
 <script src="js/agent.js?v=df7f044dda"></script>

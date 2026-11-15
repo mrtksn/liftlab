@@ -2,7 +2,8 @@
 // The drone card: a small card over the 3D view, the same in the simulator and connected to the real drone (live.js):
 // what the drone says (its link, battery, height, attitude, state), its buttons, a line to type a command, and what
 // the drone answered. The buttons are the design's, the command module's (computers().ground.buttons; the defaults,
-// CARD_BUTTONS_DEFAULT in boards.js, until you edit them). Each does one of:
+// CARD_BUTTONS_DEFAULT in boards.js, until you edit them), in a group for each kind (switch, momentary, command, page
+// action: CARD_KINDS below), each saying which of the design's boards takes it. Each does one of:
 //   arm, fly     the command module's arm and fly switches (a toggle: its label, and its label while on)
 //   hold, home   momentary: hold where it is, fly home (with navigation)
 //   send         a line of text up the radio (rc_core.h RC_CMD_TEXT). On the real drone the Pi's dfb_pi takes it as
@@ -16,7 +17,7 @@
 // simulator's pilot (who arms and takes off by itself after a reset) until the next reset.
 // The card moves (drag its title) and folds; where it is and whether it's folded are this browser's.
 
-const card = { sent: null, ask: null, msg: '', msgTone: '', msgT: 0, pos: null, fold: false, edit: false, next: 0 };
+const card = { sent: null, ask: null, msg: '', msgTone: '', msgT: 0, pos: null, fold: false, edit: false, next: 0, hover: null };
 const cardButtons = () => computers().ground.buttons || CARD_BUTTONS_DEFAULT;
 const cardPref = (k, d) => { try { const v = localStorage.getItem('dfb.card.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 const cardSavePref = (k, v) => { try { localStorage.setItem('dfb.card.' + k, JSON.stringify(v)); } catch (e) {} };
@@ -35,6 +36,69 @@ function cardShown(b) {
   if (b.act === 'upload') return !!cardRadioPi();
   if (b.act === 'fly') return !(cardLive() && !nav && live.gp);       // (angle mode with a gamepad: its throttle stick takes off)
   return true;
+}
+/* ───────── what each button is: its kind, and who takes it ───────── */
+// Four kinds, and the card and its editor say which each button is (a group each) and which of the design's boards
+// takes it (the names on the Computers tab):
+//   switch     a radio channel in every frame the command module sends (about 250 a second): it stays as you set it,
+//              and if the link drops the drone stops hearing it (the failsafe). Arm, take off.
+//   momentary  a radio channel switched on for a moment: hold, fly home (the navigation's).
+//   command    a line of text up the radio, once (sent again until it arrives), answered under the command line.
+//   page       done by this page: Upload design (a script of commands, below), Disconnect (nothing sent).
+const CARD_KINDS = {
+  switch: { name: 'Switches', one: 'switch', how: 'held on the radio', hint: 'A radio channel in every frame (about 250 a second): it stays as you set it, and if the link drops the drone lets go of it (its failsafe).' },
+  pulse: { name: 'Momentary', one: 'momentary switch', how: 'on the radio for a moment', hint: 'A radio channel switched on for a moment: the drone acts on it once.' },
+  text: { name: 'Commands', one: 'command', how: 'one-off text', hint: 'A line of text up the radio, sent once (again until it arrives); the answer shows under the command line.' },
+  page: { name: 'Actions', one: 'page action', how: 'run by this page', hint: 'This page does it: Upload design runs a series of commands; Disconnect sends nothing.' },
+};
+const CARD_KIND_ORDER = ['switch', 'pulse', 'text', 'page'];
+const CARD_ACT_KIND = { arm: 'switch', fly: 'switch', hold: 'pulse', home: 'pulse', send: 'text', upload: 'page', disconnect: 'page' };
+// The commands the drone's Pi takes (dfb_pi: docs/pi-suite.md), for the command line's suggestions and the editor's menu.
+const CARD_CMDS = [
+  { cmd: 'level', label: 'Level here', what: 'as it sits now is level (disarmed, still)', confirm: true },
+  { cmd: 'level none', label: 'Forget level', what: 'back to the sensor\'s own level' },
+  { cmd: 'safety off', label: 'Safety off', what: 'no level check when arming, no crash cut-off (bench work)', confirm: true },
+  { cmd: 'safety on', label: 'Safety on', what: 'the checks back on' },
+  { cmd: 'status', label: 'Status', what: 'what the Pi\'s program and the ESP32 are doing' },
+  { cmd: 'health', label: 'Health', what: 'the Pi\'s health checks' },
+  { cmd: 'esp32 show', label: 'ESP32 settings', what: 'the flight controller\'s settings lines' },
+  { cmd: 'esp32 reboot', label: 'Restart ESP32', what: 'the flight controller starts again (disarmed only)', confirm: true },
+  { cmd: 'restart', label: 'Restart dfb_pi', what: 'the Pi\'s program starts again with its folder\'s files', confirm: true },
+];
+const cardKind = b => CARD_ACT_KIND[b.act] || 'text';
+const cardCoreName = () => { const b = boardOf('core'); return b ? b.name : 'the flight controller'; };
+// Who takes a line of text: the radio's board, and on a Pi, the lines it passes on to the ESP32 (dfb_pi: esp32 …,
+// level, safety; wiring and airframe send its files there). { to, via, what }
+function cardTextRoute(line) {
+  const r = boardOf('tlm'), w = String(line || '').trim(), word = w.split(/\s+/)[0] || '';
+  if (!r) return { to: '', what: 'this design has no radio' };
+  if (BOARD_KINDS[r.kind].mcu) return { to: r.name, what: 'a settings line' };
+  const known = CARD_CMDS.find(c => c.cmd === w);
+  if (/^(esp32|level|safety)$/.test(word)) return { to: cardCoreName(), via: r.name, what: known ? known.what : word === 'esp32' ? 'a settings line, passed on' : '' };
+  if (/^(wiring|airframe)$/.test(word)) return { to: cardCoreName(), via: r.name, what: `the Pi's ${word === 'wiring' ? 'wiring.txt' : 'drone.dfa'}, sent on` };
+  return { to: r.name, what: known ? known.what : '' };
+}
+// A button's route: { kind, to (who takes it), via, what (in a few words) }
+function cardRoute(b) {
+  const kind = cardKind(b), nav = boardOf('nav'), pi = cardRadioPi();
+  if (b.act === 'arm') return { kind, to: cardCoreName(), what: 'armed while it\'s on' };
+  if (b.act === 'fly') return nav ? { kind, to: nav.name, what: 'the navigation takes off while it\'s on, lands when off' } : { kind, to: cardCoreName(), what: 'the throttle up while it\'s on (angle mode), down when off' };
+  if (b.act === 'hold') return { kind, to: nav ? nav.name : '', what: 'hold where it is' };
+  if (b.act === 'home') return { kind, to: nav ? nav.name : '', what: 'fly back to where it took off' };
+  if (b.act === 'send') { const r = cardTextRoute(b.cmd); return { kind, ...r, what: `sends "${b.cmd || ''}"${r.what ? ': ' + r.what : ''}` }; }
+  if (b.act === 'upload') return { kind, to: pi ? `${pi.name}, then ${cardCoreName()}` : '', what: 'the design\'s files, wiring and airframe onto the drone' };
+  return { kind, to: 'this page', what: 'leave the real drone (nothing is sent)' };
+}
+const cardRouteTo = r => r.to ? `→ ${r.to}${r.via ? ` (through ${r.via})` : ''}` : '';
+// Why a button isn't on the card now ('' when it is).
+function cardHiddenWhy(b) {
+  if (cardShown(b)) return '';
+  return { home: 'not shown: this design has no navigation', disconnect: 'shown while connected to the real drone', upload: 'shown when the radio is on a Pi',
+    fly: 'not shown: the gamepad\'s throttle takes off in angle mode' }[b.act] || 'not shown now';
+}
+function cardExplain(b) {
+  const r = cardRoute(b), k = CARD_KINDS[r.kind];
+  return `${b.label}: ${k.one}, ${k.how} ${cardRouteTo(r)}. ${r.what.charAt(0).toUpperCase() + r.what.slice(1)}.${b.confirm ? ' Press twice.' : ''}`;
 }
 // The simulator's switches: the card has them from now until the next reset.
 function cardSimArm() {
@@ -60,7 +124,7 @@ function cardTextOut(line) {
 function cardSend(line) {
   line = String(line || '').trim(); if (!line) return 'type a command first';
   const why = cardTextOut(line); if (why) return why;
-  card.sent = { text: line, t: cardClock(), n: gs.nmsg || 0 };
+  card.sent = { text: line, t: cardClock(), n: gs.nmsg || 0, to: cardRouteTo(cardTextRoute(line)) };
   linkLog('↑', 'cmd', `text: ${line}`, 'the drone card', '');
   return '';
 }
@@ -233,11 +297,14 @@ function cardRender(force) {
   if (showA) { setText(al, a.text.charAt(0).toUpperCase() + a.text.slice(1)); al.dataset.tone = a.level >= 2 ? 'bad' : 'warn'; }
   else if (why) { setText(al, why.charAt(0).toUpperCase() + why.slice(1)); al.dataset.tone = 'warn'; }
   cardRenderButtons();
+  cardRenderCmdTo();
   cardRenderSaid();
   if (card.edit && $('#cardEditor').dataset.sig !== JSON.stringify(cardButtons())) cardRenderEditor();   // (an undo, another tab's edit)
   const nav = hasTask('nav'), pad = L && !!live.gp, slow = L && live.slow ? ` This page stood still ${live.slow}×: keep this tab in front.` : '';
   if (cardUp.on) cardNote(cardUp.said, '');                           // (its progress stays while it runs)
   let note = card.msg && now - card.msgT < 6000 ? card.msg.charAt(0).toUpperCase() + card.msg.slice(1) + '.' : '';
+  const hb = card.hover != null && !note && cardButtons()[card.hover];
+  if (hb) note = cardExplain(hb);                                     // (the button under the pointer, or in focus: what it is)
   if (!note) note = L ? (!nav && !pad ? `Angle mode: ${live.landing ? 'landing (it sinks until the height stops changing).' : live.fly ? 'W/S climb and sink (let go: it holds the height), A/D turn, the arrows lean.' : 'Arm, then Take off: the keys and pads fly it, W/S climb.'}`
     : `${pad ? `Gamepad: ${live.gp.replace(/\s*\(.*$/, '')}. ` : ''}${nav ? 'The keys and pads move it; Space holds, H flies home.' : ''}`) + slow
     : brt.pilot.manual ? 'The card\'s switches fly it until the next reset.' : 'The simulator\'s pilot arms and takes off by itself; the switches here take over.';
@@ -245,19 +312,40 @@ function cardRender(force) {
   if (card.pos) cardPlace();                                           // (its height changes with what it shows)
 }
 const fcStateWord = () => ['disarmed', 'armed', 'failsafe', 'crashed', 'motor test'][brt.fcState] || '';
+// The buttons, a group for each kind (CARD_KINDS: the switches, then the momentary ones, the commands, the page's own),
+// each group saying how it goes and to which board; a button in focus or under the pointer says what it does, below.
+function cardGroups(list) {
+  const g = new Map();
+  list.forEach((b, i) => { const k = cardKind(b); if (!g.has(k)) g.set(k, []); g.get(k).push(i); });
+  return CARD_KIND_ORDER.filter(k => g.has(k)).map(k => ({ kind: k, items: g.get(k) }));
+}
+function cardGroupTo(list, items) {
+  const to = [...new Set(items.filter(i => cardShown(list[i])).map(i => cardRoute(list[i])).filter(r => r.to).map(r => r.via ? `${r.to} (through ${r.via})` : r.to))];
+  return to.length ? '→ ' + to.join(', ') : '';
+}
 function cardRenderButtons() {
   const box = $('#cardBtns'), list = cardButtons(), now = performance.now();
   if (card.ask && now > card.ask.until) card.ask = null;
-  const sig = JSON.stringify([list, cardLive()]);
+  const groups = cardGroups(list);
+  const sig = JSON.stringify([list, cardLive(), groups.map(g => cardGroupTo(list, g.items)), list.map(b => cardShown(b))]);
   if (box.dataset.sig !== sig) {
     box.dataset.sig = sig; box.textContent = '';
-    list.forEach((b, i) => {
-      const x = el('button', { class: 'btn' + (b.act === 'arm' || b.act === 'fly' ? ' tog' : '') + (b.act === 'arm' ? ' live-arm' : ''), type: 'button', 'data-i': i,
-        title: b.act === 'send' ? `Sends "${b.cmd}" to the drone${b.confirm ? ' (press twice)' : ''}` : { upload: 'Puts this design on the drone through its Pi: the Pi\'s files, and the ESP32\'s wiring and airframe (it restarts the ESP32). Disarmed only', arm: 'The arm switch', fly: 'The fly switch: take off, and land when off', hold: 'Hold where it is (Space)', home: 'Fly home (H)', disconnect: 'Leave the real drone: the simulation comes back' }[b.act] });
-      x.addEventListener('mousedown', e => e.preventDefault());       // (a click leaves the keyboard where it was: Space mustn't press it again)
-      x.addEventListener('click', () => cardPress(i, x));
-      box.append(x);
-    });
+    for (const g of groups) {
+      const K = CARD_KINDS[g.kind], row = el('div', { class: 'card-btns' }), to = cardGroupTo(list, g.items);
+      for (const i of g.items) {
+        const b = list[i];
+        const x = el('button', { class: 'btn' + (b.act === 'arm' || b.act === 'fly' ? ' tog' : '') + (b.act === 'arm' ? ' live-arm' : '') + (b.act === 'send' ? ' is-cmd' : ''), type: 'button', 'data-i': i, title: cardExplain(b) });
+        x.addEventListener('mousedown', e => e.preventDefault());       // (a click leaves the keyboard where it was: Space mustn't press it again)
+        x.addEventListener('click', () => cardPress(i, x));
+        for (const ev of ['pointerenter', 'focus']) x.addEventListener(ev, () => { card.hover = i; cardRender(true); });
+        for (const ev of ['pointerleave', 'blur']) x.addEventListener(ev, () => { if (card.hover === i) { card.hover = null; cardRender(true); } });
+        row.append(x);
+      }
+      const sec = el('div', { class: 'card-grp', 'data-kind': g.kind, role: 'group', 'aria-label': `${K.name}: ${K.how} ${to}` },
+        el('div', { class: 'card-grp-h', title: K.hint }, el('b', { text: K.name }), el('span', { text: K.how }), to ? el('span', { class: 'card-to', text: to }) : null), row);
+      sec.hidden = !g.items.some(i => cardShown(list[i]));
+      box.append(sec);
+    }
   }
   box.querySelectorAll('button').forEach(x => {
     const i = +x.dataset.i, b = list[i]; if (!b) return;
@@ -270,6 +358,15 @@ function cardRenderButtons() {
   });
   if (cardLive() && live.stopAsk && now > live.stopAsk) live.stopAsk = 0;
 }
+// The command line: who takes what's typed, and the Pi's commands as suggestions.
+function cardRenderCmdTo() {
+  const inp = $('#cardCmdIn'), t = $('#cardCmdTo'), v = inp.value, r = cardTextRoute(v), r0 = cardTextRoute('');
+  const ph = r0.to ? `A command for ${r0.to}: level, safety off, ${cardRadioPi() ? 'status' : 'show'}…` : 'A command (this design has no radio)';
+  if (inp.placeholder !== ph) inp.placeholder = ph;
+  setText(t, r.to && v.trim() ? `→ ${r.to}` : '');                   // (what's typed: who takes it, as it's typed) t.title = r.to ? `Typed text is a one-off command for ${r.to}${r.via ? `, passed on by ${r.via}` : ''}${r.what ? `: ${r.what}` : ''}. Its answer shows below.` : r.what;
+  const dl = $('#cardCmdList'), sig = cardRadioPi() ? 'pi' : 'mcu';
+  if (dl.dataset.sig !== sig) { dl.dataset.sig = sig; dl.textContent = ''; if (sig === 'pi') for (const c of CARD_CMDS) dl.append(el('option', { value: c.cmd, label: c.what })); }
+}
 // What the drone said since the last command: the messages that came after it (the newest last).
 function cardRenderSaid() {
   const box = $('#cardSaid'), s = card.sent;
@@ -277,7 +374,7 @@ function cardRenderSaid() {
   const items = [];
   if (card.sent) {
     const k = Math.min(4, (gs.nmsg || 0) - s.n), got = gs.log.slice(0, Math.max(0, k)).reverse();
-    items.push({ text: `› ${s.text}`, cls: 'card-sent' });
+    items.push({ text: `› ${s.text}${s.to ? `   ${s.to}` : ''}`, cls: 'card-sent' });
     for (const m of got) items.push({ text: m.text, cls: m.sev <= 3 ? 'is-bad' : m.sev === 4 ? 'is-warn' : '' });
     if (!got.length) items.push({ text: cardClock() - s.t > 5 ? 'no answer yet: is the link up, and the drone\'s software new enough to take text commands?' : 'sent; waiting for the answer…', cls: 'card-wait' });
   }
@@ -313,7 +410,12 @@ function cardDrag(e) {
 }
 
 /* ───────── editing the buttons ───────── */
-const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Send a command', upload: 'Upload design', disconnect: 'Disconnect (live)' };
+// In the same groups as the card, each row saying what it does and who takes it; a button moves within its group (a
+// change of what it does moves it to that one's group). Add a button from a menu: the switches, the Pi's commands, your
+// own command, the page's actions (the ones your buttons haven't, marked).
+const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Command (text)', upload: 'Upload design', disconnect: 'Disconnect' };
+const CARD_ACT_NEW = { arm: { label: 'Arm', on: 'Armed', act: 'arm' }, fly: { label: 'Take off', on: 'Land', act: 'fly' }, hold: { label: 'Hold', act: 'hold' }, home: { label: 'Home', act: 'home' },
+  upload: { label: 'Upload design', act: 'upload', confirm: true }, disconnect: { label: 'Disconnect', act: 'disconnect' } };
 function cardSetButtons(list) {
   const C = computers(); C.ground.buttons = fixCardButtons(list);
   undoKey = 'cardButtons'; save(); $('#cardEditor').dataset.sig = JSON.stringify(cardButtons()); cardRender(true);
@@ -322,31 +424,77 @@ function cardRenderEditor() {
   const box = $('#cardEditor'); box.hidden = !card.edit; if (!card.edit) return;
   box.textContent = ''; box.dataset.sig = JSON.stringify(cardButtons());
   const list = cardButtons().map(b => ({ ...b }));
-  const commit = () => cardSetButtons(list);
-  box.append(el('p', { class: 'hint', text: 'The buttons are the design\'s (its command module\'s). A command goes up the radio as text: on the drone the Pi takes it (level, level none, level ROLL,PITCH,YAW, safety off, safety on, esp32 SETTING …); the simulator answers the same.' }));
-  list.forEach((b, i) => {
-    const row = el('div', { class: 'card-row' });
-    const lab = el('input', { type: 'text', value: b.label, maxlength: 24, 'aria-label': `Button ${i + 1}: its label` });
-    lab.addEventListener('change', () => { b.label = lab.value; commit(); });
-    const act = el('select', { 'aria-label': `Button ${i + 1}: what it does` });
-    for (const k of CARD_ACTS) act.append(el('option', { value: k, text: CARD_ACT_LABEL[k] }));
-    act.value = b.act; act.addEventListener('change', () => { b.act = act.value; if (b.act === 'send' && !b.cmd) b.cmd = 'status'; commit(); cardRenderEditor(); });
-    row.append(lab, act);
-    if (b.act === 'send') { const c = el('input', { type: 'text', class: 'mono', value: b.cmd || '', maxlength: CARD_TEXT_MAX, spellcheck: 'false', placeholder: 'level', 'aria-label': `Button ${i + 1}: the command it sends` }); c.addEventListener('change', () => { b.cmd = c.value; commit(); }); row.append(c); }
-    else if (b.act === 'arm' || b.act === 'fly') { const o = el('input', { type: 'text', value: b.on || '', maxlength: 24, placeholder: 'label while on', 'aria-label': `Button ${i + 1}: its label while on` }); o.addEventListener('change', () => { b.on = o.value; commit(); }); row.append(o); }
-    else row.append(el('span'));
-    const cf = el('label', { class: 'card-confirm', title: 'Press twice: the first asks' }); const cb = el('input', { type: 'checkbox' }); cb.checked = !!b.confirm;
-    cb.addEventListener('change', () => { b.confirm = cb.checked; commit(); }); cf.append(cb, ' twice');
-    const mv = (d, t) => { const x = el('button', { type: 'button', class: 'card-ic', title: t, 'aria-label': `Button ${i + 1}: ${t}`, text: d < 0 ? '↑' : '↓' }); x.disabled = d < 0 ? i === 0 : i === list.length - 1;
-      x.addEventListener('click', () => { const j = i + d; [list[i], list[j]] = [list[j], list[i]]; commit(); cardRenderEditor(); }); return x; };
-    const del = el('button', { type: 'button', class: 'card-ic', title: 'Remove it', 'aria-label': `Button ${i + 1}: remove it`, text: '✕' });
-    del.addEventListener('click', () => { list.splice(i, 1); commit(); cardRenderEditor(); });
-    row.append(cf, mv(-1, 'Move up'), mv(1, 'Move down'), del);
-    box.append(row);
+  const commit = () => cardSetButtons(list), redo = () => { commit(); cardRenderEditor(); };
+  box.append(el('p', { class: 'hint', text: 'The design\'s buttons (its command module\'s). Each is one of four kinds, and goes to one of the design\'s boards (Computers tab):' }));
+  const legend = el('dl', { class: 'card-kinds' });
+  for (const k of CARD_KIND_ORDER) legend.append(el('dt', { 'data-kind': k, text: CARD_KINDS[k].name }), el('dd', { text: CARD_KINDS[k].hint }));
+  box.append(legend);
+  const missing = Object.keys(CARD_ACT_NEW).filter(a => !list.some(b => b.act === a) && CARD_BUTTONS_DEFAULT.some(b => b.act === a));
+  if (missing.length) box.append(el('p', { class: 'hint card-missing', text: `Not among your buttons: ${missing.map(a => CARD_ACT_NEW[a].label).join(', ')} (add from the menu below).` }));
+  for (const g of cardGroups(list)) {
+    const K = CARD_KINDS[g.kind];
+    box.append(el('div', { class: 'card-grp-h', 'data-kind': g.kind }, el('b', { text: K.name }), el('span', { text: K.how })));
+    g.items.forEach((i, j) => {
+      const b = list[i], n = `Button "${b.label}"`;
+      const item = el('div', { class: 'card-item', 'data-kind': g.kind }), row = el('div', { class: 'card-row' });
+      const lab = el('input', { type: 'text', value: b.label, maxlength: 24, 'aria-label': `${n}: its label` });
+      lab.addEventListener('change', () => { b.label = lab.value; commit(); });
+      const act = el('select', { 'aria-label': `${n}: what it does` });
+      for (const k of CARD_KIND_ORDER) {
+        const og = el('optgroup', { label: CARD_KINDS[k].name });
+        for (const a of CARD_ACTS) if (CARD_ACT_KIND[a] === k) og.append(el('option', { value: a, text: CARD_ACT_LABEL[a] }));
+        act.append(og);
+      }
+      act.value = b.act; act.addEventListener('change', () => { b.act = act.value; if (b.act === 'send' && !b.cmd) b.cmd = 'status'; redo(); });
+      row.append(lab, act);
+      const route = el('div', { class: 'card-route' });
+      const showRoute = () => {
+        const r = cardRoute(b), why = cardHiddenWhy(b);
+        route.textContent = '';
+        route.append(el('span', { class: 'card-chip', 'data-kind': r.kind, text: CARD_KINDS[r.kind].one }), el('span', { class: 'card-to', text: cardRouteTo(r) || '→ (no board for it in this design)' }), el('span', { text: r.what }));
+        if (why) route.append(el('span', { class: 'card-off', text: why }));
+      };
+      if (b.act === 'send') {
+        const c = el('input', { type: 'text', class: 'mono', value: b.cmd || '', maxlength: CARD_TEXT_MAX, spellcheck: 'false', placeholder: 'level', list: 'cardCmdList', 'aria-label': `${n}: the text it sends` });
+        c.addEventListener('input', () => { b.cmd = c.value; showRoute(); });
+        c.addEventListener('change', () => { b.cmd = c.value; commit(); });
+        row.append(c);
+      } else if (b.act === 'arm' || b.act === 'fly') {
+        const o = el('input', { type: 'text', value: b.on || '', maxlength: 24, placeholder: 'label while on', 'aria-label': `${n}: its label while on` });
+        o.addEventListener('change', () => { b.on = o.value; commit(); }); row.append(o);
+      } else row.append(el('span'));
+      const cf = el('label', { class: 'card-confirm', title: 'Press twice: the first press asks, a second within 3 s does it' }); const cb = el('input', { type: 'checkbox' }); cb.checked = !!b.confirm;
+      cb.addEventListener('change', () => { b.confirm = cb.checked; commit(); }); cf.append(cb, ' confirm');
+      const mv = (d, t) => {
+        const k = g.items[j + d], x = el('button', { type: 'button', class: 'card-ic', title: t, 'aria-label': `${n}: ${t}`, text: d < 0 ? '↑' : '↓' });
+        x.disabled = k == null;
+        x.addEventListener('click', () => { [list[i], list[k]] = [list[k], list[i]]; redo(); }); return x;
+      };
+      const del = el('button', { type: 'button', class: 'card-ic', title: 'Remove it', 'aria-label': `${n}: remove it`, text: '✕' });
+      del.addEventListener('click', () => { list.splice(i, 1); redo(); });
+      row.append(cf, mv(-1, 'Move up'), mv(1, 'Move down'), del);
+      showRoute();
+      item.append(row, route); box.append(item);
+    });
+  }
+  const add = el('select', { class: 'card-add', 'aria-label': 'Add a button' });
+  add.append(el('option', { value: '', text: 'Add a button…' }));
+  const has = a => list.some(b => b.act === a), opt = (v, t) => el('option', { value: v, text: t });
+  const og = (k, ...o) => { const x = el('optgroup', { label: `${CARD_KINDS[k].name}: ${CARD_KINDS[k].how}` }); x.append(...o); return x; };
+  const actOpt = a => opt('act:' + a, CARD_ACT_NEW[a].label + (has(a) ? '' : ' (not on the card)'));
+  add.append(og('switch', actOpt('arm'), actOpt('fly')), og('pulse', actOpt('hold'), actOpt('home')),
+    og('text', ...(cardRadioPi() ? CARD_CMDS.map(c => opt('cmd:' + c.cmd, `${c.label} (${c.cmd})`)) : []), opt('cmd:', 'Your own command…')),
+    og('page', actOpt('upload'), actOpt('disconnect')));
+  add.addEventListener('change', () => {
+    const v = add.value; if (!v) return;
+    if (v.startsWith('act:')) list.push({ ...CARD_ACT_NEW[v.slice(4)] });
+    else { const c = CARD_CMDS.find(x => x.cmd === v.slice(4)); list.push(c ? { label: c.label, act: 'send', cmd: c.cmd, ...(c.confirm ? { confirm: true } : {}) } : { label: 'Command', act: 'send', cmd: '' }); }
+    redo();
+    const nb = list[list.length - 1], last = [...box.querySelectorAll(`.card-item[data-kind="${cardKind(nb)}"]`)].pop();   // (the new one: last in its group)
+    const inp = last && (nb.act === 'send' && !nb.cmd ? last.querySelector('input.mono') : last.querySelector('input'));
+    if (inp) { inp.focus(); inp.select(); }
   });
-  const add = el('button', { type: 'button', class: 'btn', text: 'Add a button' });
-  add.addEventListener('click', () => { list.push({ label: 'Status', act: 'send', cmd: 'status' }); commit(); cardRenderEditor(); const last = box.querySelectorAll('.card-row'); const r = last[last.length - 1]; if (r) r.querySelector('input').select(); });
-  const def = el('button', { type: 'button', class: 'btn', text: 'Defaults' });
+  const def = el('button', { type: 'button', class: 'btn', text: 'Reset to defaults' });
   def.addEventListener('click', () => { const C = computers(); delete C.ground.buttons; undoKey = 'cardButtons'; save(); cardRenderEditor(); cardRender(true); });
   const done = el('button', { type: 'button', class: 'btn', text: 'Done' }); done.addEventListener('click', () => cardEditSet(false));
   box.append(el('div', { class: 'card-edit-acts' }, add, def, done));
@@ -367,6 +515,7 @@ function cardEditSet(on) {
   $('#cardEdit').addEventListener('click', () => cardEditSet(!card.edit));
   $('#cardCmd').addEventListener('submit', e => { e.preventDefault(); const i = $('#cardCmdIn'), why = cardSend(i.value); cardNote(why, why ? 'bad' : ''); if (!why) i.value = ''; cardRender(true); });
   $('#cardCmdIn').addEventListener('keydown', e => { if (e.key === 'Escape') e.target.blur(); e.stopPropagation(); });
+  $('#cardCmdIn').addEventListener('input', cardRenderCmdTo);
   for (const x of bar.querySelectorAll('.card-head button')) x.addEventListener('mousedown', e => e.preventDefault());
   window.addEventListener('resize', cardPlace);
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => cardPlace()).observe(bar);   // (it grew: unfolded, the editor, an answer)

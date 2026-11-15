@@ -436,7 +436,7 @@ static void setting(const char *line) {
 }
 /* The longest payload each frame type may have: a damaged header can't swallow the frames after it. */
 static uint32_t frame_limit(uint8_t type) {
-  switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
+  switch (type) { case RN_LINK_CMD: return 48; case RN_LINK_BENCH_TEST: return 4 * FC_MAX_MOTORS; case RN_LINK_STATUS: return 0; case RN_LINK_SETTING: return 127;
     case RN_LINK_AIRFRAME: return AIRFRAME_CAP; case RN_LINK_PROGRAM: return IMG_CAP;
     case RN_LINK_TUNE:
       return sizeof tune_box;
@@ -503,6 +503,9 @@ static void link_task(void *arg) {
         fc_cmd c = { v[0] > 0.5f, v[1], v[2], v[3], v[4], v[5] >= -0.5f && v[5] < FC_MAX_MOTORS - 0.5f ? (int)(v[5] + 0.5f) : -1, v[6],
                      v[7] > 0.5f, { v[8], v[9], v[10] }, v[11] };
         if (c.guided || Lp->len == 48) guided_us = now;
+        portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
+      } else if (type == RN_LINK_BENCH_TEST && Lp->len >= 4 && Lp->len % 4 == 0) {   /* several motors at once, each at its own (dfb_pi's motors), disarmed */
+        fc_cmd c = { 0 }; c.test_motor = 0; c.test_multi = 1; memcpy(c.test_values, Lp->buf, Lp->len);
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_PROGRAM) {
         char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)Lp->len); say(s);

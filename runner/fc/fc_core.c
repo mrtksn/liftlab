@@ -325,14 +325,17 @@ static void bus_after_step(fc_state *F, const fc_out *o) {
 void fc_command(fc_state *F, const fc_cmd *in) {
   /* a command with a number that isn't finite is ignored (it doesn't count as a command either) */
   if (!fin(in->roll) || !fin(in->pitch) || !fin(in->yaw) || !fin(in->throttle) || !fin(in->test_throttle)) return;
+  if (in->test_multi) for (int i = 0; i < FC_MAX_MOTORS; i++) if (!fin(in->test_values[i])) return;
   if (in->guided && (!fin(in->acc[0]) || !fin(in->acc[1]) || !fin(in->acc[2]) || !fin(in->heading))) return;
   fc_cmd cc = *in, *c = &cc;
   c->roll = clampf(c->roll, -1, 1); c->pitch = clampf(c->pitch, -1, 1); c->yaw = clampf(c->yaw, -1, 1);
-  c->throttle = clampf(c->throttle, 0, 1); c->test_throttle = clampf(c->test_throttle, 0, 0.3f);
+  c->throttle = clampf(c->throttle, 0, 1); c->test_throttle = clampf(c->test_throttle, 0, 1);
+  c->test_multi = c->test_multi ? 1 : 0;
+  if (c->test_multi) { if (c->test_motor >= 0) c->test_motor = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) c->test_values[i] = clampf(c->test_values[i], 0, 1); }
   c->guided = c->guided ? 1 : 0;
   if (c->guided) { c->acc[0] = clampf(c->acc[0], -10, 10); c->acc[1] = clampf(c->acc[1], -10, 10); c->acc[2] = clampf(c->acc[2], -FC_AZ_MAX, FC_AZ_MAX); }
   if (c->test_motor < 0 || c->test_motor >= FC_MAX_MOTORS) c->test_motor = -1;
-  int prev_test = F->cmd.test_motor;
+  int prev_test = F->cmd.test_motor, prev_multi = F->cmd.test_multi;
   F->cmd = *c; F->cmd_t = F->t;
   if (F->bus) { float v[10] = { (float)c->arm, c->roll, c->pitch, c->yaw, c->throttle, (float)c->guided, c->acc[0], c->acc[1], c->acc[2], c->heading }; bus_pub(F->bus, F->bt[BT_CMD], v, 10); }
   if (!c->arm) { F->arm_released = 1; if (F->state == FC_ARMED || F->state == FC_FAILSAFE || F->state == FC_CRASHED) { F->state = FC_DISARMED; fc_say(F, "disarmed"); F->sup_mode = 0; F->sup_landing = 0; } }
@@ -352,10 +355,12 @@ void fc_command(fc_state *F, const fc_cmd *in) {
     }
   }
   if (c->arm && F->state == FC_FAILSAFE && !F->sup_landing) { F->state = FC_ARMED; fc_say(F, "commands back: armed"); }
-  /* motor test: disarmed only, one motor, for FC_TEST_S from when it starts; another needs the test switched off first */
-  if (F->state == FC_TESTING && (c->arm || c->test_motor != prev_test)) { F->state = FC_DISARMED; fc_say(F, "motor test stopped"); }
+  /* motor test: disarmed only, while its commands come; one motor, or several at once at their own throttles (their
+   * throttles change as they come, motors join and leave). Another single motor needs the test switched off first */
+  if (F->state == FC_TESTING && (c->arm || c->test_motor != prev_test || c->test_multi != prev_multi)) { F->state = FC_DISARMED; fc_say(F, "motor test stopped"); }
   if (!c->arm && F->state == FC_DISARMED && c->test_motor >= 0 && c->test_motor < F->A.n_motors && F->have_airframe && F->test_released) {
-    F->state = FC_TESTING; F->test_t = F->t; F->test_released = 0; fc_say(F, "motor test: %s", F->A.mot[c->test_motor].name);
+    F->state = FC_TESTING; F->test_t = F->t; F->test_released = 0;
+    if (c->test_multi) fc_say(F, "motor test: several at once"); else fc_say(F, "motor test: %s", F->A.mot[c->test_motor].name);
   }
 }
 
@@ -494,8 +499,10 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   float tilt = axis_tilt(F);
   float vz = F->have_alt ? F->vz_e : F->vz_i;
   if (F->state == FC_TESTING) {
-    if (F->t - F->test_t > FC_TEST_S || F->t - F->cmd_t > FC_CMD_TIMEOUT) { F->state = FC_DISARMED; fc_say(F, "motor test done"); return 0; }
-    o->motor[F->cmd.test_motor] = F->cmd.test_throttle; return 0;
+    if (F->t - F->cmd_t > FC_CMD_TIMEOUT) { F->state = FC_DISARMED; fc_say(F, "motor test done"); return 0; }
+    if (F->cmd.test_multi) for (int i = 0; i < F->A.n_motors; i++) o->motor[i] = F->cmd.test_values[i];
+    else o->motor[F->cmd.test_motor] = F->cmd.test_throttle;
+    return 0;
   }
   if ((F->state == FC_ARMED || F->state == FC_FAILSAFE) && tilt > FC_CRASH_DEG && !F->safety_off && !open && !F->open_loop && F->t >= F->recover_t)   /* (open_loop: a throw's open loop ended this step, its grace starts below) */ { F->state = FC_CRASHED; fc_say(F, "tilted %.0f°: crashed, motors off", (double)tilt); }
   if (F->state == FC_ARMED && F->t - F->cmd_t > FC_CMD_TIMEOUT) {

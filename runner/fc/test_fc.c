@@ -193,13 +193,24 @@ int main(int argc, char **argv) {
 
   printf("motor test\n");
   start(quad, lq); fly(1); C.test_motor = 2; C.test_throttle = 0.9f; fly(0.5);
-  CHECK(F.state == FC_TESTING && O.motor[2] == 0.3f && O.motor[0] == 0 && O.motor[1] == 0 && O.motor[3] == 0, "one motor, capped at 0.3: %s", F.why);
+  CHECK(F.state == FC_TESTING && O.motor[2] == 0.9f && O.motor[0] == 0 && O.motor[1] == 0 && O.motor[3] == 0, "one motor, at its throttle: %s", F.why);
   link_up = 0; fly(0.6); CHECK(F.state == FC_DISARMED && max_motor() == 0, "stops 0.5 s after the commands stop");
   link_up = 1; fly(0.2); CHECK(F.state == FC_DISARMED, "the same test command again doesn't restart it (test off first)");
   C.test_motor = -1; fly(0.1); C.test_motor = 0; fly(2.5); CHECK(F.state == FC_TESTING, "switched off and on: motor 1 runs");
-  fly(0.6); CHECK(F.state == FC_DISARMED && max_motor() == 0, "stops %d s after it started, though test commands keep coming", (int)FC_TEST_S);
+  fly(5); CHECK(F.state == FC_TESTING && O.motor[0] == 0.9f, "as long as its commands keep coming (7.5 s)");
+  C.test_motor = -1; fly(0.1); CHECK(F.state == FC_DISARMED && max_motor() == 0, "switched off: stopped");
   C.test_motor = -1; C.arm = 1; fly(0.2); C.test_motor = 1; fly(0.2);
   CHECK(F.state == FC_ARMED && O.motor[1] == FC_IDLE, "not while armed");
+
+  printf("a test of several motors at once\n");
+  start(quad, lq); fly(1); C.test_multi = 1; C.test_motor = 0;
+  C.test_values[0] = 0.06f; C.test_values[2] = 0.4f; fly(0.3);
+  CHECK(F.state == FC_TESTING && O.motor[0] == 0.06f && O.motor[1] == 0 && O.motor[2] == 0.4f && O.motor[3] == 0, "each at its own: %.2f %.2f %.2f %.2f", O.motor[0], O.motor[1], O.motor[2], O.motor[3]);
+  C.test_values[0] = 0; C.test_values[1] = 0.2f; C.test_values[3] = 1.5f; fly(0.2);
+  CHECK(F.state == FC_TESTING && O.motor[0] == 0 && O.motor[1] == 0.2f && O.motor[2] == 0.4f && O.motor[3] == 1.0f, "motors join and leave, no restart; at most 1");
+  C.test_values[0] = NAN; fly(0.6); CHECK(F.state == FC_DISARMED && max_motor() == 0, "a number that isn't one: not a command, so it stops");
+  C.test_values[0] = 0; C.arm = 1; fly(0.2); CHECK(F.state != FC_TESTING && max_motor() <= FC_IDLE, "an arm stops it");
+  C.arm = 0; C.test_multi = 0; C.test_motor = -1; for (int i = 0; i < FC_MAX_MOTORS; i++) C.test_values[i] = 0; fly(0.2);
 
   printf("tilt-rotor quad (stays level, servos steer)\n");
   start(tilt, lt); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.9f; fly(2); C.throttle = 0.5f; fly(2);
