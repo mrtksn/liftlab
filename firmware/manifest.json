@@ -1,7 +1,7 @@
 {
  "version": 2,
- "built": "2026-11-13",
- "commit": "fb38edc",
+ "built": "2026-11-15",
+ "commit": "7ca87b0",
  "idf": "ESP-IDF v5.3.2",
  "targets": {
   "esp32": {
@@ -25,11 +25,11 @@
      "files": {
       "bootloader.bin": {
        "size": 26752,
-       "sha256": "d0dd0daade3beadef70118a8882947854984a4c48c7bc7b984467bbe3a874eb8"
+       "sha256": "e4ba9e5da5bede8d86dfae9bcc3bdc5415a035fc2ea5e2505e1eeb7511909cd1"
       },
       "dfb_flight.bin": {
-       "size": 1127808,
-       "sha256": "a35e257d9e42c51a4ac51142837661edac5538c97c582f76e553ebc7e81d58b5"
+       "size": 1129360,
+       "sha256": "73c6117cb0b43a3d228b20325634dd294cb41b1df8132f53fcb6e41c460e4e96"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -56,11 +56,11 @@
      "files": {
       "bootloader.bin": {
        "size": 26752,
-       "sha256": "cc1be6b8b100b031d63b115d83d5036c39aa14c34f1c7840f3aa13e0f1de478d"
+       "sha256": "04304ea3aacc865f75e1d6be515d2996e0fe398a841c21348627c63e192ee9fb"
       },
       "dfb_ground.bin": {
-       "size": 912592,
-       "sha256": "aa1a110df85469f67e40c8b2127f13958710fe9982db73c3a15df382767bf2a2"
+       "size": 913184,
+       "sha256": "e76617aa30c02c471d53572acea12ece04e2045ef94b93c74df576b334485788"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -91,11 +91,11 @@
      "files": {
       "bootloader.bin": {
        "size": 21648,
-       "sha256": "b23092eaa3631d10e29faa3cb82919414def5cb5b3bc3238e2645b6ba9fa94cc"
+       "sha256": "de1e7e9652c63c1c385e2229a04a63fc4796df57b14890b2db38d69a89a7fa8c"
       },
       "dfb_flight.bin": {
-       "size": 1290592,
-       "sha256": "fbbf162c918d2cb4313e35d9e1509c827d4fdcb9fb5b72149229adb31b5271d4"
+       "size": 1292080,
+       "sha256": "5c753e44f3dc6906694745b0902efe31b9928dba0a975dadcf85ea34a4586896"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -122,11 +122,11 @@
      "files": {
       "bootloader.bin": {
        "size": 21648,
-       "sha256": "e46f173839dc29a5cec9d429390de5051f260b3ba0add8902edd92fff56be58d"
+       "sha256": "a263bc3423266689476f66ddff6d0f91a0eb7a42bd19a2aade3dc117ed9cc9f0"
       },
       "dfb_ground.bin": {
-       "size": 1073424,
-       "sha256": "88712f75c77e8a4210c54490abccea7d7b73e9d3b8d753f4475fb67b40ccf24f"
+       "size": 1074016,
+       "sha256": "614929241c6577d20d9e5f629b41a88ea372b27009857d18bef5401c90f71ddf"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -157,11 +157,11 @@
      "files": {
       "bootloader.bin": {
        "size": 21408,
-       "sha256": "9402a505c6cd5907bc2c6472924bf074e106793cec4c5ffdb07e182b735ea22a"
+       "sha256": "78c9dfb4ff3d8797607c52089ee33e20f6f2df27d70c4fa33a7476f914f8ac02"
       },
       "dfb_flight.bin": {
-       "size": 1408112,
-       "sha256": "d17149e4de92f868d17b2f4accdb702b22c7c8b3c26d73aaf348416d462ad8a1"
+       "size": 1411040,
+       "sha256": "5f0d85c62fd0939fca5eb512d2046a875dc25d1201a8f5f40dd208d39d72593c"
       },
       "partition-table.bin": {
        "size": 3072,
@@ -188,11 +188,11 @@
      "files": {
       "bootloader.bin": {
        "size": 21408,
-       "sha256": "634f207cf0e5237c4692a122dd3ecdc8817956946468fb46b21e82ffa246e6f6"
+       "sha256": "62157ad4052886cbf5672cd594c7578eb6dfc1af161010dccbae921f231837f9"
       },
       "dfb_ground.bin": {
-       "size": 1169968,
-       "sha256": "7512d9645a34c8c55bb7e742a8d807ceb8fac4b34cfa12b9838d3d2f63e1e8d9"
+       "size": 1170656,
+       "sha256": "caca8b36ee68e7724fa8461dd0399c5d52a14ae02980fa3f7d4fdcd36314c874"
       },
       "partition-table.bin": {
        "size": 3072,
