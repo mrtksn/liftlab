@@ -506,6 +506,7 @@ static void link_task(void *arg) {
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_BENCH_TEST && Lp->len >= 4 && Lp->len % 4 == 0) {   /* several motors at once, each at its own (dfb_pi's motors), disarmed */
         fc_cmd c = { 0 }; c.test_motor = 0; c.test_multi = 1; memcpy(c.test_values, Lp->buf, Lp->len);
+        guided_us = now;                                     /* (as a guided command: NAV samples go to the Pi, and a radio here doesn't override it) */
         portENTER_CRITICAL(&mux); cmd_box = c; cmd_new = 1; portEXIT_CRITICAL(&mux);
       } else if (type == RN_LINK_PROGRAM) {
         char s[96]; snprintf(s, sizeof s, "received a program: %u bytes; checking it", (unsigned)Lp->len); say(s);
