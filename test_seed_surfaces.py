@@ -26,6 +26,14 @@ class SeedGrowthTest(unittest.TestCase):
             m = survey([[0,0,1], [.13,0,1], third], [('1',[0,0,0],[0,1,2])])
             self.assertEqual(build_surfaces(m)["patches"], [])
 
+    def test_custom_cutoff_smaller_and_larger_than_default(self):
+        model = survey([[0,0,1], [.12,0,1], [0,.19,1]], [('1',[0,0,0],[0,1,2])])
+        self.assertFalse(build_surfaces(model, .10)["patches"])
+        self.assertFalse(build_surfaces(model)["patches"])
+        mesh = build_surfaces(model, .25)
+        self.assertEqual(mesh["max_edge_m"], .25)
+        self.assertEqual(len(mesh["patches"]), 1)
+
     def test_front_occludes_through_back_face_then_retry_from_other_view(self):
         points = [[-.07,-.05,1], [.07,-.05,1], [0,.08,1], [0,0,1.3]]
         frames = [('0',[0,0,0],[0,1,2]), ('1',[0,0,0],[3])]

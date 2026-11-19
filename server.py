@@ -21,7 +21,7 @@ import re
 
 from replay import read_timeline
 from fusion import STREAMS
-from seed_surfaces import build_surfaces
+from seed_surfaces import MAX_EDGE, build_surfaces
 
 import numpy as np
 import pycolmap as sfm
@@ -259,11 +259,17 @@ class Survey:
                     for point in model["points"]:
                         point[:3] = (np.array(point[:3]) * scale).tolist()
                     model.update(units="m", reference=refs)
+            path = run / "survey.json"
             if recover:
                 report("Growing surfaces from observed landmarks")
-                model["surfaces"] = build_surfaces(model)
+                try:
+                    previous = json.loads(path.read_bytes())
+                except (FileNotFoundError, json.JSONDecodeError):
+                    previous = {}
+                max_edge_m = (previous.get("surfaces") or {}).get("max_edge_m", MAX_EDGE)
+                model["surfaces"] = build_surfaces(model, max_edge_m)
             model["run"] = run.name
-            atomic_json(run / "survey.json", model)
+            atomic_json(path, model)
             with self.lock:
                 if self.run == run:
                     self.version += 1
@@ -273,10 +279,29 @@ class Survey:
         except Exception as exc:
             report(str(exc))
         finally:
+            self.finish_build()
+
+    def finish_build(self):
+        with self.lock:
+            self.building = None
+            if self.build_queue:
+                self.start_next_build()
+
+    def rebuild_surfaces(self, run, model, max_edge_m):
+        try:
+            mesh = build_surfaces(model, max_edge_m)
+            model["surfaces"] = mesh
+            atomic_json(run / "survey.json", model)
             with self.lock:
-                self.building = None
-                if self.build_queue:
-                    self.start_next_build()
+                if self.run == run:
+                    self.version += 1
+                    self.message = f"Surfaces rebuilt · {len(mesh['patches']):,} triangles"
+        except Exception as exc:
+            with self.lock:
+                if self.run == run:
+                    self.message = f"Surface rebuild failed · {exc}"
+        finally:
+            self.finish_build()
 
     def runs(self):
         return sorted((p.name for p in self.root.iterdir()
@@ -429,6 +454,23 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
+            elif action == "rebuild-surfaces":
+                if self.busy or self.log or not self.run or self.run.name != body.get("run"):
+                    raise ValueError("Choose a finished walk.")
+                try:
+                    centimetres = float(body["max_edge_cm"])
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError("Enter a positive maximum edge length in centimetres.") from None
+                max_edge_m = centimetres / 100
+                if not math.isfinite(max_edge_m) or max_edge_m <= 0:
+                    raise ValueError("Enter a positive maximum edge length in centimetres.")
+                model = json.loads((self.run / "survey.json").read_bytes())
+                if model["units"] != "m" or not model.get("landmark_views"):
+                    raise ValueError("Surface growth needs a metric map with landmark observations.")
+                self.building = self.run
+                self.message = "Rebuilding surfaces from saved landmarks"
+                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, max_edge_m),
+                                 daemon=True).start()
             elif action == "rebuild":
                 if not self.run or self.busy or self.log:
                     raise ValueError("Choose a finished walk.")

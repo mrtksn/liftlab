@@ -9,10 +9,6 @@ MAX_EDGE = .20
 NEIGHBOURS = tuple(product((-1, 0, 1), repeat=3))
 
 
-def cell(point):
-    return tuple(np.floor(point / MAX_EDGE).astype(int))
-
-
 def unit(vector):
     return vector / max(np.linalg.norm(vector), 1e-15)
 
@@ -23,8 +19,10 @@ def edges(ids):
 
 
 class GrowingMesh:
-    def __init__(self, xyz):
+    def __init__(self, xyz, max_edge_m):
         self.xyz = xyz
+        self.max_edge_m = max_edge_m
+        self.cell_size = max(max_edge_m, MAX_EDGE)
         self.accepted = set()
         self.nearby = defaultdict(list)
         self.faces = {}
@@ -35,6 +33,9 @@ class GrowingMesh:
         self.frame = None
         self.created = {}
         self.retired = []
+
+    def cell(self, point):
+        return tuple(np.floor(point / self.cell_size).astype(int))
 
     def face(self, ids, vertices, eye):
         if len(ids) < 3:
@@ -50,7 +51,7 @@ class GrowingMesh:
             vertices = vertices[[0, 2, 1]]
             if len(ids) == 3:
                 ids = (ids[0], ids[2], ids[1])
-        lo, hi = cell(vertices.min(axis=0)), cell(vertices.max(axis=0))
+        lo, hi = self.cell(vertices.min(axis=0)), self.cell(vertices.max(axis=0))
         buckets = list(product(*(range(a, b+1) for a, b in zip(lo, hi))))
         key = self.next_id
         self.next_id += 1
@@ -82,8 +83,8 @@ class GrowingMesh:
                 self.edge_faces[edge].remove(key)
 
     def ray_candidates(self, eye, point):
-        # Traverse every 20 cm grid cell between the observing pose and landmark.
-        start, end = np.array(cell(eye)), np.array(cell(point))
+        # Traverse the grid cells between the observing pose and landmark.
+        start, end = np.array(self.cell(eye)), np.array(self.cell(point))
         steps = int(np.abs(end-start).sum())
         if steps > 512:
             return [k for k, (ids, _, _) in self.faces.items() if len(ids) == 3]
@@ -92,8 +93,8 @@ class GrowingMesh:
         signs = np.sign(direction).astype(int)
         moving = signs != 0
         delta = np.full(3, np.inf)
-        delta[moving] = MAX_EDGE / np.abs(direction[moving])
-        boundary = (start + (signs > 0)) * MAX_EDGE
+        delta[moving] = self.cell_size / np.abs(direction[moving])
+        boundary = (start + (signs > 0)) * self.cell_size
         t = np.full(3, np.inf)
         t[moving] = (boundary-eye)[moving] / direction[moving]
         for _ in range(steps+1):
@@ -129,10 +130,10 @@ class GrowingMesh:
 
     def grow(self, i, eye):
         point = self.xyz[i]
-        key = cell(point)
+        key = self.cell(point)
         neighbours = [j for dx, dy, dz in NEIGHBOURS
                       for j in self.nearby.get((key[0]+dx, key[1]+dy, key[2]+dz), ())
-                      if np.linalg.norm(self.xyz[j]-point) <= MAX_EDGE]
+                      if np.linalg.norm(self.xyz[j]-point) <= self.max_edge_m]
         candidates = sorted({k for j in neighbours for k in self.incident[j]})
         close = set(neighbours)
         extensions = []
@@ -198,8 +199,10 @@ class GrowingMesh:
         return normal/length
 
 
-def build_surfaces(model):
-    mesh = dict(method="camera-ray-seeds-v1", units=model["units"], max_edge_m=MAX_EDGE, patches=[])
+def build_surfaces(model, max_edge_m=MAX_EDGE):
+    if not np.isfinite(max_edge_m) or max_edge_m <= 0:
+        raise ValueError("Enter a positive maximum edge length.")
+    mesh = dict(method="camera-ray-seeds-v1", units=model["units"], max_edge_m=max_edge_m, patches=[])
     if model["units"] != "m":
         return dict(mesh, status="needs_scale")
     views = model.get("landmark_views")
@@ -207,7 +210,7 @@ def build_surfaces(model):
         return dict(mesh, status="needs_tracks")
     xyz = np.asarray([p[:3] for p in model["points"]], dtype=float).reshape(-1, 3)
     poses = {p["frame"]: np.asarray(p["xyz"]) for p in model["poses"]}
-    growth = GrowingMesh(xyz)
+    growth = GrowingMesh(xyz, max_edge_m)
     hidden = set()
     skips = 0
     for frame, ids in sorted(views.items()):

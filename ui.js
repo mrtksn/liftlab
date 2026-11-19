@@ -6,7 +6,7 @@ let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFram
 let sampleOrder=new Map();
 let mapRun, gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
-let centre = [0,0,0], extent = 1, drag;
+let centre = [0,0,0], extent = 1, panX = 0, panY = 0, drag;
 const canvas = $('map'), ctx = canvas.getContext('2d');
 function draw() {
   const w=canvas.clientWidth, h=canvas.clientHeight, d=devicePixelRatio;
@@ -16,7 +16,7 @@ function draw() {
     const [x,y,z]=p.slice(0,3).map((v,i)=>v-centre[i]);
     const u=x*Math.cos(yaw)-y*Math.sin(yaw), v=x*Math.sin(yaw)+y*Math.cos(yaw);
     const scale=Math.min(w,h)*zoom/extent;
-    return [w/2+u*scale,h/2-(z*Math.cos(pitch)+v*Math.sin(pitch))*scale];
+    return [w/2+panX+u*scale,h/2+panY-(z*Math.cos(pitch)+v*Math.sin(pitch))*scale];
   };
   if($('surfaceLayer').checked&&model.surfaces?.patches.length){
     const depth=([x,y,z])=>(x*Math.sin(yaw)+y*Math.cos(yaw))*Math.cos(pitch)-z*Math.sin(pitch);
@@ -99,10 +99,14 @@ function fitMapView(){
   const w=canvas.clientWidth,h=canvas.clientHeight;
   extent=Math.max(1e-5,2.2*Math.min(w,h)*Math.max(halfWidth/w,halfHeight/h));
   zoom=1;
+  panX=panY=0;
 }
 function showMap(m) {
   if(m?.surfaces && m.surfaces.method!=='camera-ray-seeds-v1') delete m.surfaces;
+  const sameMap=m && model && m.run===model.run && m.units===model.units &&
+    m.feature_index && m.feature_index===model.feature_index;
   model=m;
+  $('surfaceEdge').value=Number(((m?.surfaces?.max_edge_m??.20)*100).toPrecision(12));
   updateSurfaceInfo();
   updateGaps();
   updateStreamControls();
@@ -115,12 +119,31 @@ function showMap(m) {
   $('residual').textContent=m ? m.mean_error_px+' px' : '—';
   $('units').textContent=m?.units==='m'?(m.reference?'Measured baseline · m':m.tof_scale?'ToF scale estimate · m':'Measured scale · m'):'Relative scale';
   if(m?.gravity_aligned) $('units').textContent+=' · IMU aligned';
-  fitMapView();
+  if(!sameMap)fitMapView();
   draw();
 }
-canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
-canvas.onpointermove=e=>{if(drag){yaw+=(e.clientX-drag[0])*.008;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-drag[1])*.008));drag=[e.clientX,e.clientY];draw();}};
-canvas.onpointerup=canvas.onpointercancel=()=>drag=null;
+canvas.onpointerdown=e=>{
+  if(e.button!==0 || drag)return;
+  drag={id:e.pointerId,x:e.clientX,y:e.clientY};
+  canvas.setPointerCapture(e.pointerId);
+};
+canvas.onpointermove=e=>{
+  if(drag?.id!==e.pointerId)return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  drag.x=e.clientX;
+  drag.y=e.clientY;
+  if(e.metaKey || e.altKey){
+    panX+=dx;
+    panY+=dy;
+  }else{
+    yaw+=dx*.008;
+    pitch=Math.max(-Math.PI/2,Math.min(Math.PI/2,pitch+dy*.008));
+  }
+  draw();
+};
+canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=e=>{
+  if(drag?.id===e.pointerId)drag=null;
+};
 canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(.15,Math.min(12,zoom*Math.exp(-e.deltaY*.002)));draw();};
 new ResizeObserver(draw).observe(canvas);
 async function update() {
@@ -179,6 +202,8 @@ async function update() {
     $('runs').replaceChildren(...list.map(n=>new Option(n,n)));
     $('runs').value=list.includes(old)?old:(s.run||list[0]||'');
   }
+  const surfaceBusy=s.recording || s.busy || model?.run!==s.run;
+  $('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -258,19 +283,31 @@ function updateSurfaceInfo(){
   const patches=model?.surfaces?.patches||[];
   const toggle=$('surfaceLayer'), info=$('surfaceInfo');
   toggle.disabled=!patches.length;
+  $('surfaceSettings').hidden=model?.units!=='m' || !Object.keys(model.landmark_views||{}).length;
   $('surfaceTimeControl').hidden=!patches.length || !toggle.checked;
   info.hidden=!(model&&(!patches.length||toggle.checked));
   const mesh=model?.surfaces;
   if(!mesh){ info.textContent='Rebuild this walk to grow surfaces from its landmark tracks.';return; }
   if(mesh.status==='needs_scale'){
-    info.textContent='The 20 cm growth limit needs metric scale. Under Metric scale, mark two mapped replay frames and enter their measured separation.';
+    info.textContent='Surface growth needs metric scale. Under Metric scale, mark two mapped replay frames and enter their measured separation.';
     return;
   }
   if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
   info.textContent=patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
-    mesh.deferred_landmarks.length+' landmarks still occluded · 20 cm maximum edge';
+    mesh.deferred_landmarks.length+' landmarks still occluded · '+Number((mesh.max_edge_m*100).toPrecision(12))+' cm maximum edge';
 
 }
+$('rebuildSurfaces').onclick=()=>{
+  const edge=$('surfaceEdge');
+  edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive maximum edge length.':'');
+  if(!edge.reportValidity())return;
+  $('surfaceLayer').checked=true;
+  act('rebuild-surfaces',{run:model.run,max_edge_cm:edge.valueAsNumber});
+};
+$('surfaceEdge').oninput=()=>{$('surfaceEdge').setCustomValidity('');};
+$('surfaceEdge').onkeydown=e=>{
+  if(e.key==='Enter')$('rebuildSurfaces').click();
+};
 $('surfaceTime').onchange=draw;
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
 $('cloud').onchange=$('route').onchange=draw;

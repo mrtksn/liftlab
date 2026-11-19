@@ -4,3 +4,6 @@
 .capture-controls #recordStatus{margin:7px 0 0;font-size:13px;line-height:1.35}
 #inputStreams{margin-top:10px}#streamSummary,#sensorOnlyNote{margin:9px 0 0}.gap-tools{margin-top:6px}.gap-tools select,.gap-tools button{padding:5px 7px;font-size:13px}.gap-tools label{font-size:13px}.gap-tools #gapPicker{margin-left:auto}#sensorTraces{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:10px;margin-top:10px}#sensorTraces>div{min-width:0;background:#13191b;border-radius:6px;padding:9px}#sensorTraces p{margin:0 0 6px;font-size:13px}#sensorTraces canvas{display:block;width:100%;height:85px}.views:has(#mapPanel[hidden]){grid-template-columns:1fr}
 .surface-info{padding:0 14px;margin:0 0 9px}
+
+#surfaceSettings{justify-content:flex-start}
+#surfaceEdge{width:6em;padding:5px 7px}
