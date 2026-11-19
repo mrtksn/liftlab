@@ -101,12 +101,15 @@ function fitMapView(){
   zoom=1;
   panX=panY=0;
 }
+function growthDistanceCm(mesh){
+  return Number(((mesh?.growth_distance_m??mesh?.max_edge_m??.20)*100).toPrecision(12));
+}
 function showMap(m) {
   if(m?.surfaces && m.surfaces.method!=='camera-ray-seeds-v1') delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
   model=m;
-  $('surfaceEdge').value=Number(((m?.surfaces?.max_edge_m??.20)*100).toPrecision(12));
+  $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
   updateSurfaceInfo();
   updateGaps();
   updateStreamControls();
@@ -294,15 +297,15 @@ function updateSurfaceInfo(){
   }
   if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
   info.textContent=patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
-    mesh.deferred_landmarks.length+' landmarks still occluded · '+Number((mesh.max_edge_m*100).toPrecision(12))+' cm maximum edge';
+    mesh.deferred_landmarks.length+' landmarks still occluded · '+growthDistanceCm(mesh)+(mesh.growth_distance_m==null?' cm maximum edge · rebuild to use growth distance':' cm growth distance');
 
 }
 $('rebuildSurfaces').onclick=()=>{
   const edge=$('surfaceEdge');
-  edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive maximum edge length.':'');
+  edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive growth distance.':'');
   if(!edge.reportValidity())return;
   $('surfaceLayer').checked=true;
-  act('rebuild-surfaces',{run:model.run,max_edge_cm:edge.valueAsNumber});
+  act('rebuild-surfaces',{run:model.run,growth_distance_cm:edge.valueAsNumber});
 };
 $('surfaceEdge').oninput=()=>{$('surfaceEdge').setCustomValidity('');};
 $('surfaceEdge').onkeydown=e=>{

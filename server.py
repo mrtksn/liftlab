@@ -266,8 +266,9 @@ class Survey:
                     previous = json.loads(path.read_bytes())
                 except (FileNotFoundError, json.JSONDecodeError):
                     previous = {}
-                max_edge_m = (previous.get("surfaces") or {}).get("max_edge_m", MAX_EDGE)
-                model["surfaces"] = build_surfaces(model, max_edge_m)
+                mesh = previous.get("surfaces") or {}
+                distance = mesh.get("growth_distance_m", mesh.get("max_edge_m", MAX_EDGE))
+                model["surfaces"] = build_surfaces(model, distance)
             model["run"] = run.name
             atomic_json(path, model)
             with self.lock:
@@ -287,9 +288,9 @@ class Survey:
             if self.build_queue:
                 self.start_next_build()
 
-    def rebuild_surfaces(self, run, model, max_edge_m):
+    def rebuild_surfaces(self, run, model, distance):
         try:
-            mesh = build_surfaces(model, max_edge_m)
+            mesh = build_surfaces(model, distance)
             model["surfaces"] = mesh
             atomic_json(run / "survey.json", model)
             with self.lock:
@@ -458,18 +459,18 @@ class Survey:
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose a finished walk.")
                 try:
-                    centimetres = float(body["max_edge_cm"])
-                except (KeyError, TypeError, ValueError):
-                    raise ValueError("Enter a positive maximum edge length in centimetres.") from None
-                max_edge_m = centimetres / 100
-                if not math.isfinite(max_edge_m) or max_edge_m <= 0:
-                    raise ValueError("Enter a positive maximum edge length in centimetres.")
+                    centimetres = float(body.get("growth_distance_cm", body.get("max_edge_cm")))
+                except (TypeError, ValueError):
+                    raise ValueError("Enter a positive growth distance in centimetres.") from None
+                distance = centimetres / 100
+                if not math.isfinite(distance) or distance <= 0:
+                    raise ValueError("Enter a positive growth distance in centimetres.")
                 model = json.loads((self.run / "survey.json").read_bytes())
                 if model["units"] != "m" or not model.get("landmark_views"):
                     raise ValueError("Surface growth needs a metric map with landmark observations.")
                 self.building = self.run
                 self.message = "Rebuilding surfaces from saved landmarks"
-                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, max_edge_m),
+                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance),
                                  daemon=True).start()
             elif action == "rebuild":
                 if not self.run or self.busy or self.log:

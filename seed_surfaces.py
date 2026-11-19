@@ -1,6 +1,7 @@
 """Grow a metric mesh in camera observation order, testing visibility before insertion."""
-from collections import defaultdict
+from collections import defaultdict, deque
 from itertools import product
+from math import prod
 
 import numpy as np
 
@@ -18,77 +19,117 @@ def edges(ids):
         yield tuple(sorted((a, ids[(i + 1) % len(ids)])))
 
 
+def segment_distance(point, start, end):
+    edge = end-start
+    fraction = min(1., max(0., (point-start) @ edge / (edge @ edge)))
+    return np.linalg.norm(point-(start+fraction*edge))
+
+
 class GrowingMesh:
-    def __init__(self, xyz, max_edge_m):
+    def __init__(self, xyz, reach):
         self.xyz = xyz
-        self.max_edge_m = max_edge_m
-        self.cell_size = max(max_edge_m, MAX_EDGE)
+        self.reach = reach
+        self.cell_size = max(reach, MAX_EDGE)
         self.accepted = set()
-        self.nearby = defaultdict(list)
+        self.orphans = {}
+        self.orphan_cells = defaultdict(set)
+        self.provisional = {}
         self.faces = {}
+        self.bounds = {}
+        self.planes = {}
         self.cells = defaultdict(set)
-        self.incident = defaultdict(set)
+        self.large_faces = set()
         self.edge_faces = defaultdict(set)
         self.next_id = 0
         self.frame = None
-        self.created = {}
         self.retired = []
 
     def cell(self, point):
         return tuple(np.floor(point / self.cell_size).astype(int))
 
-    def face(self, ids, vertices, eye):
-        if len(ids) < 3:
-            key = self.next_id
-            self.next_id += 1
-            self.faces[key] = (ids, vertices, [])
-            for i in ids:
-                self.incident[i].add(key)
-            return
-        a, b, c = vertices
-        normal = np.cross(b-a, c-a)
-        if normal @ (eye-a) < 0:
-            vertices = vertices[[0, 2, 1]]
-            if len(ids) == 3:
-                ids = (ids[0], ids[2], ids[1])
-        lo, hi = self.cell(vertices.min(axis=0)), self.cell(vertices.max(axis=0))
-        buckets = list(product(*(range(a, b+1) for a, b in zip(lo, hi))))
+    def around(self, cell):
+        x, y, z = cell
+        for dx, dy, dz in NEIGHBOURS:
+            yield x+dx, y+dy, z+dz
+
+    def face(self, ids, eye):
+        vertices = self.xyz[list(ids)]
         key = self.next_id
         self.next_id += 1
-        self.faces[key] = (ids, vertices, buckets)
-        self.created[key] = self.frame
-        for bucket in buckets:
-            self.cells[bucket].add(key)
-        for i in ids:
-            self.incident[i].add(key)
+        lower, upper = vertices.min(axis=0), vertices.max(axis=0)
+        self.bounds[key] = lower-self.reach, upper+self.reach
+        lo, hi = self.cell(lower), self.cell(upper)
+        dimensions = [range(a,b+1) for a,b in zip(lo,hi)]
+        buckets = tuple(product(*dimensions)) if prod(map(len, dimensions)) <= 512 else ()
+        if buckets:
+            for bucket in buckets:
+                self.cells[bucket].add(key)
+        else:
+            self.large_faces.add(key)
         if len(ids) == 3:
+            a, b, c = vertices
+            normal = unit(np.cross(b-a, c-a))
+            if normal @ (eye-a) < 0:
+                normal = -normal
+                ids = (ids[0], ids[2], ids[1])
+                vertices = vertices[[0,2,1]]
+            inward = np.cross(normal, np.roll(vertices, -1, axis=0)-vertices)
+            self.planes[key] = normal, inward
             for edge in edges(ids):
                 self.edge_faces[edge].add(key)
+        else:
+            for i in ids:
+                self.provisional[i] = key
+        self.faces[key] = (ids, vertices, buckets, self.frame)
+        return key
 
     def remove(self, key):
-        ids, vertices, buckets = self.faces.pop(key)
+        ids, vertices, buckets, born = self.faces.pop(key)
+        del self.bounds[key]
         if len(ids) == 3:
-            born = self.created.pop(key)
+            del self.planes[key]
             if born != self.frame:
                 self.retired.append(dict(landmarks=list(ids), vertices=vertices.tolist(),
                                          first=born, until=self.frame))
+            for edge in edges(ids):
+                faces = self.edge_faces[edge]
+                faces.remove(key)
+                if not faces:
+                    del self.edge_faces[edge]
+        else:
+            for i in ids:
+                self.provisional.pop(i)
         for bucket in buckets:
             self.cells[bucket].remove(key)
             if not self.cells[bucket]:
                 del self.cells[bucket]
-        for i in ids:
-            self.incident[i].remove(key)
+        if not buckets:
+            self.large_faces.remove(key)
+        return ids
+
+    def adopt(self, ids, eye):
+        # Break old seed pairs when one end joins a triangle. The unused end
+        # remains an independent seed eligible for the next extension.
+        for key in sorted({self.provisional[i] for i in ids if i in self.provisional}):
+            for i in self.remove(key):
+                if i not in ids:
+                    self.face((i,), eye)
         if len(ids) == 3:
-            for edge in edges(ids):
-                self.edge_faces[edge].remove(key)
+            for i in ids:
+                self.orphans.pop(i, None)
+                bucket = self.cell(self.xyz[i])
+                self.orphan_cells[bucket].discard(i)
+                if not self.orphan_cells[bucket]:
+                    del self.orphan_cells[bucket]
+        return self.face(ids, eye)
 
     def ray_candidates(self, eye, point):
         # Traverse the grid cells between the observing pose and landmark.
         start, end = np.array(self.cell(eye)), np.array(self.cell(point))
         steps = int(np.abs(end-start).sum())
         if steps > 512:
-            return [k for k, (ids, _, _) in self.faces.items() if len(ids) == 3]
-        result = set()
+            return [k for k, (ids, _, _, _) in self.faces.items() if len(ids) == 3]
+        result = self.large_faces.copy()
         direction = point-eye
         signs = np.sign(direction).astype(int)
         moving = signs != 0
@@ -107,7 +148,7 @@ class GrowingMesh:
         return result
 
     def occluded(self, eye, point):
-        candidates = self.ray_candidates(eye, point)
+        candidates = [k for k in self.ray_candidates(eye, point) if len(self.faces[k][0]) == 3]
         if not candidates:
             return False
         triangles = np.array([self.faces[k][1] for k in candidates])
@@ -128,81 +169,103 @@ class GrowingMesh:
         return np.any(valid & (x >= -1e-9) & (y >= -1e-9) & (x+y <= 1+1e-9) &
                       (t > 1e-9) & (t < 1-1e-7/max(np.linalg.norm(direction), 1e-7)))
 
-    def grow(self, i, eye):
+    def attach(self, i, eye, *, pair, changed_face=None):
         point = self.xyz[i]
-        key = self.cell(point)
-        neighbours = [j for dx, dy, dz in NEIGHBOURS
-                      for j in self.nearby.get((key[0]+dx, key[1]+dy, key[2]+dz), ())
-                      if np.linalg.norm(self.xyz[j]-point) <= self.max_edge_m]
-        candidates = sorted({k for j in neighbours for k in self.incident[j]})
-        close = set(neighbours)
+        candidates = [changed_face] if changed_face is not None else sorted(
+            self.large_faces.union(*(self.cells.get(cell, ()) for cell in self.around(self.cell(point)))))
         extensions = []
         refinements = []
-        for k in candidates:
-            ids, v, _ = self.faces[k]
-            if len(ids) < 3:
-                if close.issuperset(ids):
-                    score = max(np.linalg.norm(point-self.xyz[j]) for j in ids)
-                    if (len(ids) == 1 and score > 1e-8) or (len(ids) == 2 and self.facing((*ids, i), eye) is not None):
-                        extensions.append((score, k, ids))
+        pairs = []
+        for key in candidates:
+            ids, vertices, _, _ = self.faces[key]
+            lower, upper = self.bounds[key]
+            if i in ids or np.any(point < lower) or np.any(point > upper):
                 continue
-            a, b, c = v
-            n = unit(np.cross(b-a, c-a))
-            # Insert within a triangle only for a nearby observation on its
-            # visible side. A foreground object well clear of it starts a seed.
+            if len(ids) == 1:
+                distance = np.linalg.norm(point-vertices[0])
+                if pair and 1e-8 < distance <= self.reach:
+                    pairs.append((distance, ids))
+                continue
+            if len(ids) == 2:
+                distance = segment_distance(point, *vertices)
+                if distance <= self.reach and self.has_area((*ids, i)):
+                    extensions.append((1, distance, ids))
+                continue
+            a = vertices[0]
+            normal, inward = self.planes[key]
             ray = point-eye
-            denom = n @ ray
-            if abs(denom) < 1e-12:
-                continue
-            hit = eye + ray * ((n @ (a-eye))/denom)
-            sides = [np.cross(v[(j+1)%3]-v[j], hit-v[j]) @ n for j in range(3)]
+            denominator = normal @ ray
+            along_ray = (normal @ (a-eye))/denominator if abs(denominator) > 1e-12 else -1.
+            plane_hit = eye + ray * along_ray if along_ray > 0 else point - normal * (normal @ (point-a))
+            sides = np.sum((plane_hit-vertices)*inward, axis=1)
             if min(sides) >= -1e-10:
-                depth = np.linalg.norm(hit-point)
-                if close.issuperset(ids) and depth <= .02 and min(sides) > 1e-10:
-                    refinements.append((depth, k))
+                depth = np.linalg.norm(plane_hit-point)
+                if depth <= min(.02, self.reach) and min(sides) > 1e-10:
+                    refinements.append((depth, key))
                 continue
-            for j, side in enumerate(sides):
-                edge = (ids[j], ids[(j+1)%3])
-                if side >= 0 or not close.issuperset(edge) or len(self.edge_faces[tuple(sorted(edge))]) != 1:
+            for e, side in enumerate(sides):
+                if side >= 0:
                     continue
-                tri = (*edge, i)
-                # Reject a fold across the existing sheet or a grazing sliver.
-                new_normal = self.facing(tri, eye)
-                if new_normal is None or abs(new_normal @ n) < .60:
-                    continue
-                score = max(np.linalg.norm(point-self.xyz[v]) for v in edge)
-                extensions.append((score, k, edge))
+                edge = (ids[e], ids[(e+1)%3])
+                if len(self.edge_faces[tuple(sorted(edge))]) == 1:
+                    distance = segment_distance(point, vertices[e], vertices[(e+1)%3])
+                    if distance <= self.reach and self.has_area((*edge, i)):
+                        extensions.append((0, distance, edge))
+        if not (refinements or extensions or pairs):
+            return []
+        if changed_face is not None and self.occluded(eye, point):
+            return []
         if refinements:
-            _, k = min(refinements)
-            ids = self.faces[k][0]
-            self.remove(k)
-            for edge in edges(ids):
-                tri = (*edge, i)
-                self.face(tri, self.xyz[list(tri)], eye)
-        elif extensions:
-            _, k, base = min(extensions)
-            if len(self.faces[k][0]) < 3:
-                self.remove(k)
-            ids = (*base, i)
-            self.face(ids, self.xyz[list(ids)], eye)
-        else:
-            self.face((i,), self.xyz[[i]], eye)
-        self.accepted.add(i)
-        self.nearby[key].append(i)
+            _, key = min(refinements)
+            ids = self.remove(key)
+            return [self.adopt((*edge, i), eye) for edge in edges(ids)]
+        if extensions:
+            _, _, base = min(extensions)
+            return [self.adopt((*base, i), eye)]
+        if pairs:
+            _, base = min(pairs)
+            return [self.adopt((*base, i), eye)]
+        return []
 
-    def facing(self, tri, eye):
-        a, b, c = self.xyz[list(tri)]
-        normal = np.cross(b-a, c-a)
-        length = np.linalg.norm(normal)
-        if length < 1e-8 or abs(normal @ unit(eye-a)) < .10*length:
-            return None
-        return normal/length
+    def has_area(self, ids):
+        a,b,c = self.xyz[list(ids)]
+        return np.linalg.norm(np.cross(b-a, c-a)) > 1e-8
+
+    def grow(self, i, eye):
+        had_observation = i in self.accepted
+        if not had_observation:
+            self.accepted.add(i)
+            self.orphan_cells[self.cell(self.xyz[i])].add(i)
+        self.orphans[i] = eye
+        changes = self.attach(i, eye, pair=not had_observation)
+        if not changes and not had_observation:
+            self.face((i,), eye)
+        self.retry_seeds(changes)
+
+    def retry_seeds(self, changes):
+        pending = deque(changes)
+        while pending:
+            key = pending.popleft()
+            face = self.faces.get(key)
+            if not face:
+                continue
+            _, _, buckets, _ = face
+            candidates = set(self.orphans) if not buckets else {
+                i for bucket in buckets for cell in self.around(bucket) for i in self.orphan_cells.get(cell, ())
+            }
+            lower, upper = self.bounds[key]
+            for i in sorted(candidates):
+                point = self.xyz[i]
+                if key not in self.faces:
+                    break
+                if i in self.orphans and np.all(point >= lower) and np.all(point <= upper):
+                    pending.extend(self.attach(i, self.orphans[i], pair=False, changed_face=key))
 
 
-def build_surfaces(model, max_edge_m=MAX_EDGE):
-    if not np.isfinite(max_edge_m) or max_edge_m <= 0:
-        raise ValueError("Enter a positive maximum edge length.")
-    mesh = dict(method="camera-ray-seeds-v1", units=model["units"], max_edge_m=max_edge_m, patches=[])
+def build_surfaces(model, growth_distance_m=MAX_EDGE):
+    if not np.isfinite(growth_distance_m) or growth_distance_m <= 0:
+        raise ValueError("Enter a positive growth distance.")
+    mesh = dict(method="camera-ray-seeds-v1", units=model["units"], growth_distance_m=growth_distance_m, patches=[])
     if model["units"] != "m":
         return dict(mesh, status="needs_scale")
     views = model.get("landmark_views")
@@ -210,7 +273,7 @@ def build_surfaces(model, max_edge_m=MAX_EDGE):
         return dict(mesh, status="needs_tracks")
     xyz = np.asarray([p[:3] for p in model["points"]], dtype=float).reshape(-1, 3)
     poses = {p["frame"]: np.asarray(p["xyz"]) for p in model["poses"]}
-    growth = GrowingMesh(xyz, max_edge_m)
+    growth = GrowingMesh(xyz, growth_distance_m)
     hidden = set()
     skips = 0
     for frame, ids in sorted(views.items()):
@@ -218,7 +281,9 @@ def build_surfaces(model, max_edge_m=MAX_EDGE):
         eye = poses.get(frame)
         if eye is None or not np.isfinite(eye).all():
             continue
-        pending = sorted(set(ids) - growth.accepted)
+        # A later observation can give a seed a clearer sightline. Retry
+        # other seeds when a face changes in their neighbourhood.
+        pending = sorted(i for i in ids if i not in growth.accepted or i in growth.orphans)
         if not pending:
             continue
         distances = np.linalg.norm(xyz[pending]-eye, axis=1)
@@ -226,16 +291,19 @@ def build_surfaces(model, max_edge_m=MAX_EDGE):
             if not np.isfinite(distances[j]) or distances[j] <= 1e-8:
                 continue
             i = pending[j]
+            if i in growth.accepted and i not in growth.orphans:
+                continue
             if growth.occluded(eye, xyz[i]):
-                hidden.add(i)
-                skips += 1
+                if i not in growth.accepted:
+                    hidden.add(i)
+                    skips += 1
                 continue
             growth.grow(i, eye)
-    for key, (ids, vertices, _) in growth.faces.items():
+    for ids, vertices, _, born in growth.faces.values():
         if len(ids) == 3:
-            mesh["patches"].append(dict(vertices=vertices.tolist(), landmarks=list(ids), first=growth.created[key]))
+            mesh["patches"].append(dict(vertices=vertices.tolist(), landmarks=list(ids), first=born))
     mesh.update(status="ready", retired=growth.retired, accepted=len(growth.accepted), occluded_observations=skips,
-                seeds=sum(len(ids) == 1 for ids, _, _ in growth.faces.values()),
-                open_pairs=sum(len(ids) == 2 for ids, _, _ in growth.faces.values()),
+                seeds=sum(len(ids) == 1 for ids, _, _, _ in growth.faces.values()),
+                open_pairs=sum(len(ids) == 2 for ids, _, _, _ in growth.faces.values()),
                 deferred_landmarks=sorted(hidden-growth.accepted))
     return mesh

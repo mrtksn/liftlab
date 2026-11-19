@@ -80,7 +80,7 @@ class ReconstructionTest(unittest.TestCase):
             model=json.loads((run/"survey.json").read_text())
             self.assertEqual(model["units"],"m")
             self.assertEqual(model["surfaces"]["status"],"ready")
-            self.assertEqual(model["surfaces"]["max_edge_m"], .25)
+            self.assertEqual(model["surfaces"]["growth_distance_m"], .25)
             self.assertTrue(model["surfaces"]["patches"])
             first_face = model["surfaces"]["patches"][0]
             for i, vertex in zip(first_face["landmarks"], first_face["vertices"]):
