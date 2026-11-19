@@ -18,6 +18,7 @@ Flight firmware currently runs the flight core and telemetry/radio, with PWM ESC
 | Cargo | Any board | Pi PWM/digital latch outputs; no load-switch input |
 | IMU, barometer, compass | Simulated measurements | Flight-core ESP I²C drivers; built-in profiles or rebuilt custom C |
 | GPS / optical flow | Navigation sensor models | Pi NMEA GPS; no optical-flow hardware driver |
+| ToF rangefinder | Standalone beam distance | TOF250 on the flight-core ESP32 I²C bus, with USB telemetry |
 | Learning / supervision | Pi task instances in WebAssembly | Pi companion code; no motor-temperature/ESC-current sensor drivers |
 | Motor / servo assignments | Flight-core outputs; other assignments are held off | Flight-core ESP outputs; distributed outputs are not implemented |
 | Custom C sensor source | Saved and exported; not executed | ESP-IDF rebuild and matching chip firmware required |

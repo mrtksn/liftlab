@@ -85,7 +85,15 @@ Pi latch cards offer hardware PWM on GPIO 18/19 (channels 0/1) or digital on/off
 
 Pi board-link, GPS and radio cards use serial device paths. `/dev/serial0` maps to fixed GPIO 14 TX / 15 RX; a USB adapter uses no Pi GPIO. The default flight link reserves GPIO 14/15; moving it to a USB serial path frees them. Duplicate serial ports and GPIO claims are rejected. ESP UART0 pins remain fixed by chip.
 
-Real outputs and onboard IMU/barometer/compass drivers currently live on the flight-core ESP. Other board assignments can be planned and are flagged as unsupported for deployment. NMEA GPS uses a Pi serial device path. Pi I²C sensors, distributed motor outputs and optical-flow hardware are not implemented. The simulator only feeds the flight core sensors assigned to its board; motor outputs assigned elsewhere/off are held off.
+Real outputs and onboard IMU, barometer, compass and ToF drivers currently live on the flight-core ESP. Other board assignments can be planned and are flagged as unsupported for deployment. NMEA GPS uses a Pi serial device path. Pi I²C sensors, distributed motor outputs and optical-flow hardware are not implemented. The simulator only feeds the flight core sensors assigned to its board; motor outputs assigned elsewhere/off are held off.
+
+### TOF250 rangefinder
+
+Add **ToF rangefinder** in Airframe. The part defaults to TOF250 on the flight-core ESP32's shared I²C bus at 7-bit address `0x52`. Computers shows the bus pins and lets you select another address for a reconfigured module. Connect SDA, SCL and GND, and supply the module within its 3.3–5 V rating. Use a bidirectional level shifter if the module side has 5 V I²C pull-ups. Leave the module's UART leads disconnected for I²C. [HCJ TOF250 datasheet](https://mechaimage.godohosting.com/mecha_datasheets/584095/TOF250%20datasheet.pdf)
+
+Install the updated flight firmware and send the wiring settings. The console setting is `tof=82` at the factory address or `tof=-1` to disable it. Open **Install / export → Its messages** to see the reading over USB. The firmware polls at 10 Hz and reports metres, out of range, or unavailable. The module may cap a return at 2.50 m. Check the reading against a wall at a measured distance. [HCJ I²C example](https://blog.csdn.net/HCJ_Application/article/details/124678978)
+
+In simulation the sensor looks along its local −Z axis by default, with a 0.05–2.50 m range. Adjust the mount to aim it elsewhere. The 3D view shows its beam and **Health → State estimate** shows the reading. The measurement is distance along the beam. The flight controller continues to derive altitude from its existing references.
 
 ## Sending a design
 

@@ -53,8 +53,9 @@ int hw_airframe_save(const uint8_t *buf, uint32_t len) {
 }
 
 /* ───────── sensors ───────── */
+#include "tof250.h"
 static i2c_master_bus_handle_t imu_i2c_bus;
-static i2c_master_dev_handle_t imu_dev, baro_dev, mag_dev;
+static i2c_master_dev_handle_t imu_dev, baro_dev, mag_dev, tof_dev;
 static hw_config sensor_config;
 static int custom_imu,custom_baro,custom_mag;
 static int imu_kind, baro_kind;
@@ -107,6 +108,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   i2c_master_bus_config_t bcfg = { .i2c_port = I2C_NUM_0, .sda_io_num = c->sda, .scl_io_num = c->scl, .clk_source = I2C_CLK_SRC_DEFAULT,
                                    .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
   if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
+  if (c->tof_addr) tof_dev = add(c->tof_addr);
   if(c->imu_driver==3 && !custom_imu_init(c->imu_addr)) { custom_imu=1;imu_kind=3;s->imu=3;snprintf(s->imu_name,sizeof s->imu_name,"custom C at 0x%02x",c->imu_addr); }
   if(c->baro_driver==3 && !custom_baro_init(c->baro_addr)) { custom_baro=1;baro_kind=3;s->baro=3;snprintf(s->baro_name,sizeof s->baro_name,"custom C"); }
   if(c->mag_driver==3 && !custom_mag_init(c->mag_addr)) { custom_mag=1;s->mag=3;snprintf(s->mag_name,sizeof s->mag_name,"custom C"); }
@@ -178,6 +180,31 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
   }
     if (k == 0 && log) log[0] = 0;
   return imu_kind ? 0 : -1;
+}
+
+int hw_tof_poll(int64_t now, float *range) {
+  static int64_t next_poll, read_after;
+  static int present;
+  if (!tof_dev) return 0;
+  if (read_after) {
+    if (now < read_after) return 0;
+    read_after = 0;
+    uint8_t data[2];
+    *range = i2c_master_receive(tof_dev, data, sizeof data, 2) == ESP_OK ? lb_tof250_metres(data) : 0;
+    if (*range == 0) present = 0;
+    return 1;
+  }
+  if (now < next_poll) return 0;
+  if (!present) {
+    /* An unplugged module is normal; probe slowly without flooding the console with transaction errors. */
+    present = i2c_master_probe(imu_i2c_bus, sensor_config.tof_addr, 2) == ESP_OK;
+    if (!present) { next_poll = now + 1000000; *range = 0; return 1; }
+  }
+  next_poll = now + 100000;   /* the factory 10 Hz update rate */
+  const uint8_t reg = 0;
+  if (i2c_master_transmit(tof_dev, &reg, 1, 2) != ESP_OK) { present = 0; *range = 0; return 1; }
+  read_after = esp_timer_get_time() + 1000;   /* the datasheet's recommended preparation time */
+  return 0;
 }
 
 int hw_imu_read(fc_imu *m) {

@@ -14,7 +14,7 @@ const handleMeshes = [];   // invisible, generous hit shapes with userData { kin
 const handleVis = [];      // the visible shapes, to highlight the active one
 
 const rotAxesFor = c => c.type === 'motor' || c.type === 'link' || c.type === 'joint' || c.type === 'mass' ? [0, 1, 2]
-  : c.type === 'sensor' && (c.kind === 'imu' || c.kind === 'mag' || c.kind === 'flow') ? [0, 1, 2] : [];
+  : c.type === 'sensor' && ['imu', 'mag', 'flow', 'tof'].includes(c.kind) ? [0, 1, 2] : [];
 
 function buildGizmo() {
   if (gizmo) { scene.remove(gizmo); gizmo.traverse(o => o.geometry && o.geometry.dispose()); }

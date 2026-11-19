@@ -5,7 +5,7 @@ let running = true, speed = 1;
 
 /* ───────── components ───────── */
 const TAG = { motor: 'Motor', joint: 'Servo', link: 'Rod', mass: 'Mass', hang: 'Cable', latch: 'Latch' };
-const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix', flow: 'Flow' };
+const SENSOR_TAG = { imu: 'IMU', mag: 'Compass', baro: 'Baro', fix: 'Fix', flow: 'Flow', tof: 'ToF' };
 const tagOf = c => c.type === 'sensor' ? SENSOR_TAG[c.kind] : TAG[c.type];
 const FD = {
   x: { label: 'X', path: ['pos', 0], hmin: -2, hmax: 2,  min: -0.6, max: 0.6, step: 0.005, u: 'm', dp: 3 },
@@ -82,6 +82,7 @@ const FD = {
   fixNoise: { label: 'Noise', path: ['noise'], min: 0, max: 1, step: 0.001, u: 'm', dp: 3 },
   wander: { label: 'Wandering error (σ)', path: ['wander'], min: 0, max: 3, step: 0.01, u: 'm', dp: 2 },
   rateFlow: { label: 'Sample rate', path: ['rate'], min: 10, max: 400, step: 10, u: 'Hz', dp: 0 },
+  rateTof: { label: 'Sample rate', path: ['rate'], min: 1, max: 18, step: 1, u: 'Hz', dp: 0 },
   flowNoise: { label: 'Flow noise (good texture)', path: ['noise'], min: 0, max: 0.3, step: 0.005, u: 'rad/s', dp: 3 },
   flowScale: { label: 'Scale error (σ)', path: ['scale'], min: 0, max: 0.1, step: 0.005, u: '%', dp: 1, k: 100 },
   flowMax: { label: 'Max flow rate', path: ['maxRate'], min: 1, max: 15, step: 0.5, u: 'rad/s', dp: 1 },
@@ -113,7 +114,7 @@ function summary(c) {
     if (c.kind === 'imu') return `${g}${c.rate} Hz · gyro ±${c.gyroNoise.toFixed(2)}°/s${u} · ${p}`;
     if (c.kind === 'mag') return `${g}${c.rate} Hz · ×${c.interference.toFixed(1)} interference${u} · ${p}`;
     if (c.kind === 'baro') return `${g}${c.rate} Hz · ±${c.noise.toFixed(2)} m${u} · ${p}`;
-    if (c.kind === 'flow') return `${g}${c.rate} Hz · range ${c.maxRange} m${u} · ${p}`;
+    if (c.kind === 'flow' || c.kind === 'tof') return `${g}${c.rate} Hz · range ${c.maxRange} m${u} · ${p}`;
     return g + `${c.quality === 'custom' ? 'Custom' : FIX_QUALITY[c.quality].label} · ${c.rate} Hz · ${c.latency} ms${c.dropout ? ' · no fix' : ''}${u}`;
   }
   return `${c.mass.toFixed(2)} kg on ${c.length.toFixed(2)} m${c.known ? '' : ' · unknown'}`;
@@ -258,6 +259,7 @@ function compBody(c) {
     else if (c.kind === 'mag') b.append(pos, mount, slider(c, 'rateMag'), slider(c, 'lat'), slider(c, 'magNoise'), slider(c, 'hardIron'), slider(c, 'softIron'), slider(c, 'interference'));
     else if (c.kind === 'baro') b.append(pos, slider(c, 'rateBaro'), slider(c, 'lat'), slider(c, 'baroNoise'), slider(c, 'baroDrift'));
     else if (c.kind === 'flow') b.append(el('p', { class: 'hint', text: 'Looks along its own −Z (down, with no mount rotation).' }), pos, mount, slider(c, 'rateFlow'), slider(c, 'lat'), slider(c, 'flowNoise'), slider(c, 'flowScale'), slider(c, 'flowMax'), slider(c, 'rangeMax'), slider(c, 'rangeNoise'));
+    else if (c.kind === 'tof') b.append(el('p', { class: 'hint', text: 'Measures distance along its own −Z axis (down with no mount rotation).' }), pos, mount, slider(c, 'rateTof'), slider(c, 'lat'), slider(c, 'rangeMax'), slider(c, 'rangeNoise'));
     else {
       const q = selectF(c, 'quality', 'Type', [['gps', 'GPS'], ['rtk', 'RTK GPS'], ['mocap', 'Motion capture'], ['custom', 'Custom']], () => {
         if (c.quality !== 'custom') Object.assign(c, fixDefaults(c.quality)); rerender(); save();
@@ -384,7 +386,7 @@ function addComp(type, place = null) {
   else if (type === 'wing') c = mkMass('Wing ' + (cfg.comps.filter(x => isWing(x)).length + 1), 0, 0, 0.06, { shape: 'box', size: [0.1, 0.7, 0.01], mass: 0.06, aero: 'wing', inc: 6 });
   else {
     const k = cfg.comps.filter(x => x.type === 'sensor' && x.kind === type).length + 1;
-    const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03] }[type];
+    const at = { imu: [0.05, 0, 0.01], mag: [0.1, 0, 0.05], baro: [-0.03, -0.02, 0.005], fix: [-0.05, 0, 0.09], flow: [0, -0.03, -0.03], tof: [0, 0.03, -0.03] }[type];
     c = mkSensor(type, SENSOR_KINDS[type] + ' ' + k, ...at);
   }
   cfg.comps.push(c); placeNew(root || c, place);
@@ -630,6 +632,11 @@ function renderEst() {
   if (fs === 'tracking') chip('Optical flow tracking', 'good', 'sensor');
   else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn', 'sensor');
   else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn', 'sensor');
+  for (const c of sensorsOf('tof')) {
+    const sample = sens.get(c.id);
+    const range = onBoard(c) && cargo.power && sample?.latest && S.t - sample.ts <= 2 / c.rate + c.latency / 1000 ? sample.latest.range : 0;
+    chip(`${c.name} · ${range > 0 ? range.toFixed(2) + ' m' : range < 0 ? 'out of range' : 'unavailable'}`, range > 0 ? 'good' : 'warn', 'sensor');
+  }
   if (!nav) chip('No navigation: angle mode, no position hold', 'warn');
   else {
     if (!fixOk) chip(fs === 'tracking' ? 'No GPS: holding with optical flow, slow drift' : has('fix') ? 'Position fix lost: position drifts' : 'No position fix: position drifts', fs === 'tracking' ? '' : 'warn', has('fix') ? 'sensor' : 'calc');

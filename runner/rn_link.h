@@ -60,6 +60,9 @@ enum { RN_LINK_TUNE = 14, RN_LINK_TUNE_LTEL = 0x88 };
 /* Pi → drone: a test of several motors at once, disarmed: one little-endian float 0..1 per motor in the airframe's
  * order (1 to FC_MAX_MOTORS of them; 0 still), renewed like the pilot's command (fc_core.h test_multi). */
 enum { RN_LINK_BENCH_TEST = 15 };
+/* Flight board → host: TOF250 beam distance as one little-endian float in metres.
+ * -1 means out of range, 0 means unavailable. Sent before regular telemetry when configured. */
+enum { RN_LINK_RANGE = 0x89 };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

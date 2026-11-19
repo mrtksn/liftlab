@@ -3,7 +3,7 @@
 // code, the same calls the buttons and fields make. Airframe and computer changes go into the undo history; a formula
 // change can be undone from its line in the chat. Nothing here reaches outside the simulator.
 
-const PART_TYPES = ['motor', 'tilt', 'joint', 'link', 'mass', 'hang', 'wing', 'latch', 'imu', 'mag', 'baro', 'fix', 'flow'];
+const PART_TYPES = ['motor', 'tilt', 'joint', 'link', 'mass', 'hang', 'wing', 'latch', 'imu', 'mag', 'baro', 'fix', 'flow', 'tof'];
 const ENV_RANGE = { wind: [0, 15], windDir: [-180, 180], turb: [0, 1], spread: [0, 3], texture: [0, 1], light: [0, 1], ambient: [-10, 45] };
 const num = (x, d) => (typeof x === 'number' && isFinite(x) ? x : d);
 const obj = (props, req = []) => ({ type: 'object', properties: props, required: req, additionalProperties: false });

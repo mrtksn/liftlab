@@ -103,13 +103,13 @@ function renderHardware() {
       if(owner)card.append(pinPicker(owner,c.name+' signal GPIO','hw-pin-'+c.id,p.pin,'part'+c.id,p.driver==='pwm'?[18,19]:pinsFor(owner),v=>update({pin:Number(v)})));
       card.append(el('p',{class:'hint',text:owner?.kind.startsWith('pi')?'PWM GPIO 18/19 uses Pi hardware PWM. Digital outputs control an external latch driver.':'Real latch drivers currently run on a Pi.'}));card.dataset.hwPart=c.id;cargo.append(card);continue;
     }
-    const defs=DEVICE_PROFILES[c.kind],def=defs[p.driver],i2c=['imu','baro','mag'].includes(c.kind),custom=p.driver==='custom';
+    const defs=DEVICE_PROFILES[c.kind],def=defs[p.driver],i2c=I2C_SENSOR_KINDS.includes(c.kind),custom=p.driver==='custom';
     const card=hardwareCard(c.name,SENSOR_KINDS[c.kind],i2c?'I²C · SDA + SCL':c.kind==='fix'?(p.port==='/dev/serial0'?'UART NMEA · Pi GPIO 14/15':'Serial NMEA · USB adapter'):'Simulation only',board,
       hardwareField('Device / driver',hardwareSelect(c.name+' device','hw-driver-'+c.id,Object.entries(defs).map(([k,d])=>[k,d.label]),p.driver,v=>update({driver:v,address:v==='custom'?(p.address||({imu:0x68,baro:0x77,mag:0x1e}[c.kind])):defs[v].addresses[0]||0}))));
     if(i2c&&owner){
       card.append(sensorBusFields(owner,c),el('p',{class:'hint',text:'Shared with all I²C sensors on '+owner.name+'. Changing either pin updates the whole bus.'}));
       if(def.addresses.length)card.append(hardwareField('I²C address',hardwareSelect(c.name+' I2C address','hw-address-'+c.id,def.addresses.map(a=>[a,a?'0x'+a.toString(16):'Auto address']),p.address,v=>update({address:Number(v)}))));
-      card.append(el('p',{class:'hint',text:'Connect sensor GND to board GND. Use the module’s specified supply and 3.3 V logic.'}));
+      card.append(el('p',{class:'hint',text:c.kind==='tof'?'Connect GND and power. Use a bidirectional level shifter if the sensor side uses 5 V I²C pull-ups.':'Connect sensor GND to board GND. Use the module’s specified supply and 3.3 V logic.'}));
     }
     if(c.kind==='fix')card.append(hardwareText(c.name+' serial port',saved.port||'/dev/ttyUSB0',v=>update({port:v})),el('p',{class:'hint',text:saved.port==='/dev/serial0'?'GPS TX → Pi GPIO 15 (RX), GPS RX ← GPIO 14 (TX), share GND. The flight link must use another port.':'GPS TX → USB adapter RX; GPS RX ← adapter TX (if needed); share GND. A USB adapter uses no Pi GPIO. Use /dev/serial0 for the fixed GPIO 14/15 UART.'}));
     if(c.kind==='flow')card.append(el('p',{class:'hint',text:'No physical driver yet. SPI/UART pin assignment will appear when a device driver is available.'}));

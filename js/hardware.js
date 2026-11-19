@@ -6,7 +6,9 @@ const DEVICE_PROFILES = {
   mag: { none: { label: 'No hardware driver', id: -1, addresses: [0] }, hmc: { label: 'HMC5883L', id: 1, addresses: [0x1e] } },
   fix: { nmea: { label: 'NMEA GPS → Pi serial port', id: 0, addresses: [] } },
   flow: { sim: { label: 'Simulation only (no hardware driver)', id: -1, addresses: [] } },
+  tof: { tof250: { label: 'TOF250', id: 1, addresses: [0x52, ...Array.from({length:112},(_,i)=>i+8).filter(a=>a!==0x52)] } },
 };
+const I2C_SENSOR_KINDS = ['imu', 'baro', 'mag', 'tof'];
 for (const kind of ['imu','baro','mag']) DEVICE_PROFILES[kind].custom = {label:'Custom C driver (rebuild firmware)',id:3,addresses:Array.from({length:112},(_,i)=>i+8)};
 // ESC configurations: how a flight board's PWM ESCs want their signal. One configuration per flight board: its ESC
 // outputs share one timer (runner/fc/esp32/main/outputs.c). Pulse widths are in µs at escHz; escStop > 0 is a stop
@@ -317,7 +319,7 @@ function hardwarePinClaims(C,comps,b) {
   const bus=hardwareBus(C,b),claims=[];
   if(ESP_PROFILES[b.kind]) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'},{pin:bus.batteryPin,name:'Battery ADC',key:'battery'},{pin:bus.batteryPin2??-1,name:'Second pack ADC',key:'battery2'},{pin:bus.crsfRx,name:'Receiver RX',key:'rx'},{pin:bus.crsfTx,name:'Receiver TX',key:'tx'});
   if(ESP_PROFILES[b.kind]&&b.tasks.includes('core')){const fl=fcLinkPins(C,b);if(fl.own)claims.push({pin:fl.tx,name:'Companion link TX',key:'fcLinkTx'},{pin:fl.rx,name:'Companion link RX',key:'fcLinkRx'});}
-  else { if(comps.some(c=>c.type==='sensor' && ['imu','baro','mag'].includes(c.kind) && hardwareOwner(C,c)===b)) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'});
+  else { if(comps.some(c=>c.type==='sensor' && I2C_SENSOR_KINDS.includes(c.kind) && hardwareOwner(C,c)===b)) claims.push({pin:bus.sda,name:'I²C SDA',key:'sda'},{pin:bus.scl,name:'I²C SCL',key:'scl'});
     if(b.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t)) && bus.linkTransport!=='mqtt' && (!bus.linkPort || bus.linkPort==='/dev/serial0')) claims.push({pin:14,name:'Flight-controller serial TX',key:'linkTx'},{pin:15,name:'Flight-controller serial RX',key:'linkRx'});
     for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='fix')){const p=hardwarePart(C,c,comps);if(p.board===b.id && p.port==='/dev/serial0')claims.push({pin:14,name:c.name+' UART TX',key:'gpsTx'+c.id},{pin:15,name:c.name+' UART RX',key:'gpsRx'+c.id});}
     if(bus.receiverPort==='/dev/serial0')claims.push({pin:14,name:'Receiver UART TX',key:'rxTx'},{pin:15,name:'Receiver UART RX',key:'rxRx'});
@@ -363,7 +365,8 @@ function hardwarePlan(C, comps, b) {
       if (sensors[c.kind]) errors.push(c.name + ': real firmware supports one sensor per kind on this bus');
       sensors[c.kind] = { ...p, name:c.name, matrix: typeof knownMount==='function'?knownMount(c):[1,0,0,0,1,0,0,0,1] };
       if(p.driver==='custom') warnings.push(c.name+': rebuild firmware with this board’s exported custom_sensors.h before installation');
-      if (['imu','mag','baro'].includes(c.kind) && b.id !== (core && core.id)) errors.push(c.name + ': this sensor driver runs on the flight-core board');
+      if (I2C_SENSOR_KINDS.includes(c.kind) && b.id !== core?.id) errors.push(c.name + ': this sensor driver runs on the flight-core board');
+      if (c.kind === 'tof' && b.id === core?.id && !profile) errors.push(c.name + ': TOF250 requires an ESP32 flight-core board');
       if(c.kind==='fix' && (ESP_PROFILES[b.kind] || !b.tasks.includes('nav'))) errors.push(c.name+': real NMEA GPS needs the navigation Pi');
       if (c.kind === 'flow') warnings.push(c.name + ': optical-flow hardware driver is not implemented');
       if (c.kind === 'mag' && p.driver === 'none') warnings.push(c.name + ': simulated compass only; choose HMC5883L for hardware');
@@ -383,10 +386,16 @@ function hardwarePlan(C, comps, b) {
     if((bus.crsfRx>=0)!==(bus.crsfTx>=0))errors.push('Receiver: assign both RX and TX, or disconnect both');
     if(bus.crsfRx>=0 && (!hardwareInputPins(b.kind).includes(bus.crsfRx)||!profile.pins.includes(bus.crsfTx)))errors.push('Receiver: unavailable RX/TX GPIO');
     const seen = new Set();
-    for (const [kind,s] of Object.entries(sensors)) if (['imu','baro','mag'].includes(kind)) {
+    for (const [kind,s] of Object.entries(sensors)) if (I2C_SENSOR_KINDS.includes(kind)) {
       const def=DEVICE_PROFILES[kind][s.driver];
       if (!def.addresses.includes(s.address)) errors.push(s.name + ': address is not supported by the chosen driver');
       if (def.id >= 0 && s.address) { if (seen.has(s.address)) errors.push('Two sensors use the same I²C address'); seen.add(s.address); }
+    }
+    if (sensors.tof) for (const kind of ['imu', 'baro', 'mag']) {
+      const s = sensors[kind];
+      if (s && s.address === 0 && DEVICE_PROFILES[kind][s.driver].id >= 0 && DEVICE_PROFILES[kind][s.driver].addresses.includes(sensors.tof.address)) {
+        errors.push(sensors.tof.name + ': I²C address reserved by automatic ' + kind + ' detection');
+      }
     }
     if(!Number.isInteger(bus.brushedHz)||bus.brushedHz<1000||bus.brushedHz>30000)errors.push('Brushed PWM frequency must be 1000–30000 Hz');
     if (!Number.isInteger(bus.escHz) || bus.escHz<50 || bus.escHz>490) errors.push('ESC signal frequency: a whole number, 50–490 Hz (it is '+bus.escHz+')');
@@ -479,7 +488,7 @@ function radioWiringRow(b,bus,esp,r) {
 function hardwareSettings(plan, radio=hardwareRadio()) {
   const csv=values=>values.map(v=>Number(Number(v).toFixed(6))).join(',');
   const {bus,motors,servos,sensors,motorConfigs}=plan;
-  const lines=['servos=','motors=','battery=-1','crsf=-1','nrf24=-1',...(bus.fcLinkTx>=0||bus.fcLinkReset?['link_uart=-1']:[]),'imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax+(bus.escStop>0?','+bus.escStop:''),'esc_hz='+bus.escHz];
+  const lines=['tof=-1','servos=','motors=','battery=-1','crsf=-1','nrf24=-1',...(bus.fcLinkTx>=0||bus.fcLinkReset?['link_uart=-1']:[]),'imu=-1,0','baro=-1,0','mag=-1,0','i2c='+bus.sda+','+bus.scl,'motors='+motors.join(','),'servos='+servos.join(','),'esc_hz=50','esc_us='+bus.escMin+','+bus.escMax+(bus.escStop>0?','+bus.escStop:''),'esc_hz='+bus.escHz];
   if(typeof designVref==='function')lines.push('vref='+designVref());   // the pack voltage the exported airframe's tables are for
   lines.push('motor_driver='+motorConfigs.map(m=>m.driver==='brushed'?1:0).join(','),'motor_max='+motorConfigs.map(m=>m.maxDuty).join(','),'brushed_hz='+bus.brushedHz);
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
@@ -489,6 +498,7 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   if(bus.fcLinkTx>=0 && bus.fcLinkRx>=0)lines.push('link_uart='+bus.fcLinkTx+','+bus.fcLinkRx);
   if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
   for (const kind of ['imu','baro','mag']) { const s=sensors[kind], def=s && DEVICE_PROFILES[kind][s.driver]; lines.push(kind+'='+(def ? def.id : -1)+','+(s ? s.address : 0)); }
+  if (sensors.tof) lines.push('tof=' + sensors.tof.address);
   if(plan.servoConfigs.length) lines.push('servo_center='+csv(plan.servoConfigs.map(s=>s.center)),'servo_us_per_rad='+csv(plan.servoConfigs.map(s=>s.scale)));
   // which way is level (runner/fc/esp32/main/hw.h level_mode): as it sits at power-up (the default), the mount as set, or a trim
   if(sensors.imu) lines.push('level='+(sensors.imu.level==null||sensors.imu.level==='boot'?'boot':sensors.imu.level==='off'?'off':String(sensors.imu.level).split(',').map(n=>Number(Number(n).toFixed(2))).join(',')));
@@ -549,7 +559,7 @@ function hardwareOverview(C, comps) {
       row.note=c.type==='motor'?(p.driver==='brushed'?bus.brushedHz+' Hz duty PWM · limit '+(p.maxDuty??100)+'%':escSummary(bus)):c.type==='joint'||p.driver==='pwm'?'50 Hz PWM':'Digital · high = closed';
       if(p.pin<0)row.note='Choose a GPIO';
       if(c.type==='latch'?!b.kind.startsWith('pi'):b.id!==core?.id)row.note+=' · Hardware assignment unsupported';
-    }else if(['imu','baro','mag'].includes(c.kind)){
+    }else if(I2C_SENSOR_KINDS.includes(c.kind)){
       row.connection=pin(bus.sda)+' → SDA; '+pin(bus.scl)+' → SCL';
       row.note=(DEVICE_PROFILES[c.kind][p.driver]?.label||p.driver)+' · '+(p.address?'address 0x'+p.address.toString(16):'auto address');
       if(!esp||b.id!==core?.id||p.driver==='none')row.note+=' · Hardware driver unsupported';

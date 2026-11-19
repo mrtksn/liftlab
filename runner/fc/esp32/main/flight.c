@@ -154,6 +154,8 @@ static void level_ask(int kind, const float *v) { portENTER_CRITICAL(&lvl_mux); 
 
 /* ── sensor task → control loop ── */
 static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static int imu_ok; static float baro_alt; static int baro_new;   /* under imu_mux */
+static float tof_range;
+static int64_t tof_us;   /* last completed poll; under imu_mux */
 static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1; int level_done = 0;
@@ -189,6 +191,13 @@ static void sensor_task(void *arg) {
     imu_now = m; imu_us = us; imu_seq++; imu_ok = ok; if (nb) { baro_alt = a; baro_new = 1; }
     portEXIT_CRITICAL(&imu_mux);
     if (flight_h) xTaskNotifyGive(flight_h);
+    if (HW.tof_addr) {
+      float range;
+      if (hw_tof_poll(esp_timer_get_time(), &range)) {
+        const int64_t t = esp_timer_get_time();
+        portENTER_CRITICAL(&imu_mux); tof_range = range; tof_us = t; portEXIT_CRITICAL(&imu_mux);
+      }
+    }
   }
 }
 
@@ -367,6 +376,13 @@ static void telemetry(void) {
   t[14] = (float)H.act; t[15] = (float)F.trap;
   for (int i = 0; i < FC_MAX_MOTORS; i++) t[16 + i] = OUT.motor[i];
   for (int j = 0; j < FC_MAX_JOINTS; j++) t[28 + j] = OUT.servo[j] * 57.29578f;
+  if (HW.tof_addr) {
+    float range;
+    int64_t sampled;
+    portENTER_CRITICAL(&imu_mux); range = tof_range; sampled = tof_us; portEXIT_CRITICAL(&imu_mux);
+    if (!sampled || esp_timer_get_time() - sampled > 300000) range = 0;
+    link_send(RN_LINK_RANGE, &range, sizeof range);
+  }
   link_send(RN_LINK_TELEM, t, sizeof t);
 }
 /* The build as the installer compares it with firmware/manifest.json: "firmware COMMIT CHIP flight". */

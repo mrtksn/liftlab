@@ -338,10 +338,10 @@ function rebuildDrone() {
       const sg = new THREE.Group(); sg.position.set(...p);
       const Rm = eulerR(c.mount[0], c.mount[1], c.mount[2]);
       sg.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(Rm[0], Rm[1], Rm[2], 0, Rm[3], Rm[4], Rm[5], 0, Rm[6], Rm[7], Rm[8], 0, 0, 0, 0, 1));
-      const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008], flow: [0.02, 0.02, 0.012] }[c.kind];
+      const size = { imu: [0.022, 0.022, 0.008], mag: [0.016, 0.016, 0.006], baro: [0.014, 0.014, 0.01], fix: [0.03, 0.03, 0.008], flow: [0.02, 0.02, 0.012], tof: [0.02, 0.013, 0.00665] }[c.kind];
       sg.add(new THREE.Mesh(new THREE.BoxGeometry(...size), mats.sensor));
       const ax = rod([0, 0, 0], [0.028, 0, 0], 0.0025, mats.sensorAxis); if (ax) sg.add(ax);   // sensor X axis shows the mount
-      if (c.kind === 'flow') {   // rangefinder beam along the boresight
+      if (c.kind === 'flow' || c.kind === 'tof') {   // rangefinder beam along the boresight
         const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), mats.beam);
         beam.visible = false; sg.add(beam); parts.set(c.id, { beam });
       }
@@ -572,7 +572,7 @@ function updateScene(selected = true) {
     const over = editMode && edit.sel === c.id, faint = editMode && !over && !shown;   // the selected one drawn over the motor, so a pusher's shows
     for (const o of [p.arrow.line, p.arrow.cone]) { o.material.depthTest = !over; o.renderOrder = over ? 21 : 0; o.material.transparent = true; o.material.opacity = faint ? 0.55 : 1; }   // where its thrust points as the servo swings
   }
-  for (const c of sensorsOf('flow')) {   // beam length: what the rangefinder reads, or its max range
+  for (const c of [...sensorsOf('flow'), ...sensorsOf('tof')]) {   // beam length: what the rangefinder reads, or its max range
     const p = parts.get(c.id), rt = sens.get(c.id); if (!p || !p.beam) continue;
     const L = rt && rt.latest; p.beam.visible = live && view.beam;
     if (live) { p.beam.scale.z = L && L.range > 0 ? L.range : c.maxRange; p.beam.computeLineDistances(); }

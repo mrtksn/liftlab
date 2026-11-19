@@ -6,6 +6,7 @@
 #include <string.h>
 #include "../runner/fc/esp32/main/bmp180.h"
 #include "../runner/fc/esp32/main/hw.h"
+#include "../runner/fc/esp32/main/tof250.h"
 static uint8_t regs[128][256];static int fail;static int64_t now;
 static int custom_read(int a,int r,uint8_t *b,int n) { if(fail)return -1;memcpy(b,regs[a]+r,(size_t)n);return 0; }
 static int custom_write(int a,int r,int v) { if(fail)return -1;regs[a][r]=(uint8_t)v;return 0; }
@@ -45,5 +46,11 @@ int main(void) {
   assert(!custom_baro_read(&alt) && regs[0x77][0xf4]==0x2e);assert(!custom_baro_read(&alt));
   now+=5000;set16(0x77,0xf6,27898);assert(!custom_baro_read(&alt) && regs[0x77][0xf4]==0x34);
   now+=5000;set16(0x77,0xf6,23843);regs[0x77][0xf8]=0;assert(custom_baro_read(&alt) && fabsf(alt)<0.001f);
-  puts("Sensor driver tests passed: BMP180 datasheet vector, nonblocking conversion, MPU units/bypass, HMC axes/status/overflow, I2C failures.");
+  assert(fabsf(lb_tof250_metres((uint8_t[]){0, 121}) - 1.21f) < 0.001f);
+  assert(lb_tof250_metres((uint8_t[]){0, 5}) == 0.05f);
+  assert(lb_tof250_metres((uint8_t[]){0, 250}) == 2.5f);
+  assert(lb_tof250_metres((uint8_t[]){0x22, 0xb8}) < 0);  /* 8888, no return */
+  assert(lb_tof250_metres((uint8_t[]){1, 0}) < 0);        /* 256 cm, outside the supported range */
+  assert(lb_tof250_metres((uint8_t[]){0, 0}) < 0);
+  puts("Sensor driver tests passed: BMP180 datasheet vector, nonblocking conversion, MPU units/bypass, HMC axes/status/overflow, I2C failures and TOF250 register decoding.");
 }

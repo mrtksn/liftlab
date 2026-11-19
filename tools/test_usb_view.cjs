@@ -28,6 +28,7 @@ const MOCK = () => {
     async setSignals() {}, async close() {},
   };
   usb.telem = (roll, pitch, yaw, h) => { const t = new Float32Array(36); t[2] = roll; t[3] = pitch; t[4] = yaw; t[8] = h; t[11] = 450; t[13] = 1 | 2 | 4; usb.ctrl.enqueue(frame(0x83, new Uint8Array(t.buffer))); };
+  usb.range = metres => usb.ctrl.enqueue(frame(0x89, new Uint8Array(Float32Array.of(metres).buffer)));
   usb.text = s => usb.ctrl.enqueue(new TextEncoder().encode(s));
   usb.report = s => usb.ctrl.enqueue(frame(0x82, new TextEncoder().encode(s)));
   usb.port = port;
@@ -45,6 +46,19 @@ const MOCK = () => {
     await page.addInitScript(MOCK);
     await page.goto('http://127.0.0.1:' + server.address().port, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => typeof brt !== 'undefined' && brt.ready && typeof fleet !== 'undefined' && fleet.ready);
+    await page.click('#addPart');
+    await page.click('[data-add="tof"]');
+    await page.locator('.place-opt').first().click();
+    assert.deepStrictEqual(await page.evaluate(() => {
+      const c = sensorsOf('tof')[0], wiring = partWiring(c);
+      const ideal = { ...c, rangeNoise: 0 }, rt = sens.get(c.id);
+      S.q = [1, 0, 0, 0]; S.p = [1000, 1000, 1];
+      const near = measure(ideal, rt, 0.1).range;
+      S.p[2] = 4;
+      const far = measure(ideal, rt, 0.1).range;
+      doReset();
+      return [wiring.driver, wiring.address, c.rate, near, far];
+    }), ['tof250', 0x52, 10, 0.97, -1]);
     const commit = JSON.parse(fs.readFileSync(path.join(root, 'firmware/manifest.json'))).commit;
     // The install dialog for the flight core's board; Connect: the board says its build, the same as the page's
     await page.evaluate(c => { running = true; renderRun(); __usb.reply = `firmware ${c} ${boardOf('core').kind === 'esp32' ? 'esp32' : ESP_PROFILES[boardOf('core').kind].chip} flight`; openInstall(boardOf('core')); }, commit);
@@ -52,6 +66,12 @@ const MOCK = () => {
     await page.waitForFunction(() => /same build/.test(document.querySelector('#instFw').textContent));
     assert.ok(await page.evaluate(() => __usb.lines.some(s => s.includes('version'))), 'it asks the board which build it runs');
     console.log('version: the board\'s build matches the page\'s firmware/manifest.json');
+    for (const [metres, expected] of [[1.21, 'ToF 1.21 m'], [-1, 'ToF out of range'], [0, 'ToF unavailable']]) {
+      await page.evaluate(m => { __usb.range(m); __usb.telem(0, 0, 0, 0); }, metres);
+      await page.waitForFunction(s => document.querySelector('#instLive').textContent.includes(s), expected);
+    }
+    await page.evaluate(() => __usb.telem(0, 0, 0, 0));
+    await page.waitForFunction(() => !document.querySelector('#instLive').textContent.includes('ToF'));
     // A buffered board error flood must not starve UI timers or command replies.
     const flood = await page.evaluate(async () => {
       let beats = 0; const timer = setInterval(() => beats++, 1), start = performance.now();

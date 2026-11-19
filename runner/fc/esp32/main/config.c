@@ -55,6 +55,7 @@ const char *hw_i2c_name(int a) {
     case 0x1E: return "HMC5883L compass";
     case 0x18: case 0x19: return "LIS3DH accelerometer";
     case 0x29: return "VL53L0X rangefinder: no driver";
+    case 0x52: return "possible TOF250 rangefinder";
     case 0x3C: case 0x3D: return "OLED display";
     case 0x40: return "INA219 or PCA9685";
     case 0x48: case 0x49: case 0x4A: case 0x4B: return "ADS1115 or a temperature sensor";
@@ -108,6 +109,17 @@ int hw_check(const hw_config *c, char *err, int errn) {
   if(c->mag_driver==2) {snprintf(err,errn,"unknown compass driver");return -1;}
   for(int i=0;i<3;i++) { if(ds[i]<-1 || ds[i]>3 || (as[i] && (as[i]<8 || as[i]>119))) { snprintf(err,errn,"invalid sensor driver/address"); return -1; }
     for(int j=0;j<i;j++) if(ds[i]>=0 && ds[j]>=0 && as[i] && as[i]==as[j]) { snprintf(err,errn,"I2C address used twice"); return -1; } }
+  const int a = c->tof_addr;
+  if (a) {
+    if (a < 8 || a > 0x77) { snprintf(err, errn, "invalid TOF250 I2C address"); return -1; }
+    for (int i = 0; i < 3; i++) if (ds[i] >= 0 && as[i] == a) { snprintf(err, errn, "I2C address used twice"); return -1; }
+    const int auto_imu = !c->imu_addr && (((c->imu_driver == 0 || c->imu_driver == 1 || c->imu_driver == 3) && a == 0x68)
+        || ((c->imu_driver == 0 || c->imu_driver == 1) && a == 0x69)
+        || ((c->imu_driver == 0 || c->imu_driver == 2) && (a == 0x18 || a == 0x19)));
+    const int auto_baro = !c->baro_addr && (((c->baro_driver == 0 || c->baro_driver == 1) && a == 0x76) || (c->baro_driver >= 0 && a == 0x77));
+    const int auto_mag = !c->mag_addr && c->mag_driver >= 0 && a == 0x1e;
+    if (auto_imu || auto_baro || auto_mag) { snprintf(err, errn, "I2C address reserved by an automatic sensor address"); return -1; }
+  }
   for(int i=0;i<3;i++) if(!isfinite(c->mag_bias[i]) || !isfinite(c->mag_scale[i]) || c->mag_scale[i]<0.01f || c->mag_scale[i]>100) { snprintf(err,errn,"invalid compass calibration"); return -1; }
   for(int i=0;i<9;i++) if(!isfinite(c->mag_matrix[i]) || fabsf(c->mag_matrix[i])>1.001f) { snprintf(err,errn,"invalid compass rotation");return -1; }
   for(int i=0;i<3;i++) for(int j=0;j<3;j++) { float dot=0;for(int k=0;k<3;k++) dot+=c->mag_matrix[3*i+k]*c->mag_matrix[3*j+k]; if(fabsf(dot-(i==j?1:0))>0.01f) { snprintf(err,errn,"compass matrix must be orthonormal");return -1; } }
@@ -226,7 +238,12 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   n = parse_list(eq + 1, v, FC_MAX_MOTORS);
   for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
   if (n < 0) { snprintf(err, errn, "%s: not a list of numbers", key); return -1; }
-  if (!strcmp(key,"imu") || !strcmp(key,"baro") || !strcmp(key,"mag")) {
+  if (!strcmp(key, "tof")) {
+    if (n != 1 || (v[0] != -1 && (v[0] < 8 || v[0] > 0x77 || v[0] != (int)v[0]))) {
+      snprintf(err, errn, "tof=ADDRESS: TOF250 7-bit I2C address (8 to 119), or -1 to disable"); return -1;
+    }
+    c->tof_addr = v[0] == -1 ? 0 : (uint8_t)v[0];
+  } else if (!strcmp(key,"imu") || !strcmp(key,"baro") || !strcmp(key,"mag")) {
     if(n!=2 || v[0]!=(int)v[0] || v[0]<-1 || v[0]>3 || v[1]!=(int)v[1] || (v[1]!=0 && (v[1]<8 || v[1]>119))) { snprintf(err,errn,"sensor=driver,address (-1 off,0 auto,1/2 named,3 custom)");return -1; }
     int8_t *d=!strcmp(key,"imu")?&c->imu_driver:!strcmp(key,"baro")?&c->baro_driver:&c->mag_driver;
     uint8_t *a=!strcmp(key,"imu")?&c->imu_addr:!strcmp(key,"baro")?&c->baro_addr:&c->mag_addr; *d=(int8_t)v[0];*a=(uint8_t)v[1];
@@ -318,6 +335,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" level_yaw=%.0f", (double)c->level_yaw);
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
+  APP(" tof=%d", c->tof_addr ? c->tof_addr : -1);
   if (c->batt2_pin >= 0) APP(" battery2=%d,%.1f", c->batt2_pin, (double)c->batt2_divider); else APP(" battery2=-1");
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }
   if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");

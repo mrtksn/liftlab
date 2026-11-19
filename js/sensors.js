@@ -10,14 +10,14 @@ const VIB_ACC = 4, VIB_GYRO = 0.15;         // vibration at a motor at full thru
 const VIB_REACH = 0.12;                     // vibration falls off over this distance [m]
 const MAG_INTERF = 0.3, MAG_REACH = 0.05;   // motor field at the motor at full thrust (Earth = 1), fall-off [m]
 
-const SENSOR_KINDS = { imu: 'IMU', mag: 'Compass', baro: 'Barometer', fix: 'Position fix', flow: 'Optical flow' };
+const SENSOR_KINDS = { imu: 'IMU', mag: 'Compass', baro: 'Barometer', fix: 'Position fix', flow: 'Optical flow', tof: 'ToF rangefinder' };
 const FIX_QUALITY = {
   gps: { label: 'GPS', rate: 5, latency: 150, noise: 0.2, wander: 0.6, velNoise: 0.1 },
   rtk: { label: 'RTK GPS', rate: 10, latency: 80, noise: 0.02, wander: 0.02, velNoise: 0.03 },
   mocap: { label: 'Motion capture', rate: 100, latency: 10, noise: 0.002, wander: 0, velNoise: 0.01 },
 };
 // What each sensor board weighs [kg]: a breakout like the MPU6050, QMC5883, BMP180; a GPS with its patch antenna; a flow camera with its rangefinder.
-const SENSOR_MASS = { imu: 0.003, mag: 0.002, baro: 0.002, fix: 0.015, flow: 0.005 };
+const SENSOR_MASS = { imu: 0.003, mag: 0.002, baro: 0.002, fix: 0.015, flow: 0.005, tof: 0.005 };
 function fixDefaults(q) { const { label, ...rest } = FIX_QUALITY[q]; return rest; }
 function mkSensor(kind, name, x, y, z, o = {}) {
   const d = {
@@ -26,6 +26,7 @@ function mkSensor(kind, name, x, y, z, o = {}) {
     baro: { rate: 50, latency: 20, noise: 0.15, drift: 0.01 },
     fix: Object.assign({ quality: 'gps', dropout: false }, fixDefaults('gps')),
     flow: { rate: 100, latency: 20, noise: 0.05, scale: 0.03, maxRate: 7, minRange: 0.05, maxRange: 4, rangeNoise: 0.01 },   // camera looks along its −Z
+    tof: { rate: 10, latency: 20, minRange: 0.05, maxRange: 2.5, rangeNoise: 0.01 },
   }[kind];
   return base(Object.assign({ type: 'sensor', kind, name, pos: [x, y, z], mount: [0, 0, 0], known: true, mass: SENSOR_MASS[kind] }, d, o));
 }
@@ -105,6 +106,11 @@ function measure(c, rt, dt) {
   }
   const Rs = m3m(Rbw, Mt), RsT = m3T(Rs);                                         // sensor → world
   if (c.kind === 'mag') return run('magModel', m3v(RsT, MAG_EARTH), m3v(MtT, m3v(m3T(K.Rb[b]), scl(motorFieldAt(P), c.interference))), { noise: c.noise, hardIron: c.hardIron, softIron: c.softIron ?? 0.03 }, rt.st);
+  if (c.kind === 'tof') {
+    const d = terrainRay(ps, m3v(Rs, [0, 0, -1]), c.maxRange);
+    const range = run('rangeModel', d, { noise: c.rangeNoise, minRange: c.minRange, maxRange: c.maxRange }, rt.st);
+    return { range: range < 0 ? -1 : Math.round(clamp(range, c.minRange, c.maxRange) * 100) / 100 };
+  }
   if (c.kind === 'flow') {
     const down = m3v(Rs, [0, 0, -1]);
     const d = terrainRay(ps, down, 50, 0.2);                          // distance to the ground (or a roof, or a wall) along the boresight

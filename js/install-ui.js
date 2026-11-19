@@ -6,7 +6,7 @@
 // step-by-step guide with the commands to paste into its terminal (over SSH): the design's files travel inside them.
 
 const FW_DIR = 'firmware/';
-const LK = { PROGRAM: 1, STATUS: 2, AIRFRAME: 4, SETTING: 5, EVENT: 0x81, REPORT: 0x82, TELEM: 0x83 };
+const LK = { PROGRAM: 1, STATUS: 2, AIRFRAME: 4, SETTING: 5, EVENT: 0x81, REPORT: 0x82, TELEM: 0x83, RANGE: 0x89 };
 const INST_STATES = ['disarmed', 'ARMED', 'FAILSAFE', 'CRASHED', 'motor test'];
 const INST = { target: null, conn: null, connTarget: null, busy: false, preparing: false, fw: null, files: null, log: [], board: null };
 const instPref = (k, d) => { try { return localStorage.getItem('dfb.install.' + k) ?? d; } catch (e) { return d; } };
@@ -94,7 +94,17 @@ class BoardConn {
     })();
   }
   frame(type, p) {
-    if (type === LK.TELEM && p.length === 144) { this.o.telem(new Float32Array(p.buffer, p.byteOffset, 36)); return; }
+    if (type === LK.RANGE && p.length === 4) { this.range = new DataView(p.buffer, p.byteOffset, 4).getFloat32(0, true); return; }
+    if (type === LK.TELEM && p.length === 144) {
+      const f = new Float32Array(p.buffer, p.byteOffset, 36);
+      if (Number.isFinite(this.range)) {
+        const extended = new Float32Array(37);
+        extended.set(f); extended[36] = this.range;
+        this.range = undefined;
+        this.o.telem(extended);
+      } else this.o.telem(f);
+      return;
+    }
     if (type === LK.EVENT || type === LK.REPORT) { const s = new TextDecoder().decode(p).replace(/\s+$/, ''); this.o.text(s, type === LK.EVENT ? 'ev' : 'rep'); this.match(s); }
   }
   match(s) { for (const w of this.waits.slice()) if (w.test(s)) { this.waits.splice(this.waits.indexOf(w), 1); w.done(s); } }
@@ -361,6 +371,7 @@ function instTelemText(f) {
   const fl = f[13], st = INST_STATES[f[1]] || '?';
   const bits = [st, `roll ${f[2].toFixed(0)}° pitch ${f[3].toFixed(0)}° yaw ${f[4].toFixed(0)}°`];
   if (fl & 2) bits.push(`height ${f[8].toFixed(2)} m`);
+  if (Number.isFinite(f[36])) bits.push(f[36] > 0 ? `ToF ${f[36].toFixed(2)} m` : f[36] < 0 ? 'ToF out of range' : 'ToF unavailable');
   bits.push(`loop ${f[11].toFixed(0)} µs`);
   if (f[10] > 0) bits.push(f[10].toFixed(2) + ' V');
   bits.push(fl & 1 ? (fl & 4 ? 'gyro ok' : 'settling') : 'NO GYRO', fl & 2 ? 'barometer' : 'no barometer', fl & 16 ? 'airframe loaded' : 'NO AIRFRAME');
@@ -448,11 +459,15 @@ async function espSendWiring(motors, servos, msg) {
   const custom=Object.values(plan.sensors).some(s=>s.driver==='custom');
   if(custom && !INST.customFirmware) { instMsg(msg,'Custom C drivers require rebuilt firmware. Flash your custom .bin files first, then send these settings.','bad');return; }
   const lines=hardwareSettings(plan);
-  const answer = s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_|radio|bind|phrase|firmware|no memory/.test(s);   // (radio=, bind=: the board's answer, or why it can't)
+  const answer = s => /^set |can't|expected|not a list|at most|unknown|disarm first|GPIO|reserved|invalid|I2C|compass|sensor|servo_|esc_|radio|bind|phrase|firmware|no memory|tof=/.test(s);   // (radio=, bind=: the board's answer, or why it can't)
   for (const [i, l] of lines.entries()) {
     let r = await espSend(dfFrame(LK.SETTING, l), answer, 2000, msg, 'Sending ' + l);
     if (r === null && i === 0 && !/Couldn|Not conn/.test(msg.textContent)) r = await espSend(dfFrame(LK.SETTING, l), answer, 3000, msg, 'Sending ' + l + ' (again: it may still have been starting)');   // (just flashed or connected: it restarts)
     if (r === null) { if (!/Couldn|Not conn/.test(msg.textContent)) instMsg(msg, 'No answer from the board.', 'bad'); return; }
+    if (l === 'tof=-1' && r === 'unknown setting tof') {
+      if (!plan.sensors.tof) continue;
+      instMsg(msg, 'TOF250 needs updated flight firmware. Flash it before sending the wiring settings.', 'bad'); return;
+    }
     if (!/^set /.test(r)) { instMsg(msg, 'The board refused ' + l + ': ' + r, 'bad'); return; }
   }
   const sv = await espSend(dfFrame(LK.SETTING, 'save'), s => /saved|couldn't save|disarm first/.test(s), 2000, msg, 'Saving');

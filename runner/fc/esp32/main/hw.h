@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 16
+#define HW_VERSION 17
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -84,6 +84,7 @@ typedef struct {
   /* Appended in v16 (v15 blobs migrate with 0): the IMU board turned about straight up (level_yaw=DEG, −180…180,
    * counter-clockwise seen from above), on top of level= (fc_core.h fc_level_yaw): gravity can't tell it, so it's set. */
   float level_yaw;
+  uint8_t tof_addr;             /* TOF250 7-bit I2C address, 0 disabled */
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -123,6 +124,9 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn);
 int hw_imu_read(fc_imu *m);
 /* Barometer: start/finish a reading; height [m] above where it was switched on. Returns 1 when a new one came. */
 int hw_baro_read(float *alt);
+/* Poll the TOF250 without waiting for its register to settle. Returns 1 for a completed attempt.
+ * Metres on success, -1 for out of range, 0 for a bus error. */
+int hw_tof_poll(int64_t now, float *range);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
 /* Every address that answers on the sensors' I2C bus, with what usually sits there, as one line. Returns how many. */
