@@ -99,7 +99,8 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
     rotation = np.array([[1,0,0],[0,0,1],[0,-1,0]]) @ first.cam_from_world().rotation.matrix()
     paired = [im for im in images if gravity and "q" in observations.get(im.name,{})]
     alignment = gravity_alignment([im.cam_from_world().rotation.matrix().T for im in paired],
-                                  [observations[im.name]["q"] for im in paired])
+                                  [observations[im.name]["q"] for im in paired],
+                                  [int(im.name[:-4]) for im in paired] if paired and all(im.name[:-4].isdigit() for im in paired) else None)
     if alignment is not None:
         rotation = alignment
     origin = first.projection_center()

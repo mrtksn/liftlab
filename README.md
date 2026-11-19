@@ -46,3 +46,9 @@ The HCJ six-pin TOF250 probe uses the Pi Zero header I²C bus 1, with SDA on phy
 The standalone dashboard and camera stream use SSH. The optional Pi flight telemetry tap is provided as `liftlab/telemetry-tap.patch`, extracted from drone-force-bench at commit `c57ff1ff0043d39b8ffc9d9facace10dd548561a`. Apply it to a compatible LiftLab checkout to build the companion with the survey telemetry output. The existing LiftLab room survey viewer is included in `liftlab/room-survey.js` as an integration reference.
 
 Pass `--output /path/to/captures/room-surveys` to open an existing capture directory. Captures are local and excluded from Git.
+
+## Continuous surface preview
+
+Enable **Surfaces** to see planes built from the mapped landmark cloud. Short triangles between coplanar landmarks connect locally dense regions. Longer edges and openings crossed by the estimated path remain open. Tan polygons interpolate between nearby landmarks. Green polygons have corroborating ToF returns when recorded poses and scale support projection.
+
+After the camera and IMU pass gravity alignment, the fitter considers level and plumb planes. To label a floor candidate, it looks for a broad, low, near-horizontal plane beneath the recorded path. An unaligned reconstruction shows surfaces with no floor label. Open areas remain unknown.

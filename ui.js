@@ -26,7 +26,7 @@ function draw() {
       const u=b.map((n,i)=>n-a[i]),v=c.map((n,i)=>n-a[i]);
       const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
       const shade=.55+.4*Math.abs(depth(n))/Math.max(1e-9,Math.hypot(...n));
-      const rgb=(p.tof_supported?[130,235,196]:p.inferred?[182,160,126]:[127,184,216]).map(n=>Math.round(n*shade));
+      const rgb=(p.tof_supported?[130,235,196]:p.inferred?[182,160,126]:p.kind==='floor'?[142,167,234]:[127,184,216]).map(n=>Math.round(n*shade));
       ctx.fillStyle='rgba('+rgb.join(',')+','+(p.inferred?.62:.9)+')';
       ctx.beginPath();
       p.vertices.forEach((vertex,i)=>i?ctx.lineTo(...project(vertex)):ctx.moveTo(...project(vertex)));
@@ -231,7 +231,7 @@ function updateSurfaceInfo(){
     : model.units!=='m'?'ToF overlay needs metric scale':'No patches corroborated by ToF';
   const inferred=patches.filter(p=>p.inferred).length;
   info.textContent=patches.length+' surface polygons · '+range+
-    (inferred?' · '+inferred+' small inferred fills (tan)':'')+' · Open areas are unknown';
+    (inferred?' · '+inferred+' interpolated polygons (tan)':'')+(model.surfaces.floor_plane!=null?' · Floor candidate (blue-violet)':'')+' · Open areas are unknown';
 }
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
 $('cloud').onchange=$('route').onchange=draw;

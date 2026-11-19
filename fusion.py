@@ -132,7 +132,7 @@ def estimate_scale(model, images, observations):
     return dict(metres_per_unit=scale, views=len(ratios), validation_median_relative_error=float(np.median(err)))
 
 
-def gravity_alignment(rotations, quaternions):
+def gravity_alignment(rotations, quaternions, frames=None):
     """Fit visual-world to inertial-world rotation using world-frame turns.
 
     The fixed camera-to-IMU mounting rotation cancels in R_j @ R_i.T.
@@ -150,19 +150,31 @@ def gravity_alignment(rotations, quaternions):
     visual, inertial = [], []
     for j in range(3,len(body),3):
         i = j-3
+        if frames is not None and frames[j]-frames[i] > 25:
+            continue
         a = cv2.Rodrigues(rotations[j] @ rotations[i].T)[0].ravel()
         b = cv2.Rodrigues(body[j] @ body[i].T)[0].ravel()
-        if .07 < np.linalg.norm(a) < 2.8 and abs(np.linalg.norm(a)-np.linalg.norm(b)) < .10:
+        if .07 < np.linalg.norm(a) < 2.8 and abs(np.linalg.norm(a)-np.linalg.norm(b)) < .08:
             visual.append(a)
             inertial.append(b)
     if len(visual) < 9:
         return None
     a, b = np.asarray(visual), np.asarray(inertial)
     holdout = np.arange(len(a)) % 3 == 0
-    u, singular, vt = np.linalg.svd(b[~holdout].T @ a[~holdout])
-    if singular[1] < .03 or singular[1] < .05*singular[0]:
+    def fit(mask):
+        u, singular, vt = np.linalg.svd(b[mask].T @ a[mask])
+        if singular[1] < .03 or singular[1] < .015*singular[0]:
+            return None
+        return u @ np.diag([1,1,np.linalg.det(u@vt)]) @ vt
+
+    alignment = fit(~holdout)
+    cross_check = fit(holdout)
+    if alignment is None or cross_check is None:
         return None
-    alignment = u @ np.diag([1,1,np.linalg.det(u@vt)]) @ vt
+    # The up direction must agree independently, including on walks that
+    # mostly turn around vertical and offer less excitation in the other axes.
+    if alignment[2] @ cross_check[2] < np.cos(np.deg2rad(8.0)):
+        return None
     errors = np.linalg.norm(a[holdout] @ alignment.T - b[holdout],axis=1)
     if np.percentile(errors,80) > .08:
         return None
