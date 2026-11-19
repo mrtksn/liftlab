@@ -19,14 +19,14 @@ function draw() {
   };
   if($('surfaceLayer').checked&&model.surfaces?.patches.length){
     const depth=([x,y,z])=>(x*Math.sin(yaw)+y*Math.cos(yaw))*Math.cos(pitch)-z*Math.sin(pitch);
-    const patches=model.surfaces.patches.map(p=>({p,z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/4}));
+    const patches=model.surfaces.patches.map(p=>({p,z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}));
     patches.sort((a,b)=>b.z-a.z);
     for(const {p} of patches){
       const [a,b,c]=p.vertices;
       const u=b.map((n,i)=>n-a[i]),v=c.map((n,i)=>n-a[i]);
       const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
       const shade=.55+.4*Math.abs(depth(n))/Math.max(1e-9,Math.hypot(...n));
-      const rgb=(p.tof_supported?[130,235,196]:p.inferred?[182,160,126]:p.kind==='floor'?[142,167,234]:[127,184,216]).map(n=>Math.round(n*shade));
+      const rgb=(p.tof_supported?[130,235,196]:p.inferred?[182,160,126]:p.kind==='floor'?[142,167,234]:p.orientation==='upright'?[105,205,191]:p.orientation==='sloped'?[216,163,107]:[127,184,216]).map(n=>Math.round(n*shade));
       ctx.fillStyle='rgba('+rgb.join(',')+','+(p.inferred?.62:.9)+')';
       ctx.beginPath();
       p.vertices.forEach((vertex,i)=>i?ctx.lineTo(...project(vertex)):ctx.moveTo(...project(vertex)));
@@ -71,6 +71,30 @@ function draw() {
     ctx.strokeStyle='#72caff';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
   }
 }
+function fitMapView(){
+  if(!model || !canvas.clientWidth || !canvas.clientHeight) return;
+  const samples=[];
+  if($('cloud').checked && model.points.length){
+    const axes=[0,1,2].map(i=>model.points.map(p=>p[i]).sort((a,b)=>a-b));
+    const limits=axes.map(v=>[v[Math.floor(v.length*.03)],v[Math.floor(v.length*.97)]]);
+    for(const x of limits[0]) for(const y of limits[1]) for(const z of limits[2]) samples.push([x,y,z]);
+  }
+  if($('surfaceLayer').checked) for(const face of model.surfaces?.patches||[]) samples.push(...face.vertices);
+  if($('route').checked || !samples.length) for(const pose of model.poses) samples.push(pose.xyz);
+  if(!samples.length) return;
+  const min=[Infinity,Infinity,Infinity], max=min.map(n=>-n);
+  for(const p of samples) for(let i=0;i<3;i++){min[i]=Math.min(min[i],p[i]);max[i]=Math.max(max[i],p[i]);}
+  centre=min.map((n,i)=>(n+max[i])/2);
+  let halfWidth=0,halfHeight=0;
+  for(const p of samples){
+    const x=p[0]-centre[0],y=p[1]-centre[1],z=p[2]-centre[2];
+    halfWidth=Math.max(halfWidth,Math.abs(x*Math.cos(yaw)-y*Math.sin(yaw)));
+    halfHeight=Math.max(halfHeight,Math.abs(z*Math.cos(pitch)+(x*Math.sin(yaw)+y*Math.cos(yaw))*Math.sin(pitch)));
+  }
+  const w=canvas.clientWidth,h=canvas.clientHeight;
+  extent=Math.max(1e-5,2.2*Math.min(w,h)*Math.max(halfWidth/w,halfHeight/h));
+  zoom=1;
+}
 function showMap(m) {
   model=m;
   updateSurfaceInfo();
@@ -85,12 +109,7 @@ function showMap(m) {
   $('residual').textContent=m ? m.mean_error_px+' px' : '—';
   $('units').textContent=m?.units==='m'?(m.reference?'Measured baseline · m':m.tof_scale?'ToF scale estimate · m':'Measured scale · m'):'Relative scale';
   if(m?.gravity_aligned) $('units').textContent+=' · IMU aligned';
-  if(m) {
-    const axes=[0,1,2].map(i=>m.points.map(p=>p[i]).sort((a,b)=>a-b));
-    const bounds=axes.map(v=>[v[Math.floor(v.length*.03)],v[Math.floor(v.length*.97)]]);
-    for(const p of m.poses) p.xyz.forEach((v,i)=>{bounds[i][0]=Math.min(v,bounds[i][0]);bounds[i][1]=Math.max(v,bounds[i][1]);});
-    centre=bounds.map(([a,b])=>(a+b)/2); extent=Math.max(1e-5,...bounds.map(([a,b])=>b-a))*1.4;
-  }
+  fitMapView();
   draw();
 }
 canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
@@ -230,12 +249,16 @@ function updateSurfaceInfo(){
     ? supported+' ToF-corroborated (green)'
     : model.units!=='m'?'ToF overlay needs metric scale':'No patches corroborated by ToF';
   const inferred=patches.filter(p=>p.inferred).length;
-  info.textContent=patches.length+' surface polygons · '+range+
+  const orientations=model.surfaces.gravity_aligned && patches.some(p=>p.orientation)
+    ? ['level','sloped','upright'].map(k=>patches.filter(p=>p.orientation===k).length+' '+k).join(' · ')+' · '
+    : '';
+  info.textContent=patches.length+' surface polygons · '+orientations+range+
     (inferred?' · '+inferred+' interpolated polygons (tan)':'')+(model.surfaces.floor_plane!=null?' · Floor candidate (blue-violet)':'')+' · Open areas are unknown';
 }
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
 $('cloud').onchange=$('route').onchange=draw;
-$('top').onclick=()=>{yaw=0;pitch=Math.PI/2;draw();};$('iso').onclick=()=>{yaw=-.38;pitch=.42;zoom=1;draw();};
+$('side').onclick=()=>{yaw=0;pitch=0;fitMapView();draw();};
+$('top').onclick=()=>{yaw=0;pitch=Math.PI/2;fitMapView();draw();};$('iso').onclick=()=>{yaw=-.38;pitch=.42;fitMapView();draw();};
 $('range').onclick=async()=>{try{const r=await fetch('/range',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:Number($('address').value)})});
 const q=await r.json();$('reading').textContent=r.ok?'Raw reading '+q.raw:q.error;}catch(e){$('reading').textContent=e.message;}};
 const sensorTypes=[

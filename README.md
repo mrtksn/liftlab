@@ -49,6 +49,6 @@ Pass `--output /path/to/captures/room-surveys` to open an existing capture direc
 
 ## Continuous surface preview
 
-Enable **Surfaces** to see planes built from the mapped landmark cloud. Short triangles between coplanar landmarks connect locally dense regions. Longer edges and openings crossed by the estimated path remain open. Tan polygons interpolate between nearby landmarks. Green polygons have corroborating ToF returns when recorded poses and scale support projection.
+Enable **Surfaces** and **Landmarks** together to inspect the fit. The fitter centers the cloud and applies one common scale to X, Y and Z. It estimates a normal for each supported 3D neighborhood, groups adjoining landmarks with compatible normals, and triangulates them in each region’s own plane. The triangle vertices are returned to the original map coordinates. Short edges bound interpolation across gaps. Open areas remain unknown.
 
-After the camera and IMU pass gravity alignment, the fitter considers level and plumb planes. To label a floor candidate, it looks for a broad, low, near-horizontal plane beneath the recorded path. An unaligned reconstruction shows surfaces with no floor label. Open areas remain unknown.
+After gravity alignment, the viewer counts faces within 15° of level or upright and classifies intermediate tilts as sloped. Upright faces are teal, sloped faces are ochre, and the floor candidate beneath the path is blue-violet. Green indicates local ToF corroboration on metric maps. **Side view** looks along the map’s Y axis. Drag to inspect faces edge-on from other directions.
