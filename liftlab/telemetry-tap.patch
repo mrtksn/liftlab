@@ -1,0 +1,29 @@
+diff --git a/runner/pi/dfb_pi.c b/runner/pi/dfb_pi.c
+index f97a3ea..37f5d0b 100644
+--- a/runner/pi/dfb_pi.c
++++ b/runner/pi/dfb_pi.c
+@@ -450,6 +450,10 @@ static void stick_line(const char *s, int angle_mode, int radio_has_it, int n_mo
+   snprintf(reply, rn, "sticks: arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f", z[0] > 0 ? "on" : "off", (double)z[4], (double)z[1], (double)z[2], (double)z[3]);
+ }
+ int main(int argc, char **argv) {
++  /* Read-only survey tap. No listener or congested receiver can block the control loop. */
++  int survey_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
++  struct sockaddr_in survey_addr = { .sin_family = AF_INET, .sin_port = htons(14681),
++                                     .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+   const char *tuning_path = 0;
+   const char *mqtt_id = "liftlab-pi";
+   const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0, no_nav = 0;
+@@ -761,6 +765,13 @@ int main(int argc, char **argv) {
+     for (ssize_t i = 0; i < n; i++) {
+       while (si < mq_nstart && mq_starts[si] == (uint32_t)i) { if (L.state) rn_link_reset(&L); si++; }   /* (a message starts: no half frame before it) */
+       int type = rn_link_feed(&L, rx[i]);
++      if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len >= 17 * sizeof(float) && survey_fd >= 0) {
++        uint8_t sample[sizeof(double) + 17 * sizeof(float)];
++        double received = now_s();
++        memcpy(sample, &received, sizeof received);
++        memcpy(sample + sizeof received, L.buf, 17 * sizeof(float));
++        sendto(survey_fd, sample, sizeof sample, MSG_DONTWAIT, (struct sockaddr *)&survey_addr, sizeof survey_addr);
++      }
+       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) {
+         printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
+         int k = (int)L.len < (int)sizeof esp_said - 1 ? (int)L.len : (int)sizeof esp_said - 1; memcpy(esp_said, L.buf, (size_t)k); esp_said[k] = 0; esp_said_t = t;

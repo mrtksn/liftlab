@@ -1,0 +1,2 @@
+pycolmap==4.2.1
+opencv-python-headless>=4.10,<5

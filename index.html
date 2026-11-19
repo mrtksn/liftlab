@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Room survey · LiftLab</title><link rel="stylesheet" href="/ui.css"></head><body>
+<header><span class="brand">LiftLab</span><span class="divider"></span>Perception <span class="status" id="connection">Connecting to dashboard…</span></header>
+<main><div class="heading"><div><h1>Room survey</h1><p>Handheld fisheye mapping</p></div><div class="capture-controls"><div class="controls"><button id="connect">Connect camera</button><button id="record" class="primary" aria-describedby="recordStatus" disabled>Start walk</button><button id="cameraMode" disabled>Review walk</button></div><p id="recordStatus" role="status">Checking camera…</p></div></div>
+<div id="error" role="alert"></div>
+<p id="captureWarning" class="muted" hidden>Live IMU unavailable. A new walk will have gaps in its motion log.</p>
+<section class="walkbar"><div class="controls"><select id="runs" aria-label="Saved walks"></select><button id="load">Open walk</button><button id="archive" disabled>Download walk ZIP</button><button id="deleteWalk" disabled>Delete walk…</button><a id="download" href="/survey.json" download="room-survey.json" hidden>Map JSON for LiftLab ↓</a></div></section>
+<section id="reconstructionInputs" class="replay" hidden>
+<div class="controls replayhead"><h2>Reconstruction inputs</h2><button id="rebuild">Rebuild with selection</button></div>
+<div id="inputStreams" class="controls" role="group" aria-label="Streams used for reconstruction"></div>
+<p id="streamSummary" class="muted"></p>
+<p id="sensorOnlyNote" class="muted" hidden>Sensor-only view. Range, rotation rate, acceleration and height show individual measurements over time. Camera views supply the landmarks and horizontal position for the 3D map.</p>
+<div id="sensorTraces" hidden></div>
+</section>
+<section id="replayPanel" class="replay" hidden>
+<div class="controls replayhead"><h2>Walk replay</h2><button id="play">Play</button><button id="first" aria-label="Go to start">Start</button><button id="last" aria-label="Go to finish">Finish</button><output id="frameNo"></output></div>
+<label class="timeline-label" for="timeline">Recording time</label><input type="range" id="timeline" min="0" value="0" step="1">
+<canvas id="timelinePlot" aria-label="Recorded time and registered camera poses"></canvas>
+<div class="controls gap-tools"><span id="timelineStatus" class="muted"></span><label id="gapPicker" hidden>Unmapped stretch <select id="gaps"><option value="">Jump to a gap</option></select></label><button id="inspectGap" hidden>Check landmark matches</button></div>
+<p id="gapEvidence" class="muted" role="status" hidden></p>
+<details id="sensorPanel"><summary>Recorded sensors</summary><div id="sensorToggles" class="controls"></div><div id="sensorValues" class="readings"></div><small id="sampleTiming"></small></details>
+</section>
+<div class="views"><section><div class="panelhead"><h2 id="cameraTitle">Camera</h2><span id="rate">OV5647 · 640 × 480</span></div><div class="imagebox"><img id="replayImage" alt="Recorded camera frame" hidden><img id="preview" alt="Live fisheye camera preview" hidden><span id="cameraempty">Waiting for the Pi camera</span></div></section>
+<section id="mapPanel"><div class="panelhead"><h2>Reconstruction</h2><span id="units">Relative scale</span></div><div class="mapbox"><canvas id="map" aria-label="Orbitable 3D landmarks and camera trajectory"></canvas><span id="mapempty">Landmarks appear after overlapping views register.</span></div><div class="legend"><i></i>Camera path <i></i>Landmarks <span>Drag to orbit · scroll to zoom</span></div><div class="controls map-controls"><label><input type="checkbox" id="surfaceLayer" disabled> Surfaces</label><label><input type="checkbox" id="cloud" checked> Landmarks</label><label><input type="checkbox" id="route" checked> Path</label><button id="top">Top view</button><button id="iso">Reset view</button><span id="coverage"></span></div><p id="surfaceInfo" class="muted surface-info" hidden></p></section></div>
+
+<div class="metrics"><div><small>Saved frames</small><strong id="frames">0</strong></div><div><small>Registered views</small><strong id="poses">—</strong></div><div><small>3D landmarks</small><strong id="points">—</strong></div><div><small>Reprojection error</small><strong id="residual">—</strong></div></div>
+<div class="progress" role="status"><b id="walk">No walk selected</b><span id="message">Ready</span></div>
+<details class="lab" id="posePanel"><summary>Pose estimation</summary>
+<p>Match a new view against the saved landmarks. The blue arrow shows the estimated camera direction. Green dots are matches accepted by the pose solver.</p>
+<div class="controls"><label>Image <select id="source"><option value="live">Live camera</option><option value="replay">Timeline frame</option></select></label><label>Minimum inliers <input id="minimum" type="number" min="8" max="100" value="12"></label><button id="estimate">Estimate pose</button><button id="continuous">Start tracking</button></div>
+
+<p id="tracking" role="status">Choose live tracking or inspect a recorded frame.</p><canvas id="matches" width="640" height="480" hidden aria-label="Analyzed image with accepted landmark matches"></canvas></details>
+<details><summary>TOF250 range probe</summary><p>Read one raw sample from the Pi header bus. Verify units against a measured wall distance before using readings for clearance.</p><div class="controls"><label>7-bit address <select id="address"><option>0x29</option><option selected>0x52</option><option>0x64</option></select></label><button id="range">Read sensor</button><output id="reading"></output></div></details>
+<details><summary>Metric scale</summary><p>Mark the camera centre at two positions a measured distance apart. Hold still at each mark. Both frames must register in the same reconstruction.</p><div class="controls"><button id="markA">Mark A</button><label>Separation (m) <input id="metres" type="number" min="0.01" step="0.01" placeholder="1.00"></label><button id="markB">Mark B</button><span id="refs"></span></div></details>
+<details><summary>Fisheye calibration <span id="lens"></span></summary><p>Open the target on a flat screen or print it. Keep the white margin visible. Collect at least 12 sharp views at different tilts, distances and positions, including the edges. You can also record now and rebuild after calibration.</p><div class="controls"><a href="/target" target="_blank">Open checkerboard ↗</a><button id="sample">Add board view</button><span id="samples">0 views</span><button id="calibrate">Fit lens</button><button id="reset">Clear samples</button></div></details>
+
+</main><script src="/ui.js"></script></body></html>
