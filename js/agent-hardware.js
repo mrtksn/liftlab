@@ -67,7 +67,7 @@ function agentSetHardware(a){
   for(const change of a.parts||[]){
     agentFields(change,{id:{type:['integer','string']},fields:{type:'object'}},'part change');
     const c=partOf(change.id);if(seen.has(c.id))throw new Error('Duplicate part change '+c.id);seen.add(c.id);
-    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(['imu','baro','mag'].includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='imu'?['level','levelYaw']:[]),...(c.kind==='fix'?['port']:[])]:[];
+    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(I2C_SENSOR_KINDS.includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='imu'?['level','levelYaw']:[]),...(c.kind==='fix'?['port']:[])]:[];
     agentFields(change.fields,Object.fromEntries(keys.map(k=>[k,AGENT_PART_FIELDS[k]])),c.name);
     const patch=agentClone(change.fields),saved=C.wiring.parts[c.id]||{};
     if(Object.hasOwn(patch,'board')){
@@ -77,7 +77,7 @@ function agentSetHardware(a){
     if(Object.hasOwn(patch,'driver')){
       const allowed=c.type==='motor'?['pwm','brushed']:c.type==='joint'?['pwm']:c.type==='latch'?['pwm','gpio']:Object.keys(DEVICE_PROFILES[c.kind]||{});
       if(!allowed.includes(patch.driver))throw new Error(c.name+': unsupported driver '+patch.driver);
-      if(c.type==='sensor'&&['imu','baro','mag'].includes(c.kind)&&!Object.hasOwn(patch,'address'))patch.address=patch.driver==='custom'?(saved.address||{imu:0x68,baro:0x77,mag:0x1e}[c.kind]):DEVICE_PROFILES[c.kind][patch.driver].addresses[0]||0;
+      if(c.type==='sensor'&&I2C_SENSOR_KINDS.includes(c.kind)&&!Object.hasOwn(patch,'address'))patch.address=patch.driver==='custom'?(saved.address||{imu:0x68,baro:0x77,mag:0x1e}[c.kind]):DEVICE_PROFILES[c.kind][patch.driver].addresses[0]||0;
     }
     if(Object.hasOwn(patch,'pin')&&patch.pin< -1)throw new Error('GPIO must be -1 or nonnegative');
     C.wiring.parts[c.id]={...saved,...patch};

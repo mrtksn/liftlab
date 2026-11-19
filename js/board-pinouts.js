@@ -82,7 +82,7 @@ function boardGpioShort(C, b, gpio) {
 function boardPinUses(C, comps, b) {
   const uses = new Map(), add = (k, text, kind) => { if (!uses.has(k)) uses.set(k, []); uses.get(k).push({ text, kind }); };
   const supply = { '3v3': new Set(), '5v': new Set(), gnd: new Set() };
-  const sensors = comps.filter(c => c.type === 'sensor' && ['imu', 'baro', 'mag'].includes(c.kind) && hardwareOwner(C, c) === b).map(c => c.name);
+  const sensors = comps.filter(c => c.type === 'sensor' && I2C_SENSOR_KINDS.includes(c.kind) && hardwareOwner(C, c) === b).map(c => c.name);
   const bus = hardwareBus(C, b), esp = !!ESP_PROFILES[b.kind];
   for (const cl of hardwarePinClaims(C, comps, b)) {
     const k = cl.key, part = /^part(\d+)$/.exec(k), gps = /^gps(Tx|Rx)(\d+)$/.exec(k), nrf = /^nrf(\d)$/.exec(k);

@@ -59,6 +59,26 @@ const MOCK = () => {
       doReset();
       return [wiring.driver, wiring.address, c.rate, near, far];
     }), ['tof250', 0x52, 10, 0.97, -1]);
+    const [tof, pi] = await page.evaluate(() => {
+      UI_PANELS.editor.select('form');
+      return [sensorsOf('tof')[0].id, boardOf('nav').id];
+    });
+    await page.locator(`#computerSensors [data-device="${tof}"]`).click();
+    await page.locator(`#computerDlg [data-assign-board="${pi}"]`).click();
+    assert.deepStrictEqual(await page.evaluate(() => {
+      const c = sensorsOf('tof')[0], owner = wiredTo(c);
+      const pins = boardPinUses(computers(), cfg.comps, owner);
+      const wiring = cardUploadFiles().find(f => f.name === 'wiring.txt');
+      return {
+        owner: owner.id,
+        address: partWiring(c).address,
+        sda: pins.get(2).some(p => p.text === 'SDA → ' + c.name),
+        scl: pins.get(3).some(p => p.text === 'SCL → ' + c.name),
+        tofSettings: new TextDecoder().decode(wiring.data).split('\n').filter(line => line.startsWith('tof=')),
+      };
+    }), { owner: pi, address: 0x52, sda: true, scl: true, tofSettings: ['tof=-1'] });
+    await page.keyboard.press('Escape');
+    console.log('TOF250: Pi assignment, header pins, and ESP32 upload settings passed');
     const commit = JSON.parse(fs.readFileSync(path.join(root, 'firmware/manifest.json'))).commit;
     // The install dialog for the flight core's board; Connect: the board says its build, the same as the page's
     await page.evaluate(c => { running = true; renderRun(); __usb.reply = `firmware ${c} ${boardOf('core').kind === 'esp32' ? 'esp32' : ESP_PROFILES[boardOf('core').kind].chip} flight`; openInstall(boardOf('core')); }, commit);

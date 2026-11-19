@@ -1,5 +1,5 @@
 'use strict';
-// Regression checks for chip selection, image headers, checksum verification and wiring limits.
+// Regression checks for chip selection, image headers, checksum verification and board wiring uploads.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -28,7 +28,7 @@ assert.throws(() => checkBoardWiring(ESP_PROFILES.c3, '4,5,6,18', '', 4, 0), /re
 assert.throws(() => checkBoardWiring(ESP_PROFILES.s3, '4,5,6,17', '', 4, 0), /I2C/);
 let corrupt = false;
 const ctx = vm.createContext({ console, crypto: webcrypto, navigator: {}, Uint8Array, DataView, TextEncoder, TextDecoder, setTimeout, clearTimeout,
-  $: () => ({ addEventListener() {} }),
+  $: selector => selector === '#liveBar' ? null : { addEventListener() {} },
   fetch: async url => { const b = fs.readFileSync(url); if (corrupt && url.endsWith('dfb_flight.bin')) b[100] ^= 1;
     return { ok: true, json: async () => JSON.parse(b), arrayBuffer: async () => b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength) }; },
 });
@@ -73,5 +73,40 @@ vm.runInContext(fs.readFileSync('js/install-ui.js','utf8')+'\nthis.audit = { fir
     assert.equal(new TextDecoder().decode(sent[0]).includes('version'),true);
   }
   ctx.audit.INST.conn=null;
-  console.log('All board installation checks passed (3 chips × 2 roles, wrong-chip rejection, corruption, wiring limits, firmware version answers).');
+
+  // Drive the radio upload with the Pi's wiring acknowledgement and the ESP32's reported results.
+  const sent = [];
+  let wiringReplies;
+  const report = (...lines) => {
+    for (const text of lines) { ctx.gs.log.unshift({ text }); ctx.gs.nmsg++; }
+  };
+  let time = 0;
+  Object.assign(ctx, { liveOn: () => true, live: { arm: false, get t() { return time++; } }, gs: { log: [], nmsg: 0 } });
+  vm.runInContext(fs.readFileSync('js/drone-card.js', 'utf8'), ctx);
+  ctx.cardUpFile = async () => 'saved';
+  ctx.cardUpSay = ctx.cardUpSleep = () => {};
+  ctx.cardUpSend = async line => {
+    sent.push(line);
+    if (line === 'wiring wiring.txt') report('wiring: 2 settings lines to the ESP32, then save', ...wiringReplies);
+    if (line === 'airframe drone.dfa') report('airframe drone.dfa: 4 motors', 'esp32: airframe loaded and saved');
+  };
+  const unknownTof = 'esp32: unknown setting tof', saved = 'esp32: saved; reboot to use them';
+  for (const [settings, replies, failure] of [
+    ['tof=-1\ni2c=17,18\n', [unknownTof, saved]],
+    ['tof=-1\ni2c=17,18\ntof=82\n', [saved]],
+    ['tof=-1\ni2c=17,18\ntof=82\n', [unknownTof, saved], /TOF250 needs updated flight firmware/],
+    ['tof=-1\ni2c=17,18\n', [unknownTof, 'esp32: invalid I2C pins', saved], /invalid I2C pins/],
+    ['tof=-1\ni2c=17,18\n', [unknownTof, "esp32: couldn't save the settings"], /couldn't save/],
+  ]) {
+    sent.length = 0;
+    wiringReplies = replies;
+    const result = await ctx.cardUpload([
+      { name: 'wiring.txt', data: new TextEncoder().encode(settings) },
+      { name: 'drone.dfa', data: new Uint8Array() },
+    ]);
+    assert.equal(result.tone, failure ? 'bad' : 'good', result.text);
+    if (failure) assert.match(result.text, failure);
+    assert.deepEqual(sent, failure ? ['wiring wiring.txt'] : ['wiring wiring.txt', 'esp32 reboot', 'airframe drone.dfa']);
+  }
+  console.log('All board installation checks passed (firmware files, USB wiring, firmware version answers, radio upload compatibility).');
 })().catch(e => { console.error(e); process.exitCode=1; });

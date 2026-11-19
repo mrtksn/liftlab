@@ -233,15 +233,24 @@ async function cardUpload(files) {
   const sim = !cardLive(), saved = {};
   try {
     for (const f of files) saved[f.name] = await cardUpFile(f);
-    if (files.some(f => f.name === 'wiring.txt')) {
+    const wiring = files.find(f => f.name === 'wiring.txt');
+    if (wiring) {
       cardUpSay('Upload design: the wiring to the ESP32');
-      let n0 = gs.nmsg || 0; await cardUpSend('wiring wiring.txt');
+      const n0 = gs.nmsg || 0; await cardUpSend('wiring wiring.txt');
       const w = await cardUpWait(n0, /^wiring: /, 8);
       if (!/settings lines/.test(w)) throw new Error(w || 'no answer to wiring from the Pi');
       const e = await cardUpWait(n0, /^esp32: (saved|couldn't save)/, 10);
       if (!/: saved/.test(e)) throw new Error(e || 'the ESP32 didn\'t say it saved the wiring: is it connected to the Pi?');
-      const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0), bad = gs.log.slice(0, Math.max(0, k)).reverse().find(m => /^esp32: /.test(m.text) && !/^esp32: (saved|set )/.test(m.text));
-      if (bad) throw new Error(`the ESP32 refused a wiring line (it saved the rest; nothing restarted): ${bad.text.replace(/^esp32: /, '')}`);   // (its answers but "set …": dfb_pi holds those back)
+      const tofSettings = new TextDecoder().decode(wiring.data).split('\n').filter(line => line.startsWith('tof='));
+      const needsTof = tofSettings.some(line => line !== 'tof=-1');
+      const optionalTofReset = !needsTof && tofSettings.includes('tof=-1');
+      const unknownTof = 'esp32: unknown setting tof';
+      const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0);
+      // Older firmware has no ToF setting to clear. Keep checking the rest of its replies for failures.
+      const bad = gs.log.slice(0, Math.max(0, k)).reverse().map(m => m.text).find(text =>
+        /^esp32: /.test(text) && !/^esp32: (saved|set )/.test(text) && !(optionalTofReset && text === unknownTof));
+      if (bad === unknownTof && needsTof) throw new Error('TOF250 needs updated flight firmware. The ESP32 saved the other wiring settings. Update it via Computers → Install over USB, then retry.');
+      if (bad) throw new Error(`the ESP32 refused a wiring line (it saved the rest; nothing restarted): ${bad.replace(/^esp32: /, '')}`);
       if (cardLive() ? live.arm : simArmed()) throw new Error('it was armed: the ESP32 wasn\'t restarted (its new wiring is saved for its next start)');
       cardUpSay('Upload design: restarting the ESP32 with it');
       await cardUpSend('esp32 reboot'); await cardUpSleep(sim ? 0.5 : 6);

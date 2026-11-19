@@ -23,7 +23,23 @@ const settings=A.hardwareSettings(p);assert.ok(settings.indexOf('esc_hz=50')<set
   W.wiring.parts[99] = { address: 0x68 };
   assert.ok(A.hardwarePlan(W, withTof, W.boards[0]).errors.some(e => /same I²C address/.test(e)));
   W.wiring.parts[99].board = 2;
-  assert.ok(A.hardwarePlan(W, withTof, W.boards[1]).errors.some(e => /flight-core board/.test(e)));
+  const pi = A.hardwarePlan(W, withTof, W.boards[1]);
+  assert.deepEqual([...pi.errors], []);
+  assert.equal(pi.sensors.tof.address, 0x68);
+  assert.deepEqual([pi.bus.sda, pi.bus.scl], [2, 3]);
+  const fc = A.hardwarePlan(W, withTof, W.boards[0]);
+  assert.deepEqual([...fc.errors], []);
+  assert.deepEqual([...A.hardwareSettings(fc).filter(line => line.startsWith('tof='))], ['tof=-1']);
+  W.ground = { kind: 'mac', name: 'Ground' };
+  const row = A.hardwareOverview(W, withTof).groups.find(g => g.id === 2).rows.find(r => r.device === 'ToF');
+  assert.equal(row.connection, 'GPIO 2 → SDA; GPIO 3 → SCL');
+  assert.equal(row.note, 'TOF250 · address 0x68');
+  W.wiring.parts[99].address = 0;
+  assert.ok(A.hardwarePlan(W, withTof, W.boards[1]).errors.some(e => /address is not supported/.test(e)));
+  const aux = { id: 3, kind: 's3', name: 'Auxiliary', tasks: [] };
+  W.boards.push(aux);
+  W.wiring.parts[99] = { board: aux.id, address: 0x52 };
+  assert.ok(A.hardwarePlan(W, withTof, aux).errors.some(e => /Raspberry Pi or the flight-core ESP32/.test(e)));
 }
 assert.ok(settings.includes('level=boot'));   // (the default: as it sits at power-up is level)
 {const W=JSON.parse(JSON.stringify(C));

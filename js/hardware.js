@@ -9,6 +9,7 @@ const DEVICE_PROFILES = {
   tof: { tof250: { label: 'TOF250', id: 1, addresses: [0x52, ...Array.from({length:112},(_,i)=>i+8).filter(a=>a!==0x52)] } },
 };
 const I2C_SENSOR_KINDS = ['imu', 'baro', 'mag', 'tof'];
+const tofBoardSupported = b => b.kind.startsWith('pi') || (!!ESP_PROFILES[b.kind] && b.tasks.includes('core'));
 for (const kind of ['imu','baro','mag']) DEVICE_PROFILES[kind].custom = {label:'Custom C driver (rebuild firmware)',id:3,addresses:Array.from({length:112},(_,i)=>i+8)};
 // ESC configurations: how a flight board's PWM ESCs want their signal. One configuration per flight board: its ESC
 // outputs share one timer (runner/fc/esp32/main/outputs.c). Pulse widths are in µs at escHz; escStop > 0 is a stop
@@ -365,8 +366,9 @@ function hardwarePlan(C, comps, b) {
       if (sensors[c.kind]) errors.push(c.name + ': real firmware supports one sensor per kind on this bus');
       sensors[c.kind] = { ...p, name:c.name, matrix: typeof knownMount==='function'?knownMount(c):[1,0,0,0,1,0,0,0,1] };
       if(p.driver==='custom') warnings.push(c.name+': rebuild firmware with this board’s exported custom_sensors.h before installation');
-      if (I2C_SENSOR_KINDS.includes(c.kind) && b.id !== core?.id) errors.push(c.name + ': this sensor driver runs on the flight-core board');
-      if (c.kind === 'tof' && b.id === core?.id && !profile) errors.push(c.name + ': TOF250 requires an ESP32 flight-core board');
+      if (c.kind === 'tof') {
+        if (!tofBoardSupported(b)) errors.push(c.name + ': assign TOF250 to a Raspberry Pi or the flight-core ESP32');
+      } else if (I2C_SENSOR_KINDS.includes(c.kind) && b.id !== core?.id) errors.push(c.name + ': this sensor driver runs on the flight-core board');
       if(c.kind==='fix' && (ESP_PROFILES[b.kind] || !b.tasks.includes('nav'))) errors.push(c.name+': real NMEA GPS needs the navigation Pi');
       if (c.kind === 'flow') warnings.push(c.name + ': optical-flow hardware driver is not implemented');
       if (c.kind === 'mag' && p.driver === 'none') warnings.push(c.name + ': simulated compass only; choose HMC5883L for hardware');
@@ -374,6 +376,15 @@ function hardwarePlan(C, comps, b) {
       if (c.kind === 'imu' && p.driver === 'lis') warnings.push(c.name + ': LIS3DH has no gyro and cannot arm for flight');
       if (c.kind === 'imu' && p.level != null && p.level !== 'boot' && p.level !== 'off') { const v=String(p.level).split(',').map(Number), D=Math.PI/180; if (v.length!==2 || v.some(n=>!Number.isFinite(n)) || Math.abs(v[0])>180 || Math.abs(v[1])>90 || Math.acos(Math.cos(v[0]*D)*Math.cos(v[1]*D))/D>170) errors.push(c.name+': level trim: roll,pitch in degrees (roll −180…180, pitch −90…90, at most 170° from straight up)'); }
       if (c.kind === 'imu' && p.levelYaw != null && !(Number.isFinite(Number(p.levelYaw)) && Math.abs(Number(p.levelYaw)) <= 180)) errors.push(c.name+': level yaw: degrees, −180…180');
+    }
+  }
+  const addresses = new Set();
+  for (const [kind, s] of Object.entries(sensors)) if (I2C_SENSOR_KINDS.includes(kind)) {
+    const def = DEVICE_PROFILES[kind][s.driver];
+    if (!def.addresses.includes(s.address)) errors.push(s.name + ': address is not supported by the chosen driver');
+    if (def.id >= 0 && s.address) {
+      if (addresses.has(s.address)) errors.push('Two sensors use the same I²C address');
+      addresses.add(s.address);
     }
   }
   if (profile && b.tasks.includes('core')) {
@@ -385,12 +396,6 @@ function hardwarePlan(C, comps, b) {
     if(bus.batteryPin2>=0 && (!Number.isFinite(bus.batteryDivider2)||bus.batteryDivider2<1||bus.batteryDivider2>30))errors.push('Second pack voltage: divider ratio must be 1–30');
     if((bus.crsfRx>=0)!==(bus.crsfTx>=0))errors.push('Receiver: assign both RX and TX, or disconnect both');
     if(bus.crsfRx>=0 && (!hardwareInputPins(b.kind).includes(bus.crsfRx)||!profile.pins.includes(bus.crsfTx)))errors.push('Receiver: unavailable RX/TX GPIO');
-    const seen = new Set();
-    for (const [kind,s] of Object.entries(sensors)) if (I2C_SENSOR_KINDS.includes(kind)) {
-      const def=DEVICE_PROFILES[kind][s.driver];
-      if (!def.addresses.includes(s.address)) errors.push(s.name + ': address is not supported by the chosen driver');
-      if (def.id >= 0 && s.address) { if (seen.has(s.address)) errors.push('Two sensors use the same I²C address'); seen.add(s.address); }
-    }
     if (sensors.tof) for (const kind of ['imu', 'baro', 'mag']) {
       const s = sensors[kind];
       if (s && s.address === 0 && DEVICE_PROFILES[kind][s.driver].id >= 0 && DEVICE_PROFILES[kind][s.driver].addresses.includes(sensors.tof.address)) {
@@ -562,7 +567,7 @@ function hardwareOverview(C, comps) {
     }else if(I2C_SENSOR_KINDS.includes(c.kind)){
       row.connection=pin(bus.sda)+' → SDA; '+pin(bus.scl)+' → SCL';
       row.note=(DEVICE_PROFILES[c.kind][p.driver]?.label||p.driver)+' · '+(p.address?'address 0x'+p.address.toString(16):'auto address');
-      if(!esp||b.id!==core?.id||p.driver==='none')row.note+=' · Hardware driver unsupported';
+      if (c.kind === 'tof' ? !tofBoardSupported(b) : !esp || b.id !== core?.id || p.driver === 'none') row.note += ' · Hardware driver unsupported';
     }else if(c.kind==='fix'){
       const port=p.port||'/dev/ttyUSB0';row.connection=port==='/dev/serial0'?'GPIO 15 (RX) ← GPS TX; GPIO 14 (TX) → GPS RX':port+' · USB adapter RX ← GPS TX';
       row.note='NMEA serial · GPS RX optional';if(esp||!b.tasks.includes('nav'))row.note+=' · Hardware assignment unsupported';

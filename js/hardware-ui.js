@@ -81,7 +81,9 @@ function renderHardware() {
     const update=patch=>editWiring(w=>{w.parts[c.id]={...w.parts[c.id],...patch};},c.id);
     const task=c.type==='latch'?'cargo':c.type==='sensor'&&['fix','flow'].includes(c.kind)?'navigation':'flight core';
     const automatic=!Object.hasOwn(saved,'board');
-    const board=hardwareField('Board',hardwareSelect(c.name+' board','hw-board-'+c.id,[['auto','Automatic — '+task+' board'],['off','No board (off)'],...C.boards.map(b=>[b.id,b.name])],automatic?'auto':(saved.board??'off'),v=>{
+    const tof=c.type==='sensor'&&c.kind==='tof';
+    const boards=tof?C.boards.filter(b=>b===owner||tofBoardSupported(b)):C.boards;
+    const board=hardwareField('Board',hardwareSelect(c.name+' board','hw-board-'+c.id,[['auto','Automatic — '+task+' board'],['off','No board (off)'],...boards.map(b=>[b.id,b.name])],automatic?'auto':(saved.board??'off'),v=>{
       if(v==='auto')editWiring(w=>{const q={...w.parts[c.id]};delete q.board;delete q.pin;w.parts[c.id]=q;},c.id);
       else update({board:v==='off'?null:Number(v),...(c.type==='sensor'?{}:{pin:-1})});
     }));
@@ -109,6 +111,7 @@ function renderHardware() {
     if(i2c&&owner){
       card.append(sensorBusFields(owner,c),el('p',{class:'hint',text:'Shared with all I²C sensors on '+owner.name+'. Changing either pin updates the whole bus.'}));
       if(def.addresses.length)card.append(hardwareField('I²C address',hardwareSelect(c.name+' I2C address','hw-address-'+c.id,def.addresses.map(a=>[a,a?'0x'+a.toString(16):'Auto address']),p.address,v=>update({address:Number(v)}))));
+      if(tof&&owner.kind.startsWith('pi'))card.append(el('p',{class:'hint',text:'Pi software reads the rangefinder over I²C. The built-in flight estimator does not use this beam.'}));
       card.append(el('p',{class:'hint',text:c.kind==='tof'?'Connect GND and power. Use a bidirectional level shifter if the sensor side uses 5 V I²C pull-ups.':'Connect sensor GND to board GND. Use the module’s specified supply and 3.3 V logic.'}));
     }
     if(c.kind==='fix')card.append(hardwareText(c.name+' serial port',saved.port||'/dev/ttyUSB0',v=>update({port:v})),el('p',{class:'hint',text:saved.port==='/dev/serial0'?'GPS TX → Pi GPIO 15 (RX), GPS RX ← GPIO 14 (TX), share GND. The flight link must use another port.':'GPS TX → USB adapter RX; GPS RX ← adapter TX (if needed); share GND. A USB adapter uses no Pi GPIO. Use /dev/serial0 for the fixed GPIO 14/15 UART.'}));
