@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let state, version = -1, model, active = false, yaw = -.38, pitch = .42, zoom = 1;
 let replayMark=null;
-let droneView=false, droneZoom=1;
+let droneView=false, droneZoom=1, droneYaw=0, dronePitch=0;
 let posesByFrame=new Map();
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
 let sampleOrder=new Map();
@@ -16,13 +16,27 @@ const normalized=v=>v.map(x=>x/Math.hypot(...v));
 function droneCamera(){
   const pose=posesByFrame.get(timeline[cursor]?.id);
   if(!pose)return null;
+  let axes;
   if(pose.rotation){
-    return {xyz:pose.xyz,axes:pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]))};
+    axes=pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]));
+  }else if(pose.forward){
+    const forward=normalized(pose.forward);
+    const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
+    axes=[right,cross(forward,right),forward];
+  }else{
+    return null;
   }
-  if(!pose.forward)return null;
-  const forward=normalized(pose.forward);
-  const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
-  return {xyz:pose.xyz,axes:[right,cross(forward,right),forward],approximate:true};
+
+  const [right,down,forward]=axes;
+  const yawCos=Math.cos(droneYaw), yawSin=Math.sin(droneYaw);
+  const turnRight=right.map((v,i)=>v*yawCos-forward[i]*yawSin);
+  const turnForward=forward.map((v,i)=>v*yawCos+right[i]*yawSin);
+  const pitchCos=Math.cos(dronePitch), pitchSin=Math.sin(dronePitch);
+  return {xyz:pose.xyz,approximate:!pose.rotation,axes:[
+    turnRight,
+    down.map((v,i)=>v*pitchCos-turnForward[i]*pitchSin),
+    turnForward.map((v,i)=>v*pitchCos+down[i]*pitchSin)
+  ]};
 }
 
 function clipNear(points, near, closed=true){
@@ -44,6 +58,7 @@ function draw() {
   canvas.width=w*d; canvas.height=h*d; ctx.setTransform(d,0,0,d,0,0);
   const status=$('droneStatus');
   status.hidden=true;
+  $('recenterDrone').hidden=!droneView || (!droneYaw && !dronePitch);
   if (!model) return;
   const camera=droneView?droneCamera():null;
   if(droneView && !camera){
@@ -201,7 +216,7 @@ function showMap(m) {
   draw();
 }
 canvas.onpointerdown=e=>{
-  if(droneView || e.button!==0 || drag)return;
+  if(e.button!==0 || drag || (droneView && !droneCamera()))return;
   drag={id:e.pointerId,x:e.clientX,y:e.clientY};
   canvas.setPointerCapture(e.pointerId);
 };
@@ -210,7 +225,10 @@ canvas.onpointermove=e=>{
   const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
   drag.x=e.clientX;
   drag.y=e.clientY;
-  if(e.metaKey || e.altKey){
+  if(droneView){
+    droneYaw=(droneYaw+dx*.008)%(2*Math.PI);
+    dronePitch=Math.max(-Math.PI/2,Math.min(Math.PI/2,dronePitch+dy*.008));
+  }else if(e.metaKey || e.altKey){
     panX+=dx;
     panY+=dy;
   }else{
@@ -399,8 +417,7 @@ function updateViewControls(){
   $('droneView').disabled=!model || !timeline.length;
   if($('droneView').disabled)droneView=false;
   $('droneView').setAttribute('aria-pressed',droneView);
-  $('mapViewport').classList.toggle('drone-view',droneView);
-  $('mapHelp').textContent=droneView?'Scrub the timeline to move · scroll to zoom':
+  $('mapHelp').textContent=droneView?'Drag to look around · scrub the timeline to move · scroll to zoom':
     'Drag to orbit · ⌘ or ⌥ + drag to pan · scroll to zoom';
 }
 
@@ -419,8 +436,13 @@ $('droneView').onclick=()=>{
   if(droneView){
     replay=true;
     droneZoom=1;
+    droneYaw=dronePitch=0;
   }
   refreshReplay();
+};
+$('recenterDrone').onclick=()=>{
+  droneYaw=dronePitch=0;
+  draw();
 };
 function setOverview(angle,pitchAngle){
   droneView=false;

@@ -10,7 +10,8 @@
 
 #enlarge{font-size:13px;padding:6px 10px}
 #droneView[aria-pressed="true"]{background:#b5ebce;color:#17271e;border-color:#b5ebce}
-.mapbox.drone-view canvas{cursor:default}
+.mapbox canvas:active{cursor:grabbing}
+#recenterDrone{position:absolute;z-index:1;right:12px;top:12px;padding:6px 10px;font-size:13px}
 #droneStatus{position:absolute;right:12px;bottom:12px;font-size:12px;padding:6px 9px;border-radius:6px;background:#1c2426;color:#c9dadc}
 .views.enlarged{grid-template-columns:minmax(0,1fr)}
 .views.enlarged .mapbox{min-height:clamp(320px,65svh,800px)}
