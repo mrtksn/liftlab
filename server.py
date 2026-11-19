@@ -20,8 +20,8 @@ from zipfile import ZipFile
 import re
 
 from replay import read_timeline
-from fusion import STREAMS, load_observations
-from surfaces import build_surfaces
+from fusion import STREAMS
+from seed_surfaces import build_surfaces
 
 import numpy as np
 import pycolmap as sfm
@@ -260,9 +260,8 @@ class Survey:
                         point[:3] = (np.array(point[:3]) * scale).tolist()
                     model.update(units="m", reference=refs)
             if recover:
-                report("Fitting low-poly surfaces")
-                observations = load_observations(run, ("tof",)) if "tof" in streams else None
-                model["surfaces"] = build_surfaces(model, observations)
+                report("Growing surfaces from observed landmarks")
+                model["surfaces"] = build_surfaces(model)
             model["run"] = run.name
             atomic_json(run / "survey.json", model)
             with self.lock:
@@ -416,6 +415,20 @@ class Survey:
                 self.load(body["name"])
             elif action == "delete":
                 self.delete(body["name"])
+            elif action == "replay-baseline":
+                if self.busy or self.log or not self.run or self.run.name != body.get("run"):
+                    raise ValueError("Select a finished walk first.")
+                model = json.loads((self.run/"survey.json").read_bytes())
+                positions = {p["frame"]: np.asarray(p["xyz"]) for p in model["poses"]}
+                a, b = body.get("A"), body.get("B")
+                distance = float(body.get("metres") or 0)
+                if a not in positions or b not in positions or np.linalg.norm(positions[a]-positions[b]) < 1e-5:
+                    raise ValueError("Choose two distinct mapped camera positions.")
+                if not math.isfinite(distance) or distance <= 0:
+                    raise ValueError("Enter the measured camera separation in metres.")
+                self.refs = {"A": a, "B": b, "metres": distance}
+                atomic_json(self.run/"reference.json", self.refs)
+                self.schedule(model.get("streams", STREAMS))
             elif action == "rebuild":
                 if not self.run or self.busy or self.log:
                     raise ValueError("Choose a finished walk.")

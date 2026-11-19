@@ -7,7 +7,7 @@ import numpy as np
 import pycolmap as sfm
 
 
-def recover_poses(run, model, images, names, xyz):
+def recover_poses(run, model, images, names, xyz, on_observation=None):
     @lru_cache(maxsize=12)
     def gray(name):
         return cv2.imread(str(run / "frames" / name), cv2.IMREAD_GRAYSCALE)
@@ -17,7 +17,7 @@ def recover_poses(run, model, images, names, xyz):
         points = [p for p in images[index].points2D if p.has_point3D()]
         pixels = np.asarray([p.xy for p in points], dtype=np.float32) - .5
         world = np.asarray([model.point3D(p.point3D_id).xyz for p in points])
-        return pixels, world
+        return pixels, world, np.array([p.point3D_id for p in points])
 
     options = sfm.AbsolutePoseEstimationOptions()
     options.ransac.max_error = 2.5
@@ -34,7 +34,7 @@ def recover_poses(run, model, images, names, xyz):
                         key=lambda k: abs(int(anchors[k][:7])-int(name[:7]))):
             if abs(int(anchors[j][:7])-int(name[:7])) > 4:
                 break
-            pixels, world = landmarks(j)
+            pixels, world, ids = landmarks(j)
             if len(pixels) < 20:
                 continue
             source = gray(anchors[j])
@@ -61,6 +61,10 @@ def recover_poses(run, model, images, names, xyz):
             depth = np.median(np.linalg.norm(world[mask][inliers] - images[j].projection_center(),axis=1))
             if np.trace(relative)<2.6 or np.linalg.norm(pose.translation-images[j].projection_center()) > .20*depth:
                 continue
+            if on_observation:
+                observed = world[mask][inliers]
+                on_observation(name, ids[mask][inliers], images[j].camera, flowed[mask][inliers]+.5,
+                               (fit["cam_from_world"] * observed)[:, 2])
             recovered.append(dict(frame=name, xyz=xyz(pose.translation), method="optical_flow"))
             break
     return recovered

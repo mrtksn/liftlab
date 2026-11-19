@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let state, version = -1, model, active = false, yaw = -.38, pitch = .42, zoom = 1;
+let replayMark=null;
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
 let sampleOrder=new Map();
 let mapRun, gapRanges=[], gapRequest=0;
@@ -19,15 +20,19 @@ function draw() {
   };
   if($('surfaceLayer').checked&&model.surfaces?.patches.length){
     const depth=([x,y,z])=>(x*Math.sin(yaw)+y*Math.cos(yaw))*Math.cos(pitch)-z*Math.sin(pitch);
-    const patches=model.surfaces.patches.map(p=>({p,z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}));
+    const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
+    const mesh=model.surfaces;
+    const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
+      mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
+    const patches=visible.map(p=>({p,z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}));
     patches.sort((a,b)=>b.z-a.z);
     for(const {p} of patches){
       const [a,b,c]=p.vertices;
       const u=b.map((n,i)=>n-a[i]),v=c.map((n,i)=>n-a[i]);
       const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
       const shade=.55+.4*Math.abs(depth(n))/Math.max(1e-9,Math.hypot(...n));
-      const rgb=(p.tof_supported?[130,235,196]:p.inferred?[182,160,126]:p.kind==='floor'?[142,167,234]:p.orientation==='upright'?[105,205,191]:p.orientation==='sloped'?[216,163,107]:[127,184,216]).map(n=>Math.round(n*shade));
-      ctx.fillStyle='rgba('+rgb.join(',')+','+(p.inferred?.62:.9)+')';
+      const rgb=[124,194,207].map(n=>Math.round(n*shade));
+      ctx.fillStyle='rgb('+rgb.join(',')+')';
       ctx.beginPath();
       p.vertices.forEach((vertex,i)=>i?ctx.lineTo(...project(vertex)):ctx.moveTo(...project(vertex)));
       ctx.closePath();ctx.fill();
@@ -96,6 +101,7 @@ function fitMapView(){
   zoom=1;
 }
 function showMap(m) {
+  if(m?.surfaces && m.surfaces.method!=='camera-ray-seeds-v1') delete m.surfaces;
   model=m;
   updateSurfaceInfo();
   updateGaps();
@@ -141,8 +147,12 @@ async function update() {
   updateStreamControls();
   $('load').disabled=s.busy||s.recording; $('sample').disabled=!s.fresh||s.recording;
   $('calibrate').disabled=s.samples<12||s.recording;
-  $('markA').disabled=!s.recording; $('markB').disabled=!s.recording||!s.refs.A;
+  const replayPose=replay && !s.busy && model?.run===s.run && model.poses.some(p=>p.frame===timeline[cursor]?.id);
+  if(replayMark?.run!==s.run || s.recording) replayMark=null;
+  $('markA').disabled=!s.recording && !replayPose;
+  $('markB').disabled=s.recording?!s.refs.A:(!replayPose || !replayMark || replayMark.frame===timeline[cursor]?.id);
   $('refs').textContent=[s.refs.A&&'A saved',s.refs.B&&'B saved'].filter(Boolean).join(' · ');
+  if(replayMark) $('refs').textContent='A · frame '+parseInt(replayMark.frame);
   const run=s.recording?null:s.run;
   if(run!==timelineRun){
     pauseReplay();
@@ -181,7 +191,16 @@ async function act(key,body={}) {
 }
 $('connect').onclick=()=>act(['Live','Connecting'].includes(state.connection)?'disconnect':'connect');
 $('record').onclick=()=>act(state.recording?'stop':'start');
-$('markA').onclick=()=>act('A'); $('markB').onclick=()=>act('B',{metres:$('metres').value});
+$('markA').onclick=()=>{
+  if(state.recording) return act('A');
+  replayMark={run:state.run,frame:timeline[cursor].id};
+  $('refs').textContent='A · frame '+parseInt(replayMark.frame);
+};
+$('markB').onclick=()=>{
+  const metres=$('metres').value;
+  if(state.recording) return act('B',{metres});
+  if(replayMark) return act('replay-baseline',{run:replayMark.run,A:replayMark.frame,B:timeline[cursor].id,metres});
+};
 $('load').onclick=()=>act('load',{name:$('runs').value});
 function updateWalkActions(){
   const name=$('runs').value;
@@ -239,22 +258,20 @@ function updateSurfaceInfo(){
   const patches=model?.surfaces?.patches||[];
   const toggle=$('surfaceLayer'), info=$('surfaceInfo');
   toggle.disabled=!patches.length;
+  $('surfaceTimeControl').hidden=!patches.length || !toggle.checked;
   info.hidden=!(model&&(!patches.length||toggle.checked));
-  if(!patches.length){
-    info.textContent=model?.surfaces?'Too little planar evidence for surfaces.':'Rebuild the walk to generate surfaces.';
+  const mesh=model?.surfaces;
+  if(!mesh){ info.textContent='Rebuild this walk to grow surfaces from its landmark tracks.';return; }
+  if(mesh.status==='needs_scale'){
+    info.textContent='The 20 cm growth limit needs metric scale. Under Metric scale, mark two mapped replay frames and enter their measured separation.';
     return;
   }
-  const supported=patches.filter(p=>p.tof_supported).length;
-  const range=supported
-    ? supported+' ToF-corroborated (green)'
-    : model.units!=='m'?'ToF overlay needs metric scale':'No patches corroborated by ToF';
-  const inferred=patches.filter(p=>p.inferred).length;
-  const orientations=model.surfaces.gravity_aligned && patches.some(p=>p.orientation)
-    ? ['level','sloped','upright'].map(k=>patches.filter(p=>p.orientation===k).length+' '+k).join(' · ')+' · '
-    : '';
-  info.textContent=patches.length+' surface polygons · '+orientations+range+
-    (inferred?' · '+inferred+' interpolated polygons (tan)':'')+(model.surfaces.floor_plane!=null?' · Floor candidate (blue-violet)':'')+' · Open areas are unknown';
+  if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
+  info.textContent=patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
+    mesh.deferred_landmarks.length+' landmarks still occluded · 20 cm maximum edge';
+
 }
+$('surfaceTime').onchange=draw;
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
 $('cloud').onchange=$('route').onchange=draw;
 $('side').onclick=()=>{yaw=0;pitch=0;fitMapView();draw();};

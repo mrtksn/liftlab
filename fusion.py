@@ -98,28 +98,41 @@ def sensor_pairs(names, similarities, observations):
             yield name, names[j]
 
 
-def estimate_scale(model, images, observations):
-    # The TOF is mounted just below the lens, approximately parallel to its
-    # optical axis. Restrict association to compact, depth-consistent patches.
-    ratios = []
+def range_ratio(observation, camera, pixels, depths):
+    distance = observation.get("range")
+    if distance is None or distance < .25:
+        return None
+    centre = [camera.principal_point_x, camera.principal_point_y]
+    near = np.linalg.norm(np.asarray(pixels).reshape(-1, 2) - centre, axis=1) < 32
+    depths = np.asarray(depths)
+    sample = depths[near & (depths > 0)]
+    if len(sample) < 5:
+        return None
+    z = np.median(sample)
+    if np.ptp(np.percentile(sample, [10, 90])) < .12*z:
+        return (distance/z, distance, z)
+    return None
+
+
+def estimate_scale(model, images, observations, extra=None):
+    ratios = {}
     for im in images:
-        r = observations.get(im.name, {}).get("range")
-        if r is None or r < .25:
+        if not observations.get(im.name, {}).get("range"):
             continue
-        camera = im.camera
-        centre = np.array([camera.principal_point_x, camera.principal_point_y])
-        depths = []
+        points = [p for p in im.points2D if p.has_point3D()]
         transform = im.cam_from_world()
-        for pt in im.points2D:
-            if pt.has_point3D() and np.linalg.norm(pt.xy-centre) < 32:
-                z = (transform * model.point3D(pt.point3D_id).xyz)[2]
-                if z > 0:
-                    depths.append(z)
-        if len(depths) < 5:
-            continue
-        z = np.median(depths)
-        if np.percentile(depths, 90)-np.percentile(depths, 10) < .12*z:
-            ratios.append((r/z,r,z))
+        ratio = range_ratio(observations[im.name], im.camera, [p.xy for p in points],
+                            [(transform * model.point3D(p.point3D_id).xyz)[2] for p in points])
+        if ratio:
+            ratios[im.name] = ratio
+    primary = checked_scale([ratios[f] for f in sorted(ratios)])
+    if primary or not extra:
+        return primary
+    ratios.update(extra)
+    return checked_scale([ratios[f] for f in sorted(ratios)])
+
+
+def checked_scale(ratios):
     if len(ratios) < 12:
         return None
     # Check on withheld views and require a change in target distance.

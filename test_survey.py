@@ -74,10 +74,15 @@ class ReconstructionTest(unittest.TestCase):
             path=render_room(run)
             names=sorted(p.name for p in (run/"frames").iterdir())
             refs={"A":names[0],"B":names[-1],"metres":float(np.linalg.norm(path[-1]-path[0]))}
-            survey.map(run,names,refs)
+            survey.map(run,names,refs,recover=True)
             self.assertTrue((run/"survey.json").is_file(),survey.message)
             model=json.loads((run/"survey.json").read_text())
             self.assertEqual(model["units"],"m")
+            self.assertEqual(model["surfaces"]["status"],"ready")
+            self.assertTrue(model["surfaces"]["patches"])
+            first_face = model["surfaces"]["patches"][0]
+            for i, vertex in zip(first_face["landmarks"], first_face["vertices"]):
+                self.assertEqual(vertex, model["points"][i][:3])
             self.assertGreater(len(model["points"]),100)
             self.assertGreaterEqual(len(model["poses"]),12)
             for pose in model["poses"]:

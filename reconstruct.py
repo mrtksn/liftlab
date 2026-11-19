@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 
-from fusion import STREAMS, gravity_alignment, estimate_scale, load_observations, sensor_pairs
+from fusion import STREAMS, gravity_alignment, estimate_scale, range_ratio, load_observations, sensor_pairs
 from localize import save_index
 from recover import align_gap, recover_poses
 import cv2
@@ -104,20 +104,36 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
     if alignment is not None:
         rotation = alignment
     origin = first.projection_center()
-    scale = estimate_scale(model, images, observations)
-    factor = scale["metres_per_unit"] if scale else 1
     def xyz(p):
-        return (factor * (rotation @ (p - origin))).round(6).tolist()
+        return (rotation @ (p - origin)).round(6).tolist()
     point_ids = list(model.points3D.keys())
     points = [[*xyz(model.point3D(i).xyz), *model.point3D(i).color.tolist()] for i in point_ids]
-    index = save_index(run, images, first.camera, {pid:i for i,pid in enumerate(point_ids)}) if indexed else None
+    labels = {pid: i for i, pid in enumerate(point_ids)}
+    views = {im.name: sorted({labels[p.point3D_id] for p in im.points2D if p.has_point3D()})
+             for im in images}
+    extra_ratios = {}
+
+    def observed(frame, ids, camera, pixels, depths):
+        views[frame] = sorted({labels[i] for i in ids})
+        ratio = range_ratio(observations.get(frame, {}), camera, pixels, depths)
+        if ratio:
+            extra_ratios[frame] = ratio
+
+    index = save_index(run, images, first.camera, labels) if indexed else None
     poses = [dict(frame=im.name, xyz=xyz(im.projection_center()),
                   forward=(rotation @ im.cam_from_world().rotation.matrix().T[:,2]).round(7).tolist())
              for im in images]
     if recovery_frames:
-        poses.extend(recover_poses(run, model, images, recovery_frames, xyz))
+        poses.extend(recover_poses(run, model, images, recovery_frames, xyz, observed))
         poses.sort(key=lambda pose: pose["frame"])
-    return dict(format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=alignment is not None, feature_index=index, poses=poses, registered_views=len(images),
+    scale = estimate_scale(model, images, observations, extra_ratios)
+    if scale:
+        factor = scale["metres_per_unit"]
+        for point in points:
+            point[:3] = (np.asarray(point[:3])*factor).round(7).tolist()
+        for pose in poses:
+            pose["xyz"] = (np.asarray(pose["xyz"])*factor).round(7).tolist()
+    return dict(landmark_views=views, format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=alignment is not None, feature_index=index, poses=poses, registered_views=len(images),
         path_frames=recovery_frames or names,
         points=points, views=len(names), sampled_frames=names,
         mean_error_px=round(model.compute_mean_reprojection_error(), 3),

@@ -47,8 +47,8 @@ The standalone dashboard and camera stream use SSH. The optional Pi flight telem
 
 Pass `--output /path/to/captures/room-surveys` to open an existing capture directory. Captures are local and excluded from Git.
 
-## Continuous surface preview
+## Surface growth
 
-Enable **Surfaces** and **Landmarks** together to inspect the fit. The fitter centers the cloud and applies one common scale to X, Y and Z. It estimates a normal for each supported 3D neighborhood, groups adjoining landmarks with compatible normals, and triangulates them in each region’s own plane. The triangle vertices are returned to the original map coordinates. Short edges bound interpolation across gaps. Open areas remain unknown.
+Enable **Surfaces** to inspect the mesh grown from the saved landmark observations. Select **Follow replay** to scrub through the faces as they form and change. Each registered view supplies a camera origin and landmark IDs. Within one frame the nearest observations are processed first. An isolated point starts a zero-area seed. A second point can form an edge. Three non-collinear points can form a camera-facing triangle when all three edges are at most 20 cm. Later observations can extend a boundary edge or split a triangle. A ray hitting an existing face before its target defers that observation; later views can retry the same landmark.
 
-After gravity alignment, the viewer counts faces within 15° of level or upright and classifies intermediate tilts as sloped. Upright faces are teal, sloped faces are ochre, and the floor candidate beneath the path is blue-violet. Green indicates local ToF corroboration on metric maps. **Side view** looks along the map’s Y axis. Drag to inspect faces edge-on from other directions.
+The limit uses the walk’s measured baseline or validated ToF scale. For a relative-scale walk, use **Metric scale** to mark two mapped replay frames with a known camera separation. The surface readout counts triangles, single seeds, open pairs and landmarks still occluded. The landmark layer and walk export include deferred points.
