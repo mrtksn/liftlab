@@ -24,3 +24,6 @@
 .legend .route-key{display:inline-flex;align-items:center;gap:6px;margin-left:8px}
 .route-key::before{content:"";width:16px;border-top:2px dashed #f7cc7f}
 .route-key.extrapolated::before{border-top:2px dotted #cfb1f7}
+
+.legend #vertexKey{display:inline-flex;align-items:center;gap:6px;margin-left:8px}
+#vertexKey::before{content:"";width:4px;height:4px;background:#fff}

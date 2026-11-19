@@ -179,11 +179,62 @@ function clipNear(points, near, closed=true){
   return visible;
 }
 
+// Index the projected triangles by screen tile. Only faces covering a landmark's
+// sightline can hide it. Smaller depth is closer in both projection modes.
+class SurfaceVisibility {
+  constructor(width,height){
+    this.tile=32;
+    this.cols=Math.ceil(width/this.tile);
+    this.rows=Math.ceil(height/this.tile);
+    this.bins=new Array(this.cols*this.rows);
+    this.members=new Set();
+  }
+
+  addFace(screen,landmarks){
+    for(const id of landmarks)this.members.add(id);
+    // A triangle clipped at the drone camera's near plane can have four corners.
+    for(let i=1;i+1<screen.length;i++){
+      const [ax,ay,az]=screen[0], [bx,by,bz]=screen[i], [cx,cy,cz]=screen[i+1];
+      const dx=bx-ax, dy=by-ay, ex=cx-ax, ey=cy-ay;
+      const det=dx*ey-dy*ex;
+      if(Math.abs(det)<1e-9)continue;
+      const face={ax,ay,az,ux:ey/det,uy:-ex/det,vx:-dy/det,vy:dx/det,dz1:bz-az,dz2:cz-az};
+      const left=Math.max(0,Math.floor(Math.min(ax,bx,cx)/this.tile));
+      const right=Math.min(this.cols-1,Math.floor(Math.max(ax,bx,cx)/this.tile));
+      const top=Math.max(0,Math.floor(Math.min(ay,by,cy)/this.tile));
+      const bottom=Math.min(this.rows-1,Math.floor(Math.max(ay,by,cy)/this.tile));
+      for(let row=top;row<=bottom;row++){
+        for(let col=left;col<=right;col++){
+          const index=row*this.cols+col;
+          (this.bins[index]??=[]).push(face);
+        }
+      }
+    }
+  }
+
+  hides([x,y,z]){
+    const col=Math.floor(x/this.tile), row=Math.floor(y/this.tile);
+    if(col<0 || row<0 || col>=this.cols || row>=this.rows)return false;
+    const faces=this.bins[row*this.cols+col];
+    if(!faces)return false;
+    for(const f of faces){
+      const dx=x-f.ax, dy=y-f.ay;
+      const u=f.ux*dx+f.uy*dy, v=f.vx*dx+f.vy*dy;
+      if(u < -1e-9 || v < -1e-9 || u+v > 1+1e-9)continue;
+      const depth=f.az+u*f.dz1+v*f.dz2;
+      // Retain landmarks lying on the face, including its own boundary vertices.
+      if(z-depth > 1e-8*Math.max(1,Math.abs(z),Math.abs(depth)))return true;
+    }
+    return false;
+  }
+}
+
 function draw() {
   const w=canvas.clientWidth, h=canvas.clientHeight, d=devicePixelRatio;
   canvas.width=w*d; canvas.height=h*d; ctx.setTransform(d,0,0,d,0,0);
   const status=$('droneStatus');
   status.hidden=true;
+  $('vertexKey').hidden=true;
   $('recenterDrone').hidden=!droneView || (!droneYaw && !dronePitch);
   if (!model) return;
   const camera=droneView?droneCamera():null;
@@ -200,25 +251,30 @@ function draw() {
   const focal=h*.5*droneZoom/Math.tan(75*Math.PI/360);
   const cameraPoint=p=>camera.axes.map(([x,y,z])=>
     x*(p[0]-camera.xyz[0])+y*(p[1]-camera.xyz[1])+z*(p[2]-camera.xyz[2]));
-  const projectCamera=([x,y,z])=>[w/2+focal*x/z,h/2+focal*y/z];
-  const project = p => {
+  // Reciprocal depth varies linearly across a perspective triangle in screen space.
+  const projectCamera=([x,y,z])=>[w/2+focal*x/z,h/2+focal*y/z,-1/z];
+  const cy=Math.cos(yaw), sy=Math.sin(yaw), cp=Math.cos(pitch), sp=Math.sin(pitch);
+  const depth=([x,y,z])=>(x*sy+y*cy)*cp-z*sp;
+  const scale=Math.min(w,h)*zoom/extent;
+  const projectWithDepth=p=>{
     if(camera){
       const viewpoint=cameraPoint(p);
       return viewpoint[2]>=near?projectCamera(viewpoint):null;
     }
-    const [x,y,z]=p.slice(0,3).map((v,i)=>v-centre[i]);
-    const u=x*Math.cos(yaw)-y*Math.sin(yaw), v=x*Math.sin(yaw)+y*Math.cos(yaw);
-    const scale=Math.min(w,h)*zoom/extent;
-    return [w/2+panX+u*scale,h/2+panY-(z*Math.cos(pitch)+v*Math.sin(pitch))*scale];
+    const x=p[0]-centre[0], y=p[1]-centre[1], z=p[2]-centre[2];
+    const u=x*cy-y*sy, v=x*sy+y*cy;
+    return [w/2+panX+u*scale,h/2+panY-(z*cp+v*sp)*scale,v*cp-z*sp];
   };
+  const project=p=>projectWithDepth(p)?.slice(0,2);
+  let visibility;
   if($('surfaceLayer').checked&&model.surfaces?.patches.length){
-    const depth=([x,y,z])=>(x*Math.sin(yaw)+y*Math.cos(yaw))*Math.cos(pitch)-z*Math.sin(pitch);
+    if($('cloud').checked)visibility=new SurfaceVisibility(w,h);
     const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const mesh=model.surfaces;
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
     const patches=visible.flatMap(p=>{
-      if(!camera)return [{p,screen:p.vertices.map(project),
+      if(!camera)return [{p,screen:p.vertices.map(projectWithDepth),
         z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}];
       const clipped=clipNear(p.vertices.map(cameraPoint),near);
       if(clipped.length<3)return [];
@@ -233,15 +289,27 @@ function draw() {
       const rgb=[124,194,207].map(n=>Math.round(n*shade));
       ctx.fillStyle='rgb('+rgb.join(',')+')';
       ctx.beginPath();
-      screen.forEach((vertex,i)=>i?ctx.lineTo(...vertex):ctx.moveTo(...vertex));
+      screen.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
       ctx.closePath();ctx.fill();
+      visibility?.addFace(screen,p.landmarks);
     }
   }
-  for (const p of ($('cloud').checked ? model.points : [])) {
-    const screen=project(p);
-    if(!screen)continue;
-    const [x,y]=screen;
-    ctx.fillStyle='rgb('+p.slice(3).map(v=>Math.round(55+.78*v)).join(',')+')'; ctx.fillRect(x,y,2,2);
+  if($('cloud').checked){
+    const vertices=[];
+    model.points.forEach((p,id)=>{
+      const screen=projectWithDepth(p);
+      if(!screen || visibility?.hides(screen))return;
+      const [x,y]=screen;
+      if(visibility?.members.has(id)){
+        vertices.push(screen);
+      }else{
+        ctx.fillStyle='rgb('+p.slice(3).map(v=>Math.round(55+.78*v)).join(',')+')';
+        ctx.fillRect(x-1,y-1,2,2);
+      }
+    });
+    ctx.fillStyle='#ffffff';
+    for(const [x,y] of vertices)ctx.fillRect(x-2,y-2,4,4);
+    $('vertexKey').hidden=!visibility?.members.size;
   }
   if(!camera && estimate?.xyz){
     const a=project(estimate.xyz), v=estimate.rotation.map(row=>row[2]);
@@ -261,8 +329,8 @@ function draw() {
       const screen=camera?clipNear(segment.points.map(cameraPoint),near,false).map(projectCamera):
         segment.points.map(project);
       if(screen.length===2){
-        ctx.moveTo(...screen[0]);
-        ctx.lineTo(...screen[1]);
+        ctx.moveTo(screen[0][0],screen[0][1]);
+        ctx.lineTo(screen[1][0],screen[1][1]);
       }
     }
     ctx.stroke();
