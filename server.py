@@ -22,6 +22,8 @@ import re
 from replay import read_timeline
 from fusion import STREAMS
 from seed_surfaces import MAX_EDGE, build_surfaces
+from cloth_surfaces import METHOD as CLOTH_METHOD, build_cloth
+
 
 import numpy as np
 import pycolmap as sfm
@@ -29,6 +31,7 @@ from localize import Locator
 from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
 
+SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth}
 HERE = Path(__file__).resolve().parent
 HEADER = struct.Struct(">4sQI")
 
@@ -268,7 +271,8 @@ class Survey:
                     previous = {}
                 mesh = previous.get("surfaces") or {}
                 distance = mesh.get("growth_distance_m", mesh.get("max_edge_m", MAX_EDGE))
-                model["surfaces"] = build_surfaces(model, distance)
+                builder = SURFACE_BUILDERS.get(mesh.get("method"), build_surfaces)
+                model["surfaces"] = builder(model, distance)
             model["run"] = run.name
             atomic_json(path, model)
             with self.lock:
@@ -288,9 +292,9 @@ class Survey:
             if self.build_queue:
                 self.start_next_build()
 
-    def rebuild_surfaces(self, run, model, distance):
+    def rebuild_surfaces(self, run, model, distance, method):
         try:
-            mesh = build_surfaces(model, distance)
+            mesh = SURFACE_BUILDERS[method](model, distance)
             model["surfaces"] = mesh
             atomic_json(run / "survey.json", model)
             with self.lock:
@@ -468,9 +472,12 @@ class Survey:
                 model = json.loads((self.run / "survey.json").read_bytes())
                 if model["units"] != "m" or not model.get("landmark_views"):
                     raise ValueError("Surface growth needs a metric map with landmark observations.")
+                method = body.get("method", (model.get("surfaces") or {}).get("method", "camera-ray-seeds-v1"))
+                if not isinstance(method, str) or method not in SURFACE_BUILDERS:
+                    raise ValueError("Choose a supported surface method.")
                 self.building = self.run
                 self.message = "Rebuilding surfaces from saved landmarks"
-                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance),
+                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance, method),
                                  daemon=True).start()
             elif action == "rebuild":
                 if not self.run or self.busy or self.log:

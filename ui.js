@@ -397,13 +397,15 @@ function growthDistanceCm(mesh){
   return Number(((mesh?.growth_distance_m??mesh?.max_edge_m??.20)*100).toPrecision(12));
 }
 function showMap(m) {
-  if(m?.surfaces && m.surfaces.method!=='camera-ray-seeds-v1') delete m.surfaces;
+  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1'].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
   updateViewControls();
   $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
+  $('surfaceMethod').value=m?.surfaces?.method||'camera-ray-seeds-v1';
+  updateSpanLabel();
   updateSurfaceInfo();
   updateGaps();
   updateStreamControls();
@@ -510,7 +512,7 @@ async function update() {
     $('runs').value=list.includes(old)?old:(s.run||list[0]||'');
   }
   const surfaceBusy=s.recording || s.busy || model?.run!==s.run;
-  $('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
+  $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -600,16 +602,25 @@ function updateSurfaceInfo(){
     return;
   }
   if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
-  info.textContent=patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
+  if(mesh.method==='first-return-cloth-v1'){
+    info.textContent='Ray cloth · '+patches.length+' triangles · '+growthDistanceCm(mesh)+' cm maximum span · '+
+      mesh.unconfirmed+' landmarks lacked a second viewpoint · '+mesh.isolated+' lacked nearby support';
+    return;
+  }
+  info.textContent='Seed growth · '+patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
     mesh.deferred_landmarks.length+' landmarks still occluded · '+growthDistanceCm(mesh)+(mesh.growth_distance_m==null?' cm maximum edge · rebuild to use growth distance':' cm growth distance');
 
 }
+function updateSpanLabel(){
+  $('surfaceSpanLabel').textContent=$('surfaceMethod').value==='first-return-cloth-v1'?'Maximum span (cm)':'Growth distance (cm)';
+}
+$('surfaceMethod').onchange=updateSpanLabel;
 $('rebuildSurfaces').onclick=()=>{
   const edge=$('surfaceEdge');
   edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive growth distance.':'');
   if(!edge.reportValidity())return;
   $('surfaceLayer').checked=true;
-  act('rebuild-surfaces',{run:model.run,growth_distance_cm:edge.valueAsNumber});
+  act('rebuild-surfaces',{run:model.run,method:$('surfaceMethod').value,growth_distance_cm:edge.valueAsNumber});
 };
 $('surfaceEdge').oninput=()=>{$('surfaceEdge').setCustomValidity('');};
 $('surfaceEdge').onkeydown=e=>{
