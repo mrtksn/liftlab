@@ -120,11 +120,14 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
             extra_ratios[frame] = ratio
 
     index = save_index(run, images, first.camera, labels) if indexed else None
-    poses = [dict(frame=im.name, xyz=xyz(im.projection_center()),
-                  forward=(rotation @ im.cam_from_world().rotation.matrix().T[:,2]).round(7).tolist())
-             for im in images]
+    poses = []
+    for im in images:
+        camera_rotation = rotation @ im.cam_from_world().rotation.matrix().T
+        poses.append(dict(frame=im.name, xyz=xyz(im.projection_center()),
+                          rotation=camera_rotation.round(7).tolist(),
+                          forward=camera_rotation[:, 2].round(7).tolist()))
     if recovery_frames:
-        poses.extend(recover_poses(run, model, images, recovery_frames, xyz, observed))
+        poses.extend(recover_poses(run, model, images, recovery_frames, xyz, rotation, observed))
         poses.sort(key=lambda pose: pose["frame"])
     scale = estimate_scale(model, images, observations, extra_ratios)
     if scale:

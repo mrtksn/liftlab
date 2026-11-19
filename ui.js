@@ -2,17 +2,69 @@
 const $ = id => document.getElementById(id);
 let state, version = -1, model, active = false, yaw = -.38, pitch = .42, zoom = 1;
 let replayMark=null;
+let droneView=false, droneZoom=1;
+let posesByFrame=new Map();
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
 let sampleOrder=new Map();
 let mapRun, gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
 let centre = [0,0,0], extent = 1, panX = 0, panY = 0, drag;
 const canvas = $('map'), ctx = canvas.getContext('2d');
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const normalized=v=>v.map(x=>x/Math.hypot(...v));
+
+function droneCamera(){
+  const pose=posesByFrame.get(timeline[cursor]?.id);
+  if(!pose)return null;
+  if(pose.rotation){
+    return {xyz:pose.xyz,axes:pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]))};
+  }
+  if(!pose.forward)return null;
+  const forward=normalized(pose.forward);
+  const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
+  return {xyz:pose.xyz,axes:[right,cross(forward,right),forward],approximate:true};
+}
+
+function clipNear(points, near, closed=true){
+  const visible=[];
+  if(!closed && points[0][2]>=near)visible.push(points[0]);
+  for(let i=closed?0:1;i<points.length;i++){
+    const a=points[(i+points.length-1)%points.length], b=points[i];
+    if((a[2]>=near)!==(b[2]>=near)){
+      const t=(near-a[2])/(b[2]-a[2]);
+      visible.push([a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1]),near]);
+    }
+    if(b[2]>=near)visible.push(b);
+  }
+  return visible;
+}
+
 function draw() {
   const w=canvas.clientWidth, h=canvas.clientHeight, d=devicePixelRatio;
   canvas.width=w*d; canvas.height=h*d; ctx.setTransform(d,0,0,d,0,0);
+  const status=$('droneStatus');
+  status.hidden=true;
   if (!model) return;
+  const camera=droneView?droneCamera():null;
+  if(droneView && !camera){
+    status.textContent='Camera pose unavailable for this frame';
+    status.hidden=false;
+    return;
+  }
+  if(camera?.approximate){
+    status.textContent='Camera roll estimated from map up';
+    status.hidden=false;
+  }
+  const near=model.units==='m'?.02:Math.max(1e-5,extent*.002);
+  const focal=h*.5*droneZoom/Math.tan(75*Math.PI/360);
+  const cameraPoint=p=>camera.axes.map(([x,y,z])=>
+    x*(p[0]-camera.xyz[0])+y*(p[1]-camera.xyz[1])+z*(p[2]-camera.xyz[2]));
+  const projectCamera=([x,y,z])=>[w/2+focal*x/z,h/2+focal*y/z];
   const project = p => {
+    if(camera){
+      const viewpoint=cameraPoint(p);
+      return viewpoint[2]>=near?projectCamera(viewpoint):null;
+    }
     const [x,y,z]=p.slice(0,3).map((v,i)=>v-centre[i]);
     const u=x*Math.cos(yaw)-y*Math.sin(yaw), v=x*Math.sin(yaw)+y*Math.cos(yaw);
     const scale=Math.min(w,h)*zoom/extent;
@@ -24,25 +76,33 @@ function draw() {
     const mesh=model.surfaces;
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
-    const patches=visible.map(p=>({p,z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}));
+    const patches=visible.flatMap(p=>{
+      if(!camera)return [{p,screen:p.vertices.map(project),
+        z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}];
+      const clipped=clipNear(p.vertices.map(cameraPoint),near);
+      if(clipped.length<3)return [];
+      return [{p,screen:clipped.map(projectCamera),z:clipped.reduce((sum,v)=>sum+v[2],0)/clipped.length}];
+    });
     patches.sort((a,b)=>b.z-a.z);
-    for(const {p} of patches){
+    for(const {p,screen} of patches){
       const [a,b,c]=p.vertices;
-      const u=b.map((n,i)=>n-a[i]),v=c.map((n,i)=>n-a[i]);
-      const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
-      const shade=.55+.4*Math.abs(depth(n))/Math.max(1e-9,Math.hypot(...n));
+      const n=normalized(cross(b.map((v,i)=>v-a[i]),c.map((v,i)=>v-a[i])));
+      const incidence=camera?camera.axes[2].reduce((sum,v,i)=>sum+v*n[i],0):depth(n);
+      const shade=.55+.4*Math.abs(incidence);
       const rgb=[124,194,207].map(n=>Math.round(n*shade));
       ctx.fillStyle='rgb('+rgb.join(',')+')';
       ctx.beginPath();
-      p.vertices.forEach((vertex,i)=>i?ctx.lineTo(...project(vertex)):ctx.moveTo(...project(vertex)));
+      screen.forEach((vertex,i)=>i?ctx.lineTo(...vertex):ctx.moveTo(...vertex));
       ctx.closePath();ctx.fill();
     }
   }
   for (const p of ($('cloud').checked ? model.points : [])) {
-    const [x,y]=project(p);
+    const screen=project(p);
+    if(!screen)continue;
+    const [x,y]=screen;
     ctx.fillStyle='rgb('+p.slice(3).map(v=>Math.round(55+.78*v)).join(',')+')'; ctx.fillRect(x,y,2,2);
   }
-  if(estimate?.xyz){
+  if(!camera && estimate?.xyz){
     const a=project(estimate.xyz), v=estimate.rotation.map(row=>row[2]);
     const b=project(estimate.xyz.map((x,i)=>x+v[i]*extent*.10));
     ctx.strokeStyle='#58baff';ctx.fillStyle='#58baff';ctx.lineWidth=3;
@@ -51,17 +111,30 @@ function draw() {
   }
   if(!$('route').checked)return;
   ctx.strokeStyle='#a5efd1'; ctx.lineWidth=2; ctx.beginPath();
-  model.poses.forEach((p,i)=>{const [x,y]=project(p.xyz); if(i && (!sampleOrder.size || sampleOrder.get(p.frame)===sampleOrder.get(model.poses[i-1].frame)+1)) ctx.lineTo(x,y); else ctx.moveTo(x,y);});
+  for(let i=1;i<model.poses.length;i++){
+    const previous=model.poses[i-1], current=model.poses[i];
+    if(sampleOrder.size && sampleOrder.get(current.frame)!==sampleOrder.get(previous.frame)+1)continue;
+    const segment=[previous.xyz,current.xyz];
+    const screen=camera?clipNear(segment.map(cameraPoint),near,false).map(projectCamera):segment.map(project);
+    if(screen.length===2){
+      ctx.moveTo(...screen[0]);
+      ctx.lineTo(...screen[1]);
+    }
+  }
   ctx.stroke();
   for(const p of model.poses){
-    const [x,y]=project(p.xyz);
+    const screen=project(p.xyz);
+    if(!screen)continue;
+    const [x,y]=screen;
     const fraction=parseInt(p.frame)/Math.max(1,(state?.frames||1)-1);
     ctx.fillStyle='hsl('+(167-130*fraction)+' 78% 71%)';
     ctx.fillRect(x-2,y-2,4,4);
   }
   const first=model.poses[0], last=model.poses.at(-1);
   const marker=(pose,label,color,below=false)=>{
-    const [x,y]=project(pose.xyz);
+    const screen=project(pose.xyz);
+    if(!screen)return;
+    const [x,y]=screen;
     ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
     ctx.font='600 12px system-ui';
     const tx=Math.min(w-ctx.measureText(label).width-8,Math.max(5,x+9));
@@ -70,7 +143,7 @@ function draw() {
   };
   marker(first,parseInt(first.frame)===0?'Start':'First mapped pose','#a5efd1');
   marker(last,parseInt(last.frame)===state.frames-1?'Finish':state.recording?'Latest pose':'Last mapped pose','#ffcf80',true);
-  const selected=replay&&model.poses.find(p=>p.frame===timeline[cursor]?.id);
+  const selected=!camera&&replay&&posesByFrame.get(timeline[cursor]?.id);
   if(selected){
     const [x,y]=project(selected.xyz);
     ctx.strokeStyle='#72caff';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
@@ -109,6 +182,8 @@ function showMap(m) {
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
   model=m;
+  posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
+  updateViewControls();
   $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
   updateSurfaceInfo();
   updateGaps();
@@ -126,7 +201,7 @@ function showMap(m) {
   draw();
 }
 canvas.onpointerdown=e=>{
-  if(e.button!==0 || drag)return;
+  if(droneView || e.button!==0 || drag)return;
   drag={id:e.pointerId,x:e.clientX,y:e.clientY};
   canvas.setPointerCapture(e.pointerId);
 };
@@ -147,7 +222,13 @@ canvas.onpointermove=e=>{
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=e=>{
   if(drag?.id===e.pointerId)drag=null;
 };
-canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(.15,Math.min(12,zoom*Math.exp(-e.deltaY*.002)));draw();};
+canvas.onwheel=e=>{
+  e.preventDefault();
+  const change=Math.exp(-e.deltaY*.002);
+  if(droneView)droneZoom=Math.max(.65,Math.min(4,droneZoom*change));
+  else zoom=Math.max(.15,Math.min(12,zoom*change));
+  draw();
+};
 new ResizeObserver(draw).observe(canvas);
 async function update() {
   const s=await (await fetch('/state')).json(); state=s;
@@ -314,8 +395,44 @@ $('surfaceEdge').onkeydown=e=>{
 $('surfaceTime').onchange=draw;
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
 $('cloud').onchange=$('route').onchange=draw;
-$('side').onclick=()=>{yaw=0;pitch=0;fitMapView();draw();};
-$('top').onclick=()=>{yaw=0;pitch=Math.PI/2;fitMapView();draw();};$('iso').onclick=()=>{yaw=-.38;pitch=.42;fitMapView();draw();};
+function updateViewControls(){
+  $('droneView').disabled=!model || !timeline.length;
+  if($('droneView').disabled)droneView=false;
+  $('droneView').setAttribute('aria-pressed',droneView);
+  $('mapViewport').classList.toggle('drone-view',droneView);
+  $('mapHelp').textContent=droneView?'Scrub the timeline to move · scroll to zoom':
+    'Drag to orbit · ⌘ or ⌥ + drag to pan · scroll to zoom';
+}
+
+function setEnlarged(enlarged){
+  const views=$('views'), camera=$('cameraPanel');
+  views.classList.toggle('enlarged',enlarged);
+  if(enlarged)$('mapViewport').append(camera);
+  else views.prepend(camera);
+  $('enlarge').textContent=enlarged?'Collapse':'Enlarge';
+  $('enlarge').setAttribute('aria-expanded',enlarged);
+}
+
+$('enlarge').onclick=()=>setEnlarged(!$('views').classList.contains('enlarged'));
+$('droneView').onclick=()=>{
+  droneView=!droneView;
+  if(droneView){
+    replay=true;
+    droneZoom=1;
+  }
+  refreshReplay();
+};
+function setOverview(angle,pitchAngle){
+  droneView=false;
+  updateViewControls();
+  yaw=angle;
+  pitch=pitchAngle;
+  fitMapView();
+  draw();
+}
+$('side').onclick=()=>setOverview(0,0);
+$('top').onclick=()=>setOverview(0,Math.PI/2);
+$('iso').onclick=()=>setOverview(-.38,.42);
 $('range').onclick=async()=>{try{const r=await fetch('/range',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:Number($('address').value)})});
 const q=await r.json();$('reading').textContent=r.ok?'Raw reading '+q.raw:q.error;}catch(e){$('reading').textContent=e.message;}};
 const sensorTypes=[
@@ -360,6 +477,7 @@ function drawTimeline(){
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
 function refreshReplay(){
+  updateViewControls();
   updateCamera();
   const frame=timeline[cursor];
   if(!replay||!frame){draw();return;}
@@ -434,7 +552,7 @@ $('play').onclick=()=>{
   };
   animation=requestAnimationFrame(tick);
 };
-$('cameraMode').onclick=()=>{pauseReplay();replay=!replay;refreshReplay();};
+$('cameraMode').onclick=()=>{pauseReplay();replay=!replay;if(!replay)droneView=false;refreshReplay();};
 const streamNames={camera:'Camera',tof:'ToF',gyro:'Gyroscope',accel:'Accelerometer',barometer:'Barometer'};
 const traceConfig={
   tof:['Range along beam · m', f=>f.tof>0&&f.tof<250?[f.tof/104]:[]],
@@ -458,6 +576,7 @@ function updateStreamControls(){
   $('rebuild').hidden=!visual;
   $('rebuild').disabled=!state?.run||state.busy||state.recording;
   $('sensorOnlyNote').hidden=visual;
+  if(!visual && $('views').classList.contains('enlarged'))setEnlarged(false);
   $('mapPanel').hidden=!visual;
   $('posePanel').hidden=!visual;
   const used=model?.streams;

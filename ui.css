@@ -7,3 +7,15 @@
 
 #surfaceSettings{justify-content:flex-start}
 #surfaceEdge{width:6em;padding:5px 7px}
+
+#enlarge{font-size:13px;padding:6px 10px}
+#droneView[aria-pressed="true"]{background:#b5ebce;color:#17271e;border-color:#b5ebce}
+.mapbox.drone-view canvas{cursor:default}
+#droneStatus{position:absolute;right:12px;bottom:12px;font-size:12px;padding:6px 9px;border-radius:6px;background:#1c2426;color:#c9dadc}
+.views.enlarged{grid-template-columns:minmax(0,1fr)}
+.views.enlarged .mapbox{min-height:clamp(320px,65svh,800px)}
+.views.enlarged #cameraPanel{position:absolute;z-index:1;top:12px;left:12px;width:clamp(110px,24%,256px);box-shadow:0 4px 18px #0008}
+.views.enlarged #cameraPanel .panelhead{padding:5px 9px}
+.views.enlarged #cameraPanel h2{font-size:11px}
+.views.enlarged #cameraPanel #rate{display:none}
+.views.enlarged #cameraPanel .imagebox{min-height:0}

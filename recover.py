@@ -7,7 +7,7 @@ import numpy as np
 import pycolmap as sfm
 
 
-def recover_poses(run, model, images, names, xyz, on_observation=None):
+def recover_poses(run, model, images, names, xyz, world_rotation, on_observation=None):
     @lru_cache(maxsize=12)
     def gray(name):
         return cv2.imread(str(run / "frames" / name), cv2.IMREAD_GRAYSCALE)
@@ -65,7 +65,10 @@ def recover_poses(run, model, images, names, xyz, on_observation=None):
                 observed = world[mask][inliers]
                 on_observation(name, ids[mask][inliers], images[j].camera, flowed[mask][inliers]+.5,
                                (fit["cam_from_world"] * observed)[:, 2])
-            recovered.append(dict(frame=name, xyz=xyz(pose.translation), method="optical_flow"))
+            orientation = world_rotation @ pose.rotation.matrix()
+            recovered.append(dict(frame=name, xyz=xyz(pose.translation), method="optical_flow",
+                                  rotation=orientation.round(7).tolist(),
+                                  forward=orientation[:, 2].round(7).tolist()))
             break
     return recovered
 
@@ -103,6 +106,15 @@ def align_gap(base, local, left, right):
         return []
     if max(errors[len(before)-1], errors[len(before)]) > .08*span:
         return []
-    return [dict(frame=name, method="aligned_window",
-                 xyz=(matrix[:,:3]@window[name]["xyz"]+matrix[:,3]).round(6).tolist())
-            for name in added]
+    result = []
+    rotation = transform.rotation.matrix()
+    for name in added:
+        pose = window[name]
+        aligned = dict(frame=name, method="aligned_window",
+                       xyz=(matrix[:, :3]@pose["xyz"]+matrix[:, 3]).round(6).tolist())
+        if "rotation" in pose:
+            orientation = rotation @ pose["rotation"]
+            aligned.update(rotation=orientation.round(7).tolist(),
+                           forward=orientation[:, 2].round(7).tolist())
+        result.append(aligned)
+    return result

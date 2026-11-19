@@ -88,6 +88,9 @@ class ReconstructionTest(unittest.TestCase):
             self.assertGreater(len(model["points"]),100)
             self.assertGreaterEqual(len(model["poses"]),12)
             for pose in model["poses"]:
+                orientation = np.asarray(pose["rotation"])
+                np.testing.assert_allclose(orientation.T @ orientation, np.eye(3), atol=2e-7)
+                np.testing.assert_allclose(orientation[:, 2], pose["forward"])
                 truth=path[int(pose["frame"][:7])]-path[0]
                 expected=[truth[0],truth[2],-truth[1]]
                 self.assertLess(np.linalg.norm(np.array(pose["xyz"])-expected),.06)
