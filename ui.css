@@ -20,3 +20,7 @@
 .views.enlarged #cameraPanel h2{font-size:11px}
 .views.enlarged #cameraPanel #rate{display:none}
 .views.enlarged #cameraPanel .imagebox{min-height:0}
+
+.legend .route-key{display:inline-flex;align-items:center;gap:6px;margin-left:8px}
+.route-key::before{content:"";width:16px;border-top:2px dashed #f7cc7f}
+.route-key.extrapolated::before{border-top:2px dotted #cfb1f7}

@@ -5,7 +5,12 @@ let replayMark=null;
 let droneView=false, droneZoom=1, droneYaw=0, dronePitch=0;
 let posesByFrame=new Map();
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
-let sampleOrder=new Map();
+let routeSegments=[], replayEstimates=new Map(), replayDirections=new Map();
+const routeStyles={
+  mapped:{color:'#a5efd1',dash:[]},
+  interpolated:{color:'#f7cc7f',dash:[7,5]},
+  extrapolated:{color:'#cfb1f7',dash:[2,5]}
+};
 let mapRun, gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
 let centre = [0,0,0], extent = 1, panX = 0, panY = 0, drag;
@@ -13,26 +18,147 @@ const canvas = $('map'), ctx = canvas.getContext('2d');
 const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
 const normalized=v=>v.map(x=>x/Math.hypot(...v));
 
-function droneCamera(){
-  const pose=posesByFrame.get(timeline[cursor]?.id);
-  if(!pose)return null;
-  let axes;
-  if(pose.rotation){
-    axes=pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]));
-  }else if(pose.forward){
-    const forward=normalized(pose.forward);
-    const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
-    axes=[right,cross(forward,right),forward];
-  }else{
-    return null;
+function cameraAxes(pose){
+  if(pose?.rotation)return pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]));
+  if(!pose?.forward)return null;
+  const forward=normalized(pose.forward);
+  const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
+  return [right,cross(forward,right),forward];
+}
+
+function orientationQuaternion([[xx,yx,zx],[xy,yy,zy],[xz,yz,zz]]){
+  const diagonal=[1+xx+yy+zz,1+xx-yy-zz,1-xx+yy-zz,1-xx-yy+zz];
+  const major=diagonal.indexOf(Math.max(...diagonal));
+  const scale=2*Math.sqrt(diagonal[major]);
+  const values=[
+    [diagonal[0],zy-yz,xz-zx,yx-xy],
+    [zy-yz,diagonal[1],xy+yx,xz+zx],
+    [xz-zx,xy+yx,diagonal[2],yz+zy],
+    [yx-xy,xz+zx,yz+zy,diagonal[3]]
+  ];
+  return normalized(values[major].map(v=>v/scale));
+}
+
+function quaternionAxes([w,x,y,z]){
+  return [
+    [1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)],
+    [2*(x*y-w*z),1-2*(x*x+z*z),2*(y*z+w*x)],
+    [2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)]
+  ];
+}
+
+function blendDirection(a,b,t){
+  if(!a||!b)return (a||b)?.axes;
+  const sign=a.quat.reduce((sum,v,i)=>sum+v*b.quat[i],0)<0?-1:1;
+  return quaternionAxes(normalized(a.quat.map((v,i)=>v*(1-t)+sign*b.quat[i]*t)));
+}
+
+function frameFraction(frames,index,left,right){
+  const elapsed=frames[right].ms-frames[left].ms;
+  return elapsed>0?(frames[index].ms-frames[left].ms)/elapsed:(index-left)/(right-left);
+}
+
+function buildReplayRoute(poses,frames,estimateEnds){
+  const segments=[], positions=new Map(), directions=new Map();
+  const order=new Map(frames.map((frame,i)=>[frame.id,i]));
+  const knots=poses.map(p=>({pose:p,index:order.get(p.frame)}));
+  for(let i=1;i<knots.length;i++){
+    const left=knots[i-1],right=knots[i];
+    const gap=(left.index!=null&&right.index!=null)
+      ? right.index>left.index+1 : parseInt(right.pose.frame)>parseInt(left.pose.frame)+1;
+    const kind=gap?'interpolated':'mapped';
+    segments.push({kind,points:[left.pose.xyz,right.pose.xyz]});
+    if(gap && left.index!=null && right.index!=null){
+      for(let j=left.index+1;j<right.index;j++){
+        const fraction=frameFraction(frames,j,left.index,right.index);
+        positions.set(frames[j].id,{kind,xyz:left.pose.xyz.map((v,k)=>v+fraction*(right.pose.xyz[k]-v))});
+      }
+    }
   }
+
+  const anchors=knots.filter(k=>k.index!=null);
+  if(estimateEnds && anchors.length){
+    for(const step of [1,-1]){
+      const start=step===1;
+      const anchorIndex=start?0:anchors.length-1;
+      const anchor=anchors[anchorIndex];
+      const end=start?0:frames.length-1;
+      if(end===anchor.index)continue;
+      // Use the span of up to four consecutive mapped frames for the end velocity.
+      let reference=anchor;
+      for(let offset=step;Math.abs(offset)<=3;offset+=step){
+        const sample=anchors[anchorIndex+offset];
+        if(!sample || sample.index!==anchor.index+offset)break;
+        reference=sample;
+      }
+      // Fall back to the nearest distinct timestamp when the edge poses are sparse.
+      if(frames[reference.index].ms===frames[anchor.index].ms){
+        const neighbours=start?anchors:anchors.slice().reverse();
+        reference=neighbours.find(sample=>frames[sample.index].ms!==frames[anchor.index].ms)||anchor;
+      }
+      const held=reference===anchor;
+      for(let j=anchor.index-step;start?j>=end:j<=end;j-=step){
+        const elapsed=frames[j].ms-frames[anchor.index].ms;
+        const interval=frames[reference.index].ms-frames[anchor.index].ms;
+        const xyz=anchor.pose.xyz.map((v,k)=>held?v:v+(reference.pose.xyz[k]-v)*elapsed/interval);
+        positions.set(frames[j].id,{kind:'extrapolated',xyz,held});
+      }
+      if(!held)segments.push({kind:'extrapolated',points:[anchor.pose.xyz,positions.get(frames[end].id).xyz]});
+    }
+  }
+
+  const oriented=anchors.flatMap(({pose,index})=>{
+    const axes=cameraAxes(pose);
+    return axes?[{index,axes,quat:orientationQuaternion(axes)}]:[];
+  });
+  if(oriented.length){
+    let next=0;
+    frames.forEach((frame,index)=>{
+      while(next<oriented.length && oriented[next].index<index)next++;
+      const left=oriented[next-1],right=oriented[next];
+      if(right?.index===index)return;
+      const fraction=left&&right?frameFraction(frames,index,left.index,right.index):0;
+      directions.set(frame.id,blendDirection(left,right,fraction));
+    });
+  }
+  return {segments,positions,directions};
+}
+
+function updateReplayRoute(){
+  const recorded=model?.run===timelineRun && timeline.length>0;
+  const frames=recorded?timeline:(model?.path_frames||model?.sampled_frames||[]).map((id,ms)=>({id,ms}));
+  const route=buildReplayRoute(model?.poses||[],frames,recorded);
+  routeSegments=route.segments;
+  replayEstimates=route.positions;
+  replayDirections=route.directions;
+  updateRouteLegend();
+}
+
+function updateRouteLegend(){
+  for(const kind of ['interpolated','extrapolated']){
+    $('legend-'+kind).hidden=!$('route').checked || !routeSegments.some(segment=>segment.kind===kind);
+  }
+}
+
+function droneCamera(){
+  const id=timeline[cursor]?.id;
+  const pose=posesByFrame.get(id);
+  const estimated=replayEstimates.get(id);
+  const xyz=pose?.xyz||estimated?.xyz;
+  const savedAxes=cameraAxes(pose);
+  const axes=savedAxes||replayDirections.get(id);
+  if(!xyz||!axes)return null;
+  const status=estimated
+    ? estimated.held?'Estimated path · held at nearest mapped pose':
+      estimated.kind==='interpolated'?'Estimated path · straight-line interpolation':'Estimated path · extrapolated end'
+    : !savedAxes?'Camera direction estimated from nearby frames':!pose.rotation?'Camera roll estimated from map up':'';
 
   const [right,down,forward]=axes;
   const yawCos=Math.cos(droneYaw), yawSin=Math.sin(droneYaw);
   const turnRight=right.map((v,i)=>v*yawCos-forward[i]*yawSin);
   const turnForward=forward.map((v,i)=>v*yawCos+right[i]*yawSin);
   const pitchCos=Math.cos(dronePitch), pitchSin=Math.sin(dronePitch);
-  return {xyz:pose.xyz,approximate:!pose.rotation,axes:[
+  return {xyz,status,axes:[
     turnRight,
     down.map((v,i)=>v*pitchCos-turnForward[i]*pitchSin),
     turnForward.map((v,i)=>v*pitchCos+down[i]*pitchSin)
@@ -66,8 +192,8 @@ function draw() {
     status.hidden=false;
     return;
   }
-  if(camera?.approximate){
-    status.textContent='Camera roll estimated from map up';
+  if(camera?.status){
+    status.textContent=camera.status;
     status.hidden=false;
   }
   const near=model.units==='m'?.02:Math.max(1e-5,extent*.002);
@@ -125,18 +251,23 @@ function draw() {
     ctx.beginPath();ctx.arc(...a,6,0,Math.PI*2);ctx.fill();
   }
   if(!$('route').checked)return;
-  ctx.strokeStyle='#a5efd1'; ctx.lineWidth=2; ctx.beginPath();
-  for(let i=1;i<model.poses.length;i++){
-    const previous=model.poses[i-1], current=model.poses[i];
-    if(sampleOrder.size && sampleOrder.get(current.frame)!==sampleOrder.get(previous.frame)+1)continue;
-    const segment=[previous.xyz,current.xyz];
-    const screen=camera?clipNear(segment.map(cameraPoint),near,false).map(projectCamera):segment.map(project);
-    if(screen.length===2){
-      ctx.moveTo(...screen[0]);
-      ctx.lineTo(...screen[1]);
+  ctx.lineWidth=2;
+  for(const [kind,style] of Object.entries(routeStyles)){
+    ctx.strokeStyle=style.color;
+    ctx.setLineDash(style.dash);
+    ctx.beginPath();
+    for(const segment of routeSegments){
+      if(segment.kind!==kind)continue;
+      const screen=camera?clipNear(segment.points.map(cameraPoint),near,false).map(projectCamera):
+        segment.points.map(project);
+      if(screen.length===2){
+        ctx.moveTo(...screen[0]);
+        ctx.lineTo(...screen[1]);
+      }
     }
+    ctx.stroke();
   }
-  ctx.stroke();
+  ctx.setLineDash([]);
   for(const p of model.poses){
     const screen=project(p.xyz);
     if(!screen)continue;
@@ -158,10 +289,12 @@ function draw() {
   };
   marker(first,parseInt(first.frame)===0?'Start':'First mapped pose','#a5efd1');
   marker(last,parseInt(last.frame)===state.frames-1?'Finish':state.recording?'Latest pose':'Last mapped pose','#ffcf80',true);
-  const selected=!camera&&replay&&posesByFrame.get(timeline[cursor]?.id);
+  const replayId=timeline[cursor]?.id, inferred=replayEstimates.get(replayId);
+  const selected=!camera&&replay&&(posesByFrame.get(replayId)||inferred);
   if(selected){
     const [x,y]=project(selected.xyz);
-    ctx.strokeStyle='#72caff';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle=inferred?routeStyles[inferred.kind].color:'#72caff';
+    ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
   }
 }
 function fitMapView(){
@@ -174,6 +307,9 @@ function fitMapView(){
   }
   if($('surfaceLayer').checked) for(const face of model.surfaces?.patches||[]) samples.push(...face.vertices);
   if($('route').checked || !samples.length) for(const pose of model.poses) samples.push(pose.xyz);
+  if($('route').checked) for(const segment of routeSegments){
+    if(segment.kind==='extrapolated')samples.push(...segment.points);
+  }
   if(!samples.length) return;
   const min=[Infinity,Infinity,Infinity], max=min.map(n=>-n);
   for(const p of samples) for(let i=0;i<3;i++){min[i]=Math.min(min[i],p[i]);max[i]=Math.max(max[i],p[i]);}
@@ -203,7 +339,7 @@ function showMap(m) {
   updateSurfaceInfo();
   updateGaps();
   updateStreamControls();
-  sampleOrder=new Map((m?.path_frames||m?.sampled_frames||[]).map((f,i)=>[f,i]));
+  updateReplayRoute();
   $('estimate').disabled=$('continuous').disabled=!m;
   const label=m ? 'Frames '+parseInt(m.poses[0].frame)+'–'+parseInt(m.poses.at(-1).frame)+' · '+state.frames+' saved' : '';
   $('coverage').textContent=label; $('mapempty').hidden=!!m;
@@ -286,6 +422,7 @@ async function update() {
     timeline=response?.ok?await response.json():[];
     timelineRun=run; displayedFrame=null; cursor=0;
     updateGaps();
+    updateReplayRoute();
     $('timeline').max=timeline.at(-1)?.ms||0;
     $('timeline').value=0;
     replay=timeline.length>0;
@@ -412,7 +549,8 @@ $('surfaceEdge').onkeydown=e=>{
 };
 $('surfaceTime').onchange=draw;
 $('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
-$('cloud').onchange=$('route').onchange=draw;
+$('cloud').onchange=draw;
+$('route').onchange=()=>{updateRouteLegend();draw();};
 function updateViewControls(){
   $('droneView').disabled=!model || !timeline.length;
   if($('droneView').disabled)droneView=false;
@@ -488,12 +626,9 @@ function drawTimeline(){
   const x=ms=>2+ms/duration*(width-4);
   const registered=new Map(model?.poses.map(p=>[p.frame,p.method]));
   for(const frame of timeline){
-    g.fillStyle=registered.has(frame.id)?(registered.get(frame.id)?'#72caff':'#a5efd1'):'#556469';
+    const inferred=selectedStreams().includes('camera')&&replayEstimates.get(frame.id);
+    g.fillStyle=inferred?routeStyles[inferred.kind].color:registered.has(frame.id)?(registered.get(frame.id)?'#72caff':'#a5efd1'):'#556469';
     g.fillRect(x(frame.ms),3,2,7);
-  }
-  for(const gap of selectedStreams().includes('camera')?gapRanges:[]){
-    g.fillStyle='#c28453';
-    g.fillRect(x(gap.first.ms),3,Math.max(2,x(gap.last.ms)-x(gap.first.ms)),7);
   }
   g.fillStyle='#72caff';g.fillRect(x(timeline[cursor].ms)-1,0,3,13);
 }
@@ -512,9 +647,12 @@ function refreshReplay(){
   $('frameNo').textContent=seconds(frame.ms)+' / '+seconds(timeline.at(-1).ms)+' · Frame '+parseInt(frame.id);
   $('rate').textContent='Recorded · '+(frame.tof>0&&frame.tof<250?'ToF '+(frame.tof/104).toFixed(2)+' m':'ToF unavailable')+
     ' · '+(frame.gyro?'IMU paired':'No paired IMU');
-  const hasPose=model?.poses.find(p=>p.frame===frame.id);
+  const hasPose=posesByFrame.get(frame.id), inferred=replayEstimates.get(frame.id);
   $('timelineStatus').textContent=hasPose
     ? (hasPose.method==='aligned_window'?'Pose aligned from overlapping views':hasPose.method?'Pose recovered from nearby frames':'Pose registered in the map')
+    : inferred?.held?'Estimated path · held at nearest mapped pose'
+    : inferred?.kind==='interpolated'?'Estimated path · straight line between mapped poses'
+    : inferred?.kind==='extrapolated'?'Estimated path · extrapolated from mapped motion'
     : model?.sampled_frames?.includes(frame.id)
       ? 'Unmapped · sampled but pose unresolved in the main map'
       : 'Unmapped · outside the initial sample and no recovery passed';
