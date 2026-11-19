@@ -199,17 +199,42 @@ class SurfaceVisibility {
       const det=dx*ey-dy*ex;
       if(Math.abs(det)<1e-9)continue;
       const face={ax,ay,az,ux:ey/det,uy:-ex/det,vx:-dy/det,vy:dx/det,dz1:bz-az,dz2:cz-az};
-      const left=Math.max(0,Math.floor(Math.min(ax,bx,cx)/this.tile));
-      const right=Math.min(this.cols-1,Math.floor(Math.max(ax,bx,cx)/this.tile));
-      const top=Math.max(0,Math.floor(Math.min(ay,by,cy)/this.tile));
-      const bottom=Math.min(this.rows-1,Math.floor(Math.max(ay,by,cy)/this.tile));
-      for(let row=top;row<=bottom;row++){
-        for(let col=left;col<=right;col++){
-          const index=row*this.cols+col;
-          (this.bins[index]??=[]).push(face);
-        }
-      }
+      this.indexFace(face, [screen[0],screen[i],screen[i+1]]);
     }
+  }
+
+  indexFace(face, outline){
+    let xmin=Infinity, xmax=-Infinity, ymin=Infinity, ymax=-Infinity;
+    for(const [x,y] of outline){
+      xmin=Math.min(xmin,x); xmax=Math.max(xmax,x);
+      ymin=Math.min(ymin,y); ymax=Math.max(ymax,y);
+    }
+    const left=Math.max(0,Math.floor(xmin/this.tile)), right=Math.min(this.cols-1,Math.floor(xmax/this.tile));
+    const top=Math.max(0,Math.floor(ymin/this.tile)), bottom=Math.min(this.rows-1,Math.floor(ymax/this.tile));
+    for(let row=top;row<=bottom;row++){
+      for(let col=left;col<=right;col++)(this.bins[row*this.cols+col]??=[]).push(face);
+    }
+  }
+
+  addPolygon(rings,landmarks){
+    for(const id of landmarks)this.members.add(id);
+    const outer=rings[0], [ax,ay,az]=outer[0];
+    // Use a wide projected triangle to determine the plane's screen-depth gradient.
+    let b=outer[0], best=0;
+    for(const v of outer){
+      const d=(v[0]-ax)**2+(v[1]-ay)**2;
+      if(d>best){best=d;b=v;}
+    }
+    const dx=b[0]-ax, dy=b[1]-ay, dz=b[2]-az;
+    let det=0, c=b;
+    for(const v of outer){
+      const area=dx*(v[1]-ay)-dy*(v[0]-ax);
+      if(Math.abs(area)>Math.abs(det)){det=area;c=v;}
+    }
+    if(Math.abs(det)<1e-9)return;
+    const gx=(dz*(c[1]-ay)-dy*(c[2]-az))/det;
+    const gy=(dx*(c[2]-az)-dz*(c[0]-ax))/det;
+    this.indexFace({rings,ax,ay,az,gx,gy},outer);
   }
 
   hides([x,y,z]){
@@ -219,6 +244,19 @@ class SurfaceVisibility {
     if(!faces)return false;
     for(const f of faces){
       const dx=x-f.ax, dy=y-f.ay;
+      if(f.rings){
+        const depth=f.az+dx*f.gx+dy*f.gy;
+        if(z-depth <= 1e-8*Math.max(1,Math.abs(z),Math.abs(depth)))continue;
+        let inside=false;
+        for(const ring of f.rings){
+          for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+            const a=ring[i], b=ring[j];
+            if((a[1]>y)!==(b[1]>y) && x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])inside=!inside;
+          }
+        }
+        if(inside)return true;
+        continue;
+      }
       const u=f.ux*dx+f.uy*dy, v=f.vx*dx+f.vy*dy;
       if(u < -1e-9 || v < -1e-9 || u+v > 1+1e-9)continue;
       const depth=f.az+u*f.dz1+v*f.dz2;
@@ -274,24 +312,31 @@ function draw() {
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
     const patches=visible.flatMap(p=>{
-      if(!camera)return [{p,screen:p.vertices.map(projectWithDepth),
+      const rings=[p.vertices,...(p.holes||[])];
+      if(!camera)return [{p,rings:rings.map(r=>r.map(projectWithDepth)),
         z:p.vertices.reduce((sum,v)=>sum+depth(v),0)/p.vertices.length}];
-      const clipped=clipNear(p.vertices.map(cameraPoint),near);
-      if(clipped.length<3)return [];
-      return [{p,screen:clipped.map(projectCamera),z:clipped.reduce((sum,v)=>sum+v[2],0)/clipped.length}];
+      const clipped=rings.map(r=>clipNear(r.map(cameraPoint),near));
+      const outer=clipped[0];
+      if(outer.length<3)return [];
+      return [{p,rings:clipped.filter(r=>r.length>=3).map(r=>r.map(projectCamera)),
+        z:outer.reduce((sum,v)=>sum+v[2],0)/outer.length}];
     });
     patches.sort((a,b)=>b.z-a.z);
-    for(const {p,screen} of patches){
+    for(const {p,rings} of patches){
       const [a,b,c]=p.vertices;
-      const n=normalized(cross(b.map((v,i)=>v-a[i]),c.map((v,i)=>v-a[i])));
+      const n=p.normal||normalized(cross(b.map((v,i)=>v-a[i]),c.map((v,i)=>v-a[i])));
       const incidence=camera?camera.axes[2].reduce((sum,v,i)=>sum+v*n[i],0):depth(n);
       const shade=.55+.4*Math.abs(incidence);
       const rgb=[124,194,207].map(n=>Math.round(n*shade));
       ctx.fillStyle='rgb('+rgb.join(',')+')';
       ctx.beginPath();
-      screen.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
-      ctx.closePath();ctx.fill();
-      visibility?.addFace(screen,p.landmarks);
+      for(const ring of rings){
+        ring.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+        ctx.closePath();
+      }
+      ctx.fill('evenodd');
+      if(p.holes)visibility?.addPolygon(rings,p.landmarks);
+      else visibility?.addFace(rings[0],p.landmarks);
     }
   }
   if($('cloud').checked){
@@ -397,14 +442,16 @@ function growthDistanceCm(mesh){
   return Number(((mesh?.growth_distance_m??mesh?.max_edge_m??.20)*100).toPrecision(12));
 }
 function showMap(m) {
-  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1'].includes(m.surfaces.method)) delete m.surfaces;
+  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1'].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
   updateViewControls();
   $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
-  $('surfaceMethod').value=m?.surfaces?.method||'camera-ray-seeds-v1';
+  const hasTracks=!!Object.keys(m?.landmark_views||{}).length;
+  for(const option of $('surfaceMethod').options)option.disabled=!hasTracks && option.value!=='cloud-planes-v1';
+  $('surfaceMethod').value=hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
   updateSpanLabel();
   updateSurfaceInfo();
   updateGaps();
@@ -592,16 +639,28 @@ function updateSurfaceInfo(){
   const patches=model?.surfaces?.patches||[];
   const toggle=$('surfaceLayer'), info=$('surfaceInfo');
   toggle.disabled=!patches.length;
-  $('surfaceSettings').hidden=model?.units!=='m' || !Object.keys(model.landmark_views||{}).length;
+  $('surfaceSettings').hidden=model?.units!=='m' || !model?.points.length;
   $('surfaceTimeControl').hidden=!patches.length || !toggle.checked;
   info.hidden=!(model&&(!patches.length||toggle.checked));
   const mesh=model?.surfaces;
+  $('vertexKey').textContent=mesh?.method==='cloud-planes-v1'?'Plane support':'Surface vertices';
   if(!mesh){ info.textContent='Rebuild this walk to grow surfaces from its landmark tracks.';return; }
   if(mesh.status==='needs_scale'){
     info.textContent='Surface growth needs metric scale. Under Metric scale, mark two mapped replay frames and enter their measured separation.';
     return;
   }
   if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
+  if(mesh.method==='cloud-planes-v1'){
+    info.textContent='Cloud planes · '+patches.length+' polygons · '+mesh.support_count.toLocaleString()+
+      ' supporting landmarks · '+Math.round(mesh.tolerance_m*1000)+' mm fitting tolerance';
+    if(mesh.indoor){
+      const e=mesh.indoor;
+      info.textContent+=' · '+e.regularized+' aligned to room directions · '+e.range_matches+'/'+e.intersected+
+        ' intersecting ToF rays agree · '+e.range_adjusted+' range-adjusted plates · '+e.attitude_samples+' paired attitudes · '+e.height_samples+
+        ' barometric heights · Vertical direction '+e.up_source;
+    }
+    return;
+  }
   if(mesh.method==='first-return-cloth-v1'){
     info.textContent='Ray cloth · '+patches.length+' triangles · '+growthDistanceCm(mesh)+' cm maximum span · '+
       mesh.unconfirmed+' landmarks lacked a second viewpoint · '+mesh.isolated+' lacked nearby support';
@@ -612,7 +671,8 @@ function updateSurfaceInfo(){
 
 }
 function updateSpanLabel(){
-  $('surfaceSpanLabel').textContent=$('surfaceMethod').value==='first-return-cloth-v1'?'Maximum span (cm)':'Growth distance (cm)';
+  const labels={'cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
+  $('surfaceSpanLabel').textContent=labels[$('surfaceMethod').value]||'Growth distance (cm)';
 }
 $('surfaceMethod').onchange=updateSpanLabel;
 $('rebuildSurfaces').onclick=()=>{

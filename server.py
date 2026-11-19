@@ -20,8 +20,9 @@ from zipfile import ZipFile
 import re
 
 from replay import read_timeline
-from fusion import STREAMS
+from fusion import STREAMS, load_observations
 from seed_surfaces import MAX_EDGE, build_surfaces
+from cloud_planes import METHOD as PLANE_METHOD, build_planes
 from cloth_surfaces import METHOD as CLOTH_METHOD, build_cloth
 
 
@@ -31,7 +32,7 @@ from localize import Locator
 from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
 
-SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth}
+SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth, PLANE_METHOD: build_planes}
 HERE = Path(__file__).resolve().parent
 HEADER = struct.Struct(">4sQI")
 
@@ -39,6 +40,13 @@ HEADER = struct.Struct(">4sQI")
 MOTION = struct.Struct("<d17f")
 RANGE = struct.Struct(">QQi")
 SENSOR_BATCH = struct.Struct(">QHH")
+
+
+def surface_mesh(run, model, method, distance):
+    if method == PLANE_METHOD:
+        observations = load_observations(run, model.get("streams", STREAMS))
+        return build_planes(model, distance, observations)
+    return SURFACE_BUILDERS.get(method, build_surfaces)(model, distance)
 
 
 class Survey:
@@ -271,8 +279,7 @@ class Survey:
                     previous = {}
                 mesh = previous.get("surfaces") or {}
                 distance = mesh.get("growth_distance_m", mesh.get("max_edge_m", MAX_EDGE))
-                builder = SURFACE_BUILDERS.get(mesh.get("method"), build_surfaces)
-                model["surfaces"] = builder(model, distance)
+                model["surfaces"] = surface_mesh(run, model, mesh.get("method"), distance)
             model["run"] = run.name
             atomic_json(path, model)
             with self.lock:
@@ -294,13 +301,14 @@ class Survey:
 
     def rebuild_surfaces(self, run, model, distance, method):
         try:
-            mesh = SURFACE_BUILDERS[method](model, distance)
+            mesh = surface_mesh(run, model, method, distance)
             model["surfaces"] = mesh
             atomic_json(run / "survey.json", model)
             with self.lock:
                 if self.run == run:
                     self.version += 1
-                    self.message = f"Surfaces rebuilt · {len(mesh['patches']):,} triangles"
+                    unit = "polygons" if method == PLANE_METHOD else "triangles"
+                    self.message = f"Surfaces rebuilt · {len(mesh['patches']):,} {unit}"
         except Exception as exc:
             with self.lock:
                 if self.run == run:
@@ -470,11 +478,11 @@ class Survey:
                 if not math.isfinite(distance) or distance <= 0:
                     raise ValueError("Enter a positive growth distance in centimetres.")
                 model = json.loads((self.run / "survey.json").read_bytes())
-                if model["units"] != "m" or not model.get("landmark_views"):
-                    raise ValueError("Surface growth needs a metric map with landmark observations.")
                 method = body.get("method", (model.get("surfaces") or {}).get("method", "camera-ray-seeds-v1"))
                 if not isinstance(method, str) or method not in SURFACE_BUILDERS:
                     raise ValueError("Choose a supported surface method.")
+                if model["units"] != "m" or (method != PLANE_METHOD and not model.get("landmark_views")):
+                    raise ValueError("Surface growth needs metric scale and seed methods need landmark tracks.")
                 self.building = self.run
                 self.message = "Rebuilding surfaces from saved landmarks"
                 threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance, method),
