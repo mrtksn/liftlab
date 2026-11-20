@@ -1,2 +1,5 @@
 pycolmap==4.2.1
 opencv-python-headless>=4.10,<5
+numba>=0.61,<1
+scikit-image>=0.25,<1
+fast-simplification>=0.1.10,<0.2

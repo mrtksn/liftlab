@@ -305,12 +305,19 @@ function draw() {
   };
   const project=p=>projectWithDepth(p)?.slice(0,2);
   const gaussian=$('surfaceMethod').value==='gaussian-map';
-  if(gaussian && gaussianReady){
-    const axes=camera?.axes||[[cy,-sy,0],[-sy*sp,-cy*sp,-cp],[sy*cp,cy*cp,-sp]];
-    gaussianViewer.paint(ctx,w,h,camera?.xyz||centre,axes,camera?[w/2,h/2]:[w/2+panX,h/2+panY],
-      camera?focal:scale,!!camera,near);
-  }
   let visibility;
+  if(gaussian && (gaussianReady || gaussianMeshReady)){
+    const axes=camera?.axes||[[cy,-sy,0],[-sy*sp,-cy*sp,-cp],[sy*cp,cy*cp,-sp]];
+    const args=[ctx,w,h,camera?.xyz||centre,axes,camera?[w/2,h/2]:[w/2+panX,h/2+panY],camera?focal:scale,!!camera,near];
+    if(gaussianReady)gaussianViewer.paint(...args);
+    if(gaussianMeshReady){
+      gaussianMeshViewer.paint(...args,gaussianReady);
+      if($('cloud').checked){
+        visibility=new SurfaceVisibility(w,h);
+        gaussianMeshViewer.indexVisibility(visibility,projectWithDepth,camera?cameraPoint:null,near,projectCamera);
+      }
+    }
+  }
   if(!gaussian && $('surfaceLayer').checked&&model.surfaces?.patches.length){
     if($('cloud').checked)visibility=new SurfaceVisibility(w,h);
     const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
@@ -666,7 +673,8 @@ async function update() {
   }
   const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
   $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
-  $('buildLingbot').disabled=$('trainGaussian').disabled=surfaceBusy;
+  $('buildGaussianMesh').disabled=$('buildLingbot').disabled=$('trainGaussian').disabled=surfaceBusy;
+  if(s.busy && !$('buildGaussianMesh').hidden)$('gaussianStatus').textContent=s.message;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -791,6 +799,7 @@ function updateSurfaceInfo(){
     mesh.deferred_landmarks.length+' landmarks still occluded · '+growthDistanceCm(mesh)+(mesh.growth_distance_m==null?' cm maximum edge · rebuild to use growth distance':' cm growth distance');
 
 }
+let gaussianMeshViewer, gaussianMeshReady=false, loadedMeshUrl, loadedSplatUrl;
 let gaussianViewer, gaussianReady=false, gaussianRequest=0;
 function gaussianUrl(file){
   return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
@@ -803,7 +812,8 @@ function gaussianPair(){
 }
 async function loadGaussian(){
   const ticket=++gaussianRequest;
-  gaussianReady=false;
+  gaussianMeshReady=gaussianReady=false;
+  $('buildGaussianMesh').hidden=true;
   $('gaussianEval').hidden=$('gaussianDownload').hidden=$('trainGaussian').hidden=true;
   $('gaussianStatus').textContent='Opening Gaussian map…';
   draw();
@@ -817,23 +827,59 @@ async function loadGaussian(){
     if(!response.ok)throw Error('Could not open the Gaussian map.');
     const report=await response.json();
     if(ticket!==gaussianRequest)return;
-    const file=$('gaussianMode').value, url=gaussianUrl(file);
-    $('gaussianDownload').hidden=false; $('gaussianDownload').href=url; $('gaussianDownload').download=file;
+    const mode=$('gaussianMode').value, mesh=mode==='mesh' || mode==='overlay';
+    const file=mesh?'mesh-v1/mesh.ply':mode, url=gaussianUrl(file);
     $('gaussianTestFrame').replaceChildren(...report.evaluation.map(e=>new Option(parseInt(e.frame)+' · '+e.psnr_db+' dB',e.frame)));
     gaussianPair(); $('gaussianEval').hidden=false;
-    const ply=await fetch(url);
-    if(!ply.ok)throw Error('Could not load the PLY file.');
-    const buffer=await ply.arrayBuffer();
-    if(ticket!==gaussianRequest)return;
-    gaussianViewer??=new GaussianView();
-    const cloud=file==='cloud.ply', count=gaussianViewer.load(buffer,cloud);
-    gaussianReady=true;
-    $('gaussianStatus').textContent=count.toLocaleString()+(cloud?' colored points':' trained splats')+' · '+report.train_views+' training views · '+report.test_views+' withheld · '+report.mean_psnr_db+' dB PSNR · saved camera poses';
+    let message;
+    if(mesh){
+      const response=await fetch(gaussianUrl('mesh-v1/report.json'));
+      if(ticket!==gaussianRequest)return;
+      if(response.status===404){
+        $('gaussianStatus').textContent='Extract surfaces from the trained splats on this Mac.';
+        $('buildGaussianMesh').hidden=false;
+        return;
+      }
+      if(!response.ok)throw Error('Could not open the mesh report.');
+      const stats=await response.json();
+      if(ticket!==gaussianRequest)return;
+      if(loadedMeshUrl!==url){
+        const result=await fetch(url);
+        if(!result.ok)throw Error('Could not load the mesh.');
+        const buffer=await result.arrayBuffer();
+        if(ticket!==gaussianRequest)return;
+        gaussianMeshViewer??=new GaussianMeshView();
+        gaussianMeshViewer.load(buffer); loadedMeshUrl=url;
+      }
+      const tof=stats.tof;
+      message=stats.triangles.toLocaleString()+' triangles · '+stats.planar_regions+' planar regions · '+stats.views+' registered views · '+
+        (stats.units==='m'?'metric map':'relative scale')+' · ToF hits '+(tof.hits||0)+'/'+(tof.eligible||0)+
+        (tof.median_error_m!=null?' · median difference '+(100*tof.median_error_m).toFixed(1)+' cm'+
+          (stats.units==='m'?'':' after provisional scaling')+' · 80th percentile '+(100*tof.p80_error_m).toFixed(1)+' cm':'')+' · '+(tof.reason||tof.beam);
+      gaussianMeshReady=true;
+    }
+    if(!mesh || mode==='overlay'){
+      const splatUrl=gaussianUrl(mesh?'gaussians.ply':file), cloud=file==='cloud.ply';
+      if(loadedSplatUrl!==splatUrl){
+        const ply=await fetch(splatUrl);
+        if(!ply.ok)throw Error('Could not load the PLY file.');
+        const buffer=await ply.arrayBuffer();
+        if(ticket!==gaussianRequest)return;
+        gaussianViewer??=new GaussianView();
+        gaussianViewer.load(buffer,cloud); loadedSplatUrl=splatUrl;
+      }
+      gaussianReady=true;
+      if(!mesh)message=gaussianViewer.order.length.toLocaleString()+(cloud?' colored points':' trained splats')+' · '+report.train_views+' training views · '+report.test_views+' withheld · '+report.mean_psnr_db+' dB PSNR · saved camera poses';
+    }
+    $('gaussianStatus').textContent=message;
+    $('gaussianDownload').hidden=false; $('gaussianDownload').href=url;
+    $('gaussianDownload').download=file.split('/').at(-1);
     draw();
   }catch(error){if(ticket===gaussianRequest)$('gaussianStatus').textContent=error.message;}
 }
 $('gaussianMode').onchange=loadGaussian;
 $('gaussianTestFrame').onchange=gaussianPair;
+$('buildGaussianMesh').onclick=()=>act('build-gaussian-mesh',{run:model.run,index:model.feature_index});
 $('trainGaussian').onclick=()=>act('build-gaussians',{run:model.run,index:model.feature_index});
 let lingbotRequest=0;
 $('buildLingbot').onclick=()=>act('build-lingbot',{run:model.run,index:model.feature_index});
@@ -869,7 +915,7 @@ function updateSpanLabel(){
   $('gaussianPanel').hidden=!gaussian;
   for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
   if(gaussian && model)loadGaussian();
-  else{++gaussianRequest;gaussianReady=false;}
+  else{++gaussianRequest;gaussianMeshReady=gaussianReady=false;}
   $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;
   replayDepth();
   const labels={[aiMethod]:'Maximum landmark gap (cm)','cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};

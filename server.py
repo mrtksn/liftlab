@@ -334,6 +334,25 @@ class Survey:
                     self.version += 1
                 self.finish_build()
 
+    def extract_gaussian_mesh(self, run, model, root):
+        def progress(message):
+            with self.lock:
+                if self.run == run:
+                    self.message = message
+
+        try:
+            import gaussian_mesh
+            result = gaussian_mesh.build(run, model, root, progress)
+            message = f"Gaussian mesh ready · {result['triangles']:,} triangles"
+        except Exception as exc:
+            message = f"Gaussian mesh failed · {exc}"
+        finally:
+            with self.lock:
+                if self.run == run:
+                    self.message = message
+                    self.version += 1
+                self.finish_build()
+
     def train_lingbot(self, run, model, target):
         try:
             cache = Path.home() / "Library/Caches/RoomSurvey/lingbot"
@@ -508,7 +527,7 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
-            elif action in ("build-gaussians","build-lingbot"):
+            elif action in ("build-gaussians","build-lingbot","build-gaussian-mesh"):
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose an idle, finished walk.")
                 model = json.loads((self.run/"survey.json").read_bytes())
@@ -518,7 +537,14 @@ class Survey:
                 lingbot = action == "build-lingbot"
                 if lingbot:
                     target = self.run / ("lingbot-v1-" + ai_surfaces.index_path(self.run,model["feature_index"]).stem)
-                if not target.is_dir():
+                if action == "build-gaussian-mesh":
+                    if not (target/"gaussians.ply").is_file():
+                        raise ValueError("Build the Gaussian map first.")
+                    if not (target/"mesh-v1"/"report.json").is_file():
+                        self.building = self.run
+                        self.message = "Opening trained Gaussian splats"
+                        threading.Thread(target=self.extract_gaussian_mesh, args=(self.run, model, target), daemon=True).start()
+                elif not target.is_dir():
                     self.building = self.run
                     self.message = "Triangulating points and training Gaussian splats on this Mac"
                     if lingbot:
@@ -630,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/ui.js":"ui.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
@@ -641,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not run or survey.log or query.get("run") != [run.name]:
                     return self.send(b"Select a finished walk","text/plain",404)
             name = query.get("file",[""])[0]
-            allowed = name in ("report.json","cloud.ply","gaussians.ply") or re.fullmatch(
+            allowed = name in ("report.json","cloud.ply","gaussians.ply","mesh-v1/mesh.ply","mesh-v1/report.json") or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
             if path == "/lingbot-artifact":
                 if name in ("view.html","cloud.ply","trajectory.json","predictions.npz"):

@@ -31,8 +31,8 @@
   <button id="rebuildSurfaces" type="button">Rebuild surfaces</button>
 </div><div id="lingbotPanel" class="map-controls" hidden><span id="lingbotStatus" role="status"></span>
 <button id="buildLingbot" type="button" hidden>Build on Apple Metal</button> <a id="lingbotCloud" download="cloud.ply" hidden>Download point cloud</a></div><div id="gaussianPanel" class="map-controls" hidden>
-  <div class="controls"><label>Display <select id="gaussianMode"><option value="gaussians.ply">Gaussian splats</option><option value="cloud.ply">Dense point cloud</option></select></label>
-  <button id="trainGaussian" type="button" hidden>Build Gaussian map</button><a id="gaussianDownload" hidden>Download PLY</a></div>
+  <div class="controls"><label>Display <select id="gaussianMode"><option value="gaussians.ply">Gaussian splats</option><option value="mesh">Surface mesh</option><option value="overlay">Splats + mesh overlay</option><option value="cloud.ply">Dense point cloud</option></select></label>
+  <button id="trainGaussian" type="button" hidden>Build Gaussian map</button><button id="buildGaussianMesh" type="button" hidden>Extract mesh</button><a id="gaussianDownload" hidden>Download PLY</a></div>
   <p id="gaussianStatus" class="muted" role="status"></p>
   <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
     <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
@@ -54,4 +54,4 @@
 <details><summary>Metric scale</summary><p>During recording, mark two camera positions a measured distance apart. In replay, scrub to a mapped frame and mark A, then scrub to B, enter the measured straight-line separation in metres, and mark B to rebuild.</p><div class="controls"><button id="markA">Mark A</button><label>Separation (m) <input id="metres" type="number" min="0.01" step="0.01" placeholder="1.00"></label><button id="markB">Mark B</button><span id="refs"></span></div></details>
 <details><summary>Fisheye calibration <span id="lens"></span></summary><p>Open the target on a flat screen or print it. Keep the white margin visible. Collect at least 12 sharp views at different tilts, distances and positions, including the edges. You can also record now and rebuild after calibration.</p><div class="controls"><a href="/target" target="_blank">Open checkerboard ↗</a><button id="sample">Add board view</button><span id="samples">0 views</span><button id="calibrate">Fit lens</button><button id="reset">Clear samples</button></div></details>
 
-</main><script src="/gaussian-view.js"></script><script src="/ui.js"></script></body></html>
+</main><script src="/gaussian-mesh-view.js"></script><script src="/gaussian-view.js"></script><script src="/ui.js"></script></body></html>

@@ -5,7 +5,7 @@ python_bin=.venv/bin/python
 if [[ ! -x "$python_bin" ]]; then
   python3 -m venv .venv
 fi
-if ! "$python_bin" -c 'import cv2, pycolmap' >/dev/null 2>&1; then
+if ! "$python_bin" -c 'import cv2, pycolmap, numba, skimage, fast_simplification' >/dev/null 2>&1; then
   "$python_bin" -m pip install -r requirements.txt
 fi
 url=http://127.0.0.1:8779
