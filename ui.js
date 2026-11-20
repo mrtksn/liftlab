@@ -438,11 +438,104 @@ function fitMapView(){
   zoom=1;
   panX=panY=0;
 }
+const aiMethod='depth-anything-v2-v1';
+let depthWorker=null, depthPreviewKey='', depthRequest=0, checkingDepth=false;
+
+function depthPair(frame,raw){
+  const params=new URLSearchParams({run:model.run,index:model.feature_index,frame});
+  $('depthPhoto').src='/depth-input.jpg?'+params;
+  $('depthPreview').hidden=false;
+  $('depthCaption').textContent='Frame '+parseInt(frame)+ ' · brighter is nearer'+(raw?'':' · '+(model.surfaces?.ai?.verdicts?.[frame]||'Predicted depth'));
+  const ctx=$('depthImage').getContext('2d');
+  if(raw){
+    const image=ctx.createImageData(96,72);
+    raw.forEach((v,i)=>{image.data.set([v,v,v,255],i*4);});
+    ctx.putImageData(image,0,0);
+  }else{
+    const key=depthPreviewKey, image=new Image();
+    ctx.clearRect(0,0,96,72);
+    image.onload=()=>{if(key===depthPreviewKey && !depthWorker)ctx.drawImage(image,0,0);};
+    image.src='/depth-preview.png?'+params;
+  }
+}
+
+function replayDepth(){
+  if(depthWorker || $('depthPanel').hidden)return;
+  const frames=model?.surfaces?.ai?.frames;
+  if(!frames?.length){$('depthPreview').hidden=true;return;}
+  const id=parseInt(timeline[cursor]?.id||frames[0]);
+  const frame=frames.reduce((best,f)=>Math.abs(parseInt(f)-id)<Math.abs(parseInt(best)-id)?f:best);
+  const key=model.run+model.feature_index+frame;
+  if(depthPreviewKey!==key){depthPreviewKey=key;depthPair(frame);}
+}
+
+function stopDepth(message){
+  depthRequest++;
+  checkingDepth=false;
+  depthWorker?.terminate();
+  depthWorker=null;
+  depthPreviewKey='';
+  $('cancelDepth').hidden=true;
+  $('depthProgress').textContent=message;
+}
+$('cancelDepth').onclick=()=>{stopDepth('Depth inference cancelled. Completed views are cached.');replayDepth();};
+
+async function buildDepth(span){
+  const candidates=model.poses.filter(p=>p.rotation && model.landmark_views?.[p.frame]?.length>=15);
+  if(candidates.length<2){
+    $('depthProgress').textContent='This walk needs two mapped camera views with landmark tracks.';
+    return;
+  }
+  const count=Math.min(36,candidates.length), frames=Array.from({length:count},(_,i)=>
+    candidates[Math.round(i*(candidates.length-1)/(count-1))].frame);
+  const run=model.run,index=model.feature_index,mapVersion=version;
+  $('depthProgress').textContent='Preparing local model · first use downloads about 38 MB';
+  $('cancelDepth').hidden=false;
+  $('rebuildSurfaces').disabled=$('surfaceMethod').disabled=$('surfaceEdge').disabled=true;
+  const request=++depthRequest;
+  checkingDepth=true;
+  let cached=[];
+  try{
+    const response=await fetch('/depth-cache?'+new URLSearchParams({run,index}));
+    if(response.ok)cached=await response.json();
+  }catch{}
+  if(request!==depthRequest)return;
+  checkingDepth=false;
+  if(model?.run!==run || version!==mapVersion || $('surfaceMethod').value!==aiMethod){stopDepth('Map changed.');return;}
+  if(cached.length===frames.length && frames.every(f=>cached.includes(f))){
+    stopDepth('Fitting surfaces from saved depth predictions…');
+    await act('rebuild-surfaces',{run,index,version:mapVersion,method:aiMethod,growth_distance_cm:span});
+    return;
+  }
+  const worker=new Worker('/depth-worker.js',{type:'module'});
+  depthWorker=worker;
+  worker.onerror=e=>stopDepth(e.message||'The local depth runtime could not load. Retry to download the model.');
+  worker.onmessage=async({data})=>{
+    if(worker!==depthWorker)return;
+    if(model?.run!==run || state.version!==mapVersion){
+      stopDepth('The selected map changed. Start depth inference again.');
+      return;
+    }
+    if(data.error){stopDepth(data.error);return;}
+    if(data.status)$('depthProgress').textContent=data.status;
+    if(data.raw)depthPair(data.frame,data.raw);
+    if(data.predictions){
+      stopDepth('Checking predictions against mapped views and fitting planes…');
+      await act('rebuild-surfaces',{run,index,version:mapVersion,method:aiMethod,growth_distance_cm:span,predictions:data.predictions});
+      if($('error').textContent)$('depthProgress').textContent=$('error').textContent;
+    }
+  };
+  worker.postMessage({run,index,frames});
+}
+
 function growthDistanceCm(mesh){
   return Number(((mesh?.growth_distance_m??mesh?.max_edge_m??.20)*100).toPrecision(12));
 }
 function showMap(m) {
-  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1'].includes(m.surfaces.method)) delete m.surfaces;
+  if(checkingDepth||depthWorker)stopDepth("The map changed. Start depth inference again.");
+  depthPreviewKey="";
+  $('depthProgress').textContent="";
+  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1',aiMethod].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
   model=m;
@@ -450,7 +543,7 @@ function showMap(m) {
   updateViewControls();
   $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
   const hasTracks=!!Object.keys(m?.landmark_views||{}).length;
-  for(const option of $('surfaceMethod').options)option.disabled=!hasTracks && option.value!=='cloud-planes-v1';
+  for(const option of $('surfaceMethod').options)option.disabled=(!hasTracks && option.value!=='cloud-planes-v1') || (option.value===aiMethod && !m?.feature_index);
   $('surfaceMethod').value=hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
   updateSpanLabel();
   updateSurfaceInfo();
@@ -558,7 +651,7 @@ async function update() {
     $('runs').replaceChildren(...list.map(n=>new Option(n,n)));
     $('runs').value=list.includes(old)?old:(s.run||list[0]||'');
   }
-  const surfaceBusy=s.recording || s.busy || model?.run!==s.run;
+  const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
   $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
   updateWalkActions();
 }
@@ -650,6 +743,14 @@ function updateSurfaceInfo(){
     return;
   }
   if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
+  if(mesh.method===aiMethod){
+    const a=mesh.ai;
+    info.textContent=a?'Depth Anything V2 · '+patches.length+' inferred planes · '+a.aligned_views+'/'+a.frames.length+
+      ' views passed depth checks · '+a.confirmed_points.toLocaleString()+' cross-view samples · ToF rejections '+a.tof_rejected:
+      'Rebuild surfaces to predict depth for this camera map.';
+    if(a && !patches.length)info.textContent+=' · Insufficient consistent planar support';
+    return;
+  }
   if(mesh.method==='cloud-planes-v1'){
     info.textContent='Cloud planes · '+patches.length+' polygons · '+mesh.support_count.toLocaleString()+
       ' supporting landmarks · '+Math.round(mesh.tolerance_m*1000)+' mm fitting tolerance';
@@ -671,7 +772,9 @@ function updateSurfaceInfo(){
 
 }
 function updateSpanLabel(){
-  const labels={'cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
+  $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;
+  replayDepth();
+  const labels={[aiMethod]:'Maximum landmark gap (cm)','cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
   $('surfaceSpanLabel').textContent=labels[$('surfaceMethod').value]||'Growth distance (cm)';
 }
 $('surfaceMethod').onchange=updateSpanLabel;
@@ -680,6 +783,7 @@ $('rebuildSurfaces').onclick=()=>{
   edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive growth distance.':'');
   if(!edge.reportValidity())return;
   $('surfaceLayer').checked=true;
+  if($('surfaceMethod').value===aiMethod){buildDepth(edge.valueAsNumber);return;}
   act('rebuild-surfaces',{run:model.run,method:$('surfaceMethod').value,growth_distance_cm:edge.valueAsNumber});
 };
 $('surfaceEdge').oninput=()=>{$('surfaceEdge').setCustomValidity('');};
@@ -773,6 +877,7 @@ function drawTimeline(){
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
 function refreshReplay(){
+  replayDepth();
   updateViewControls();
   updateCamera();
   const frame=timeline[cursor];

@@ -22,6 +22,8 @@ import re
 from replay import read_timeline
 from fusion import STREAMS, load_observations
 from seed_surfaces import MAX_EDGE, build_surfaces
+import ai_surfaces
+import depth_assets
 from cloud_planes import METHOD as PLANE_METHOD, build_planes
 from cloth_surfaces import METHOD as CLOTH_METHOD, build_cloth
 
@@ -32,7 +34,7 @@ from localize import Locator
 from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
 
-SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth, PLANE_METHOD: build_planes}
+SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth, PLANE_METHOD: build_planes, ai_surfaces.METHOD: ai_surfaces.build_ai}
 HERE = Path(__file__).resolve().parent
 HEADER = struct.Struct(">4sQI")
 
@@ -43,6 +45,8 @@ SENSOR_BATCH = struct.Struct(">QHH")
 
 
 def surface_mesh(run, model, method, distance):
+    if method == ai_surfaces.METHOD:
+        return ai_surfaces.build_ai(run, model, distance)
     if method == PLANE_METHOD:
         observations = load_observations(run, model.get("streams", STREAMS))
         return build_planes(model, distance, observations)
@@ -307,7 +311,7 @@ class Survey:
             with self.lock:
                 if self.run == run:
                     self.version += 1
-                    unit = "polygons" if method == PLANE_METHOD else "triangles"
+                    unit = "polygons" if method in (PLANE_METHOD, ai_surfaces.METHOD) else "triangles"
                     self.message = f"Surfaces rebuilt · {len(mesh['patches']):,} {unit}"
         except Exception as exc:
             with self.lock:
@@ -483,6 +487,13 @@ class Survey:
                     raise ValueError("Choose a supported surface method.")
                 if model["units"] != "m" or (method != PLANE_METHOD and not model.get("landmark_views")):
                     raise ValueError("Surface growth needs metric scale and seed methods need landmark tracks.")
+                if method == ai_surfaces.METHOD:
+                    if body.get("index") != model.get("feature_index") or body.get("version") != self.version:
+                        raise ValueError("The map changed. Reopen the walk and retry depth inference.")
+                    if "predictions" in body:
+                        ai_surfaces.save_predictions(self.run,model,body["predictions"])
+                    elif not ai_surfaces.cached_frames(self.run,model["feature_index"]):
+                        raise ValueError("Depth predictions unavailable. Retry browser inference.")
                 self.building = self.run
                 self.message = "Rebuilding surfaces from saved landmarks"
                 threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance, method),
@@ -566,10 +577,41 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/ui.js":"ui.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
+        if path.startswith("/depth-assets/"):
+            name = path.removeprefix("/depth-assets/")
+            if name not in depth_assets.FILES:
+                return self.send(b"Unknown asset","text/plain",404)
+            try:
+                asset = depth_assets.asset(name)
+                mime = {".mjs":"text/javascript",".wasm":"application/wasm",".onnx":"application/octet-stream"}
+                return self.send(asset.read_bytes(), mime[asset.suffix])
+            except (OSError,ValueError,subprocess.SubprocessError) as exc:
+                return self.send(str(exc).encode(),"text/plain",503)
+        if path in ("/depth-cache","/depth-input.jpg","/depth-preview.png"):
+            query = parse_qs(url.query)
+            with survey.lock:
+                run = survey.run
+                if not run or run.name != query.get("run",[""])[0] or survey.log:
+                    return self.send(b"Select a finished walk","text/plain",404)
+            frame = query.get("frame",[""])[0]
+            index = query.get("index",[""])[0]
+            if path == "/depth-cache":
+                try:
+                    return self.send(json.dumps(ai_surfaces.cached_frames(run,index)).encode(),"application/json")
+                except (ValueError,OSError):
+                    return self.send(b"Invalid camera map","text/plain",400)
+            if re.fullmatch(r"[0-9]{7}\.jpg",frame):
+                try:
+                    if path == "/depth-input.jpg":
+                        return self.send(ai_surfaces.rectified_jpeg(run,index,frame),"image/jpeg")
+                    return self.send(ai_surfaces.preview_png(run,index,frame),"image/png")
+                except (ValueError,OSError,KeyError):
+                    pass
+            return self.send(b"Depth view unavailable","text/plain",404)
         if path == "/walk.zip":
             return self.download_walk(parse_qs(url.query).get("run", [""])[0])
         if path == "/timeline" or path == "/recorded.jpg":
@@ -612,7 +654,8 @@ class Handler(BaseHTTPRequestHandler):
             if origin and origin != "http://" + self.headers["Host"]:
                 raise ValueError("Local dashboard required")
             size = int(self.headers.get("Content-Length","0"))
-            if not 0 < size <= 2048:
+            limit = 360_000 if self.path == "/rebuild-surfaces" else 2048
+            if not 0 < size <= limit:
                 raise ValueError("Invalid command")
             result = survey.action(self.path.removeprefix("/"),json.loads(self.rfile.read(size)))
             self.send(json.dumps(result).encode(),"application/json")
