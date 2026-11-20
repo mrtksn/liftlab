@@ -678,6 +678,20 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError,OSError):
                         pass
                 return self.send(b"LingBot-Map result unavailable","text/plain",404)
+            if name == "tof-evidence.json":
+                try:
+                    index = query.get("index", [""])[0]
+                    root = gaussian_map.artifact_dir(run, index)
+                    model = json.loads((run/"survey.json").read_bytes())
+                    if model.get("feature_index") != index:
+                        raise ValueError("The camera map changed. Reopen the walk.")
+                    from gaussian_mesh import saved_range_evidence
+                    evidence = saved_range_evidence(run, model, root/"mesh-v1"/"mesh.ply")
+                    return self.send(json.dumps(evidence, allow_nan=False).encode(), "application/json")
+                except FileNotFoundError:
+                    return self.send(b"Extract the Gaussian mesh first.", "text/plain", 404)
+                except (ValueError, KeyError, OSError, ImportError) as exc:
+                    return self.send(str(exc).encode(), "text/plain", 400)
             if allowed:
                 try:
                     root = gaussian_map.artifact_dir(run,query.get("index",[""])[0])

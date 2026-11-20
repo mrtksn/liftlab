@@ -34,6 +34,16 @@
   <div class="controls"><label>Display <select id="gaussianMode"><option value="gaussians.ply">Gaussian splats</option><option value="mesh">Surface mesh</option><option value="overlay">Splats + mesh overlay</option><option value="cloud.ply">Dense point cloud</option></select></label>
   <button id="trainGaussian" type="button" hidden>Build Gaussian map</button><button id="buildGaussianMesh" type="button" hidden>Extract mesh</button><a id="gaussianDownload" hidden>Download PLY</a></div>
   <p id="gaussianStatus" class="muted" role="status"></p>
+  <label><input type="checkbox" id="tofEvidenceToggle"> Show ToF evidence</label>
+  <div id="tofEvidencePanel" hidden>
+    <p id="tofEvidenceStatus" class="muted" role="status"></p>
+    <div id="tofEvidenceControls" class="controls" hidden>
+      <label>Rays <select id="tofRayFilter"><option value="validation">Validation readings</option><option value="miss">Validation misses</option><option value="all">All paired readings</option></select></label>
+      <label>Replay frame <select id="tofRayFrame"></select></label>
+      <button id="tofPrev" type="button">Previous reading</button><button id="tofNext" type="button">Next reading</button>
+    </div>
+    <small id="tofRayDetail"></small>
+  </div>
   <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
     <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
     <figure><img width="192" id="gaussianRender" alt="Gaussian rendering"><figcaption>Rendered</figcaption></figure></div>

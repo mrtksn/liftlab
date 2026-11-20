@@ -1,8 +1,10 @@
+import tempfile
+from pathlib import Path
 import unittest
 
 import numpy as np
 from gaussian_mesh import (CX, CY, FOCAL, HEIGHT, WIDTH, composite, confirm_depths,
-                           fuse, ray_ranges)
+                           fuse, ray_ranges, saved_range_evidence, write_ply)
 
 
 class GaussianMeshTests(unittest.TestCase):
@@ -30,6 +32,35 @@ class GaussianMeshTests(unittest.TestCase):
         ranges = ray_ranges(vertices, faces, [[0,0,0], [.6,0,0]], [[0,0,1]]*2)
         self.assertTrue(np.isnan(ranges[0]))
         self.assertAlmostEqual(ranges[1], 2., places=2)
+
+    def test_saved_mesh_evidence_pairs_registered_fresh_rays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            positions = [0, 4, 1, 0, 0]
+            poses = [dict(frame=f'{i:07}.jpg', xyz=[x,0,0], rotation=np.eye(3).tolist())
+                     for i,x in enumerate(positions)]
+            poses[2]['method'] = 'interpolated'
+            (run/'timestamps.csv').write_text('frame,tof_raw,pi_encoder_callback_ns,pi_tof_read_end_ns\n'+
+                ''.join(f"{p['frame']},{8888 if i==3 else 104},100,{90000100 if i==4 else 110}\n"
+                        for i,p in enumerate(poses)))
+            mesh = run/'mesh.ply'
+            write_ply(mesh, np.array([[-2.,-2.,2],[2.,-2.,2],[0.,2.,2]]), np.array([[0,1,2]]))
+            model = dict(units='m', poses=poses[::-1])
+            result = saved_range_evidence(run,model,mesh)
+            first, second = result['readings']
+            self.assertFalse(first['validation'])
+            self.assertEqual(first['endpoint'],[0,0,1])
+            self.assertEqual(first['intersection'],[0,0,2])
+            self.assertEqual(first['mesh_m'],2)
+            self.assertEqual(second['frame'],'0000001.jpg')
+            self.assertTrue(second['validation'])
+            self.assertFalse(second['hit'])
+            self.assertIsNone(second['intersection'])
+            self.assertEqual(result['summary']['eligible'],1)
+            model['units'] = 'relative'
+            relative = saved_range_evidence(run,model,mesh)
+            self.assertIsNone(relative['readings'][0]['endpoint'])
+            self.assertIn('reason',relative['summary'])
 
     def test_repeated_pose_cannot_confirm_depth(self):
         depth = np.ones((HEIGHT,WIDTH),'f')

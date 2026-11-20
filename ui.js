@@ -376,6 +376,7 @@ function draw() {
     ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
     ctx.beginPath();ctx.arc(...a,6,0,Math.PI*2);ctx.fill();
   }
+  if(gaussian && $('tofEvidenceToggle').checked)drawTofEvidence(project,cameraPoint,projectCamera,camera,near);
   if(!$('route').checked)return;
   ctx.lineWidth=2;
   for(const [kind,style] of Object.entries(routeStyles)){
@@ -804,6 +805,118 @@ let gaussianViewer, gaussianReady=false, gaussianRequest=0;
 function gaussianUrl(file){
   return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
 }
+let evidenceKey='', evidenceTicket=0, evidenceRows=[], shownRays=[];
+
+function selectTofRays(){
+  const filter=$('tofRayFilter').value;
+  shownRays=evidenceRows.filter(r=>filter==='all' || (r.validation && (filter!=='miss' || !r.hit)));
+  $('tofRayFrame').replaceChildren(new Option('Choose a frame',''),...shownRays.map(r=>
+    new Option('Frame '+parseInt(r.frame)+' · '+(r.hit?'hit':'miss')+' · '+r.measured_m.toFixed(2)+' m',r.frame)));
+  for(const id of ['tofRayFrame','tofPrev','tofNext'])$(id).disabled=!shownRays.length;
+  syncTofReading(); draw();
+}
+
+function syncTofReading(){
+  if(!evidenceKey || $('tofEvidenceControls').hidden)return;
+  const id=replay && timeline[cursor]?.id;
+  const row=shownRays.find(r=>r.frame===id);
+  $('tofRayFrame').value=row?.frame||'';
+  const detail=$('tofRayDetail');
+  if(!shownRays.length){detail.textContent='No readings match this filter.';return;}
+  if(!row){detail.textContent='Choose a reading to see its recorded photo and beam.';return;}
+  let info='Frame '+parseInt(id)+' · '+(row.validation?'validation':'comparison set')+' · measured '+row.measured_m.toFixed(2)+' m';
+  if(!row.hit)info+=' · ray misses the mesh';
+  else if(row.mesh_m!=null){
+    const diff=row.mesh_m-row.measured_m;
+    info+=' · first mesh hit '+row.mesh_m.toFixed(2)+' m · '+Math.abs(100*diff).toFixed(1)+' cm '+(diff>=0?'beyond':'before')+' the return';
+  }else info+=' · ray intersects the mesh';
+  detail.textContent=info;
+}
+
+async function refreshTofEvidence(){
+  const enabled=model && $('surfaceMethod').value==='gaussian-map' && $('tofEvidenceToggle').checked;
+  $('tofEvidencePanel').hidden=!enabled;
+  const key=enabled?gaussianUrl('tof-evidence.json')+'&version='+state.version:'';
+  if(evidenceKey===key)return;
+  evidenceKey=key;
+  const ticket=++evidenceTicket;
+  evidenceRows=[]; shownRays=[];
+  $('tofEvidenceControls').hidden=true; $('tofRayDetail').textContent='';
+  if(!enabled)return;
+  $('tofEvidenceStatus').textContent='Checking recorded ranges against the saved mesh…';
+  try{
+    const response=await fetch(key);
+    if(!response.ok)throw Error(await response.text());
+    const {summary,readings}=await response.json();
+    if(ticket!==evidenceTicket)return;
+    evidenceRows=readings;
+    const held=readings.filter(r=>r.validation), misses=held.filter(r=>!r.hit);
+    const scale=summary.units==='m'?'metric map':summary.candidate_metres_per_unit?
+      'provisional scale '+summary.candidate_metres_per_unit.toFixed(3)+' m/unit':'unscaled map';
+    $('tofEvidenceStatus').textContent=misses.length+' misses / '+held.length+' validation rays · '+readings.length+
+      ' paired, registered readings · '+summary.beam+' · '+scale+'. '+
+      (summary.reason||'Orange diamonds mark missed rays, teal dots mark returns on rays that hit. A white cross marks the selected mesh intersection.');
+    $('tofEvidenceControls').hidden=!readings.length;
+    selectTofRays();
+  }catch(error){
+    if(ticket!==evidenceTicket)return;
+    $('tofEvidenceStatus').textContent=error.message;
+    evidenceKey='';
+  }
+}
+
+function drawTofEvidence(project,cameraPoint,projectCamera,camera,near){
+  const current=replay && timeline[cursor]?.id;
+  ctx.save();
+  function marker(row,selected){
+    const end=row.endpoint && project(row.endpoint);
+    const color=row.hit?'#6ce3e7':'#ff9a49';
+    if(selected && row.endpoint){
+      const beam=camera?clipNear([row.origin,row.endpoint].map(cameraPoint),near,false).map(projectCamera):[project(row.origin),end];
+      if(beam.length===2){
+        ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(...beam[0].slice(0,2));ctx.lineTo(...beam[1].slice(0,2));ctx.stroke();
+      }
+    }
+    if(end){
+      const [x,y]=end, r=selected?7:row.hit?2.8:4.5;
+      ctx.fillStyle=color;ctx.strokeStyle='#152025';ctx.lineWidth=1.3;ctx.beginPath();
+      if(row.hit)ctx.arc(x,y,r,0,Math.PI*2);
+      else{ctx.moveTo(x,y-r);ctx.lineTo(x+r,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r,y);ctx.closePath();}
+      ctx.fill();ctx.stroke();
+      if(selected){ctx.strokeStyle='white';ctx.beginPath();ctx.arc(x,y,r+3,0,Math.PI*2);ctx.stroke();}
+    }
+    const hit=selected && row.intersection && project(row.intersection);
+    if(hit){
+      const [x,y]=hit;
+      ctx.beginPath();ctx.moveTo(x-5,y);ctx.lineTo(x+5,y);ctx.moveTo(x,y-5);ctx.lineTo(x,y+5);
+      ctx.strokeStyle='#162022';ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();
+    }
+  }
+  // Draw misses and the selected frame last so they stay visible in dense clusters.
+  for(const hit of [true,false])for(const row of shownRays)if(row.hit===hit && row.frame!==current)marker(row,false);
+  const selected=shownRays.find(r=>r.frame===current);
+  if(selected)marker(selected,true);
+  ctx.restore();
+}
+
+function jumpToTofFrame(id){
+  const frame=timeline.find(f=>f.id===id);
+  if(!frame || timelineRun!==model?.run)return;
+  replay=true;
+  jumpToEndpoint(frame);
+}
+function stepTofReading(forward){
+  const id=timeline[cursor]?.id||'';
+  const row=forward?(shownRays.find(r=>r.frame>id)||shownRays[0]):
+    (shownRays.findLast(r=>r.frame<id)||shownRays.at(-1));
+  if(row)jumpToTofFrame(row.frame);
+}
+$('tofEvidenceToggle').onchange=()=>{refreshTofEvidence();draw();};
+$('tofRayFilter').onchange=selectTofRays;
+$('tofRayFrame').onchange=()=>jumpToTofFrame($('tofRayFrame').value);
+$('tofPrev').onclick=()=>stepTofReading(false);
+$('tofNext').onclick=()=>stepTofReading(true);
+
 function gaussianPair(){
   const frame=$('gaussianTestFrame').value;
   if(!frame)return;
@@ -812,6 +925,7 @@ function gaussianPair(){
 }
 async function loadGaussian(){
   const ticket=++gaussianRequest;
+  refreshTofEvidence();
   gaussianMeshReady=gaussianReady=false;
   $('buildGaussianMesh').hidden=true;
   $('gaussianEval').hidden=$('gaussianDownload').hidden=$('trainGaussian').hidden=true;
@@ -915,7 +1029,7 @@ function updateSpanLabel(){
   $('gaussianPanel').hidden=!gaussian;
   for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
   if(gaussian && model)loadGaussian();
-  else{++gaussianRequest;gaussianMeshReady=gaussianReady=false;}
+  else{++gaussianRequest;gaussianMeshReady=gaussianReady=false;refreshTofEvidence();}
   $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;
   replayDepth();
   const labels={[aiMethod]:'Maximum landmark gap (cm)','cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
@@ -1021,6 +1135,7 @@ function drawTimeline(){
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
 function refreshReplay(){
+  syncTofReading();
   replayDepth();
   updateViewControls();
   updateCamera();

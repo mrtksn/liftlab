@@ -282,7 +282,7 @@ def ray_ranges(vertices, faces, eyes, directions):
     return np.array(result)
 
 
-def range_check(run, model, vertices, faces, poses):
+def range_evidence(run, model, vertices, faces, poses):
     observations = load_observations(run, ('tof',))
     cal = run/'tof-extrinsics.json'
     mount = json.loads(cal.read_text()) if cal.exists() else dict(direction=[0, 0, 1], origin_m=[0, 0, 0])
@@ -292,7 +292,7 @@ def range_check(run, model, vertices, faces, poses):
     check = dict(beam='measured mount' if cal.exists() else 'camera-axis approximation', units=model['units'])
     if model['units'] != 'm' and np.any(origin):
         check['reason'] = 'Metric scale required for measured sensor offset'
-        return check
+        return check, []
     valid = []
     timestamps = run/'timestamps.csv'
     if timestamps.exists():
@@ -304,31 +304,67 @@ def range_check(run, model, vertices, faces, poses):
                     paired.add(row['frame'])
         valid = [p for p in poses if p['frame'] in paired and 'range' in observations.get(p['frame'], {})]
     # Reserve validation frames before intersecting rays, so misses count in coverage.
-    test = valid[1::2]
-    def hits(items):
-        rays, starts, truth = [], [], []
-        for p in items:
-            rot = np.asarray(p['rotation'])
-            starts.append(p['xyz'] + rot @ origin)
-            rays.append(rot @ (direction / np.linalg.norm(direction)))
-            truth.append(observations[p['frame']]['range'])
-        return ray_ranges(vertices, faces, starts, rays), np.asarray(truth)
-    predicted, measured = hits(test)
-    found = np.isfinite(predicted)
+    starts, rays, truth = [], [], []
+    axis = direction / np.linalg.norm(direction)
+    for pose in valid:
+        rot = np.asarray(pose['rotation'])
+        starts.append(pose['xyz'] + rot @ origin)
+        rays.append(rot @ axis)
+        truth.append(observations[pose['frame']]['range'])
+    measured = np.asarray(truth)
+    predicted = ray_ranges(vertices, faces, starts, rays)
+    test = predicted[1::2]
+    found = np.isfinite(test)
     check.update(eligible=len(test), hits=int(found.sum()))
     scale = 1.
     if model['units'] != 'm':
-        train, reference = hits(valid[::2])
+        train, reference = predicted[::2], measured[::2]
         ok = np.isfinite(train)
         if ok.sum() < 8 or np.ptp(np.percentile(reference[ok], [10,90])) < .3:
             check['reason'] = 'Insufficient range variation or mesh hits to estimate scale'
-            return check
-        scale = float(np.median(reference[ok]/train[ok]))
-        check['candidate_metres_per_unit'] = scale
-    if found.any():
-        errs = np.abs(predicted[found]*scale-measured[found])
+            scale = None
+        else:
+            scale = float(np.median(reference[ok]/train[ok]))
+            check['candidate_metres_per_unit'] = scale
+    if scale is not None and found.any():
+        errs = np.abs(test[found]*scale-measured[1::2][found])
         check.update(median_error_m=float(np.median(errs)), p80_error_m=float(np.percentile(errs,80)))
-    return check
+    readings = []
+    for i, pose in enumerate(valid):
+        hit = np.isfinite(predicted[i])
+        readings.append(dict(frame=pose['frame'], validation=bool(i%2), origin=starts[i].tolist(),
+            measured_m=truth[i], hit=bool(hit),
+            endpoint=(starts[i]+rays[i]*truth[i]/scale).tolist() if scale is not None else None,
+            intersection=(starts[i]+rays[i]*predicted[i]).tolist() if hit else None,
+            mesh_m=float(predicted[i]*scale) if hit and scale is not None else None))
+    return check, readings
+
+
+def saved_range_evidence(run, model, mesh_path):
+    # Read the indexed, packed triangle PLY produced by write_ply.
+    with mesh_path.open('rb') as file:
+        header = []
+        while len(header) < 12:
+            line = file.readline(256)
+            if line == b'end_header\n':
+                break
+            header.append(line.decode('ascii').strip())
+        if (len(header) != 8 or header[:2] != ['ply', 'format binary_little_endian 1.0']
+                or header[3:6] != ['property float x', 'property float y', 'property float z']
+                or header[7] != 'property list uchar int vertex_indices'
+                or not header[2].startswith('element vertex ') or not header[6].startswith('element face ')):
+            raise ValueError('Unsupported saved mesh format')
+        nv, nf = int(header[2].split()[-1]), int(header[6].split()[-1])
+        if min(nv, nf) < 1 or mesh_path.stat().st_size-file.tell() != 12*nv+13*nf:
+            raise ValueError('Incomplete saved mesh')
+        vertices = np.fromfile(file, '<f4', nv*3).reshape(nv,3).astype(float)
+        triangles = np.fromfile(file, [('size','u1'),('indices','<i4',3)], nf)
+    faces = triangles['indices']
+    if np.any(triangles['size'] != 3) or faces.min()<0 or faces.max()>=nv:
+        raise ValueError('Invalid saved triangles')
+    poses = sorted((p for p in model['poses'] if 'rotation' in p and not p.get('method')), key=lambda p:p['frame'])
+    summary, readings = range_evidence(run, model, vertices, faces, poses)
+    return dict(summary=summary, readings=readings)
 
 
 def write_ply(path, vertices, faces):
@@ -369,7 +405,7 @@ def build(run, model, root, progress=lambda message: None):
     report = dict(views=len(selected), triangles=len(faces), raw_triangles=raw, planar_regions=regions, vertices=len(vertices),
                   voxel_size=float(voxel), units=model['units'], accepted_pixels=int(sum(np.count_nonzero(im) for im in accepted)),
                   rendered_pixels=int(sum(np.count_nonzero(im) for im in images)),
-                  tof=range_check(run, model, vertices, faces, poses))
+                  tof=range_evidence(run, model, vertices, faces, poses)[0])
     with tempfile.TemporaryDirectory(dir=root, prefix='.mesh-') as tmp:
         ready = Path(tmp)/'ready'
         ready.mkdir()
