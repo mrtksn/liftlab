@@ -334,6 +334,29 @@ class Survey:
                     self.version += 1
                 self.finish_build()
 
+    def train_lingbot(self, run, model, target):
+        try:
+            cache = Path.home() / "Library/Caches/RoomSurvey/lingbot"
+            with tempfile.TemporaryDirectory(dir=run, prefix=".lingbot-") as tmp:
+                stage = Path(tmp)
+                gaussian_map.export_droid(run, model, stage/"rectified")
+                proc = subprocess.run([str(cache/"env/bin/python"), str(HERE/"lingbot_apple.py"),
+                    str(stage/"rectified"), str(cache/"lingbot-map.pt"), str(stage/"result"), "--stride", "8"],
+                    env=dict(os.environ,PYTHONPATH=str(cache/"source"),PYTORCH_ENABLE_MPS_FALLBACK="1"),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                if proc.returncode:
+                    raise ValueError(proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "Inference exited early")
+                (stage/"result").rename(target)
+            message = "LingBot-Map reconstruction ready"
+        except Exception as exc:
+            message = f"LingBot-Map failed · {exc}"
+        finally:
+            with self.lock:
+                if self.run == run:
+                    self.message = message
+                    self.version += 1
+                self.finish_build()
+
     def runs(self):
         return sorted((p.name for p in self.root.iterdir()
                        if not p.name.startswith(".") and not p.is_symlink()
@@ -485,17 +508,22 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
-            elif action == "build-gaussians":
+            elif action in ("build-gaussians","build-lingbot"):
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose an idle, finished walk.")
                 model = json.loads((self.run/"survey.json").read_bytes())
                 if body.get("index") != model.get("feature_index"):
                     raise ValueError("The camera map changed. Reopen the walk.")
                 target = gaussian_map.artifact_dir(self.run, model.get("feature_index"))
+                lingbot = action == "build-lingbot"
+                if lingbot:
+                    target = self.run / ("lingbot-v1-" + ai_surfaces.index_path(self.run,model["feature_index"]).stem)
                 if not target.is_dir():
                     self.building = self.run
                     self.message = "Triangulating points and training Gaussian splats on this Mac"
-                    threading.Thread(target=self.train_gaussians,args=(self.run,model,target),daemon=True).start()
+                    if lingbot:
+                        self.message = "Running LingBot-Map on Apple Metal"
+                    threading.Thread(target=self.train_lingbot if lingbot else self.train_gaussians,args=(self.run,model,target),daemon=True).start()
             elif action == "rebuild-surfaces":
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose a finished walk.")
@@ -560,7 +588,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length",str(len(data)))
         self.send_header("Cache-Control","no-store")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if urlsplit(self.path).path == "/lingbot-artifact" else "DENY")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -606,7 +634,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
-        if path == "/gaussian-artifact":
+        if path in ("/gaussian-artifact","/lingbot-artifact"):
             query = parse_qs(url.query)
             with survey.lock:
                 run = survey.run
@@ -615,6 +643,15 @@ class Handler(BaseHTTPRequestHandler):
             name = query.get("file",[""])[0]
             allowed = name in ("report.json","cloud.ply","gaussians.ply") or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
+            if path == "/lingbot-artifact":
+                if name in ("view.html","cloud.ply","trajectory.json","predictions.npz"):
+                    try:
+                        index = ai_surfaces.index_path(run,query.get("index",[""])[0]).stem
+                        file = run/("lingbot-v1-"+index)/name
+                        return self.send(file.read_bytes(),{".html":"text/html",".json":"application/json"}.get(file.suffix,"application/octet-stream"))
+                    except (ValueError,OSError):
+                        pass
+                return self.send(b"LingBot-Map result unavailable","text/plain",404)
             if allowed:
                 try:
                     root = gaussian_map.artifact_dir(run,query.get("index",[""])[0])

@@ -91,6 +91,21 @@ def triangulate(anchor, other, uv, gray):
     return xyz, valid
 
 
+def write_brush_image(path, image):
+    ok, encoded = cv2.imencode('.jpg', image)
+    if not ok:
+        raise OSError('Could not encode rectified frame')
+    data = encoded.tobytes()
+    # Brush 0.3.0 reads exactly 16,387 bytes for its initial format probe.
+    # Add a legal JPEG comment before EOI without changing decoded pixels.
+    missing = 16387 - len(data)
+    if missing > 0:
+        padding = bytes(max(0, missing - 4))
+        comment = b'\xff\xfe' + (len(padding) + 2).to_bytes(2, 'big') + padding
+        data = data[:-2] + comment + data[-2:]
+    path.write_bytes(data)
+
+
 def prepare_brush(run, model, dest, dense_seed=True):
     if len(model.get('points',[]))<3:
         raise ValueError('Rebuild the camera landmarks before Gaussian mapping')
@@ -127,8 +142,7 @@ def prepare_brush(run, model, dest, dense_seed=True):
         dense.append(np.column_stack([xyz, window[1][2][v,u,::-1]]))
 
     for i, (p,(name,bgr)) in enumerate(zip(poses,rectified_frames(run,model,[p['frame'] for p in poses]))):
-        if not cv2.imwrite(str(images/name), bgr):
-            raise OSError('Could not save rectified frame')
+        write_brush_image(images/name, bgr)
         rotation, eye = np.asarray(p['rotation']), np.asarray(p['xyz'])
         c2w = np.eye(4)
         c2w[:3,:3], c2w[:3,3] = rotation @ np.diag([1,-1,-1]), eye
@@ -168,7 +182,10 @@ def build(run, model, dest, brush=None, steps=1500, dense_seed=True):
                '--export-every',str(steps),'--eval-save-to-disk','--export-path',str(stage),
                '--export-name','gaussians.ply','--max-splats','120000','--sh-degree','0',
                '--refine-every','100','--growth-select-fraction','0.3']
-        subprocess.run(cmd,check=True)
+        process = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, errors='replace')
+        if process.returncode:
+            detail = ' '.join(process.stderr.split())[-450:]
+            raise ValueError(detail or f'Brush exited with status {process.returncode}')
         eval_dir = stage/f'eval_{steps}'
         heldout = json.loads((stage/'dataset/transforms_val.json').read_text())['frames']
         scores = []

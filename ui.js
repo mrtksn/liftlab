@@ -544,6 +544,7 @@ function showMap(m) {
   if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1',aiMethod].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
+  const keepLingbot=sameMap && $('surfaceMethod').value==='lingbot-map';
   const keepGaussian=sameMap && $('surfaceMethod').value==='gaussian-map';
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
@@ -552,10 +553,11 @@ function showMap(m) {
   const hasTracks=!!Object.keys(m?.landmark_views||{}).length;
   for(const option of $('surfaceMethod').options)option.disabled=(!hasTracks && option.value!=='cloud-planes-v1') || (option.value===aiMethod && !m?.feature_index);
   for(const opt of $('surfaceMethod').options){
-    if(opt.value==='gaussian-map')opt.disabled=!m?.feature_index;
+    if(['gaussian-map','lingbot-map'].includes(opt.value))opt.disabled=!m?.feature_index;
     else if(m?.units!=='m')opt.disabled=true;
   }
-  $('surfaceMethod').value=keepGaussian?'gaussian-map':hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
+  const relativeGaussian=m?.feature_index && m.units!=='m';
+  $('surfaceMethod').value=keepLingbot?'lingbot-map':(keepGaussian || relativeGaussian)?'gaussian-map':hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
   updateSpanLabel();
   updateSurfaceInfo();
   updateGaps();
@@ -664,7 +666,7 @@ async function update() {
   }
   const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
   $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
-  $('trainGaussian').disabled=surfaceBusy;
+  $('buildLingbot').disabled=$('trainGaussian').disabled=surfaceBusy;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -746,7 +748,7 @@ function updateSurfaceInfo(){
   toggle.disabled=!patches.length;
   const gaussian=$('surfaceMethod').value==='gaussian-map';
   $('surfaceSettings').hidden=!model?.points.length || (model.units!=='m' && !model.feature_index);
-  if(gaussian){
+  if(gaussian || $('surfaceMethod').value==='lingbot-map'){
     toggle.disabled=true;
     $('surfaceTimeControl').hidden=info.hidden=true;
     return;
@@ -833,10 +835,39 @@ async function loadGaussian(){
 $('gaussianMode').onchange=loadGaussian;
 $('gaussianTestFrame').onchange=gaussianPair;
 $('trainGaussian').onclick=()=>act('build-gaussians',{run:model.run,index:model.feature_index});
+let lingbotRequest=0;
+$('buildLingbot').onclick=()=>act('build-lingbot',{run:model.run,index:model.feature_index});
+async function updateLingbot(selected){
+  const ticket=++lingbotRequest, viewer=$('lingbotView');
+  $('lingbotPanel').hidden=!selected;
+  $('mapHelp').closest('.legend').hidden=selected;
+  $('route').closest('.map-controls').hidden=selected;
+  viewer.hidden=true;
+  if(!selected){viewer.removeAttribute('src');return;}
+  $('lingbotStatus').textContent='Opening reconstruction…';
+  $('buildLingbot').hidden=$('lingbotCloud').hidden=true;
+  const url=file=>'/lingbot-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
+  try{
+    const response=await fetch(url('trajectory.json'));
+    if(ticket!==lingbotRequest)return;
+    if(response.status===404){
+      $('lingbotStatus').textContent='Sample every eighth image across this walk.';
+      $('buildLingbot').hidden=false;return;
+    }
+    if(!response.ok)throw Error('Could not open the saved trajectory.');
+    const report=await response.json();
+    if(ticket!==lingbotRequest)return;
+    $('lingbotStatus').textContent=report.views+' predicted poses · '+report.points.toLocaleString()+' depth samples · relative scale';
+    viewer.src=url('view.html');viewer.hidden=false;
+    $('lingbotCloud').href=url('cloud.ply');$('lingbotCloud').hidden=false;
+  }catch(error){if(ticket===lingbotRequest)$('lingbotStatus').textContent=error.message;}
+}
 function updateSpanLabel(){
+  const lingbot=$('surfaceMethod').value==='lingbot-map';
+  updateLingbot(lingbot);
   const gaussian=$('surfaceMethod').value==='gaussian-map';
   $('gaussianPanel').hidden=!gaussian;
-  for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian;
+  for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
   if(gaussian && model)loadGaussian();
   else{++gaussianRequest;gaussianReady=false;}
   $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;

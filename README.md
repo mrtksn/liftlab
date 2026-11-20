@@ -66,3 +66,15 @@ Use Brush v0.3.0 from the [official releases](https://github.com/ArthurBrussee/b
 `python gaussian_map.py prepare-droid WALK NEW_OUTPUT` exports every saved image, including frames without existing poses. It saves the capture timestamp table and a calibrated config for the authors’ RGB loader with Gaussian mapping enabled. The local Brush option uses saved camera poses. DROID-W estimates a new trajectory and depth using its learned tracker.
 
 For an installation of [the authors’ code](https://github.com/MoyangLi00/DROID-W) at revision `c3414af6047d06bafc1a6645d09f23247f3b2cdc`, follow its CUDA and pretrained-weight setup. From that checkout, run `python run.py --config /absolute/path/to/export/walk.yaml`. If the prepared folder moves, update `data.input_folder` in its config. The upstream run writes keyframe depths and poses to `video.npz` and the Gaussian model to `final_gs.ply`. Preparing the export requires no GPU or network.
+
+### LingBot-Map on Apple Silicon
+
+In a finished camera walk choose **Reconstruction method → LingBot-Map (Apple Metal)**. Build once per saved calibration. Orbit and zoom the point cloud and scrub its walk replay. The blue line connects predicted camera positions. Inference takes rectified RGB images and estimates a trajectory in its own relative coordinates. It uses every eighth image plus the finish, including images without registered camera poses. ToF and inertial streams are available in the recording and are independent of this estimate.
+
+The tested runtime is arm64 Python 3.11, torch 2.8.0 and torchvision 0.23.0. The dashboard expects the following local layout under `~/Library/Caches/RoomSurvey/lingbot`:
+
+- `source/` is [LingBot-Map](https://github.com/Robbyant/lingbot-map) at `b9dd1b1de535e6d36e777fb42b8433c781bfd783`.
+- `lingbot-map.pt` is the [balanced pretrained checkpoint](https://huggingface.co/robbyant/lingbot-map).
+- `env/` is a Python virtual environment with torch, torchvision, einops, scipy, numpy, pillow, opencv-python, tqdm, safetensors, huggingface_hub and omegaconf.
+
+The runner uses native PyTorch attention at 224 × 168, two initialization frames, a sliding attention window of eight, and two camera refinement iterations. It assembles the complex rotary table on the CPU before passing it to Metal. PyTorch CPU fallback is enabled for unsupported operations. The point cloud keeps positive depths with confidence above 1.5 and samples a four-pixel grid. The standalone HTML viewer displays one in three of those points. The PLY export contains the full filtered cloud. The walk ZIP includes per-pixel depth and confidence, predicted pinhole intrinsics, camera-to-world poses, and source frame names in `predictions.npz`.
