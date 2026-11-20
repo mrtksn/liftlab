@@ -22,6 +22,7 @@ import re
 from replay import read_timeline
 from fusion import STREAMS, load_observations
 from seed_surfaces import MAX_EDGE, build_surfaces
+import gaussian_map
 import ai_surfaces
 import depth_assets
 from cloud_planes import METHOD as PLANE_METHOD, build_planes
@@ -320,6 +321,19 @@ class Survey:
         finally:
             self.finish_build()
 
+    def train_gaussians(self, run, model, target):
+        try:
+            result = gaussian_map.build(run, model, target, os.getenv("ROOM_SURVEY_BRUSH"))
+            message = f"Gaussian map ready · {result['test_views']} evaluation images"
+        except Exception as exc:
+            message = f"Gaussian mapping failed · {exc}"
+        finally:
+            with self.lock:
+                if self.run == run:
+                    self.message = message
+                    self.version += 1
+                self.finish_build()
+
     def runs(self):
         return sorted((p.name for p in self.root.iterdir()
                        if not p.name.startswith(".") and not p.is_symlink()
@@ -471,6 +485,17 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
+            elif action == "build-gaussians":
+                if self.busy or self.log or not self.run or self.run.name != body.get("run"):
+                    raise ValueError("Choose an idle, finished walk.")
+                model = json.loads((self.run/"survey.json").read_bytes())
+                if body.get("index") != model.get("feature_index"):
+                    raise ValueError("The camera map changed. Reopen the walk.")
+                target = gaussian_map.artifact_dir(self.run, model.get("feature_index"))
+                if not target.is_dir():
+                    self.building = self.run
+                    self.message = "Triangulating points and training Gaussian splats on this Mac"
+                    threading.Thread(target=self.train_gaussians,args=(self.run,model,target),daemon=True).start()
             elif action == "rebuild-surfaces":
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose a finished walk.")
@@ -577,10 +602,29 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/ui.js":"ui.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
+        if path == "/gaussian-artifact":
+            query = parse_qs(url.query)
+            with survey.lock:
+                run = survey.run
+                if not run or survey.log or query.get("run") != [run.name]:
+                    return self.send(b"Select a finished walk","text/plain",404)
+            name = query.get("file",[""])[0]
+            allowed = name in ("report.json","cloud.ply","gaussians.ply") or re.fullmatch(
+                r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
+            if allowed:
+                try:
+                    root = gaussian_map.artifact_dir(run,query.get("index",[""])[0])
+                    file = root/name
+                    mime = {".ply":"application/octet-stream",".json":"application/json",
+                            ".jpg":"image/jpeg",".png":"image/png"}[file.suffix]
+                    return self.send(file.read_bytes(),mime)
+                except (ValueError,OSError):
+                    pass
+            return self.send(b"Gaussian map unavailable","text/plain",404)
         if path.startswith("/depth-assets/"):
             name = path.removeprefix("/depth-assets/")
             if name not in depth_assets.FILES:

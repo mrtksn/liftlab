@@ -304,8 +304,14 @@ function draw() {
     return [w/2+panX+u*scale,h/2+panY-(z*cp+v*sp)*scale,v*cp-z*sp];
   };
   const project=p=>projectWithDepth(p)?.slice(0,2);
+  const gaussian=$('surfaceMethod').value==='gaussian-map';
+  if(gaussian && gaussianReady){
+    const axes=camera?.axes||[[cy,-sy,0],[-sy*sp,-cy*sp,-cp],[sy*cp,cy*cp,-sp]];
+    gaussianViewer.paint(ctx,w,h,camera?.xyz||centre,axes,camera?[w/2,h/2]:[w/2+panX,h/2+panY],
+      camera?focal:scale,!!camera,near);
+  }
   let visibility;
-  if($('surfaceLayer').checked&&model.surfaces?.patches.length){
+  if(!gaussian && $('surfaceLayer').checked&&model.surfaces?.patches.length){
     if($('cloud').checked)visibility=new SurfaceVisibility(w,h);
     const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const mesh=model.surfaces;
@@ -538,13 +544,18 @@ function showMap(m) {
   if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1',aiMethod].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
+  const keepGaussian=sameMap && $('surfaceMethod').value==='gaussian-map';
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
   updateViewControls();
   $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
   const hasTracks=!!Object.keys(m?.landmark_views||{}).length;
   for(const option of $('surfaceMethod').options)option.disabled=(!hasTracks && option.value!=='cloud-planes-v1') || (option.value===aiMethod && !m?.feature_index);
-  $('surfaceMethod').value=hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
+  for(const opt of $('surfaceMethod').options){
+    if(opt.value==='gaussian-map')opt.disabled=!m?.feature_index;
+    else if(m?.units!=='m')opt.disabled=true;
+  }
+  $('surfaceMethod').value=keepGaussian?'gaussian-map':hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
   updateSpanLabel();
   updateSurfaceInfo();
   updateGaps();
@@ -653,6 +664,7 @@ async function update() {
   }
   const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
   $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
+  $('trainGaussian').disabled=surfaceBusy;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -732,7 +744,13 @@ function updateSurfaceInfo(){
   const patches=model?.surfaces?.patches||[];
   const toggle=$('surfaceLayer'), info=$('surfaceInfo');
   toggle.disabled=!patches.length;
-  $('surfaceSettings').hidden=model?.units!=='m' || !model?.points.length;
+  const gaussian=$('surfaceMethod').value==='gaussian-map';
+  $('surfaceSettings').hidden=!model?.points.length || (model.units!=='m' && !model.feature_index);
+  if(gaussian){
+    toggle.disabled=true;
+    $('surfaceTimeControl').hidden=info.hidden=true;
+    return;
+  }
   $('surfaceTimeControl').hidden=!patches.length || !toggle.checked;
   info.hidden=!(model&&(!patches.length||toggle.checked));
   const mesh=model?.surfaces;
@@ -771,13 +789,62 @@ function updateSurfaceInfo(){
     mesh.deferred_landmarks.length+' landmarks still occluded · '+growthDistanceCm(mesh)+(mesh.growth_distance_m==null?' cm maximum edge · rebuild to use growth distance':' cm growth distance');
 
 }
+let gaussianViewer, gaussianReady=false, gaussianRequest=0;
+function gaussianUrl(file){
+  return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
+}
+function gaussianPair(){
+  const frame=$('gaussianTestFrame').value;
+  if(!frame)return;
+  $('gaussianPhoto').src=gaussianUrl('reference/'+frame);
+  $('gaussianRender').src=gaussianUrl('renders/'+frame.replace('.jpg','.png'));
+}
+async function loadGaussian(){
+  const ticket=++gaussianRequest;
+  gaussianReady=false;
+  $('gaussianEval').hidden=$('gaussianDownload').hidden=$('trainGaussian').hidden=true;
+  $('gaussianStatus').textContent='Opening Gaussian map…';
+  draw();
+  try{
+    const response=await fetch(gaussianUrl('report.json'));
+    if(ticket!==gaussianRequest)return;
+    if(response.status===404){
+      $('gaussianStatus').textContent='Build from the registered camera views on this Mac.';
+      $('trainGaussian').hidden=false; return;
+    }
+    if(!response.ok)throw Error('Could not open the Gaussian map.');
+    const report=await response.json();
+    if(ticket!==gaussianRequest)return;
+    const file=$('gaussianMode').value, url=gaussianUrl(file);
+    $('gaussianDownload').hidden=false; $('gaussianDownload').href=url; $('gaussianDownload').download=file;
+    $('gaussianTestFrame').replaceChildren(...report.evaluation.map(e=>new Option(parseInt(e.frame)+' · '+e.psnr_db+' dB',e.frame)));
+    gaussianPair(); $('gaussianEval').hidden=false;
+    const ply=await fetch(url);
+    if(!ply.ok)throw Error('Could not load the PLY file.');
+    const buffer=await ply.arrayBuffer();
+    if(ticket!==gaussianRequest)return;
+    gaussianViewer??=new GaussianView();
+    const cloud=file==='cloud.ply', count=gaussianViewer.load(buffer,cloud);
+    gaussianReady=true;
+    $('gaussianStatus').textContent=count.toLocaleString()+(cloud?' colored points':' trained splats')+' · '+report.train_views+' training views · '+report.test_views+' withheld · '+report.mean_psnr_db+' dB PSNR · saved camera poses';
+    draw();
+  }catch(error){if(ticket===gaussianRequest)$('gaussianStatus').textContent=error.message;}
+}
+$('gaussianMode').onchange=loadGaussian;
+$('gaussianTestFrame').onchange=gaussianPair;
+$('trainGaussian').onclick=()=>act('build-gaussians',{run:model.run,index:model.feature_index});
 function updateSpanLabel(){
+  const gaussian=$('surfaceMethod').value==='gaussian-map';
+  $('gaussianPanel').hidden=!gaussian;
+  for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian;
+  if(gaussian && model)loadGaussian();
+  else{++gaussianRequest;gaussianReady=false;}
   $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;
   replayDepth();
   const labels={[aiMethod]:'Maximum landmark gap (cm)','cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
   $('surfaceSpanLabel').textContent=labels[$('surfaceMethod').value]||'Growth distance (cm)';
 }
-$('surfaceMethod').onchange=updateSpanLabel;
+$('surfaceMethod').onchange=()=>{updateSpanLabel();updateSurfaceInfo();draw();};
 $('rebuildSurfaces').onclick=()=>{
   const edge=$('surfaceEdge');
   edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive growth distance.':'');

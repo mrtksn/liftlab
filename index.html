@@ -24,11 +24,19 @@
 <div id="views" class="views"><section id="cameraPanel"><div class="panelhead"><h2 id="cameraTitle">Camera</h2><span id="rate">OV5647 · 640 × 480</span></div><div class="imagebox"><img id="replayImage" alt="Recorded camera frame" hidden><img id="preview" alt="Live fisheye camera preview" hidden><span id="cameraempty">Waiting for the Pi camera</span></div></section>
 <section id="mapPanel"><div class="panelhead"><h2>Reconstruction</h2><div class="controls"><span id="units">Relative scale</span><button type="button" id="enlarge" aria-controls="views" aria-expanded="false">Enlarge</button></div></div><div id="mapViewport" class="mapbox"><canvas id="map" aria-label="Orbitable 3D landmarks and camera trajectory"></canvas><button type="button" id="recenterDrone" hidden>Re-center</button><span id="droneStatus" hidden></span><span id="mapempty">Landmarks appear after overlapping views register.</span></div><div class="legend"><i></i>Mapped path <i></i>Landmarks <span id="vertexKey" hidden>Surface vertices</span> <span class="route-key interpolated" id="legend-interpolated" hidden>Interpolated</span>
 <span class="route-key extrapolated" id="legend-extrapolated" hidden>Extrapolated</span> <span id="mapHelp">Drag to orbit · ⌘ or ⌥ + drag to pan · scroll to zoom</span></div><div class="controls map-controls"><label><input type="checkbox" id="surfaceLayer" disabled> Surfaces</label><label id="surfaceTimeControl" hidden><input type="checkbox" id="surfaceTime"> Follow replay</label><label><input type="checkbox" id="cloud" checked> Landmarks</label><label><input type="checkbox" id="route" checked> Path</label><button id="droneView" type="button" aria-pressed="false" disabled>Drone view</button><button id="top">Top view</button><button id="side">Side view</button><button id="iso">Reset view</button><span id="coverage"></span></div><div id="surfaceSettings" class="controls map-controls" hidden>
-  <label for="surfaceMethod">Surface method</label>
-  <select id="surfaceMethod"><option value="camera-ray-seeds-v1">Seed growth</option><option value="first-return-cloth-v1">Ray cloth</option><option value="cloud-planes-v1">Cloud planes</option><option value="depth-anything-v2-v1">AI depth planes</option></select>
+  <label for="surfaceMethod">Reconstruction method</label>
+  <select id="surfaceMethod"><option value="camera-ray-seeds-v1">Seed growth</option><option value="first-return-cloth-v1">Ray cloth</option><option value="cloud-planes-v1">Cloud planes</option><option value="depth-anything-v2-v1">AI depth planes</option><option value="gaussian-map">Gaussian mapping</option></select>
   <label id="surfaceSpanLabel" for="surfaceEdge">Growth distance (cm)</label>
   <input id="surfaceEdge" type="number" min="0" step="any" value="20" required>
   <button id="rebuildSurfaces" type="button">Rebuild surfaces</button>
+</div><div id="gaussianPanel" class="map-controls" hidden>
+  <div class="controls"><label>Display <select id="gaussianMode"><option value="gaussians.ply">Gaussian splats</option><option value="cloud.ply">Dense point cloud</option></select></label>
+  <button id="trainGaussian" type="button" hidden>Build Gaussian map</button><a id="gaussianDownload" hidden>Download PLY</a></div>
+  <p id="gaussianStatus" class="muted" role="status"></p>
+  <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
+    <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
+    <figure><img width="192" id="gaussianRender" alt="Gaussian rendering"><figcaption>Rendered</figcaption></figure></div>
+  </details>
 </div><div id="depthPanel" class="map-controls" hidden>
   <div class="controls"><span id="depthProgress" role="status"></span><button id="cancelDepth" type="button" hidden>Cancel depth inference</button></div>
   <figure id="depthPreview" hidden style="margin:8px 0"><img id="depthPhoto" alt="Rectified recorded frame" width="144"><canvas id="depthImage" width="96" height="72" style="width:144px;vertical-align:baseline" aria-label="Predicted relative depth"></canvas><figcaption id="depthCaption"></figcaption></figure>
@@ -45,4 +53,4 @@
 <details><summary>Metric scale</summary><p>During recording, mark two camera positions a measured distance apart. In replay, scrub to a mapped frame and mark A, then scrub to B, enter the measured straight-line separation in metres, and mark B to rebuild.</p><div class="controls"><button id="markA">Mark A</button><label>Separation (m) <input id="metres" type="number" min="0.01" step="0.01" placeholder="1.00"></label><button id="markB">Mark B</button><span id="refs"></span></div></details>
 <details><summary>Fisheye calibration <span id="lens"></span></summary><p>Open the target on a flat screen or print it. Keep the white margin visible. Collect at least 12 sharp views at different tilts, distances and positions, including the edges. You can also record now and rebuild after calibration.</p><div class="controls"><a href="/target" target="_blank">Open checkerboard ↗</a><button id="sample">Add board view</button><span id="samples">0 views</span><button id="calibrate">Fit lens</button><button id="reset">Clear samples</button></div></details>
 
-</main><script src="/ui.js"></script></body></html>
+</main><script src="/gaussian-view.js"></script><script src="/ui.js"></script></body></html>
