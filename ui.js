@@ -377,6 +377,7 @@ function draw() {
     ctx.beginPath();ctx.arc(...a,6,0,Math.PI*2);ctx.fill();
   }
   if(gaussian && $('tofEvidenceToggle').checked)drawTofEvidence(project,cameraPoint,projectCamera,camera,near);
+  if(gaussian && !camera)drawClearanceEnvelope(project,scale);
   if(!$('route').checked)return;
   ctx.lineWidth=2;
   for(const [kind,style] of Object.entries(routeStyles)){
@@ -674,6 +675,8 @@ async function update() {
   }
   const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
   $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
+  $('buildClearance').disabled=surfaceBusy;
+  if(s.busy && $('clearancePanel').open && !$('buildClearance').hidden)$('clearanceStatus').textContent=s.message;
   $('buildGaussianMesh').disabled=$('buildLingbot').disabled=$('trainGaussian').disabled=surfaceBusy;
   if(s.busy && !$('buildGaussianMesh').hidden)$('gaussianStatus').textContent=s.message;
   updateWalkActions();
@@ -805,6 +808,114 @@ let gaussianViewer, gaussianReady=false, gaussianRequest=0;
 function gaussianUrl(file){
   return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
 }
+let clearanceReport=null, clearanceKey='';
+const clearanceStates={
+  fits:{label:'Fits observed space',color:'#89dfb2'},
+  conflict:{label:'Obstacle conflict',color:'#ff8275'},
+  unknown:{label:'Unknown space',color:'#ecbf75'},
+  missing:{label:'No reliable pose',color:'#88969f'}
+};
+function envelopeRadius(){
+  const body=$('bodyRadius'), margin=$('clearanceMargin');
+  if(!body.value || !margin.value || !body.validity.valid || !margin.validity.valid)return null;
+  return (body.valueAsNumber+margin.valueAsNumber)/100;
+}
+function clearanceState(row,radius){
+  if(!row)return 'missing';
+  if(row.obstacle_m!==null && row.obstacle_m<=radius)return 'conflict';
+  return row.observed_m>radius?'fits':'unknown';
+}
+function syncClearance(){
+  if(!clearanceReport || timelineRun!==model?.run)return;
+  const frame=timeline[cursor], radius=envelopeRadius();
+  if(!frame)return;
+  $('clearanceSeek').value=frame.ms;
+  const info=$('clearanceReading');
+  if(radius===null){info.textContent='Enter a positive body radius and a nonnegative margin within the shown limits.';return;}
+  const row=clearanceReport.frames[frame.id], result=clearanceStates[clearanceState(row,radius)];
+  let detail='Frame '+parseInt(frame.id)+' · '+(frame.ms/1000).toFixed(2)+' s · '+result.label;
+  if(row){
+    detail+=' · '+row.pose+' pose · nearest occupied cell '+
+      (row.obstacle_m===null?'unavailable':Math.round(row.obstacle_m*100)+' cm')+
+      ' · observed free radius '+Math.round(100*Math.min(row.observed_m,row.obstacle_m??Infinity))+' cm';
+  }
+  info.textContent=detail;
+}
+function paintClearanceTrack(){
+  const plot=$('clearancePlot'), width=plot.clientWidth;
+  if(!width || !clearanceReport || !timeline.length || timelineRun!==model?.run)return;
+  const radius=envelopeRadius(), d=devicePixelRatio, duration=timeline.at(-1).ms||1;
+  plot.width=Math.ceil(width*d);plot.height=Math.ceil(plot.clientHeight*d);
+  $('clearanceSeek').max=duration;
+  const counts={fits:0,conflict:0,unknown:0,missing:0};
+  const legend=$('clearanceCounts');
+  legend.replaceChildren();
+  if(radius===null){syncClearance();return;}
+  const paint=plot.getContext('2d');
+  for(let i=0;i<timeline.length;i++){
+    const frame=timeline[i], state=clearanceState(clearanceReport.frames[frame.id],radius);
+    const begin=i?(timeline[i-1].ms+frame.ms)/2:0;
+    const end=i+1<timeline.length?(frame.ms+timeline[i+1].ms)/2:duration;
+    paint.fillStyle=clearanceStates[state].color;
+    paint.fillRect(begin/duration*plot.width,0,Math.max(1,(end-begin)/duration*plot.width),plot.height);
+    counts[state]++;
+  }
+  for(const [state,count] of Object.entries(counts)){
+    const item=document.createElement('span');
+    item.style.color=clearanceStates[state].color;
+    item.textContent=clearanceStates[state].label+' · '+count;
+    legend.append(item);
+  }
+  syncClearance();
+}
+async function refreshClearance(){
+  const open=model && $('surfaceMethod').value==='gaussian-map' && $('clearancePanel').open;
+  const key=open?gaussianUrl('clearance-v1/report.json')+'&version='+state.version:'';
+  if(clearanceKey===key)return;
+  clearanceKey=key;clearanceReport=null;
+  $('clearanceControls').hidden=$('buildClearance').hidden=true;
+  if(!key)return;
+  const status=$('clearanceStatus');
+  status.textContent='Opening clearance map…';
+  try{
+    const response=await fetch(key);
+    if(clearanceKey!==key)return;
+    if(response.status===404){
+      status.textContent=state.message?.startsWith('Walk clearance failed')?state.message:
+        'Build from the trained Gaussian map and recorded ToF sightlines.';
+      $('buildClearance').hidden=false;return;
+    }
+    if(!response.ok)throw Error('Could not load clearance data.');
+    const data=await response.json();
+    if(clearanceKey!==key)return;
+    clearanceReport=data;
+    status.textContent=data.views+' camera views · '+data.placed_ranges.toLocaleString()+' / '+
+      data.valid_ranges.toLocaleString()+' valid '+data.range_source+' readings placed · '+
+      (100*data.voxel_m).toFixed(1)+' cm cells · '+data.scale_source+
+      (data.scale_check_error==null?'':' ('+Math.round(data.scale_check_error*100)+'% median range discrepancy on scale check)')+
+      ' · '+data.mount;
+    $('clearanceGrid').href=gaussianUrl('clearance-v1/grid.npz');
+    $('clearanceControls').hidden=false;
+    paintClearanceTrack();draw();
+  }catch(error){if(clearanceKey===key){status.textContent=error.message;clearanceKey='';}}
+}
+function drawClearanceEnvelope(project,screenScale){
+  if(!clearanceReport || !replay || timelineRun!==model?.run)return;
+  const radius=envelopeRadius(), row=clearanceReport.frames[timeline[cursor]?.id];
+  if(!row || radius===null)return;
+  const point=project(row.xyz);
+  if(!point)return;
+  const color=clearanceStates[clearanceState(row,radius)].color;
+  ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color+'40';ctx.lineWidth=3;
+  ctx.beginPath();ctx.arc(point[0],point[1],Math.max(4,radius*screenScale/clearanceReport.scale),0,2*Math.PI);
+  ctx.fill();ctx.stroke();ctx.restore();
+}
+$('clearancePanel').ontoggle=()=>{refreshClearance();draw();};
+$('buildClearance').onclick=()=>act('build-clearance',{run:model.run,index:model.feature_index});
+for(const id of ['bodyRadius','clearanceMargin'])$(id).oninput=()=>{paintClearanceTrack();draw();};
+$('clearanceSeek').oninput=()=>{pauseReplay();replay=true;seek($('clearanceSeek').valueAsNumber);};
+new ResizeObserver(paintClearanceTrack).observe($('clearancePlot'));
+
 let evidenceKey='', evidenceTicket=0, evidenceRows=[], shownRays=[];
 
 function selectTofRays(){
@@ -1027,6 +1138,7 @@ function updateSpanLabel(){
   updateLingbot(lingbot);
   const gaussian=$('surfaceMethod').value==='gaussian-map';
   $('gaussianPanel').hidden=!gaussian;
+  refreshClearance();
   for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
   if(gaussian && model)loadGaussian();
   else{++gaussianRequest;gaussianMeshReady=gaussianReady=false;refreshTofEvidence();}
@@ -1135,6 +1247,7 @@ function drawTimeline(){
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
 function refreshReplay(){
+  syncClearance();
   syncTofReading();
   replayDepth();
   updateViewControls();

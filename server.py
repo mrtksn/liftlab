@@ -334,18 +334,24 @@ class Survey:
                     self.version += 1
                 self.finish_build()
 
-    def extract_gaussian_mesh(self, run, model, root):
+    def build_gaussian_geometry(self, run, model, root, clearance_map):
         def progress(message):
             with self.lock:
                 if self.run == run:
                     self.message = message
 
         try:
-            import gaussian_mesh
-            result = gaussian_mesh.build(run, model, root, progress)
-            message = f"Gaussian mesh ready · {result['triangles']:,} triangles"
+            if clearance_map:
+                import clearance
+                result = clearance.build(run, model, root, progress)
+                message = f"Walk clearance ready · {len(result['frames'])} located frames"
+            else:
+                import gaussian_mesh
+                result = gaussian_mesh.build(run, model, root, progress)
+                message = f"Gaussian mesh ready · {result['triangles']:,} triangles"
         except Exception as exc:
-            message = f"Gaussian mesh failed · {exc}"
+            label = "Walk clearance" if clearance_map else "Gaussian mesh"
+            message = f"{label} failed · {exc}"
         finally:
             with self.lock:
                 if self.run == run:
@@ -527,7 +533,7 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
-            elif action in ("build-gaussians","build-lingbot","build-gaussian-mesh"):
+            elif action in ("build-gaussians","build-lingbot","build-gaussian-mesh","build-clearance"):
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose an idle, finished walk.")
                 model = json.loads((self.run/"survey.json").read_bytes())
@@ -537,13 +543,18 @@ class Survey:
                 lingbot = action == "build-lingbot"
                 if lingbot:
                     target = self.run / ("lingbot-v1-" + ai_surfaces.index_path(self.run,model["feature_index"]).stem)
-                if action == "build-gaussian-mesh":
+                if action in ("build-gaussian-mesh", "build-clearance"):
                     if not (target/"gaussians.ply").is_file():
                         raise ValueError("Build the Gaussian map first.")
-                    if not (target/"mesh-v1"/"report.json").is_file():
+                    clearance_map = action == "build-clearance"
+                    artifact = target/"mesh-v1"
+                    if clearance_map:
+                        import clearance
+                        artifact = clearance.artifact_dir(self.run, target)
+                    if not (artifact/"report.json").is_file():
                         self.building = self.run
                         self.message = "Opening trained Gaussian splats"
-                        threading.Thread(target=self.extract_gaussian_mesh, args=(self.run, model, target), daemon=True).start()
+                        threading.Thread(target=self.build_gaussian_geometry, args=(self.run, model, target, clearance_map), daemon=True).start()
                 elif not target.is_dir():
                     self.building = self.run
                     self.message = "Triangulating points and training Gaussian splats on this Mac"
@@ -667,7 +678,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not run or survey.log or query.get("run") != [run.name]:
                     return self.send(b"Select a finished walk","text/plain",404)
             name = query.get("file",[""])[0]
-            allowed = name in ("report.json","cloud.ply","gaussians.ply","mesh-v1/mesh.ply","mesh-v1/report.json") or re.fullmatch(
+            allowed = name in ("report.json","cloud.ply","gaussians.ply","mesh-v1/mesh.ply","mesh-v1/report.json",
+                               "clearance-v1/report.json","clearance-v1/grid.npz") or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
             if path == "/lingbot-artifact":
                 if name in ("view.html","cloud.ply","trajectory.json","predictions.npz"):
@@ -696,8 +708,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     root = gaussian_map.artifact_dir(run,query.get("index",[""])[0])
                     file = root/name
+                    if name.startswith("clearance-v1/"):
+                        import clearance
+                        file = clearance.artifact_dir(run, root)/file.name
                     mime = {".ply":"application/octet-stream",".json":"application/json",
-                            ".jpg":"image/jpeg",".png":"image/png"}[file.suffix]
+                            ".jpg":"image/jpeg",".png":"image/png",".npz":"application/octet-stream"}[file.suffix]
                     return self.send(file.read_bytes(),mime)
                 except (ValueError,OSError):
                     pass

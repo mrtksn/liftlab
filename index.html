@@ -44,6 +44,21 @@
     </div>
     <small id="tofRayDetail"></small>
   </div>
+  <details id="clearancePanel"><summary>Walk clearance</summary>
+    <p id="clearanceStatus" class="muted" role="status"></p>
+    <button type="button" id="buildClearance" hidden>Build clearance map</button>
+    <div id="clearanceControls" hidden>
+      <div class="controls">
+        <label>Body radius (cm) <input type="number" min="1" max="200" step="any" value="15" id="bodyRadius"></label>
+        <label>Extra margin (cm) <input type="number" min="0" max="100" step="any" value="5" id="clearanceMargin"></label>
+        <a id="clearanceGrid" download="clearance-grid.npz">Download grid</a>
+      </div>
+      <p class="muted">Measure from the camera to the farthest propeller tip or body part. The test uses a sphere at each recorded position.</p>
+      <label for="clearanceSeek">Clearance along walk</label>
+      <div id="clearanceTrack"><canvas id="clearancePlot" aria-hidden="true"></canvas><input type="range" min="0" step="1" value="0" id="clearanceSeek"></div>
+      <div id="clearanceCounts" class="controls"></div><p id="clearanceReading"></p>
+    </div>
+  </details>
   <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
     <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
     <figure><img width="192" id="gaussianRender" alt="Gaussian rendering"><figcaption>Rendered</figcaption></figure></div>
