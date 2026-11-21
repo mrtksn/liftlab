@@ -41,13 +41,13 @@ def footprints(uv, radius):
             yield ids, rings
 
 
-def build_planes(model, span, observations=None):
+def build_planes(model, span, observations=None, *, relative_fit=False):
     if not np.isfinite(span) or span <= 0:
         raise ValueError("Enter a positive maximum landmark gap.")
-    tolerance = min(.04, span*.12)
+    tolerance = span*.12 if relative_fit and model["units"]!="m" else min(.04, span*.12)
     mesh = dict(method=METHOD, units=model["units"], growth_distance_m=span, tolerance_m=tolerance,
                 status="ready", patches=[], retired=[], support_count=0)
-    if model["units"] != "m":
+    if model["units"] != "m" and not relative_fit:
         return dict(mesh, status="needs_scale")
 
     xyz = np.asarray([p[:3] for p in model["points"]], float).reshape(-1,3)

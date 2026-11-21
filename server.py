@@ -767,6 +767,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(asset.read_bytes(), mime[asset.suffix])
             except (OSError,ValueError,subprocess.SubprocessError) as exc:
                 return self.send(str(exc).encode(),"text/plain",503)
+        if path == "/depth-surface-methods":
+            from depth_surfaces import METHODS
+            return self.send(json.dumps({k:v[0] for k,v in METHODS.items()}).encode(),"application/json")
         if path in ("/frame-depth.png","/frame-depth-status"):
             import replay_depth
             query = parse_qs(url.query)
@@ -859,14 +862,19 @@ class Handler(BaseHTTPRequestHandler):
             limit = 360_000 if self.path == "/rebuild-surfaces" else 2048
             if not 0 < size <= limit:
                 raise ValueError("Invalid command")
-            if self.path == "/depth-cloud":
+            if self.path in ("/depth-cloud","/depth-surfaces"):
                 import depth_cloud
                 body = json.loads(self.rfile.read(size))
                 with survey.lock:
                     run = survey.run
                     if not run or survey.log or run.name != body.get("run"):
                         raise ValueError("Open a finished walk.")
-                result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"))
+                if self.path == "/depth-surfaces":
+                    import depth_surfaces
+                    result = depth_surfaces.build(run,body.get("index"),body.get("source"),
+                                                  body.get("method"),body.get("tof",False))
+                else:
+                    result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"))
                 return self.send(json.dumps(result,separators=(",",":")).encode(),"application/json")
             result = survey.action(self.path.removeprefix("/"),json.loads(self.rfile.read(size)))
             self.send(json.dumps(result).encode(),"application/json")

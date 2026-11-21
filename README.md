@@ -33,6 +33,12 @@ Choose an **Image set** under **Reconstruction**. Recorded photos use the existi
 
 **Processing times** shows the machine's measured wall time, average time per processed frame and throughput. New builds save stage timings with the depth archive. For the original walks the dashboard labels the 24-frame benchmark separately. The depth-cloud report times reading, projection and fusion after depth maps are available.
 
+### Surfaces from depth points
+
+In **Reconstruction**, choose a depth **Image set**, select a **Surface method**, then click **Generate surfaces**. The **Surfaces** and **Depth points** switches control their visibility independently. **Planar regions** fits bounded polygons for walls and other flat areas. **Voxel envelope** wraps clusters of observed points in a simplified triangle mesh. Its thickness depends on the voxel size.
+
+**Include ToF returns** is available in metric walks. It pairs range readings with oriented camera poses, uses the measured sensor mount when present, and adds endpoints within two voxel widths of the depth cloud. The result reports accepted and paired returns and identifies a camera-axis approximation. Gaps without supporting observations remain uncertain. Each source, method and ToF setting has a separate cached result in the walk ZIP. Surface method labels and builders are registered in `depth_surfaces.METHODS`.
+
 ## Range measurements
 
 The mounted TOF250 responds at 7-bit address 0x52. Start walk saves one row per JPEG in timestamps.csv, including camera-relative microseconds, the Pi monotonic time of the encoder callback, the time the range register read completed, and the raw reading. A blank range field means the read failed. New walks also save range.csv, with register reads polled independently at a target of 60 Hz, timestamped before and after each transaction on the Pi. The camera CSV pairs each encoder callback with the most recent completed read within 80 ms. Older walks sampled at JPEG output time. Read timing does not establish the sensor’s internal measurement cadence or hardware synchronization with camera exposure. Median readings were 52 at 50 cm and 104 at 100 cm. Values are kept raw for replay. The tilted sensor measures along its viewing direction. The mapper estimates metric scale from compact, depth-consistent landmark patches near the optical axis when the available ranges span multiple distances and withheld views agree. This estimate assumes a nearly parallel camera and range beam. The map uses relative scale when the range check fails.

@@ -282,7 +282,7 @@ def ray_ranges(vertices, faces, eyes, directions):
     return np.array(result)
 
 
-def range_evidence(run, model, vertices, faces, poses):
+def paired_range_rays(run, model, poses):
     observations = load_observations(run, ('tof',))
     cal = run/'tof-extrinsics.json'
     mount = json.loads(cal.read_text()) if cal.exists() else dict(direction=[0, 0, 1], origin_m=[0, 0, 0])
@@ -292,7 +292,7 @@ def range_evidence(run, model, vertices, faces, poses):
     check = dict(beam='measured mount' if cal.exists() else 'camera-axis approximation', units=model['units'])
     if model['units'] != 'm' and np.any(origin):
         check['reason'] = 'Metric scale required for measured sensor offset'
-        return check, []
+        return check, [], [], [], []
     valid = []
     timestamps = run/'timestamps.csv'
     if timestamps.exists():
@@ -311,6 +311,13 @@ def range_evidence(run, model, vertices, faces, poses):
         starts.append(pose['xyz'] + rot @ origin)
         rays.append(rot @ axis)
         truth.append(observations[pose['frame']]['range'])
+    return check, valid, starts, rays, truth
+
+
+def range_evidence(run, model, vertices, faces, poses):
+    check, valid, starts, rays, truth = paired_range_rays(run, model, poses)
+    if 'reason' in check:
+        return check, []
     measured = np.asarray(truth)
     predicted = ray_ranges(vertices, faces, starts, rays)
     test = predicted[1::2]

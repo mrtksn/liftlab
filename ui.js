@@ -319,10 +319,10 @@ function draw() {
       }
     }
   }
-  if(!gaussian && !depthGeometry && $('surfaceLayer').checked&&model.surfaces?.patches.length){
+  const mesh=depthGeometry?depthSurfaceMesh:model.surfaces;
+  if(!gaussian && $('surfaceLayer').checked&&mesh?.patches.length){
     if($('cloud').checked)visibility=new SurfaceVisibility(w,h);
-    const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
-    const mesh=model.surfaces;
+    const frame=!depthGeometry && replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
     const patches=visible.flatMap(p=>{
@@ -556,7 +556,7 @@ function showMap(m) {
     m.feature_index && m.feature_index===model.feature_index;
   const keepLingbot=sameMap && $('surfaceMethod').value==='lingbot-map';
   const keepGaussian=sameMap && $('surfaceMethod').value==='gaussian-map';
-  if(!sameMap){$('geometrySource').value='photo';activeDepthCloud=null;++cloudTicket;}
+  if(!sameMap){clearDepthSurface();$('geometrySource').value='photo';activeDepthCloud=null;++cloudTicket;}
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
   updateViewControls();
@@ -765,8 +765,12 @@ function updateSurfaceInfo(){
   const fromDepth=$('geometrySource').value!=='photo';
   $('surfaceMethod').hidden=$('methodTitle').hidden=fromDepth;
   $('geometryReport').hidden=!fromDepth;
+  $('depthSurfaceControls').hidden=!fromDepth||!model;
+  $('buildDepthSurfaces').disabled=!activeDepthCloud||surfacePending||!$('depthSurfaceMethod').value;
+  $('depthSurfaceTof').disabled=model?.units!=='m';
+  if(model?.units!=='m')$('depthSurfaceTof').checked=false;
   $('methodConfig').hidden=$('surfaceSettings').hidden||fromDepth;
-  if(fromDepth){toggle.disabled=true;info.hidden=$('surfaceTimeControl').hidden=true;return;}
+  if(fromDepth){toggle.disabled=!depthSurfaceMesh?.patches.length;info.hidden=$('surfaceTimeControl').hidden=true;return;}
   if(gaussian || $('surfaceMethod').value==='lingbot-map'){
     toggle.disabled=true;
     $('surfaceTimeControl').hidden=info.hidden=true;
@@ -1230,6 +1234,36 @@ const sensorFields=sensorTypes.map(([key,name,unit,on])=>{
   toggle.onchange=()=>{field.hidden=!toggle.checked;};field.hidden=!on;
   return {key,unit,output};
 });
+let depthSurfaceMesh=null,surfaceTicket=0,surfacePending=false;
+function clearDepthSurface(){
+  ++surfaceTicket;surfacePending=false;depthSurfaceMesh=null;
+  $('depthSurfaceStatus').textContent='';
+}
+function surfaceOptionsChanged(){
+  clearDepthSurface();updateSurfaceInfo();draw();
+}
+$('depthSurfaceMethod').onchange=$('depthSurfaceTof').onchange=surfaceOptionsChanged;
+fetch('/depth-surface-methods').then(r=>r.json()).then(methods=>{
+  $('depthSurfaceMethod').replaceChildren(...Object.entries(methods).map(([id,label])=>new Option(label,id)));
+  updateSurfaceInfo();
+}).catch(()=>{$('depthSurfaceStatus').textContent='Surface methods unavailable. Reload the dashboard.';});
+$('buildDepthSurfaces').onclick=async()=>{
+  const ticket=++surfaceTicket, source=$('geometrySource').value;
+  surfacePending=true;updateSurfaceInfo();
+  $('depthSurfaceStatus').textContent='Generating surfaces…';
+  try{
+    const response=await fetch('/depth-surfaces',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:model.run,index:model.feature_index,source,method:$('depthSurfaceMethod').value,tof:$('depthSurfaceTof').checked})});
+    const result=await response.json();
+    if(ticket!==surfaceTicket)return;
+    if(!response.ok)throw Error(result.error||'Surface generation failed');
+    depthSurfaceMesh=result;
+    $('surfaceLayer').checked=result.patches.length>0;
+    $('depthSurfaceStatus').textContent=result.patches.length.toLocaleString()+' polygons · '+result.points.toLocaleString()+' input points · '+result.seconds.toFixed(2)+' s'+
+      (result.tof?' · '+result.tof.used+'/'+result.tof.paired+' paired ToF returns used · '+result.tof.mount:'');
+  }catch(e){if(ticket===surfaceTicket)$('depthSurfaceStatus').textContent=e.message;}
+  finally{if(ticket===surfaceTicket){surfacePending=false;updateSurfaceInfo();draw();}}
+};
 let activeDepthCloud=null, cloudTicket=0, rightKey='';
 for(const opt of $('frameMethod').options){
   $('rightSource').add(new Option(opt.text,opt.value));
@@ -1243,7 +1277,7 @@ function timingText(t){
 }
 $('geometrySource').onchange=async()=>{
   const method=$('geometrySource').value, ticket=++cloudTicket;
-  activeDepthCloud=null;
+  activeDepthCloud=null;clearDepthSurface();
   updateSpanLabel();updateSurfaceInfo();draw();
   if(method==='photo'||!model)return;
   const report=$('geometryReport');
@@ -1255,7 +1289,7 @@ $('geometrySource').onchange=async()=>{
     const result=await response.json();
     if(ticket!==cloudTicket)return;
     if(!response.ok)throw Error(result.error||'Depth reconstruction unavailable');
-    activeDepthCloud=result;
+    activeDepthCloud=result;updateSurfaceInfo();
     report.textContent='Depth point cloud · '+result.points.length.toLocaleString()+' displayed · '+result.used+'/'+result.poses+
       ' oriented frames contributed · '+timingText({...result,frames:result.poses});
     draw();
