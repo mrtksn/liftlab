@@ -14,6 +14,25 @@ Use **Download walk ZIP** to export the walk selected in the dropdown, including
 
 A failed solve leaves the last successful snapshot available and reports the failure. Frame filenames in `survey.json` correspond to `timestamps.csv`. The reprojection error is a pixel fit diagnostic. Ground-truth accuracy requires independent measurements. The current prototype runs structure from motion on the Mac. The Pi reads camera and ToF data and listens on loopback UDP port 14681 for flight telemetry.
 
+## Frame depth replay
+
+Open a saved walk and use **Frame view** above the recorded image to switch between the original photo and four depth sources. The shared timeline selects the same frame in both views. The original photo includes the full fisheye field of view. All four depth previews use the central rectified camera view. In **Reconstruction**, select a method to see its build and display controls.
+
+| Frame source | What the colours show |
+| --- | --- |
+| Depth Anything V2 Small | Relative inverse depth from each image. Yellow is near, purple is far. |
+| Apple Depth Pro 2 Small | Video depth using overlapping eight-frame windows and the rectified focal length. Estimated metres use a fixed 0–8 m colour scale. |
+| LingBot-Map | Relative depth for each image in a 48-frame group with up to four preceding context frames. Scale can vary between groups. |
+| Gaussian rendered depth | Visible surface depth rendered from the saved splats. The selected frame indicates a saved, interpolated or nearest camera pose. Black pixels have no usable surface depth. |
+
+In **Recorded photo**, **Generate missing depth maps** queues all available methods that still need processing. **Generate all frames** computes the selected method for every recorded JPEG in a finished walk with a camera map. Gaussian depth also requires a trained Gaussian map. Relative previews stretch the colour scale for each frame. The numeric arrays retain the model values. The walk ZIP includes those arrays under `frame-depth-v1-<camera index>/<method>/<frame>.npy`. Models and inference stay on the Mac. This setup uses the existing LingBot Python environment and model caches under `~/Library/Caches/RoomSurvey`.
+
+**Compare** gives the left and right sides independent sources. The divider supports dragging, arrow keys, Home and End. When a photo is compared, replay uses the rectified crop to align it with the depth pixels.
+
+Choose an **Image set** under **Reconstruction**. Recorded photos use the existing reconstruction methods. A depth source backprojects the numerical arrays into the saved camera poses and uses the recorded colours. Depth Anything fits inverse-depth scale and offset against tracked landmarks. LingBot aligns its scale with landmark depth, as does Apple when the saved walk has relative scale. Only oriented frames with usable depth and points supported by at least two views contribute. Gaussian depth reprojects the trained splats. This point cloud is a visualization in the existing camera coordinate system.
+
+**Processing times** shows the machine's measured wall time, average time per processed frame and throughput. New builds save stage timings with the depth archive. For the original walks the dashboard labels the 24-frame benchmark separately. The depth-cloud report times reading, projection and fusion after depth maps are available.
+
 ## Range measurements
 
 The mounted TOF250 responds at 7-bit address 0x52. Start walk saves one row per JPEG in timestamps.csv, including camera-relative microseconds, the Pi monotonic time of the encoder callback, the time the range register read completed, and the raw reading. A blank range field means the read failed. New walks also save range.csv, with register reads polled independently at a target of 60 Hz, timestamped before and after each transaction on the Pi. The camera CSV pairs each encoder callback with the most recent completed read within 80 ms. Older walks sampled at JPEG output time. Read timing does not establish the sensor’s internal measurement cadence or hardware synchronization with camera exposure. Median readings were 52 at 50 cm and 104 at 100 cm. Values are kept raw for replay. The tilted sensor measures along its viewing direction. The mapper estimates metric scale from compact, depth-consistent landmark patches near the optical axis when the available ranges span multiple distances and withheld views agree. This estimate assumes a nearly parallel camera and range beam. The map uses relative scale when the range check fails.

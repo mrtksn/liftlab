@@ -304,7 +304,8 @@ function draw() {
     return [w/2+panX+u*scale,h/2+panY-(z*cp+v*sp)*scale,v*cp-z*sp];
   };
   const project=p=>projectWithDepth(p)?.slice(0,2);
-  const gaussian=$('surfaceMethod').value==='gaussian-map';
+  const depthGeometry=$('geometrySource').value!=='photo';
+  const gaussian=!depthGeometry&&$('surfaceMethod').value==='gaussian-map';
   let visibility;
   if(gaussian && (gaussianReady || gaussianMeshReady)){
     const axes=camera?.axes||[[cy,-sy,0],[-sy*sp,-cy*sp,-cp],[sy*cp,cy*cp,-sp]];
@@ -318,7 +319,7 @@ function draw() {
       }
     }
   }
-  if(!gaussian && $('surfaceLayer').checked&&model.surfaces?.patches.length){
+  if(!gaussian && !depthGeometry && $('surfaceLayer').checked&&model.surfaces?.patches.length){
     if($('cloud').checked)visibility=new SurfaceVisibility(w,h);
     const frame=replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const mesh=model.surfaces;
@@ -354,7 +355,7 @@ function draw() {
   }
   if($('cloud').checked){
     const vertices=[];
-    model.points.forEach((p,id)=>{
+    (depthGeometry ? activeDepthCloud?.points||[] : model.points).forEach((p,id)=>{
       const screen=projectWithDepth(p);
       if(!screen || visibility?.hides(screen))return;
       const [x,y]=screen;
@@ -555,6 +556,7 @@ function showMap(m) {
     m.feature_index && m.feature_index===model.feature_index;
   const keepLingbot=sameMap && $('surfaceMethod').value==='lingbot-map';
   const keepGaussian=sameMap && $('surfaceMethod').value==='gaussian-map';
+  if(!sameMap){$('geometrySource').value='photo';activeDepthCloud=null;++cloudTicket;}
   model=m;
   posesByFrame=new Map((m?.poses||[]).map(p=>[p.frame,p]));
   updateViewControls();
@@ -760,6 +762,11 @@ function updateSurfaceInfo(){
   toggle.disabled=!patches.length;
   const gaussian=$('surfaceMethod').value==='gaussian-map';
   $('surfaceSettings').hidden=!model?.points.length || (model.units!=='m' && !model.feature_index);
+  const fromDepth=$('geometrySource').value!=='photo';
+  $('surfaceMethod').hidden=$('methodTitle').hidden=fromDepth;
+  $('geometryReport').hidden=!fromDepth;
+  $('methodConfig').hidden=$('surfaceSettings').hidden||fromDepth;
+  if(fromDepth){toggle.disabled=true;info.hidden=$('surfaceTimeControl').hidden=true;return;}
   if(gaussian || $('surfaceMethod').value==='lingbot-map'){
     toggle.disabled=true;
     $('surfaceTimeControl').hidden=info.hidden=true;
@@ -1134,9 +1141,11 @@ async function updateLingbot(selected){
   }catch(error){if(ticket===lingbotRequest)$('lingbotStatus').textContent=error.message;}
 }
 function updateSpanLabel(){
-  const lingbot=$('surfaceMethod').value==='lingbot-map';
+  const fromPhoto=$('geometrySource').value==='photo';
+  $('cloudLabel').textContent=fromPhoto?'Landmarks':'Depth points';
+  const lingbot=fromPhoto&&$('surfaceMethod').value==='lingbot-map';
   updateLingbot(lingbot);
-  const gaussian=$('surfaceMethod').value==='gaussian-map';
+  const gaussian=fromPhoto&&$('surfaceMethod').value==='gaussian-map';
   $('gaussianPanel').hidden=!gaussian;
   refreshClearance();
   for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
@@ -1221,8 +1230,159 @@ const sensorFields=sensorTypes.map(([key,name,unit,on])=>{
   toggle.onchange=()=>{field.hidden=!toggle.checked;};field.hidden=!on;
   return {key,unit,output};
 });
+let activeDepthCloud=null, cloudTicket=0, rightKey='';
+for(const opt of $('frameMethod').options){
+  $('rightSource').add(new Option(opt.text,opt.value));
+  $('geometrySource').add(new Option(opt.value==='photo'?'Recorded photos':opt.text,opt.value));
+}
+$('rightSource').value='apple';
+function timingText(t){
+  if(!t)return '';
+  const stages=Object.entries(t.stages||{}).map(([name,seconds])=>name+' '+seconds.toFixed(2)+' s');
+  return [t.seconds.toFixed(2)+' s total',t.frames?Math.round(1000*t.seconds/t.frames)+' ms/frame · '+(t.frames/t.seconds).toFixed(1)+' fps':'',...stages].filter(Boolean).join(' · ');
+}
+$('geometrySource').onchange=async()=>{
+  const method=$('geometrySource').value, ticket=++cloudTicket;
+  activeDepthCloud=null;
+  updateSpanLabel();updateSurfaceInfo();draw();
+  if(method==='photo'||!model)return;
+  const report=$('geometryReport');
+  report.textContent='Backprojecting depth with saved camera poses…';
+  $('cloud').checked=true;
+  try{
+    const response=await fetch('/depth-cloud',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:model.run,index:model.feature_index,method})});
+    const result=await response.json();
+    if(ticket!==cloudTicket)return;
+    if(!response.ok)throw Error(result.error||'Depth reconstruction unavailable');
+    activeDepthCloud=result;
+    report.textContent='Depth point cloud · '+result.points.length.toLocaleString()+' displayed · '+result.used+'/'+result.poses+
+      ' oriented frames contributed · '+timingText({...result,frames:result.poses});
+    draw();
+  }catch(e){if(ticket===cloudTicket)report.textContent=e.message;}
+};
+function comparisonUrl(method,frame){
+  const query=depthQuery();
+  const endpoint=method==='photo'?'/depth-input.jpg?':'/frame-depth.png?';
+  return endpoint+new URLSearchParams({...query,method,frame});
+}
+function refreshComparison(frame){
+  const enabled=replay&&$('compareFrames').checked;
+  $('leftSourceLabel').textContent=enabled?'Left':'Frame view';
+  for(const id of ['comparisonRight','wipe','wipeLine','rightChoice'])$(id).hidden=!enabled;
+  if(!enabled||!frame||!depthQuery().index){rightKey='';return;}
+  const url=comparisonUrl($('rightSource').value,frame.id);
+  if(rightKey===url)return;
+  rightKey=url;
+  $('rightMissing').hidden=true;
+  $('rightPhoto').style.visibility='hidden';
+  $('rightPhoto').src=url;
+}
+$('rightPhoto').onload=()=>{$('rightPhoto').style.visibility='';$('rightMissing').hidden=true;};
+$('rightPhoto').onerror=()=>{$('rightMissing').hidden=false;};
+$('compareFrames').onchange=()=>{displayedFrame=null;refreshReplay();};
+$('rightSource').onchange=()=>refreshComparison(timeline[cursor]);
+$('wipe').oninput=()=>$('wipe').parentElement.style.setProperty('--split',$('wipe').value+'%');
+let profileKey='', profileTick=0;
+async function refreshProfile(){
+  const panel=$('profilePanel'), query=depthQuery();
+  if(!panel.open||!replay||!query.index)return;
+  const key=query.run+'/'+query.index;
+  if(key===profileKey&&Date.now()-profileTick<15000)return;
+  const body=$('timingTable');
+  if(key!==profileKey)body.textContent='Reading timings…';
+  profileKey=key;profileTick=Date.now();
+  const rows=await Promise.all(Array.from($('frameMethod').options).slice(1).map(async opt=>{
+    try{
+      const res=await fetch('/frame-depth-status?'+new URLSearchParams({...query,method:opt.value}));
+      const data=await res.json(), t=data.timing||data.benchmark;
+      return {name:opt.text,t,kind:data.timing?'Build':'Benchmark'};
+    }catch{return {name:opt.text};}
+  }));
+  if(profileKey!==key)return;
+  const table=document.createElement('table');
+  const header=table.createTHead().insertRow();
+  for(const title of ['Method / stages','Frames','Total','ms/frame','fps']){
+    const th=document.createElement('th');th.textContent=title;header.append(th);
+  }
+  const tbody=table.createTBody();
+  for(const {name,t,kind} of rows){
+    const row=tbody.insertRow();
+    const cell=row.insertCell();
+    if(!t?.frames){cell.textContent=name;const blank=row.insertCell();blank.colSpan=4;blank.textContent='Timing unavailable';continue;}
+    const details=document.createElement('details'),summary=document.createElement('summary');
+    details.open=Array.from(body.querySelectorAll('details[open] > summary')).some(item=>item.textContent===name);
+    summary.textContent=name;details.append(summary);
+    for(const [stage,seconds] of Object.entries(t.stages)){
+      const line=document.createElement('div');
+      line.textContent=stage+' · '+seconds.toFixed(2)+' s'+
+        (['Infer frames and write arrays','Render and save'].includes(stage)?' · '+Math.round(seconds*1000/t.frames)+' ms/frame':'');
+      details.append(line);
+    }
+    cell.append(details);
+    for(const value of [kind+' · '+t.frames,t.seconds.toFixed(2)+' s',Math.round(t.seconds*1000/t.frames),(t.frames/t.seconds).toFixed(1)]){
+      row.insertCell().textContent=value;
+    }
+  }
+  body.replaceChildren(table);
+}
+$('profilePanel').ontoggle=refreshProfile;
+let depthStatusKey='', depthPollTime=0, frameDepthStatus={};
+function depthQuery(){
+  return {run:timelineRun||'',index:model?.run===timelineRun ? model.feature_index||'' : '',method:$('frameMethod').value};
+}
+function describeFrameDepth(){
+  const {method,index}=depthQuery(), info=$('frameDepthStatus'), build=$('buildFrameDepth');
+  const timing=frameDepthStatus.timing||frameDepthStatus.benchmark;
+  $('depthTiming').textContent=method==='photo'?'':timing?(frameDepthStatus.benchmark&&!frameDepthStatus.timing?'Benchmark · '+timing.frames+' frames · ':'Build · ')+timingText(timing):'Build timing unavailable for this archive';
+  if(method==='photo'){
+    const results=Object.values(frameDepthStatus);
+    const available=results.filter(row=>row.available);
+    const missing=available.some(row=>!row.complete&&!row.running);
+    build.hidden=!index||!missing;
+    build.disabled=!!state?.busy;
+    build.textContent='Generate missing depth maps';
+    const running=Object.keys(frameDepthStatus).filter(key=>frameDepthStatus[key].running).map(key=>
+      Array.from($('frameMethod').options).find(option=>option.value===key)?.text);
+    info.textContent=results.length ? available.filter(row=>row.complete).length+' / '+available.length+' depth methods ready'+
+      (running.length?' · Processing '+running.join(', '):'')+
+      (frameDepthStatus.gaussian?.available?'':' · Gaussian depth needs trained splats') : '';
+    return;
+  }
+  build.textContent='Generate all frames';
+  build.hidden=!index||frameDepthStatus.saved===timeline.length;
+  build.disabled=!!state?.busy||frameDepthStatus.running||frameDepthStatus.available===false;
+  const scale=method==='apple'?'Estimated metres · yellow near, purple 8 m+':'Relative depth · colours scaled per frame';
+  const pose=frameDepthStatus.poses?.[timeline[cursor]?.id];
+  info.textContent=method==='photo'?'':!index?'Build the camera map to enable frame depth':
+    [scale,frameDepthStatus.saved==null?'':frameDepthStatus.saved+' / '+timeline.length+' ready',pose,frameDepthStatus.running?'Processing':'',frameDepthStatus.available===false?'Train the Gaussian map first':method==='gaussian'?'Black = no surface depth':''].filter(Boolean).join(' · ');
+}
+async function pollFrameDepth(){
+  const query=depthQuery(), key=new URLSearchParams(query).toString();
+  if(key!==depthStatusKey){depthStatusKey=key;depthPollTime=0;frameDepthStatus={};}
+  describeFrameDepth();
+  if(!query.index||(frameDepthStatus.total===timeline.length&&frameDepthStatus.saved===timeline.length)||Date.now()-depthPollTime<2500)return;
+  depthPollTime=Date.now();
+  try{
+    const res=await fetch('/frame-depth-status?'+new URLSearchParams({...query,method:query.method==='photo'?'all':query.method}));
+    if(!res.ok)return;
+    const next=await res.json();
+    if(key!==depthStatusKey)return;
+    const retry=next.saved!==frameDepthStatus.saved&&!$('depthMissing').hidden;
+    frameDepthStatus=next; describeFrameDepth();
+    if(retry){displayedFrame=null;refreshReplay();}
+  }catch{}
+}
+$('frameMethod').onchange=()=>{displayedFrame=null;refreshReplay();};
+$('buildFrameDepth').onclick=()=>{const query=depthQuery();return act('build-frame-depth',{...query,method:query.method==='photo'?'all':query.method});};
+$('replayImage').onerror=()=>{if(replay){$('replayImage').style.visibility='hidden';$('depthMissing').hidden=false;}};
+$('replayImage').onload=()=>{$('replayImage').style.visibility='';$('depthMissing').hidden=true;};
 function updateCamera(){
-  $('cameraTitle').textContent=replay?'Recorded camera':'Live camera';
+  $('cameraTitle').textContent=replay?'Frame replay':'Live camera';
+  $('frameControls').hidden=!replay;
+  refreshComparison(timeline[cursor]);
+  if(replay){pollFrameDepth();refreshProfile();}
+  else $('depthMissing').hidden=true;
   $('cameraMode').textContent=replay?'Show live camera':'Review walk';
   $('replayPanel').hidden=!replay;
   $('replayImage').hidden=!replay;
@@ -1254,10 +1414,19 @@ function refreshReplay(){
   updateCamera();
   const frame=timeline[cursor];
   if(!replay||!frame){draw();return;}
-  const key=timelineRun+'/'+frame.id;
+  const query=depthQuery();
+  const compare=$('compareFrames').checked;
+  const key=[timelineRun,frame.id,query.method,query.index,compare].join('/');
   if(displayedFrame!==key){
     displayedFrame=key;
-    $('replayImage').src='/recorded.jpg?'+new URLSearchParams({run:timelineRun,frame:frame.id});
+    $('replayImage').style.visibility='hidden';
+    $('depthMissing').hidden=true;
+    if((query.method==='photo'&&!compare)||query.index){
+      $('replayImage').src=compare?comparisonUrl(query.method,frame.id):(query.method==='photo'?'/recorded.jpg?':'/frame-depth.png?')+new URLSearchParams({...query,frame:frame.id});
+    }else{
+      $('replayImage').removeAttribute('src');
+      $('depthMissing').hidden=false;
+    }
   }
   const seconds=ms=>(ms/1000).toFixed(2)+' s';
   $('frameNo').textContent=seconds(frame.ms)+' / '+seconds(timeline.at(-1).ms)+' · Frame '+parseInt(frame.id);

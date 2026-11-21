@@ -321,6 +321,27 @@ class Survey:
         finally:
             self.finish_build()
 
+    def build_frame_depth(self, run, index, methods):
+        import replay_depth
+        finished, errors = [], []
+        try:
+            for method in methods:
+                label = replay_depth.LABELS[method]
+                with self.lock:
+                    if self.run == run:
+                        self.message = f"Generating {label} depth for every saved frame"
+                try:
+                    replay_depth.build(run, method, index)
+                    finished.append(label)
+                except Exception as exc:
+                    errors.append(f"{label}: {exc}")
+        finally:
+            with self.lock:
+                if self.run == run:
+                    parts = (["Depth ready · " + ", ".join(finished)] if finished else []) + errors
+                    self.message = " · ".join(parts)
+                self.finish_build()
+
     def train_gaussians(self, run, model, target):
         try:
             result = gaussian_map.build(run, model, target, os.getenv("ROOM_SURVEY_BRUSH"))
@@ -533,6 +554,25 @@ class Survey:
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
                 self.schedule(model.get("streams", STREAMS))
+            elif action == "build-frame-depth":
+                import replay_depth
+                if self.busy or self.log or not self.run or self.run.name != body.get("run"):
+                    raise ValueError("Choose an idle, finished walk.")
+                index, method = body.get("index"), body.get("method")
+                if json.loads((self.run/"survey.json").read_bytes()).get("feature_index") != index:
+                    raise ValueError("Reopen the camera map.")
+                if method == "all":
+                    methods = [key for key, result in replay_depth.inventory(self.run, index).items()
+                               if result["available"] and not result["complete"] and not result["running"]]
+                else:
+                    replay_depth.output(self.run,index,method)
+                    if method == "gaussian" and not (gaussian_map.artifact_dir(self.run,index)/"gaussians.ply").is_file():
+                        raise ValueError("Build Gaussian mapping for this walk first.")
+                    methods = [method]
+                if methods:
+                    self.building = self.run
+                    self.message = "Generating depth for every saved frame"
+                    threading.Thread(target=self.build_frame_depth,args=(self.run,index,methods),daemon=True).start()
             elif action in ("build-gaussians","build-lingbot","build-gaussian-mesh","build-clearance"):
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose an idle, finished walk.")
@@ -727,6 +767,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(asset.read_bytes(), mime[asset.suffix])
             except (OSError,ValueError,subprocess.SubprocessError) as exc:
                 return self.send(str(exc).encode(),"text/plain",503)
+        if path in ("/frame-depth.png","/frame-depth-status"):
+            import replay_depth
+            query = parse_qs(url.query)
+            run = survey.run
+            if not run or query.get("run") != [run.name] or survey.log:
+                return self.send(b"Select a finished walk","text/plain",404)
+            method = query.get("method",[""])[0]
+            try:
+                index = query.get("index",[""])[0]
+                if path == "/frame-depth-status" and method == "all":
+                    return self.send(json.dumps(replay_depth.inventory(run,index)).encode(),"application/json")
+                dest = replay_depth.output(run,index,method)
+                if path == "/frame-depth-status":
+                    manifest = dest/"complete.json"
+                    status = json.loads(manifest.read_bytes()) if manifest.exists() else {"saved":sum(1 for _ in dest.glob("*.npy"))}
+                    profile = dest/"benchmark.json"
+                    if profile.is_file():
+                        status["benchmark"] = json.loads(profile.read_bytes())
+                    status.update(replay_depth.inventory(run,index)[method])
+                    return self.send(json.dumps(status).encode(),"application/json")
+                frame = query.get("frame",[""])[0]
+                if re.fullmatch(r"[0-9]{7}\.jpg",frame):
+                    return self.send(replay_depth.preview(dest/(frame[:-4]+".npy"),method),"image/png")
+            except (ValueError,OSError):
+                pass
+            return self.send(b"Depth unavailable for this frame","text/plain",404)
         if path in ("/depth-cache","/depth-input.jpg","/depth-preview.png"):
             query = parse_qs(url.query)
             with survey.lock:
@@ -793,6 +859,15 @@ class Handler(BaseHTTPRequestHandler):
             limit = 360_000 if self.path == "/rebuild-surfaces" else 2048
             if not 0 < size <= limit:
                 raise ValueError("Invalid command")
+            if self.path == "/depth-cloud":
+                import depth_cloud
+                body = json.loads(self.rfile.read(size))
+                with survey.lock:
+                    run = survey.run
+                    if not run or survey.log or run.name != body.get("run"):
+                        raise ValueError("Open a finished walk.")
+                result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"))
+                return self.send(json.dumps(result,separators=(",",":")).encode(),"application/json")
             result = survey.action(self.path.removeprefix("/"),json.loads(self.rfile.read(size)))
             self.send(json.dumps(result).encode(),"application/json")
         except (ValueError, OSError, KeyError) as exc:

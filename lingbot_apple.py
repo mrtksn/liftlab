@@ -13,18 +13,7 @@ from lingbot_map.models.gct_stream import GCTStream
 from lingbot_map.utils.pose_enc import pose_encoding_to_extri_intri
 
 
-def reconstruct(folder, weights, dest, stride, limit):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Metal (PyTorch MPS) is required")
-    files = sorted(folder.glob("frame*.jpg"))[::stride][:limit]
-    if len(files) < 2:
-        raise ValueError("At least two rectified images are required")
-    if limit is None and files[-1] != sorted(folder.glob("frame*.jpg"))[-1]:
-        files.append(sorted(folder.glob("frame*.jpg"))[-1])
-    rgb = np.stack([cv2.cvtColor(cv2.resize(cv2.imread(str(f)), (224,168),
-                    interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB) for f in files])
-    images = torch.from_numpy(rgb).permute(0,3,1,2).float()/255
-    print(f"Loading {weights.name} for {len(files)} views",flush=True)
+def load_model(weights):
     checkpoint = torch.load(weights,map_location="cpu",weights_only=True,mmap=True)
     model = GCTStream(enable_3d_rope=True,use_sdpa=True,kv_cache_sliding_window=8,
                       kv_cache_scale_frames=2,camera_num_iterations=2)
@@ -39,6 +28,22 @@ def reconstruct(folder, weights, dest, stride, limit):
     model.eval().to("mps")
     del checkpoint
     gc.collect()
+    return model
+
+
+def reconstruct(folder, weights, dest, stride, limit):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Metal (PyTorch MPS) is required")
+    files = sorted(folder.glob("frame*.jpg"))[::stride][:limit]
+    if len(files) < 2:
+        raise ValueError("At least two rectified images are required")
+    if limit is None and files[-1] != sorted(folder.glob("frame*.jpg"))[-1]:
+        files.append(sorted(folder.glob("frame*.jpg"))[-1])
+    rgb = np.stack([cv2.cvtColor(cv2.resize(cv2.imread(str(f)), (224,168),
+                    interpolation=cv2.INTER_AREA),cv2.COLOR_BGR2RGB) for f in files])
+    images = torch.from_numpy(rgb).permute(0,3,1,2).float()/255
+    print(f"Loading {weights.name} for {len(files)} views",flush=True)
+    model = load_model(weights)
     start=time.monotonic()
     with torch.inference_mode():
         pred=model.inference_streaming(images,num_scale_frames=2,keyframe_interval=2,output_device=torch.device("cpu"))
