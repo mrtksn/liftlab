@@ -113,9 +113,25 @@ class GaussianView {
         q.forEach((v,j)=>texels[base+12+j]=v/n);
       }
     }
+    return this.upload(texels,cloud);
+  }
+  upload(texels,cloud){
+    const gl=this.gl, rows=texels.length/4096;
     gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,1024,rows,0,gl.RGBA,gl.FLOAT,texels);
-    this.sorted=null; this.cloud=cloud;
-    return count;
+    this.sorted=null; this.cloud=cloud; this.attributes=texels;
+    return this.order.length;
+  }
+  fitPoints(points){
+    return this.loadAttributes(fitGaussianAttributes(points));
+  }
+  loadAttributes(values){
+    const count=values.length/16,rows=Math.ceil(count/256);
+    if(!count||rows>this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE))throw Error('Invalid Gaussian texture size.');
+    const packed=new Float32Array(rows*4096);packed.set(values);
+    this.xyz=new Float32Array(count*3);
+    for(let i=0;i<count;i++)this.xyz.set(values.subarray(i*16,i*16+3),i*3);
+    this.order=Uint32Array.from({length:count},(_,i)=>i);this.depth=new Float32Array(count);
+    return this.upload(packed,false);
   }
   paint(ctx,width,height,eye,axes,origin,focal,perspective,near){
     const gl=this.gl,u=this.uniform;
@@ -134,4 +150,58 @@ class GaussianView {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,this.order.length);
     ctx.drawImage(this.canvas,0,0,width,height);
   }
+}
+
+function fitGaussianAttributes(points){
+    const count=points.length,data=new Float32Array(count*16);
+    // Estimate a neighborhood size from the central extent to limit outlier influence.
+    let span=0;
+    for(let axis=0;axis<3;axis++){
+      const values=points.map(p=>p[axis]).sort((a,b)=>a-b);
+      span=Math.max(span,values[Math.floor(.98*count)]-values[Math.floor(.02*count)]);
+    }
+    const cell=Math.max(1e-8,span/Math.max(8,Math.sqrt(count)/2));
+    const cells=new Map(),bins=points.map(p=>p.slice(0,3).map(v=>Math.floor(v/cell)));
+    bins.forEach((bin,i)=>{
+      const key=bin.join(',');
+      if(!cells.has(key))cells.set(key,[]);
+      cells.get(key).push(i);
+    });
+    points.forEach((p,i)=>{
+      const base=i*16,near=[];
+      const [bx,by,bz]=bins[i];
+      for(let x=bx-1;x<=bx+1;x++)for(let y=by-1;y<=by+1;y++)for(let z=bz-1;z<=bz+1;z++){
+        const bucket=cells.get(x+','+y+','+z);
+        if(!bucket)continue;
+        const stride=Math.max(1,Math.ceil(bucket.length/32));
+        for(let j=0;j<bucket.length;j+=stride){
+          const q=points[bucket[j]],dx=q[0]-p[0],dy=q[1]-p[1],dz=q[2]-p[2];
+          const d=dx*dx+dy*dy+dz*dz;
+          if(d>0)near.push([d,dx,dy,dz]);
+        }
+      }
+      near.sort((a,b)=>a[0]-b[0]);near.length=Math.min(near.length,12);
+      let xx=0,xy=0,xz=0,yy=0,yz=0,zz=0;
+      for(const [,x,y,z] of near){
+        xx+=x*x;xy+=x*y;xz+=x*z;yy+=y*y;yz+=y*z;zz+=z*z;
+      }
+      // The longest covariance cofactor gives the locally fitted plane normal.
+      const normals=[[yy*zz-yz*yz,xz*yz-xy*zz,xy*yz-xz*yy],
+                     [xz*yz-xy*zz,xx*zz-xz*xz,xy*xz-xx*yz],
+                     [xy*yz-xz*yy,xy*xz-xx*yz,xx*yy-xy*xy]];
+      let normal=normals.reduce((a,b)=>Math.hypot(...a)>Math.hypot(...b)?a:b);
+      const length=Math.hypot(...normal),planar=near.length>=3 && length>1e-8*(xx+yy+zz)**2;
+      normal=planar?normal.map(v=>v*(normal[2]<0?-1:1)/length):[0,0,1];
+      const radius=Math.max(.04*cell,Math.min(.7*cell,near.length?Math.sqrt(near[Math.min(2,near.length-1)][0])*.78:.15*cell));
+      const residual=near.reduce((sum,[,x,y,z])=>sum+(normal[0]*x+normal[1]*y+normal[2]*z)**2,0);
+      const thickness=planar?Math.min(radius,Math.max(radius*.12,Math.sqrt(residual/near.length))):radius;
+      const qw=Math.sqrt((1+normal[2])/2);
+      for(let k=0;k<3;k++){
+        data[base+k]=p[k];data[base+4+k]=p[k+3]/255;
+      }
+      data[base+3]=.82;
+      data.set([radius,radius,thickness],base+8);
+      data.set([qw,-normal[1]/(2*qw),normal[0]/(2*qw),0],base+12);
+    });
+    return data;
 }

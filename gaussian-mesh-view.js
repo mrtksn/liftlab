@@ -12,23 +12,26 @@ class GaussianMeshView {
     uniform vec2 viewport, origin;
     uniform float focal, nearZ, span;
     uniform bool perspective;
-    out vec3 world;
+    out vec3 viewPosition;
     void main() {
       vec3 p = camera * (point-eye);
       float w = perspective ? p.z : 1.;
       vec2 xy = (origin/viewport*2.-1.)*w + 2.*focal*p.xy/viewport;
       float z = perspective ? (p.z - 2.*nearZ) : p.z/span;
       gl_Position = vec4(xy.x, -xy.y, z, w);
-      world = point;
+      viewPosition = p;
     }`;
     const fragment = `#version 300 es
     precision highp float;
-    in vec3 world;
+    in vec3 viewPosition;
+    uniform bool perspective;
     out vec4 pixel;
     void main() {
-      vec3 n = normalize(cross(dFdx(world), dFdy(world)));
-      float light = .36 + .64*abs(dot(n,normalize(vec3(.25,-.45,.86))));
-      pixel = vec4(vec3(.39,.79,.78)*light,1.);
+      vec3 n = normalize(cross(dFdx(viewPosition),dFdy(viewPosition)));
+      vec3 eyeRay = perspective ? viewPosition : vec3(0.,0.,1.);
+      if(dot(n,eyeRay)>0.) n=-n;
+      float diffuse=max(0.,dot(n,vec3(-.55,-.67,-.50)));
+      pixel=vec4(vec3((72.+166.*diffuse)/255.),1.);
     }`;
     this.program = gl.createProgram();
     for (const [type, source] of [[gl.VERTEX_SHADER,vertex],[gl.FRAGMENT_SHADER,fragment]]) {

@@ -49,7 +49,44 @@ def align_depth(raw, method, units, camera):
     return raw*scale
 
 
-def reconstruct(run, index, method):
+def reconstruct(run, index, method, regenerate=False, saved_only=False, trained=False):
+    if trained:
+        if method != 'anything':
+            raise ValueError('Depth calibration is available for Depth Anything V2.')
+        base = reconstruct(run,index,method,regenerate,saved_only)
+        folder = output(run,index,method)
+        base_file = folder/('point-cloud-path-v1.json' if 'path' in base else 'point-cloud-v1.json')
+        cache = base_file.with_suffix('.trained.json')
+        with (folder/'.points.lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            # Reload the current path under lock in case another build finished.
+            base = json.loads(base_file.read_bytes())
+            inputs = [f.stat().st_mtime_ns for f in (base_file,run/'survey.json',folder/'complete.json')]
+            if cache.is_file():
+                result = json.loads(cache.read_bytes())
+                if result.get('trainingInputs') == inputs:
+                    return result
+            model = json.loads((run/'survey.json').read_bytes())
+            if model.get('feature_index') != index or inputs[0] < max(inputs[1:]):
+                raise ValueError('The map changed. Reopen the walk and try again.')
+            from depth_training import train
+            start = time.perf_counter()
+            training = train(model,folder)
+            training['seconds'] = time.perf_counter()-start
+            if 'path' in base:
+                model['poses'] = base['path']['poses']
+            result = fuse(run,model,folder,method,training)
+            if 'path' in base:
+                result['path'] = base['path']
+            result.update(training=training,trainingInputs=inputs)
+            result['stages']['Train depth correction'] = training['seconds']
+            result['seconds'] += training['seconds']
+            if inputs != [f.stat().st_mtime_ns for f in (base_file,run/'survey.json',folder/'complete.json')]:
+                raise ValueError('The map changed during training. Try again.')
+            with tempfile.NamedTemporaryFile(dir=folder, mode='w',delete=False) as tmp:
+                json.dump(result,tmp,separators=(',',':'),allow_nan=False)
+            Path(tmp.name).replace(cache)
+            return result
     folder = output(run,index,method)
     if not (folder/'complete.json').is_file():
         raise ValueError('Finish generating this depth set first.')
@@ -59,17 +96,32 @@ def reconstruct(run, index, method):
     cache = folder/'point-cloud-v1.json'
     with (folder/'.points.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        if cache.is_file() and cache.stat().st_mtime_ns >= max((run/'survey.json').stat().st_mtime_ns,
-                (folder/'complete.json').stat().st_mtime_ns):
-            return json.loads(cache.read_bytes())
-        result = fuse(run,model,folder,method)
+        inputs = [(run/'survey.json').stat().st_mtime_ns,(folder/'complete.json').stat().st_mtime_ns]
+        variant = folder/'point-cloud-path-v1.json'
+        if not regenerate:
+            if not saved_only and variant.is_file():
+                saved = json.loads(variant.read_bytes())
+                if saved.get('pathInputs')==inputs:
+                    return saved
+            if cache.is_file() and cache.stat().st_mtime_ns >= max(inputs):
+                return json.loads(cache.read_bytes())
+        if regenerate:
+            from depth_path import estimate
+            path = estimate(run,model,folder,method)
+            result = fuse(run,dict(model,poses=path['poses']),folder,method)
+            result.update(path=path,pathInputs=inputs)
+            cache = variant
+        else:
+            result = fuse(run,model,folder,method)
+        if inputs != [(run/'survey.json').stat().st_mtime_ns,(folder/'complete.json').stat().st_mtime_ns]:
+            raise ValueError('The map or depth set changed. Reopen the walk and try again.')
         with tempfile.NamedTemporaryFile(dir=folder,mode='w',delete=False) as tmp:
             json.dump(result,tmp,separators=(',',':'),allow_nan=False)
         Path(tmp.name).replace(cache)
         return result
 
 
-def fuse(run,model,folder,method):
+def fuse(run,model,folder,method,training=None):
     start = time.perf_counter()
     xyz = np.array(model['points'])[:,:3]
     scale = np.linalg.norm(np.ptp(np.percentile(xyz,[5,95],axis=0),axis=0))
@@ -95,6 +147,9 @@ def fuse(run,model,folder,method):
             z = depth[y,x]
             keep = np.isfinite(z)&(z>0)&(z<scale*2)
             x,y,z = x[keep],y[keep],z[keep]
+            if training and len(z):
+                from depth_training import correct
+                z = correct(z,x,y,w,h,training)
             if len(z):
                 rays = np.stack(((x+.5-w/2)/(F*w/W),(y+.5-h/2)/(F*w/W),np.ones_like(z)),axis=1)
                 points = (rays*z[:,None]) @ rot.T + pose['xyz']

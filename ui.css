@@ -63,3 +63,97 @@
 #timingTable summary,#profilePanel>summary{cursor:pointer}
 #timingTable details div{padding:.2rem 0;color:#b6c5c8}
 #mapViewport #wipeLine{position:absolute;padding:0}
+
+#viewNav{position:absolute;top:8px;right:8px;z-index:2;display:flex;align-items:center;padding:4px 6px;background:#192226ed;border:1px solid #47565b;border-radius:9px}
+#viewNav[hidden]{display:none}
+#axisGizmo{width:72px;height:72px}
+#axisGizmo g{cursor:pointer}
+#axisGizmo g:focus-visible circle,#axisGizmo g:hover circle{stroke:white;stroke-width:2}
+#axisGizmo text{fill:#10191b;font:700 10px system-ui;text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.view-buttons{display:grid;grid-template-columns:repeat(2,1fr);gap:3px}
+.view-buttons button{font-size:12px;line-height:1.2;padding:3px 6px}
+.view-buttons button[aria-pressed=true]{background:#b3edd2;color:#13291e}
+#recenterDrone{top:90px}
+.views.enlarged #cameraPanel .panelhead,.views.enlarged #frameControls{display:none}
+.views.enlarged #cameraPanel .imagebox{width:100%;aspect-ratio:4/3;flex:none}
+
+#levelSetup{font-size:13px;margin:6px 0}
+#levelSetup label{display:inline-flex;align-items:center;gap:4px;margin:4px}
+#mountAngles input{width:5em}
+#levelRings{position:absolute;z-index:1;width:min(48%,260px);aspect-ratio:1;pointer-events:none;overflow:visible}
+#levelRings path{fill:none;stroke-width:3;pointer-events:stroke;touch-action:none;cursor:grab}
+#levelRings path:hover,#levelRings path:focus{stroke-width:5}
+#levelTools{position:absolute;bottom:8px;z-index:2;display:flex;align-items:center;gap:6px;background:#192226ed;padding:4px 8px;border-radius:6px}
+#levelTools span{padding:0}
+#levelTools[hidden],#levelRings[hidden]{display:none}
+
+#views.views{grid-template-columns:minmax(0,1fr)}
+#pipeline .replayhead{justify-content:flex-start;gap:.7rem}
+#pipeline h2{margin-right:auto}
+#presetName{max-width:12em}
+.stage{margin-top:.7rem;border-top:1px solid #354145;padding-top:.7rem}
+.stage>summary{cursor:pointer;font-weight:650}
+.stage>summary small,#viewerOutput{font-weight:400;color:#a9baba;margin-left:.5rem}
+#frameStage #cameraPanel{max-width:860px;margin:.6rem auto;background:#151c1e}
+#frameStage .imagebox{height:clamp(170px,34vh,380px);min-height:0;aspect-ratio:auto}
+#pipeline #reconstructionInputs{margin:.6rem 0}
+#pipeline #reconstructionInputs h2{font-size:1rem}
+
+#pipeline #pathChoice{display:none}
+
+.node-scroll{overflow:auto;margin:15px 0 0;border:1px solid #364448;border-radius:9px;background-color:#12191b;background-image:radial-gradient(#324044 1px,transparent 1px);background-size:16px 16px}
+#nodeBoard{position:relative;min-width:100%}
+#nodeWires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#nodeWires path{fill:none;stroke:#647c81;stroke-width:1.8}
+#nodeWires path.selected{stroke:#a9e5c5;stroke-width:2.4}
+.node-card{position:absolute;width:170px;height:70px;display:grid;align-content:center;gap:4px;padding:9px 15px;text-align:left;border:1px solid #47575a;border-radius:7px;background:#202a2e;color:#e5eeeb}
+.node-card[aria-pressed=true]{border-color:#ace6c6;background:#233a34;box-shadow:0 0 0 1px #ace6c6}
+.node-card small{color:#aabbbd;font-size:11px}
+.node-card strong{font-size:14px}
+.node-card::before,.node-card::after{content:'';position:absolute;top:calc(50% - 4px);border-radius:50%;width:8px;height:8px;background:#95b9be;border:1px solid #152124}
+.node-card::before{left:-5px}.node-card::after{right:-5px}
+.node-card.root::before,.node-card.terminal::after{display:none}
+#nodeInspector{padding:12px 0;border-bottom:1px solid #354145}
+#nodeTitle{margin-right:auto}
+#pipeline .stage{border:0;margin:0}
+#pipeline .stage>summary{display:none}
+#pipeline .stage[hidden],#depthOutput,#depthOutputLabel{display:none}
+#pipeline[data-inspect=walk] #geometrySource,#pipeline[data-inspect=walk] label[for=geometrySource]{display:none}
+#pipeline[data-inspect=points] #depthSurfaceControls,#pipeline[data-inspect=mesh] #depthStages,#pipeline[data-inspect=splats] #depthStages{display:none}
+#pipeline:not([data-inspect=points]) #pipelinePathLabel{display:none}
+#pipeline[data-inspect=depth] #geometrySource option[value=photo]{display:none}
+#pipeline[data-inspect=pose] #regeneratePath{display:none}
+#pipeline[data-inspect=points] #pipelinePathLabel{margin:10px 0}
+#pipeline:not([data-inspect=depth]) #nodeDepthChoice{display:none}
+
+#pipeline[data-inspect=gaussMesh] #surfaceSettings{display:none}
+#pipeline[data-inspect=pose] #previousPhotoMap{display:inline-block}
+
+/* Geometry comes from the inspected node. The timeline and path remain viewer overlays. */
+#mapPanel .map-controls label:has(>#cloud),
+#mapPanel .map-controls label:has(>#splatLayer),
+#mapPanel .map-controls label:has(>#surfaceLayer),
+#mapPanel #trainLayer{display:none}
+
+.node-visible{position:absolute;padding:2px 5px;font-size:10px;line-height:14px;border-radius:4px}
+.node-visible[aria-pressed=true]{color:#b2f4d1}
+.node-card.muted-node{opacity:.6}
+.node-card strong{padding-right:16px}
+
+.node-ports{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:16px;padding:12px 2px;border-bottom:1px solid #354145}
+.node-ports h3{font-size:.8rem;color:#acc6c2;margin:0 0 6px}
+.node-ports label,.node-ports #portOutputs>div{display:block;line-height:1.8}
+.node-ports select{margin-left:8px}
+
+.port-data{font-size:.85rem;margin:4px 0 9px}.port-data summary{cursor:pointer;color:#b1d8c8}
+.port-data pre,#viewerFrames pre{overflow:auto;max-height:200px;margin:5px 0;background:#13191b;padding:8px}
+.port-data img,#viewerFrames img{display:block;max-width:min(100%,360px);max-height:200px}
+.port-data input[type=number]{width:7em}#viewerInputs{padding:10px 0}
+#viewerFrames:not([hidden]){display:flex;flex-wrap:wrap;gap:10px;padding:8px}
+
+#mapPanel.frames-only .mapbox,#mapPanel.frames-only .legend,#mapPanel.frames-only .legend+.map-controls{display:none}
+#viewerInputs:not([hidden]){display:flex;gap:12px;flex-wrap:wrap}
+
+#runTraceData{max-height:300px;overflow:auto}
+
+#codePanel{padding:9px 0}#codePanel summary{cursor:pointer}#codePanel textarea{display:block;box-sizing:border-box;width:100%;margin:8px 0;background:#11191a;color:#d9ece6;padding:12px;font:13px/1.5 ui-monospace,monospace;tab-size:2;border:1px solid #415056;border-radius:5px}#codeSchema{white-space:pre-wrap;color:#acc6c2}

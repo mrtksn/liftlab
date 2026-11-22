@@ -187,14 +187,20 @@ class Survey:
                 self.next_build = len(self.keys) + max(16, len(self.keys)//2)
                 self.schedule()
 
-    def start(self):
+    def start(self, level=None):
         if self.log:
             raise ValueError("Finish the current recording first.")
         if not self.latest or time.monotonic()-self.arrival > 3:
             raise ValueError("Wait for a fresh camera frame.")
+        if level is not None:
+            if not isinstance(level,dict) or any(type(level.get(k)) not in (int,float) or
+                    not math.isfinite(level[k]) or abs(level[k])>180 for k in ('pitch','roll')):
+                raise ValueError("Enter the camera mount pitch and roll in degrees.")
         folder = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:5]
         self.run = self.root / folder
         (self.run / "frames").mkdir(parents=True)
+        if level is not None:
+            atomic_json(self.run/"level-start.json",{k:level[k] for k in ('pitch','roll')})
         if self.calib.exists():
             shutil.copyfile(self.calib, self.run / "calibration.json")
         self.log = (self.run / "timestamps.csv").open("w")
@@ -286,6 +292,13 @@ class Survey:
                 distance = mesh.get("growth_distance_m", mesh.get("max_edge_m", MAX_EDGE))
                 model["surfaces"] = surface_mesh(run, model, mesh.get("method"), distance)
             model["run"] = run.name
+            if recover and previous.get("feature_index"):
+                prior_index = previous["feature_index"]
+                if (gaussian_map.artifact_dir(run,prior_index)/"gaussians.ply").is_file():
+                    report("Training splats for the rebuilt photo map before switching")
+                    gaussian_map.build(run, model, gaussian_map.artifact_dir(run,model["feature_index"]),
+                                       os.getenv("ROOM_SURVEY_BRUSH"))
+                atomic_json(run/"previous-photo-map.json",previous)
             atomic_json(path, model)
             with self.lock:
                 if self.run == run:
@@ -461,6 +474,7 @@ class Survey:
                     tofRaw=self.tof[-1] if self.tof and self.tof[-1] >= 0 else None,
                     fps=round(self.rate,1), recording=bool(self.log), run=self.run.name if self.run else None,
                     frames=self.count, keys=len(self.keys), busy=self.busy, message=self.message,
+                    hasPreviousMap=bool(self.run and (self.run/"previous-photo-map.json").is_file()),
                     buildingWalks=([self.building.name] if self.building else []) +
                                   [job[0].name for job in self.build_queue],
                     version=self.version, refs=self.refs, samples=len(self.samples), calibrated=self.calib.exists(),
@@ -531,11 +545,27 @@ class Survey:
                     self.process = None
                 self.connection, self.latest, self.stamp = "Disconnected", None, 0
             elif action == "start":
-                self.start()
+                self.start(body.get("level"))
             elif action == "stop":
                 self.stop()
             elif action in ("A","B"):
                 self.mark(action,float(body.get("metres") or 0))
+            elif action == "previous-photo-map":
+                if self.busy or self.log or not self.run or body.get("run")!=self.run.name:
+                    raise ValueError("Open an idle saved walk.")
+                path = self.run/"survey.json"
+                archive = self.run/"previous-photo-map.json"
+                old = json.loads(archive.read_bytes())
+                current = json.loads(path.read_bytes())
+                if current.get("feature_index")!=body.get("index") or old.get("run")!=self.run.name:
+                    raise ValueError("Reopen the walk before switching photo maps.")
+                # Keep the outgoing revision independently until both pointers have switched.
+                outgoing = self.run/("saved-"+ai_surfaces.index_path(self.run,current["feature_index"]).stem+".json")
+                atomic_json(outgoing,current)
+                atomic_json(path,old)
+                atomic_json(archive,current)
+                self.version += 1
+                self.message = "Switched photo map and its matching reconstruction assets"
             elif action == "load":
                 self.load(body["name"])
             elif action == "delete":
@@ -770,7 +800,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/depth-surface-methods":
             from depth_surfaces import METHODS
             return self.send(json.dumps({k:v[0] for k,v in METHODS.items()}).encode(),"application/json")
-        if path in ("/frame-depth.png","/frame-depth-status"):
+        if path in ("/frame-depth.png","/frame-depth-status","/frame-depth-sample"):
             import replay_depth
             query = parse_qs(url.query)
             run = survey.run
@@ -792,7 +822,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(json.dumps(status).encode(),"application/json")
                 frame = query.get("frame",[""])[0]
                 if re.fullmatch(r"[0-9]{7}\.jpg",frame):
-                    return self.send(replay_depth.preview(dest/(frame[:-4]+".npy"),method),"image/png")
+                    array_path = dest/(frame[:-4]+".npy")
+                    if path == "/frame-depth-sample":
+                        depth = np.load(array_path, mmap_mode="r", allow_pickle=False)
+                        height,width = depth.shape
+                        x = int(query.get("x",[width//2])[0])
+                        y = int(query.get("y",[height//2])[0])
+                        if not (0 <= x < width and 0 <= y < height):
+                            raise ValueError("Outside depth frame")
+                        value = float(depth[y,x])
+                        sample = dict(width=width,height=height,x=x,y=y,value=value if math.isfinite(value) else None)
+                        return self.send(json.dumps(sample).encode(),"application/json")
+                    return self.send(replay_depth.preview(array_path,method),"image/png")
             except (ValueError,OSError):
                 pass
             return self.send(b"Depth unavailable for this frame","text/plain",404)
@@ -862,19 +903,24 @@ class Handler(BaseHTTPRequestHandler):
             limit = 360_000 if self.path == "/rebuild-surfaces" else 2048
             if not 0 < size <= limit:
                 raise ValueError("Invalid command")
-            if self.path in ("/depth-cloud","/depth-surfaces"):
+            if self.path in ("/depth-cloud","/depth-surfaces","/regenerate-path"):
                 import depth_cloud
                 body = json.loads(self.rfile.read(size))
                 with survey.lock:
                     run = survey.run
                     if not run or survey.log or run.name != body.get("run"):
                         raise ValueError("Open a finished walk.")
+                    if self.path=="/regenerate-path" and survey.busy:
+                        raise ValueError("Wait for the current reconstruction to finish.")
                 if self.path == "/depth-surfaces":
                     import depth_surfaces
                     result = depth_surfaces.build(run,body.get("index"),body.get("source"),
-                                                  body.get("method"),body.get("tof",False))
+                                                  body.get("method"),body.get("tof",False),
+                                                  body.get("detail"),body.get("reach"),body.get("savedOnly") is True, trained=body.get("trained") is True)
                 else:
-                    result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"))
+                    result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"),
+                                                    regenerate=self.path=="/regenerate-path",
+                                                    saved_only=body.get("savedOnly") is True, trained=body.get("trained") is True)
                 return self.send(json.dumps(result,separators=(",",":")).encode(),"application/json")
             result = survey.action(self.path.removeprefix("/"),json.loads(self.rfile.read(size)))
             self.send(json.dumps(result).encode(),"application/json")

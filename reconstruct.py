@@ -1,4 +1,5 @@
 """Recover one connected sparse model from a snapshot of a handheld recording."""
+import csv
 import json
 from pathlib import Path
 import tempfile
@@ -89,6 +90,41 @@ def build(run, names, report, *, recover=False, index=True, streams=STREAMS):
         return result
 
 
+def startup_rotation(run, images):
+    """A level airframe and measured camera mount define up during the initial hold."""
+    reference = run/'level-start.json'
+    if not reference.exists():
+        return None, None
+    mount = json.loads(reference.read_text())
+    with (run/'timestamps.csv').open() as stream:
+        samples = list(csv.DictReader(stream))
+    if not samples:
+        return None, 'No startup frames'
+    t0 = float(samples[0]['pi_camera_relative_us'])
+    start = {s['frame'] for s in samples if 0 <= float(s['pi_camera_relative_us'])-t0 <= 2e6}
+    ticks = [float(s['pi_encoder_callback_ns'])*1e-9 for s in samples if
+             s['frame'] in start and s.get('pi_encoder_callback_ns')]
+    if ticks and (run/'motion.csv').exists():
+        with (run/'motion.csv').open() as stream:
+            rates = [np.linalg.norm([float(row[k]) for k in ('gx_rad_s','gy_rad_s','gz_rad_s')])
+                     for row in csv.DictReader(stream) if min(ticks)<=float(row['pi_uart_monotonic_s'])<=max(ticks)]
+        if len(rates)>=5 and np.percentile(rates,90)>np.deg2rad(5):
+            return None, 'IMU detected rotation during level start'
+    views = [im for im in images if im.name in start]
+    if not views:
+        return None, 'No mapped pose during level start'
+    pitch,roll = np.deg2rad([mount['pitch'],mount['roll']])
+    tilt = cv2.Rodrigues(np.array([-pitch,0.,0.]))[0]
+    twist = cv2.Rodrigues(np.array([0.,0.,roll]))[0]
+    camera_level = tilt @ np.array([[1,0,0],[0,0,1],[0,-1,0]]) @ twist
+    first = views[0].cam_from_world().rotation.matrix()
+    for im in views[1:]:
+        turn = cv2.Rodrigues(im.cam_from_world().rotation.matrix() @ first.T)[0]
+        if np.linalg.norm(turn)>np.deg2rad(4):
+            return None, 'Camera moved during level start'
+    return camera_level @ first, 'Level start'
+
+
 def export_model(run, model, names, calibrated, observations, recovery_frames=(), *, indexed=True, gravity=True):
     images = sorted((model.image(i) for i in model.reg_image_ids()), key=lambda im: im.name)
     if len(images) < 3 or not model.num_points3D():
@@ -101,7 +137,10 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
     alignment = gravity_alignment([im.cam_from_world().rotation.matrix().T for im in paired],
                                   [observations[im.name]["q"] for im in paired],
                                   [int(im.name[:-4]) for im in paired] if paired and all(im.name[:-4].isdigit() for im in paired) else None)
-    if alignment is not None:
+    level_rotation,level_status = startup_rotation(run,images)
+    if level_rotation is not None:
+        rotation = level_rotation
+    elif alignment is not None:
         rotation = alignment
     origin = first.projection_center()
     def xyz(p):
@@ -136,7 +175,7 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
             point[:3] = (np.asarray(point[:3])*factor).round(7).tolist()
         for pose in poses:
             pose["xyz"] = (np.asarray(pose["xyz"])*factor).round(7).tolist()
-    return dict(landmark_views=views, format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=alignment is not None, feature_index=index, poses=poses, registered_views=len(images),
+    return dict(landmark_views=views, format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=alignment is not None and level_rotation is None, level_status=level_status, feature_index=index, poses=poses, registered_views=len(images),
         path_frames=recovery_frames or names,
         points=points, views=len(names), sampled_frames=names,
         mean_error_px=round(model.compute_mean_reprojection_error(), 3),
