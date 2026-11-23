@@ -49,3 +49,24 @@ def read_timeline(run):
                 )
         result.append(frame)
     return result
+
+
+def read_recording_tables(run):
+    """Read independent acquisition logs without resampling them to camera rate."""
+    def cell(value):
+        if value is None or value == "":
+            return None
+        try:
+            n = float(value)
+            return n if math.isfinite(n) else None
+        except ValueError:
+            return value
+
+    tables = {}
+    for path in sorted(run.glob("*.csv")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        with path.open(newline="") as stream:
+            tables[path.name] = [{k: cell(v) for k, v in row.items() if k is not None}
+                                 for row in csv.DictReader(stream)]
+    return tables

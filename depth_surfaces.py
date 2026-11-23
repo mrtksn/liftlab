@@ -89,39 +89,58 @@ def build(run,index,source,method,use_tof,detail=None,reach=None,saved_only=Fals
             existing = json.loads(cache.read_bytes())
             if existing.get('inputs')==signature:
                 return existing
-        start = time.perf_counter()
-        xyz = np.asarray(cloud['points'],float)[:,:3]
-        lo, hi = np.percentile(xyz,[.5,99.5],axis=0)
-        span = max(hi-lo)
-        if not np.isfinite(span) or span<=0:
-            raise ValueError('Depth cloud has no spatial extent.')
-        cell = span/80
-        keep = ((xyz>=lo-4*cell)&(xyz<=hi+4*cell)).all(axis=1)
-        xyz = xyz[keep]
-        reading = None
-        if use_tof:
-            endpoints,reading = range_points(run,model,xyz,cell)
-            xyz = np.vstack((xyz,endpoints))
-        balloon = None
-        if method=='balloon':
-            # UI distances are centimetres for metric walks, percent of span otherwise.
-            factor = .01 if units=='m' else span*.01
-            if detail*factor < span*1e-7:
-                raise ValueError('Minimum detail is too small for this walk.')
-            patches,balloon = build_balloon(xyz,model['poses'],detail*factor,reach*factor)
-        else:
-            _,groups = np.unique(np.floor((xyz-lo)/cell).astype(int),axis=0,return_inverse=True)
-            counts = np.bincount(groups)
-            xyz = np.stack([np.bincount(groups,weights=v)/counts for v in xyz.T],axis=1)
-            patches = METHODS[method][1](xyz,cell,units)
-        for patch in patches:
-            # Fitting indices refer to downsampled cells, not displayed depth points.
-            patch['landmarks'] = []
-        result = dict(method=method,source=source,units=units,patches=patches,tof=reading,
-                      points=int(keep.sum()),seconds=time.perf_counter()-start,inputs=signature)
-        if balloon:
-            result['balloon'] = balloon
+        result = fit_cloud(run, model, cloud, method, use_tof, detail, reach)
+        result['inputs'] = signature
         with tempfile.NamedTemporaryFile(dir=folder,mode='w',delete=False) as tmp:
             json.dump(result,tmp,separators=(',',':'),allow_nan=False)
         Path(tmp.name).replace(cache)
         return result
+
+
+
+def fit_cloud(run, model, cloud, method, use_tof=False, detail=None, reach=None):
+    """Build a mesh from the supplied points; the caller owns persistence."""
+    units, source = cloud['units'], cloud['method']
+    if method not in METHODS or type(use_tof) is not bool:
+        raise ValueError('Choose a valid mesh method and ToF setting.')
+    if use_tof and units != 'm':
+        raise ValueError('ToF requires map coordinates in metres.')
+    if method == 'balloon' and (not model.get('poses') or
+            not all(type(v) in (int, float) and np.isfinite(v) for v in (detail, reach))
+            or not 0 < detail < reach):
+        raise ValueError('Balloon needs camera poses and positive detail below its reach.')
+    start = time.perf_counter()
+    xyz = np.asarray(cloud['points'],float)[:,:3]
+    if len(xyz) < 3 or not np.isfinite(xyz).all():
+        raise ValueError('At least three finite points are required.')
+    lo, hi = np.percentile(xyz,[.5,99.5],axis=0)
+    span = max(hi-lo)
+    if not np.isfinite(span) or span<=0:
+        raise ValueError('Depth cloud has no spatial extent.')
+    cell = span/80
+    keep = ((xyz>=lo-4*cell)&(xyz<=hi+4*cell)).all(axis=1)
+    xyz = xyz[keep]
+    reading = None
+    if use_tof:
+        endpoints,reading = range_points(run,model,xyz,cell)
+        xyz = np.vstack((xyz,endpoints))
+    balloon = None
+    if method=='balloon':
+        # UI distances are centimetres for metric walks, percent of span otherwise.
+        factor = .01 if units=='m' else span*.01
+        if detail*factor < span*1e-7:
+            raise ValueError('Minimum detail is too small for this walk.')
+        patches,balloon = build_balloon(xyz,model['poses'],detail*factor,reach*factor)
+    else:
+        _,groups = np.unique(np.floor((xyz-lo)/cell).astype(int),axis=0,return_inverse=True)
+        counts = np.bincount(groups)
+        xyz = np.stack([np.bincount(groups,weights=v)/counts for v in xyz.T],axis=1)
+        patches = METHODS[method][1](xyz,cell,units)
+    for patch in patches:
+        # Fitting indices refer to downsampled cells, not displayed depth points.
+        patch['landmarks'] = []
+    result = dict(method=method,source=source,units=units,patches=patches,tof=reading,
+                  points=int(keep.sum()),seconds=time.perf_counter()-start)
+    if balloon:
+        result['balloon'] = balloon
+    return result

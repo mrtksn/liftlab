@@ -157,3 +157,13 @@
 #runTraceData{max-height:300px;overflow:auto}
 
 #codePanel{padding:9px 0}#codePanel summary{cursor:pointer}#codePanel textarea{display:block;box-sizing:border-box;width:100%;margin:8px 0;background:#11191a;color:#d9ece6;padding:12px;font:13px/1.5 ui-monospace,monospace;tab-size:2;border:1px solid #415056;border-radius:5px}#codeSchema{white-space:pre-wrap;color:#acc6c2}
+
+.record-controls{padding:6px 0}.record-controls select{max-width:18em}.record-plot{display:block;width:100%;min-width:240px;height:120px;background:#11191a}.record-controls input{max-width:6em}
+#viewerFrames section{min-width:min(340px,95%);flex:1}
+#mapPanel:not(.has-path) :is(.path-key,.route-key,#droneView,#coverage,label:has(>#route)),#mapPanel:not(.has-points) .points-key{display:none}
+#extraInputs:not([hidden]){display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}#extraInputs>div{width:100%}
+
+.frames-only #units{display:none}.legend .path-key,.legend .points-key{display:inline-flex;align-items:center;gap:5px;margin-left:0}.points-key i{width:4px;height:4px;border-radius:50%}
+.views.enlarged #mapPanel{position:relative}.views.enlarged #mapPanel:not(.frames-only) #viewerFrames:has(img):not(:has(.record-controls)){position:absolute;z-index:3;top:58px;left:12px;max-width:27%;background:#13191b}.views.enlarged #viewerFrames img{max-width:100%}
+
+.pixel-preview{display:block;max-width:min(360px,100%);height:auto}

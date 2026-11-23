@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from zipfile import ZipFile
 import re
 
-from replay import read_timeline
+from replay import read_timeline, read_recording_tables
 from fusion import STREAMS, load_observations
 from seed_surfaces import MAX_EDGE, build_surfaces
 import gaussian_map
@@ -737,7 +737,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
@@ -800,7 +800,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/depth-surface-methods":
             from depth_surfaces import METHODS
             return self.send(json.dumps({k:v[0] for k,v in METHODS.items()}).encode(),"application/json")
-        if path in ("/frame-depth.png","/frame-depth-status","/frame-depth-sample"):
+        if path in ("/frame-depth.png","/frame-depth-status","/frame-depth-sample", "/frame-depth.bin"):
             import replay_depth
             query = parse_qs(url.query)
             run = survey.run
@@ -823,6 +823,10 @@ class Handler(BaseHTTPRequestHandler):
                 frame = query.get("frame",[""])[0]
                 if re.fullmatch(r"[0-9]{7}\.jpg",frame):
                     array_path = dest/(frame[:-4]+".npy")
+                    if path == "/frame-depth.bin":
+                        depth = np.load(array_path, allow_pickle=False).astype("<f4", copy=False)
+                        height, width = depth.shape
+                        return self.send(struct.pack("<II", width, height) + depth.tobytes(), "application/octet-stream")
                     if path == "/frame-depth-sample":
                         depth = np.load(array_path, mmap_mode="r", allow_pickle=False)
                         height,width = depth.shape
@@ -860,13 +864,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Depth view unavailable","text/plain",404)
         if path == "/walk.zip":
             return self.download_walk(parse_qs(url.query).get("run", [""])[0])
-        if path == "/timeline" or path == "/recorded.jpg":
+        if path in ("/timeline", "/recording-tables", "/recorded.jpg"):
             query = parse_qs(url.query)
             with survey.lock:
                 run = survey.run
                 if not run or run.name != query.get("run", [""])[0] or survey.log:
                     return self.send(b"Select a finished walk", "text/plain", 404)
             try:
+                if path == "/recording-tables":
+                    return self.send(json.dumps(read_recording_tables(run), allow_nan=False).encode(), "application/json")
                 if path == "/timeline":
                     return self.send(json.dumps(read_timeline(run), allow_nan=False).encode(), "application/json")
                 frame = query.get("frame", [""])[0]
@@ -900,10 +906,10 @@ class Handler(BaseHTTPRequestHandler):
             if origin and origin != "http://" + self.headers["Host"]:
                 raise ValueError("Local dashboard required")
             size = int(self.headers.get("Content-Length","0"))
-            limit = 360_000 if self.path == "/rebuild-surfaces" else 2048
+            limit = {"/rebuild-surfaces":360_000, "/mesh-input":16_000_000}.get(self.path, 2048)
             if not 0 < size <= limit:
                 raise ValueError("Invalid command")
-            if self.path in ("/depth-cloud","/depth-surfaces","/regenerate-path"):
+            if self.path in ("/depth-cloud","/depth-surfaces","/regenerate-path","/mesh-input"):
                 import depth_cloud
                 body = json.loads(self.rfile.read(size))
                 with survey.lock:
@@ -912,7 +918,19 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Open a finished walk.")
                     if self.path=="/regenerate-path" and survey.busy:
                         raise ValueError("Wait for the current reconstruction to finish.")
-                if self.path == "/depth-surfaces":
+                if self.path == "/mesh-input":
+                    from depth_surfaces import fit_cloud
+                    points = body.get("points")
+                    if not isinstance(points, list) or not 3 <= len(points) <= 100_000 or any(
+                            not isinstance(row, list) or len(row) != 6 for row in points):
+                        raise ValueError("Supply 3 to 100,000 colored points.")
+                    model = json.loads((run/"survey.json").read_bytes()) if (run/"survey.json").is_file() else {}
+                    if model.get("feature_index") != body.get("index"):
+                        raise ValueError("The selected map changed.")
+                    cloud = dict(points=points, units=model.get("units", "relative"), method="input")
+                    result = fit_cloud(run, model, cloud, body.get("method"), body.get("tof", False),
+                                       body.get("detail"), body.get("reach"))
+                elif self.path == "/depth-surfaces":
                     import depth_surfaces
                     result = depth_surfaces.build(run,body.get("index"),body.get("source"),
                                                   body.get("method"),body.get("tof",False),
