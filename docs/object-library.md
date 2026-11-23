@@ -8,6 +8,8 @@ Import sets the asset's name, file units, up axis and default size with a live s
 
 **Place in world** places an independent fixed copy and opens its existing in-view world editor. Set its name, position, turn, scale and collision geometry. World copies can add a two-pose hinge/slide animation with loop, button or proximity activation; see [World animation editor](world-animation.md). Animation is exclusive to world copies. File units and up axis belong to the library import settings. Both editors share the actual scale field, collision controls, collision renderer and overlay styling.
 
+A program can start the same import with its file and defaults: the Room Survey (`survey/`, World → Room survey) sends a scanned room as a Z-up OBJ in metres or a custom size, and its library entry makes placed copies use **Follows model** collisions, since a room's walls are open surfaces.
+
 ## Collision choices
 
 - **Follows model** uses the original triangle surfaces for contacts, collision rays and radio obstruction. Closed meshes enclose a volume; an open mesh acts as a surface. The blue indicator draws those triangles, rather than a box approximation. This applies to static world objects, imported drone shapes, cable-ball/fleet contacts and released imported cargo.

@@ -64,27 +64,30 @@ function objectLibraryOpen(context) {
 function objectSessionBegin(context,phase) {
   if(partImport.active||maps.busy||!fleetCanSelect()||(context==='drone'&&(!fleet.selected||liveOn()))||(context==='world'&&!wedit.on))return false;
   partImport.active=partImport.busy=true;partImport.context=context;partImport.phase=phase;partImport.editId=null;partImport.asset=null;partImport.mount='';partImport.owner=fleet.selected;
-  partImport.wasEditing=editMode;partImport.wasRunning=running;partImport.showSolid=true;partImport.massAuto=true;partImport.pick=null;partImport.generation++;
+  partImport.hints={};partImport.wasEditing=editMode;partImport.wasRunning=running;partImport.showSolid=true;partImport.massAuto=true;partImport.pick=null;partImport.generation++;
   partImport.camera={dist:cam.dist,pan:cam.pan.clone(),target:cam.target.clone()};
   if(context==='drone')setEditMode(true);else running=false;
   fleet.pendingEdits++;$('.work').classList.add('part-importing');
   partImport.locked=[$('#airframe'),$('.bar'),$('#editBar'),$('#worldPanel')].filter(Boolean).map(e=>[e,e.inert]);for(const [e]of partImport.locked)e.inert=true;
   partImportPanel();return true;
 }
-async function objectImportStart(files,context) {
-  if(!objectSessionBegin(context,'import'))return;const generation=partImport.generation;
+// hints, from a program that made the model (survey/ sends rooms): up ('y'|'z'), units (a WORLD_OBJ_UNITS key or
+// 'custom'), scale (metres per file unit, for 'custom'), worldCollision (placed copies' default, 'boxes'|'mesh') and say (a note shown with the import settings).
+async function objectImportStart(files,context,hints={}) {
+  if(!objectSessionBegin(context,'import'))return false;const generation=partImport.generation;partImport.hints=hints;
   try {
     const parts=await Promise.all([...files].map(async f=>({name:f.name,data:await f.arrayBuffer()})));
     if(parts.reduce((s,p)=>s+p.data.byteLength,0)>128*1024*1024)throw new Error('Model files exceed 128 MB');
     const main=parts.find(p=>WORLD_OBJ_FORMATS[extOf(p.name)]);if(!main)throw new Error('Choose a GLB, glTF, OBJ or STL model');
-    const rec={id:newObjId('asset-'),name:main.name,files:parts},up=extOf(main.name)==='stl'?'z':'y';
+    const rec={id:newObjId('asset-'),name:main.name,files:parts},up=hints.up||(extOf(main.name)==='stl'?'z':'y');
     const {base,size}=standModel(await parseModel(rec),up);base.children[0].position.z-=size[2]/2;
     if(!partImport.active||generation!==partImport.generation){disposeGroup(base);return;}
-    const units=guessUnits(extOf(main.name),size);
-    const c=mkMass(main.name.replace(/\.[^.]+$/,'').slice(0,60)||'Object',0,0,0,{shape:'model',battery:false,category:'payload',rotation:[0,0,0],model:{fileId:rec.id,rawSize:size,scale:WORLD_OBJ_UNITS[units].k,units,up,detail:'medium',collision:'boxes',boxes:[]}});
+    const units=hints.units||guessUnits(extOf(main.name),size);
+    const c=mkMass(main.name.replace(/\.[^.]+$/,'').slice(0,60)||'Object',0,0,0,{shape:'model',battery:false,category:'payload',rotation:[0,0,0],model:{fileId:rec.id,rawSize:size,scale:WORLD_OBJ_UNITS[units]?.k??(hints.scale>0?hints.scale:1),units,up,detail:'medium',collision:'boxes',boxes:[]}});
     worldObjects.files.set(rec.id,rec);partModels.set(rec.id+':'+up,Promise.resolve(base));partImport.draft=c;
     partSolidifyDraft(c,base);c.cog=partSolidMass(c).center;c.mass=clamp(partSolidMass(c).volume*200,.005,20);c.points=[];
     partImport.panel.remove();partImportPanel();partDraftRefresh();objectPreviewFrame(c);
+    if(hints.say&&$('#objectImportSay'))$('#objectImportSay').textContent=hints.say;
   } catch(e){if(generation===partImport.generation){partImportCancel();designNote('Could not import object: '+e.message);worldEditSay('Could not import object: '+e.message);}}
   finally {if(generation===partImport.generation)partImport.busy=false;}
 }
@@ -113,7 +116,7 @@ function objectImportFields(panel,c) {
 async function objectImportSave() {
   if(partImport.busy||!partImport.draft)return;const c=partImport.draft,generation=partImport.generation,context=partImport.context;
   partImport.busy=true;$('#objectImportSave').disabled=true;
-  try {const old=partImport.asset,asset={...old,...objectAsset(c)};await objectLibraryKeep(asset,worldObjects.files.get(c.model.fileId));if(generation!==partImport.generation)return;
+  try {const old=partImport.asset,asset={...old,...objectAsset(c)};if(partImport.hints?.worldCollision)asset.worldCollision=partImport.hints.worldCollision;await objectLibraryKeep(asset,worldObjects.files.get(c.model.fileId));if(generation!==partImport.generation)return;
     // Library changes do not alter copies already placed in the world or on drones.
     const wasEditing=partImport.wasEditing,wasRunning=partImport.wasRunning;partImportEnd();if(context==='drone'&&!wasEditing)setEditMode(false);if(context==='world')running=wasRunning;
     objectLibraryOpen(context);
@@ -140,7 +143,7 @@ async function objectUseStart(asset,context,existing=null) {
 async function objectWorldUse(asset) {
   if(!wedit.on||wedit.busy||maps.busy||partImport.active)return;wedit.busy=true;fleet.pendingEdits++;worldEditSay('Preparing object copy…');worldEditRender();mapUiSync();
   try{const rec=worldObjects.files.get(asset.fileId)||await worldFileGet(asset.fileId);if(!rec)throw new Error('Original model file unavailable');
-    const {base,size}=standModel(await parseModel(rec),asset.up);if(!wedit.on){disposeGroup(base);throw new Error('World editing ended before placement');}const o={id:newObjId('o'),fileId:asset.fileId,name:asset.name,pos:[cam.target.x,cam.target.y,0],yaw:0,scale:asset.scale,units:asset.units,up:asset.up,detail:'medium',collision:'boxes',size,boxes:[]};
+    const {base,size}=standModel(await parseModel(rec),asset.up);if(!wedit.on){disposeGroup(base);throw new Error('World editing ended before placement');}const o={id:newObjId('o'),fileId:asset.fileId,name:asset.name,pos:[cam.target.x,cam.target.y,0],yaw:0,scale:asset.scale,units:asset.units,up:asset.up,detail:'medium',collision:asset.worldCollision==='mesh'?'mesh':'boxes',size,boxes:[]};
     objGroup(o);showModel(o,base);try{worldObjSolidify(o);}catch(e){disposeObj(o);throw e;}worldObjects.list.push(o);worldObjectsChanged();worldEditChanged();wedit.busy=false;worldEditSay('Placed an independent fixed copy. Edit its placement, size and collision geometry below.');worldEditSelect(o.id);worldEditLookAt(o);
   }catch(e){worldEditSay('Could not place object: '+e.message);}finally{wedit.busy=false;fleet.pendingEdits--;worldEditRender();mapUiSync();}
 }

@@ -377,7 +377,7 @@ function renderOutputs(node){
       const output=results.get(node.id)?.outputs?.[p.name];
       if(!output){body.textContent=results.get(node.id)?.error||'Run to node to produce this output.';return;}
       body.textContent='Reading…';
-      try{showValue(body,await materialize(output,p.types[0]),p.types[0],output);}catch(e){body.textContent=e.message;}
+      try{showValue(body,await materialize(output,p.types[0]),p.types[0],output,nodeLabel(node));}catch(e){body.textContent=e.message;}
     };
     host.append(box);
   }
@@ -785,7 +785,7 @@ function mountReplayFrames(host,view){
   };
 }
 // Inspect any value by its type.
-function showValue(body,value,type,output={}){
+function showValue(body,value,type,output={},label=''){
   body.replaceChildren();
   const text=s=>{const p=document.createElement('pre');p.textContent=s;body.append(p);return p;};
   const rows=(label,count,get,initial=0)=>{
@@ -833,6 +833,7 @@ function showValue(body,value,type,output={}){
   if(Array.isArray(value)){
     rows({points:'Point',polygons:'Face',triangles:'Triangle',path:'Pose'}[kind]||'Record',value.length,i=>value[i]);
     if(kind==='points')plot(value);
+    if(kind==='polygons'||kind==='triangles')sendToWorld(body,value,output,label);
     if(output.summary)text(JSON.stringify(output.summary,null,2));
     return;
   }
@@ -841,6 +842,34 @@ function showValue(body,value,type,output={}){
 function consoleLine([label,...values]){
   const box=$('codeConsole');box.hidden=false;
   for(const value of values)box.append(inspectConsoleValue(label,value));
+}
+
+// Send to World ---------------------------------------------------------------------------------
+// Inside LiftLab (its Room Survey dialog, which shares this page's origin), a surface output becomes a model in
+// LiftLab's World editor. It goes as this view shows it: the map's levelling plus any Survey leveling correction,
+// Z up, with the walk's camera positions so LiftLab can face each triangle toward the side the camera saw. A map
+// without a scale sends the output's own estimate when it has one (output.scale, e.g. the Gaussian mesh's ToF check).
+function liftlabWindow(){try{return parent!==window&&parent.location.origin===location.origin?parent:null;}catch{return null;}}
+function sendToWorld(body,value,output,label){
+  const row=document.createElement('div'),say=document.createElement('small'),host=liftlabWindow();
+  row.className='controls';say.setAttribute('role','status');row.append(say);body.append(row);
+  if(!host){say.textContent='Open this survey from LiftLab (World → Room survey → Room Survey…) to send this surface to the World.';return;}
+  const button=document.createElement('button');button.type='button';button.textContent='Send to World';row.prepend(button);
+  button.onclick=()=>{
+    const level=v=>correction.map(r=>r[0]*v[0]+r[1]*v[1]+r[2]*v[2]);
+    const corrected=correction.some((r,i)=>r.some((v,j)=>Math.abs(v-(i===j?1:0))>1e-9));
+    const id=String(Date.now())+Math.random();
+    const reply=({source,data})=>{
+      if(source!==host||data?.type!=='liftlab-survey-reply'||data.id!==id)return;
+      removeEventListener('message',reply);say.textContent=data.text;button.disabled=false;
+    };
+    addEventListener('message',reply);button.disabled=true;say.textContent='Sending to LiftLab…';
+    host.postMessage({type:'liftlab-survey-surface',id,name:[label,state?.run].filter(Boolean).join(' · '),
+      units:output.units||model?.units||'relative',levelled:!!model?.gravity_aligned||corrected,
+      scale:(output.units||model?.units)==='m'?null:output.scale||null,
+      polygons:value.map(p=>Array.isArray(p)?{outer:p.map(level)}:{outer:p.vertices.map(level),holes:(p.holes||[]).map(h=>h.map(level))}),
+      viewpoints:(model?.poses||[]).filter(p=>Array.isArray(p.xyz)).map(p=>level(p.xyz))},location.origin);
+  };
 }
 
 // Presets ---------------------------------------------------------------------------------------

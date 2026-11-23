@@ -1,6 +1,7 @@
 """The operator catalogue and the preset files must describe a graph the dashboard can run."""
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 from node_params import validate
@@ -44,6 +45,22 @@ class OperatorTests(unittest.TestCase):
             default = clearance.artifact_dir(run, root)
             self.assertEqual(clearance.artifact_dir(run, root, {"views": 120}), default)
             self.assertNotEqual(clearance.artifact_dir(run, root, {"views": 60}), default)
+
+    def test_mesh_scale_from_range_readings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory)/"report.json"
+            report.write_text(json.dumps({"tof": {"candidate_metres_per_unit": 0.338, "median_error_m": 0.157,
+                                                  "p80_error_m": 0.435, "hits": 36, "eligible": 46}}))
+            scale = operators.range_scale(report, "relative")
+            self.assertEqual((scale["metres_per_unit"], scale["median_error_m"], scale["hits"]), (0.338, 0.157, 36))
+            self.assertIsNone(operators.range_scale(report, "m"))      # a measured map is in metres already
+            for tof in ({"reason": "Insufficient range variation"}, {"candidate_metres_per_unit": -1},
+                        {"candidate_metres_per_unit": "1"}):
+                report.write_text(json.dumps({"tof": tof}))
+                self.assertIsNone(operators.range_scale(report, "relative"))
+            report.write_text("not json")
+            self.assertIsNone(operators.range_scale(report, "relative"))
+            self.assertIsNone(operators.range_scale(Path(directory)/"missing.json", "relative"))
 
     def test_every_type_declares_a_display(self):
         kinds = {"tables", "table", "frames", "pixels", "map", "path", "points", "polygons", "triangles", "splats", "report"}

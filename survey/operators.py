@@ -13,6 +13,8 @@ the operator needs the browser to compute something first.
 """
 import hashlib
 import json
+import math
+from pathlib import Path
 import threading
 
 import ai_surfaces
@@ -329,14 +331,39 @@ def run_gaussian_map(ctx):
               ctx.run, ctx.model, root, ctx.params["steps"], ctx.params["dense_seed"])
 
 
+def range_scale(report, units):
+    """Metres per map unit that the mesh's ToF check measured, for a map without a scale of its own, else None.
+
+    gaussian_mesh.range_evidence casts each paired ToF beam into the mesh and compares the hit with the reading;
+    a consumer (Send to World) can size the surface from it and show how well it held on held-out readings.
+    """
+    if units == "m":
+        return None
+    try:
+        tof = json.loads(Path(report).read_text()).get("tof") or {}
+    except (OSError, ValueError):
+        return None
+    k = tof.get("candidate_metres_per_unit")
+    if not isinstance(k, (int, float)) or not math.isfinite(k) or k <= 0:
+        return None
+    errors = {key: tof[key] for key in ("median_error_m", "p80_error_m", "hits", "eligible")
+              if isinstance(tof.get(key), (int, float)) and math.isfinite(tof[key])}
+    return dict(metres_per_unit=float(k), source="ToF readings against this mesh", **errors)
+
+
 def run_gaussian_mesh(ctx):
     root, suffix = splat_root(ctx, ctx.ref("splats"))
     if not (root/"gaussians.ply").is_file():
         raise ValueError("Run the Gaussian map first.")
     index = ctx.model["feature_index"]
-    if (root/"mesh-v1"/"report.json").is_file():
-        return dict(mesh=dict(url=artifact("/gaussian-artifact", ctx.run, index, "mesh-v1/mesh.ply", variant=suffix),
-                              format="mesh-ply", index=index, variant=suffix))
+    report = root/"mesh-v1"/"report.json"
+    if report.is_file():
+        mesh = dict(url=artifact("/gaussian-artifact", ctx.run, index, "mesh-v1/mesh.ply", variant=suffix),
+                    format="mesh-ply", index=index, variant=suffix)
+        scale = range_scale(report, ctx.model.get("units"))
+        if scale:
+            mesh["scale"] = scale
+        return dict(mesh=mesh)
     ctx.start("Opening trained Gaussian splats", ctx.survey.build_gaussian_geometry, ctx.run, ctx.model, root, False)
 
 
