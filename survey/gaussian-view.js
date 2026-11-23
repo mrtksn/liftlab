@@ -1,4 +1,6 @@
 // A sorted, alpha-composited projection of the trained 3D Gaussian ellipsoids.
+// Splats fainter than one 8-bit step don't show; Send to World leaves out the same ones (graph.js).
+const GAUSSIAN_MIN_ALPHA=1/255;
 class GaussianView {
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -54,7 +56,7 @@ class GaussianView {
     in vec2 offset; in vec4 color; out vec4 pixel;
     void main(){
       float alpha=min(0.99,color.a*exp(-0.5*dot(offset,offset)));
-      if(alpha<0.0039) discard;
+      if(alpha<${GAUSSIAN_MIN_ALPHA.toFixed(6)}) discard;
       pixel=vec4(color.rgb*alpha,alpha);
     }`;
     this.program=gl.createProgram();
@@ -121,9 +123,6 @@ class GaussianView {
     this.sorted=null; this.cloud=cloud; this.attributes=texels;
     return this.order.length;
   }
-  fitPoints(points){
-    return this.loadAttributes(fitGaussianAttributes(points));
-  }
   loadAttributes(values){
     const count=values.length/16,rows=Math.ceil(count/256);
     if(!count||rows>this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE))throw Error('Invalid Gaussian texture size.');
@@ -134,6 +133,7 @@ class GaussianView {
     return this.upload(packed,false);
   }
   paint(ctx,width,height,eye,axes,origin,focal,perspective,near){
+    if(!(width>0&&height>0))return;   // (a hidden viewer has no size to draw into)
     const gl=this.gl,u=this.uniform;
     if(this.canvas.width!==width || this.canvas.height!==height){this.canvas.width=width;this.canvas.height=height;}
     gl.viewport(0,0,width,height); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -152,15 +152,18 @@ class GaussianView {
   }
 }
 
-function fitGaussianAttributes(points){
+// Gaussian splats fitted to points, in the splat layout of loadAttributes. s: the splat-fit node's settings
+// (operators.py SPLAT_FIT_PARAMS); every number that shapes the result is one of them.
+function fitGaussianAttributes(points,s){
     const count=points.length,data=new Float32Array(count*16);
     // Estimate a neighborhood size from the central extent to limit outlier influence.
     let span=0;
     for(let axis=0;axis<3;axis++){
       const values=points.map(p=>p[axis]).sort((a,b)=>a-b);
-      span=Math.max(span,values[Math.floor(.98*count)]-values[Math.floor(.02*count)]);
+      const trim=s.extent_trim_pct/100;
+      span=Math.max(span,values[Math.min(count-1,Math.floor((1-trim)*count))]-values[Math.floor(trim*count)]);
     }
-    const cell=Math.max(1e-8,span/Math.max(8,Math.sqrt(count)/2));
+    const cell=Math.max(1e-8,span/Math.max(s.min_cells,Math.sqrt(count)*s.cells_per_sqrt_point));
     const cells=new Map(),bins=points.map(p=>p.slice(0,3).map(v=>Math.floor(v/cell)));
     bins.forEach((bin,i)=>{
       const key=bin.join(',');
@@ -173,14 +176,14 @@ function fitGaussianAttributes(points){
       for(let x=bx-1;x<=bx+1;x++)for(let y=by-1;y<=by+1;y++)for(let z=bz-1;z<=bz+1;z++){
         const bucket=cells.get(x+','+y+','+z);
         if(!bucket)continue;
-        const stride=Math.max(1,Math.ceil(bucket.length/32));
+        const stride=Math.max(1,Math.ceil(bucket.length/s.cell_samples));
         for(let j=0;j<bucket.length;j+=stride){
           const q=points[bucket[j]],dx=q[0]-p[0],dy=q[1]-p[1],dz=q[2]-p[2];
           const d=dx*dx+dy*dy+dz*dz;
           if(d>0)near.push([d,dx,dy,dz]);
         }
       }
-      near.sort((a,b)=>a[0]-b[0]);near.length=Math.min(near.length,12);
+      near.sort((a,b)=>a[0]-b[0]);near.length=Math.min(near.length,s.neighbours);
       let xx=0,xy=0,xz=0,yy=0,yz=0,zz=0;
       for(const [,x,y,z] of near){
         xx+=x*x;xy+=x*y;xz+=x*z;yy+=y*y;yz+=y*z;zz+=z*z;
@@ -192,14 +195,15 @@ function fitGaussianAttributes(points){
       let normal=normals.reduce((a,b)=>Math.hypot(...a)>Math.hypot(...b)?a:b);
       const length=Math.hypot(...normal),planar=near.length>=3 && length>1e-8*(xx+yy+zz)**2;
       normal=planar?normal.map(v=>v*(normal[2]<0?-1:1)/length):[0,0,1];
-      const radius=Math.max(.04*cell,Math.min(.7*cell,near.length?Math.sqrt(near[Math.min(2,near.length-1)][0])*.78:.15*cell));
+      const radius=Math.max(s.min_radius*cell,Math.min(s.max_radius*cell,near.length?
+        Math.sqrt(near[Math.min(s.radius_neighbour-1,near.length-1)][0])*s.radius_scale:s.lone_radius*cell));
       const residual=near.reduce((sum,[,x,y,z])=>sum+(normal[0]*x+normal[1]*y+normal[2]*z)**2,0);
-      const thickness=planar?Math.min(radius,Math.max(radius*.12,Math.sqrt(residual/near.length))):radius;
+      const thickness=planar?Math.min(radius,Math.max(radius*s.min_thickness,Math.sqrt(residual/near.length))):radius;
       const qw=Math.sqrt((1+normal[2])/2);
       for(let k=0;k<3;k++){
         data[base+k]=p[k];data[base+4+k]=p[k+3]/255;
       }
-      data[base+3]=.82;
+      data[base+3]=s.opacity;
       data.set([radius,radius,thickness],base+8);
       data.set([qw,-normal[1]/(2*qw),normal[0]/(2*qw),0],base+12);
     });

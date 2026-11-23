@@ -49,6 +49,20 @@
     }
    },
    {
+    "id": "route",
+    "op": "replay-path",
+    "inputs": {
+     "poses": {
+      "node": "map",
+      "port": "map"
+     },
+     "frames": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
     "id": "surfaces",
     "op": "landmark-surfaces",
     "inputs": {
@@ -77,6 +91,10 @@
      {
       "node": "surfaces",
       "port": "mesh"
+     },
+     {
+      "node": "route",
+      "port": "path"
      }
     ]
    }

@@ -81,14 +81,15 @@ async function objectImportStart(files,context,hints={}) {
     const main=parts.find(p=>WORLD_OBJ_FORMATS[extOf(p.name)]);if(!main)throw new Error('Choose a GLB, glTF, OBJ or STL model');
     const rec={id:newObjId('asset-'),name:main.name,files:parts},up=hints.up||(extOf(main.name)==='stl'?'z':'y');
     const {base,size}=standModel(await parseModel(rec),up);base.children[0].position.z-=size[2]/2;
-    if(!partImport.active||generation!==partImport.generation){disposeGroup(base);return;}
-    const units=hints.units||guessUnits(extOf(main.name),size);
+    if(!partImport.active||generation!==partImport.generation){disposeGroup(base);return false;}
+    const units=WORLD_OBJ_UNITS[hints.units]||hints.units==='custom'?hints.units:guessUnits(extOf(main.name),size);
     const c=mkMass(main.name.replace(/\.[^.]+$/,'').slice(0,60)||'Object',0,0,0,{shape:'model',battery:false,category:'payload',rotation:[0,0,0],model:{fileId:rec.id,rawSize:size,scale:WORLD_OBJ_UNITS[units]?.k??(hints.scale>0?hints.scale:1),units,up,detail:'medium',collision:'boxes',boxes:[]}});
     worldObjects.files.set(rec.id,rec);partModels.set(rec.id+':'+up,Promise.resolve(base));partImport.draft=c;
     partSolidifyDraft(c,base);c.cog=partSolidMass(c).center;c.mass=clamp(partSolidMass(c).volume*200,.005,20);c.points=[];
     partImport.panel.remove();partImportPanel();partDraftRefresh();objectPreviewFrame(c);
     if(hints.say&&$('#objectImportSay'))$('#objectImportSay').textContent=hints.say;
-  } catch(e){if(generation===partImport.generation){partImportCancel();designNote('Could not import object: '+e.message);worldEditSay('Could not import object: '+e.message);}}
+    return true;
+  } catch(e){if(generation===partImport.generation){partImportCancel();designNote('Could not import object: '+e.message);worldEditSay('Could not import object: '+e.message);}return false;}
   finally {if(generation===partImport.generation)partImport.busy=false;}
 }
 function objectPreviewFrame(c) {

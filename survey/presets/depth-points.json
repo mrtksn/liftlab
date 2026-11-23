@@ -33,6 +33,20 @@
     }
    },
    {
+    "id": "route",
+    "op": "replay-path",
+    "inputs": {
+     "poses": {
+      "node": "map",
+      "port": "map"
+     },
+     "frames": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
     "id": "depth",
     "op": "depth",
     "inputs": {
@@ -76,6 +90,10 @@
      {
       "node": "points",
       "port": "points"
+     },
+     {
+      "node": "route",
+      "port": "path"
      }
     ]
    }

@@ -81,6 +81,7 @@ class GaussianMeshView {
   }
 
   paint(ctx,w,h,eye,axes,origin,focal,perspective,near,overlay) {
+    if(!(w>0&&h>0))return;   // (a hidden viewer has no size to draw into)
     const gl=this.gl,u=this.uniform;
     if(this.canvas.width!==w || this.canvas.height!==h){this.canvas.width=w; this.canvas.height=h;}
     gl.viewport(0,0,w,h); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);

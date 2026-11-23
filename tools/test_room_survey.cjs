@@ -78,6 +78,10 @@ try{
   assert(!faces.some(f=>f.every(q=>q[1]===0)&&inside(f,[2,1])),'doorway filled');
   assert(faces.some(f=>f.every(q=>q[1]===0)&&inside(f,[.5,1])),'front wall missing');
 
+  // A second scene while this import is open: refused, saying why.
+  const busy=await send({...room,id:'t1b'});
+  assert(!busy.ok&&/Another import or edit is open/.test(busy.text),JSON.stringify(busy));
+
   // Save to the library, place it: the copy collides with its triangles.
   await page.locator('#objectImportSave').click();
   await page.locator('#objectLibraryDlg [data-object-use]').first().click();

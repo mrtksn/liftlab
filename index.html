@@ -187,10 +187,9 @@
           </section>
           <section class="sec"><h2>Room survey</h2>
             <div class="hrow"><button class="btn btn-sm primary" id="surveyWorkspace" type="button">Room Survey…</button>
-              <button class="btn btn-sm" id="surveyOpen" type="button">Open camera survey…</button>
-              <button class="btn btn-sm" id="surveyClear" type="button" hidden>Clear overlay</button>
+              <button class="btn btn-sm" id="surveyOpen" type="button">Open survey map…</button>
               <input type="file" id="surveyFile" accept=".json" hidden></div>
-            <p class="hint" id="surveyStatus" role="status">Record walks and process them with the survey companion on this computer, or display a saved survey's camera path and landmarks here.</p>
+            <p class="hint" id="surveyStatus" role="status">Record walks and process them with the survey server on this computer, then Send to World from its viewer. A saved survey map (the survey page's map download) comes in the same way: its landmarks and camera path as a World object.</p>
           </section>
           <section class="sec world-objs" id="worldObjSec"><h2>Objects <small id="worldObjCount"></small></h2><div class="world-obj-body" id="worldObjBody"></div></section>
           <section class="sec"><h2>Environment</h2><div class="sp" id="spFields"></div></section>
@@ -434,13 +433,13 @@
       <dialog class="ask survey-dlg" id="surveyDlg" aria-labelledby="surveyTitle">
         <div class="survey-head">
           <h2 id="surveyTitle">Room Survey</h2>
-          <label class="survey-addr">Companion <input type="text" id="surveyAddr" spellcheck="false" autocomplete="off" aria-describedby="surveyLink"></label>
+          <label class="survey-addr">Survey server <input type="text" id="surveyAddr" spellcheck="false" autocomplete="off" aria-describedby="surveyLink"></label>
           <span class="hint" id="surveyLink" role="status"></span>
           <a class="btn btn-sm" id="surveyTab" target="_blank" rel="noopener" hidden>Open in a tab ↗</a>
           <button class="btn btn-sm" type="button" id="surveyClose">Close</button>
         </div>
         <div class="survey-help" id="surveyHelp" hidden>
-          <p>The survey's camera capture and processing run in the companion, a Python server on this computer. In this repository's folder, open <code>survey/Room Survey.command</code>, or in a terminal:</p>
+          <p>The survey's camera capture and processing run in the survey server, a Python program on this computer. In this repository's folder, open <code>survey/Room Survey.command</code>, or in a terminal:</p>
           <pre class="live-cmd"><code>cd survey &amp;&amp; ../.venv/bin/python server.py</code></pre>
           <p class="hint" id="surveyWhy"></p>
           <div class="ask-btns"><button class="btn primary" type="button" id="surveyRetry">Try again</button></div>
@@ -720,15 +719,15 @@
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=2d436df689"></script>
 <script src="js/fleet-collisions.js?v=0f07b736ea"></script>
-<script src="js/room-survey.js?v=853bd741ec"></script>
-<script src="js/world-objects.js?v=595fac4bc9"></script>
+<script src="js/room-survey.js?v=abfc62fc3f"></script>
+<script src="js/world-objects.js?v=8c5231a7ff"></script>
 <script src="js/world-animation.js?v=fd5b55b7bc"></script>
 <script src="js/world-animation-audio.js?v=6f68161671"></script>
-<script src="js/world-edit.js?v=d84bfec745"></script>
+<script src="js/world-edit.js?v=18e5618ad6"></script>
 <script src="js/replay.js?v=d52f007fcb"></script>
 <script src="js/maps.js?v=af04a6fb74"></script>
 <script src="js/part-import.js?v=a96fdccf37"></script>
-<script src="js/object-library.js?v=7a22cdd3c4"></script>
+<script src="js/object-library.js?v=1f4a81e8fd"></script>
 <script src="js/part-edit-ui.js?v=3bf10977ce"></script>
 <script>boot();</script>
 <script src="js/section-nav.js?v=b558eb4ab7"></script>

@@ -322,7 +322,7 @@ function inspectNode(node){
   $('nodeType').replaceChildren(...groups.values());
   $('appendLabel').hidden=$('addNode').hidden=!options.length;
   $('removeNode').hidden=node.op==='walk';
-  renderWiring(node);renderNodeSettings(node);renderCode(node);renderControlsEditor(node);renderOutputs(node);
+  renderWiring(node);renderNodeSettings(node);renderSource(node);renderCode(node);renderControlsEditor(node);renderOutputs(node);
 }
 function renderWiring(node){
   const host=$('nodeWiring');host.replaceChildren();
@@ -407,6 +407,23 @@ function renderOutputs(node){
   if(result?.error){const p=document.createElement('p');p.className='muted';p.textContent=result.error;host.append(p);}
 }
 
+// The code a node runs, as the survey server lists it (operators.py sources()): the operator function, the helpers and
+// server methods it calls, and the modules they use; for browser nodes, their script. Read from the server as it runs.
+function renderSource(node){
+  const list=$('sourceList'),files=opOf(node)?.sources||[];
+  list.replaceChildren();$('sourcePanel').hidden=!files.length;
+  for(const f of files){
+    const box=document.createElement('details'),title=document.createElement('summary'),pre=document.createElement('pre');
+    title.textContent=f.name?f.file+' · '+f.name:f.file+' (whole file)';box.className='port-data';box.append(title,pre);
+    box.ontoggle=async()=>{
+      if(!box.open||pre.textContent)return;
+      pre.textContent='Reading…';
+      try{const r=await fetch(API+'/source?'+new URLSearchParams(f.name?{file:f.file,name:f.name}:{file:f.file}));pre.textContent=r.ok?await r.text():'Unavailable: '+await r.text();}
+      catch(e){pre.textContent=e.message;}
+    };
+    list.append(box);
+  }
+}
 function renderCode(node){
   const panel=$('codePanel'),code=node.op==='code',viewer=node.op==='viewer';
   panel.hidden=!code&&!viewer&&opOf(node)?.runner==='browser';
@@ -540,7 +557,11 @@ const browserRequests={
 };
 let activeWorker=null;
 const browserOperators={
-  'splat-fit':async(node,inputs)=>({splats:{data:fitGaussianAttributes(inputs.points)}})
+  'splat-fit':async(node,inputs,settings)=>({splats:{data:fitGaussianAttributes(inputs.points,settings)}}),
+  'replay-path':async(node,inputs,settings)=>{
+    const poses=Array.isArray(inputs.poses)?inputs.poses:inputs.poses?.poses||[];
+    return {path:{data:replayPath(poses,inputs.frames||[],settings)}};
+  }
 };
 async function inputValues(node){
   const values=Object.create(null),refs=[];
@@ -696,7 +717,7 @@ async function showScene(node,built){
     if(!output)continue;
     if(isTableType(type)||isImageType(type)){feeds.push({...b,type,output});continue;}
     panels.push({type,panel:catalog.types[type]?.panel,output,node:nodeById(b.node)});
-    try{const layer=await layerFor(output,type);if(layer)layers.push({...layer,type,source:b.node,output});}
+    try{const layer=await layerFor(output,type);if(layer)layers.push({...layer,type,source:b.node,port:b.port,output});}
     catch(e){feeds.push({...b,type,error:e.message});}
   }
   for(const g of built.geometry)layers.push({...g,type:'Plot',source:node.id});
@@ -722,16 +743,16 @@ function graphLayers(){return scene.layers;}
 function viewBindings(){return [...scene.layers.filter(l=>l.type!=='Plot').map(l=>({type:l.type,node:l.source})),...scene.feeds];}
 
 // Output panels by data type ---------------------------------------------------------------------
-let activeGaussian=null;
+let activeGaussian=null,activeMesh=null;   // (activeMesh: the shown Gaussian mesh's folder, for its ToF evidence)
 // Tools shown beside an output, named by its type's `panel` in the catalogue.
 const typePanels={
   gaussian:{element:'gaussianPanel',show:({output})=>{activeGaussian=output;loadGaussianReport();}},
   clearance:{element:'clearancePanel',show:({output})=>{activeGaussian=output;refreshClearance();}},
   lingbot:{element:'lingbotPanel',show:({output})=>showLingbot(output)},
-  mesh:{element:'balloonCutControl',show:({output})=>{$('balloonCutControl').hidden=!output.summary?.heightRange;}},
+  mesh:{element:'balloonCutControl',show:({output})=>{$('balloonCutControl').hidden=!output.summary?.heightRange;if(output.mesh)activeMesh=output.mesh;}},
 };
 function showTypePanels(panels){
-  activeGaussian=null;
+  activeGaussian=null;activeMesh=null;
   for(const [name,p] of Object.entries(typePanels))$(p.element).hidden=!panels.some(x=>x.panel===name);
   $('typePanels').hidden=!panels.some(x=>typePanels[x.panel]);
   for(const panel of panels)typePanels[panel.panel]?.show(panel);
@@ -865,6 +886,69 @@ function consoleLine([label,...values]){
   for(const value of values)box.append(inspectConsoleValue(label,value));
 }
 
+// What the viewer shows -------------------------------------------------------------------------
+// Every drawn layer with where it comes from (node · port · type), how much it holds, how it is drawn, and its data;
+// the route the replay follows and what each of its marks means; and the timeline's colours. Nothing is drawn that
+// isn't listed here.
+function renderShown(){
+  const host=$('shownList'),key=$('timelineKey');
+  const swatch=(css,title='')=>{const i=document.createElement('i');i.className='swatch';i.style.cssText=css;if(title)i.title=title;return i;};
+  const line=kind=>swatch('border-top:2px '+(routeStyles[kind].dash.length?routeStyles[kind].dash[0]>2?'dashed':'dotted':'solid')+' '+routeStyles[kind].color);
+  const row=(parent,mark,text)=>{const p=document.createElement('div');p.className='shown-rule';if(mark)p.append(mark);p.append(text);parent.append(p);return p;};
+  host.replaceChildren();
+  const layers=scene.layers,followed=displayedLayer(),poses=displayedPoses(),count=n=>n.toLocaleString();
+  host.hidden=!layers.length;
+  if(layers.length){
+    const title=document.createElement('strong');title.textContent='Shown';host.append(title);
+    const surfaces=layers.some(l=>l.mesh?.patches?.length||l.solid);
+    for(const l of layers){
+      const box=document.createElement('div');box.className='shown-layer';
+      const head=document.createElement('div');head.className='shown-head';
+      const plot=l.type==='Plot';
+      head.textContent=plot?'Drawn by the viewer’s code · '+nodeLabel(nodeById(l.source)):nodeLabel(nodeById(l.source))+' · '+l.port+' · '+l.type;
+      box.append(head);
+      if(l.points?.length)row(box,swatch('background:'+tone('--ink-2')+';border-radius:50%;width:5px;height:5px'),
+        count(l.points.length)+' points, in their recorded colours'+(surfaces?'. Behind a surface: hidden. Fitted by a surface: drawn larger, in ink.':'.'));
+      if(l.splats)row(box,swatch('background:'+tone('--muted')+';border-radius:50%'),
+        count(l.splats.order.length)+' splats, blended by their opacity (fainter than 1/255: not drawn).');
+      if(l.mesh?.patches?.length){
+        const shown=shownPatches(l).length;
+        row(box,swatch('background:'+tone('--line-strong')),count(shown)+' of '+count(l.mesh.patches.length)+' surface patches shown, shaded by distance'+
+          (l.cut?'; above the height cut: hidden':'')+(l.mesh.patches.some(p=>p.first!=null)&&replay&&$('surfaceTime').checked?'; during replay: those built by the frame':'')+'.');
+      }
+      if(l.solid)row(box,swatch('background:'+tone('--line-strong')),count(l.solid.indices.length/3)+' triangles, shaded by distance.');
+      if(l.poses?.length&&l!==followed)row(box,null,count(l.poses.length)+' poses (the route follows '+nodeLabel(nodeById(followed?.source))+').');
+      if(l===followed&&poses.length){
+        const route=document.createElement('div');route.className='shown-route';
+        row(route,null,'Route: '+count(poses.length)+' poses, in frame order. The replay and Drone view follow them'+($('route').checked?'.':' (hidden: Path is off).'));
+        const by=kind=>routeSegments.filter(s=>s.kind===kind).length;
+        const meaning={mapped:'consecutive recorded frames, both poses given',jump:'given poses with unmapped frames between them; nothing estimated',
+          interpolated:'frames filled on a straight line (Replay path: Fill unmapped stretches)',extrapolated:'frames extended from the speed at an end of the walk (Replay path: Extend)'};
+        for(const kind of Object.keys(routeStyles))if(by(kind))row(route,line(kind),count(by(kind))+' '+(by(kind)===1?'segment':'segments')+': '+meaning[kind]+'.');
+        const first=poses[0],last=poses.at(-1);
+        row(route,swatch('background:linear-gradient(90deg,'+tone('--good')+','+tone('--warn')+')'),'Dots: each pose, coloured by its frame from the first recorded frame to the last.');
+        row(route,swatch('background:'+tone('--good')+';border-radius:50%'),(parseInt(first.frame)===0?'Start':'First pose')+': frame '+parseInt(first.frame)+'. '+
+          (parseInt(last.frame)===state?.frames-1?'Finish':'Last pose')+': frame '+parseInt(last.frame)+'.');
+        row(route,swatch('border:2px solid '+tone('--accent')+';border-radius:50%'),'Ring: the replay frame’s pose, in its segment’s colour when estimated.');
+        if(estimate?.xyz)row(route,swatch('background:'+tone('--accent')+';border-radius:50%'),'Arrow: the camera located live against this map (tracking).');
+        box.append(route);
+      }
+      if(l.line?.length&&l!==followed)row(box,swatch('border-top:2px solid '+tone('--good')),'A line through '+count(l.line.length)+' positions.');
+      if(!plot&&l.output)box.append(dataView('view:'+l.source+':'+l.port,'Data',l.type,()=>l.output,()=>'No data.'));
+      host.append(box);
+    }
+  }
+  // The timeline: what each frame's colour means, for the path the replay follows.
+  key.replaceChildren();
+  if(timeline.length){
+    const parts=[[timelineTone({}),'given pose'],[tone('--accent'),'pose recovered or aligned later'],
+      [routeStyles.interpolated.color,'filled'],[routeStyles.extrapolated.color,'extended'],[tone('--line-strong'),'no pose']];
+    key.append('Timeline: ');
+    for(const [c,label] of parts){const s=document.createElement('span');s.className='shown-key';s.append(swatch('background:'+c),label);key.append(s);}
+    key.append(followed?' · from '+nodeLabel(nodeById(followed.source)):' · nothing connected gives poses');
+  }
+}
+
 // Send to World ---------------------------------------------------------------------------------
 // Inside LiftLab (its Room Survey dialog, which shares this page's origin), the viewer's button sends what the viewer
 // shows to LiftLab's World editor as one model: surfaces (meshes, polygons, triangles), points (landmarks, depth
@@ -880,19 +964,18 @@ function viewerScenePayload(){
   const path=poses=>{const line=poses.filter(p=>Array.isArray(p?.xyz)).map(p=>level(p.xyz));if(line.length>1)paths.push(line);viewpoints.push(...line);};
   for(const l of scene.layers){
     if(l.output?.scale&&!scale)scale=l.output.scale;
-    for(const p of l.mesh?.patches||[]){
-      const ring=Array.isArray(p.vertices?.vertices)?p.vertices.vertices:p.vertices;
-      if(Array.isArray(ring))polygons.push({outer:ring.map(level),holes:(p.holes||[]).map(h=>h.map(level))});
-    }
+    for(const {outer,holes} of shownPatches(l))polygons.push({outer:outer.map(level),holes:holes.map(h=>h.map(level))});
     if(l.solid)for(let i=0;i+2<l.solid.indices.length;i+=3)polygons.push({outer:[0,1,2].map(k=>level(l.solid.vertices[l.solid.indices[i+k]]))});
-    for(const p of l.points||[])points.push([...level(p),p[3]??200,p[4]??200,p[5]??200]);
+    for(const p of l.points||[])points.push([...level(p),...p.slice(3,6)]);
     if(l.splats){
       const a=l.splats.attributes,n=l.splats.order.length;
-      for(let i=0;i<n;i++){const o=16*i;if(a[o+3]>=.1)points.push([...level([a[o],a[o+1],a[o+2]]),...[4,5,6].map(k=>Math.round(255*Math.min(1,Math.max(0,a[o+k]))))]);}
+      for(let i=0;i<n;i++){const o=16*i;if(a[o+3]>=GAUSSIAN_MIN_ALPHA)points.push([...level([a[o],a[o+1],a[o+2]]),...[4,5,6].map(k=>Math.round(255*Math.min(1,Math.max(0,a[o+k]))))]);}
     }
-    if(l.poses)path(l.poses);else if(l.line)path(l.line.map(xyz=>({xyz})));
+    // The route the viewer draws (the followed path), and any other drawn line: as drawn, nothing more.
+    if(l===displayedLayer())path(l.poses);else if(l.line)path(l.line.map(xyz=>({xyz})));
   }
-  if(!viewpoints.length)viewpoints.push(...(model?.poses||[]).filter(p=>Array.isArray(p.xyz)).map(p=>level(p.xyz)));
+  // Faces turn toward the camera positions; with no path shown, those of the camera map in view.
+  if(!viewpoints.length)for(const l of scene.layers)for(const p of l.poses||[])if(Array.isArray(p.xyz))viewpoints.push(level(p.xyz));
   const units=model?.units||'relative';
   const shown=[...new Set(scene.layers.map(l=>l.type==='Plot'?$('viewerName').textContent:nodeLabel(nodeById(l.source))))].join(' + ');
   return {name:[shown,state?.run].filter(Boolean).join(' · '),units,levelled:!!model?.gravity_aligned||corrected,
@@ -953,7 +1036,9 @@ async function runQuiet(target){
     for(const node of executionOrder(target)){
       if(node.op==='viewer')continue;
       const op=opOf(node);
-      if(op.runner==='code'||op.runner==='browser'||node.program)break;
+      if(op.runner==='code'||node.program)break;
+      // Browser nodes are local and quick: compute them from the outputs collected so far.
+      if(op.runner==='browser'){results.set(node.id,{key:nodeKey(node),outputs:(await execute(node)).outputs});continue;}
       const settings=resolveSettings(node),inputs={};
       for(const c of connections(node))inputs[c.name]=await refOf(nodeById(c.link.node));
       const reply=await postJson(API+'/operator',{run:state.run,op:node.op,params:Object.fromEntries(op.params.map(p=>[p.key,settings[p.key]])),inputs,peek:true});

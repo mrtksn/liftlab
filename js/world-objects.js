@@ -13,7 +13,8 @@
 const WORLD_OBJ_FORMATS = { glb: 'GLTFLoader', gltf: 'GLTFLoader', obj: 'OBJLoader', stl: 'STLLoader' };
 const WORLD_OBJ_DETAIL = { coarse: { label: 'Coarse', cells: 16 }, medium: { label: 'Medium', cells: 32 }, fine: { label: 'Fine', cells: 64 } };
 const WORLD_OBJ_UNITS = { m: { label: 'Metres', k: 1 }, cm: { label: 'Centimetres', k: 0.01 }, mm: { label: 'Millimetres', k: 0.001 }, in: { label: 'Inches', k: 0.0254 } };
-const WORLD_OBJ_MAX_BOXES = 6000;   // more than this at the detail asked for: the next coarser detail
+const WORLD_OBJ_MAX_BOXES = 6000;
+const WORLD_OBJ_POINT_PX = 3;   // points in model files (a survey's landmarks), drawn this many pixels wide   // more than this at the detail asked for: the next coarser detail
 const worldObjects = { list: [], ver: 0, files: new Map() };   // files: fileId → { id, name, files: [{ name, data }] }, read this session
 const worldObjG = new THREE.Group(); scene.add(worldObjG);
 let worldObjMats = null;
@@ -45,8 +46,8 @@ async function parseModel(rec) {
     // mesh material, and it draws points 1 px wide. Give them their own, keeping their vertex colours.
     g.traverse(o => {
       const colours = !!o.geometry?.attributes.color;
-      if (o.isPoints && !o.material.isPointsMaterial) o.material = new THREE.PointsMaterial({ size: 3, sizeAttenuation: false, vertexColors: colours });
-      else if (o.isPoints) o.material.size = Math.max(o.material.size, 3);
+      if (o.isPoints && !o.material.isPointsMaterial) o.material = new THREE.PointsMaterial({ size: WORLD_OBJ_POINT_PX, sizeAttenuation: false, vertexColors: colours });
+      else if (o.isPoints) o.material.size = Math.max(o.material.size, WORLD_OBJ_POINT_PX);
       if (o.isLine && !o.material.isLineBasicMaterial) o.material = new THREE.LineBasicMaterial({ vertexColors: colours });
     });
     return g;

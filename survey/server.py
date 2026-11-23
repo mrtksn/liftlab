@@ -459,7 +459,7 @@ class Survey:
                 message = f"Walk clearance ready · {len(result['frames'])} located frames"
             else:
                 import gaussian_mesh
-                result = gaussian_mesh.build(run, model, root, progress)
+                result = gaussian_mesh.build(run, model, root, progress, params)
                 message = f"Gaussian mesh ready · {result['triangles']:,} triangles"
         except Exception as exc:
             label = "Walk clearance" if clearance_map else "Gaussian mesh"
@@ -787,7 +787,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/index.html":"index.html","/api.js":"api.js","/look.js":"look.js","/target.html":"target.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/index.html":"index.html","/api.js":"api.js","/look.js":"look.js","/replay-path.js":"replay-path.js","/target.html":"target.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
@@ -804,7 +804,7 @@ class Handler(BaseHTTPRequestHandler):
             suffix = query.get("variant",[""])[0]
             if not re.fullmatch(r"[0-9a-f]{0,8}", suffix):
                 return self.send(b"Invalid variant","text/plain",400)
-            allowed = name in ("report.json","cloud.ply","gaussians.ply","mesh-v1/mesh.ply","mesh-v1/report.json",
+            allowed = re.fullmatch(r"mesh-v1(-[0-9a-f]{8})?/(mesh\.ply|report\.json)", name) or name in ("report.json","cloud.ply","gaussians.ply",
                                "clearance-v1/report.json","clearance-v1/grid.npz") or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
             if path == "/lingbot-artifact":
@@ -825,7 +825,10 @@ class Handler(BaseHTTPRequestHandler):
                     if model.get("feature_index") != index:
                         raise ValueError("The camera map changed. Reopen the walk.")
                     from gaussian_mesh import saved_range_evidence
-                    evidence = saved_range_evidence(run, model, root/"mesh-v1"/"mesh.ply")
+                    chosen = query.get("mesh", ["mesh-v1"])[0]
+                    if not re.fullmatch(r"mesh-v1(-[0-9a-f]{8})?", chosen):
+                        raise ValueError("Unknown mesh")
+                    evidence = saved_range_evidence(run, model, root/chosen/"mesh.ply")
                     return self.send(json.dumps(evidence, allow_nan=False).encode(), "application/json")
                 except FileNotFoundError:
                     return self.send(b"Extract the Gaussian mesh first.", "text/plain", 404)
@@ -859,6 +862,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(str(exc).encode(),"text/plain",503)
         if path == "/device-settings":
             return self.send(json.dumps(dict(params=DEVICE_PARAMS, values=survey.device)).encode(), "application/json")
+        if path == "/source":
+            query = parse_qs(url.query)
+            try:
+                text = operators.source_text(query.get("file", [""])[0], query.get("name", [None])[0])
+            except (ValueError, OSError, TypeError) as exc:
+                return self.send(str(exc).encode(), "text/plain; charset=utf-8", 404)
+            return self.send(text.encode(), "text/plain; charset=utf-8")
         if path == "/operators":
             return self.send(json.dumps(operators.catalog()).encode(), "application/json")
         if path == "/presets":

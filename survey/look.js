@@ -12,7 +12,7 @@ function tone(name){
 (()=>{
   const root=document.documentElement;
   const host=(()=>{try{return parent!==window&&parent.location.origin===location.origin?parent:null;}catch{return null;}})();
-  const changed=()=>{tones.clear();if(typeof draw==='function')draw();};
+  const changed=()=>{tones.clear();if(typeof draw==='function')draw();if(typeof renderShown==='function')renderShown();};
   if(host){
     root.dataset.embedded='';
     const theirs=host.document.documentElement,sync=()=>{

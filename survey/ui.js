@@ -9,12 +9,26 @@ let droneView=false, droneZoom=1, droneYaw=0, dronePitch=0;
 let posesByFrame=new Map();
 let lastSourceWalk=null;
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
-let routeSegments=[], replayEstimates=new Map(), replayDirections=new Map();
+let routeSegments=[];
+// How the viewer draws a route segment, by how its poses were made (see replay-path.js), and how it says so.
+const routeSource={interpolated:'Replay path · straight line between mapped poses',extrapolated:'Replay path · extended from the mapped speed',
+  held:'Replay path · held at the end pose (no speed to extend with)'};
 const routeStyles={
   mapped:{get color(){return tone('--good');},dash:[]},
   interpolated:{get color(){return tone('--warn');},dash:[7,5]},
-  extrapolated:{get color(){return tone('--src-sim');},dash:[2,5]}
+  extrapolated:{get color(){return tone('--src-sim');},dash:[2,5]},
+  jump:{get color(){return tone('--muted');},dash:[1,6]}
 };
+// The timeline's colour for a frame: how its pose was made, else none.
+function timelineTone(pose,estimate=estimateOf(pose)){
+  return estimate?routeStyles[estimate].color:pose?(pose.method?tone('--accent'):tone('--good')):tone('--line-strong');
+}
+// A colour between two theme colours (hex), t from 0 to 1: the route's pose dots, by time along the walk.
+function mixTone(a,b,t){
+  const rgb=h=>{const x=h.replace('#','');return [0,2,4].map(i=>parseInt(x.length===3?x[i/2]+x[i/2]:x.slice(i,i+2),16));};
+  const [p,q]=[rgb(tone(a)),rgb(tone(b))];
+  return 'rgb('+p.map((v,i)=>Math.round(v+(q[i]-v)*t)).join(',')+')';
+}
 let gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
 let centre = [0,0,0], extent = 1, panX = 0, panY = 0, drag;
@@ -92,145 +106,37 @@ $('editLevel').onclick=()=>editOrientation(!editingLevel);
 $('levelDone').onclick=()=>editOrientation(false);
 $('levelUndo').onclick=()=>{correction=identityLevel();saveCorrection();draw();};
 
-function cameraAxes(pose){
-  if(pose?.rotation)return pose.rotation[0].map((_,i)=>pose.rotation.map(row=>row[i]));
-  if(!pose?.forward)return null;
-  const forward=normalized(pose.forward);
-  const right=normalized(cross(forward,Math.abs(forward[2])>.999?[0,1,0]:[0,0,1]));
-  return [right,cross(forward,right),forward];
+// The path the viewer follows in replay and draws as a route, from its connected layers only: a replay path (poses that
+// say how they were made, from the Replay path node), else another camera path, else a camera map's poses.
+function displayedLayer(){
+  const layers=scene.layers.filter(l=>l.poses?.length);
+  return layers.find(l=>l.poses.some(p=>p.source))||layers.find(l=>l.type==='Camera path')||layers.find(l=>l.type==='Camera map')||null;
 }
-
-function orientationQuaternion([[xx,yx,zx],[xy,yy,zy],[xz,yz,zz]]){
-  const diagonal=[1+xx+yy+zz,1+xx-yy-zz,1-xx+yy-zz,1-xx-yy+zz];
-  const major=diagonal.indexOf(Math.max(...diagonal));
-  const scale=2*Math.sqrt(diagonal[major]);
-  const values=[
-    [diagonal[0],zy-yz,xz-zx,yx-xy],
-    [zy-yz,diagonal[1],xy+yx,xz+zx],
-    [xz-zx,xy+yx,diagonal[2],yz+zy],
-    [yx-xy,xz+zx,yz+zy,diagonal[3]]
-  ];
-  return normalized(values[major].map(v=>v/scale));
-}
-
-function quaternionAxes([w,x,y,z]){
-  return [
-    [1-2*(y*y+z*z),2*(x*y+w*z),2*(x*z-w*y)],
-    [2*(x*y-w*z),1-2*(x*x+z*z),2*(y*z+w*x)],
-    [2*(x*z+w*y),2*(y*z-w*x),1-2*(x*x+y*y)]
-  ];
-}
-
-function blendDirection(a,b,t){
-  if(!a||!b)return (a||b)?.axes;
-  const sign=a.quat.reduce((sum,v,i)=>sum+v*b.quat[i],0)<0?-1:1;
-  return quaternionAxes(normalized(a.quat.map((v,i)=>v*(1-t)+sign*b.quat[i]*t)));
-}
-
-function frameFraction(frames,index,left,right){
-  const elapsed=frames[right].ms-frames[left].ms;
-  return elapsed>0?(frames[index].ms-frames[left].ms)/elapsed:(index-left)/(right-left);
-}
-
-function buildReplayRoute(poses,frames,estimateEnds){
-  const segments=[], positions=new Map(), directions=new Map();
-  const order=new Map(frames.map((frame,i)=>[frame.id,i]));
-  const knots=poses.map(p=>({pose:p,index:order.get(p.frame)}));
-  for(let i=1;i<knots.length;i++){
-    const left=knots[i-1],right=knots[i];
-    const gap=(left.index!=null&&right.index!=null)
-      ? right.index>left.index+1 : parseInt(right.pose.frame)>parseInt(left.pose.frame)+1;
-    const kind=gap?'interpolated':'mapped';
-    segments.push({kind,points:[left.pose.xyz,right.pose.xyz]});
-    if(gap && left.index!=null && right.index!=null){
-      for(let j=left.index+1;j<right.index;j++){
-        const fraction=frameFraction(frames,j,left.index,right.index);
-        positions.set(frames[j].id,{kind,xyz:left.pose.xyz.map((v,k)=>v+fraction*(right.pose.xyz[k]-v))});
-      }
-    }
-  }
-
-  const anchors=knots.filter(k=>k.index!=null);
-  if(estimateEnds && anchors.length){
-    for(const step of [1,-1]){
-      const start=step===1;
-      const anchorIndex=start?0:anchors.length-1;
-      const anchor=anchors[anchorIndex];
-      const end=start?0:frames.length-1;
-      if(end===anchor.index)continue;
-      // Use the span of up to four consecutive mapped frames for the end velocity.
-      let reference=anchor;
-      for(let offset=step;Math.abs(offset)<=3;offset+=step){
-        const sample=anchors[anchorIndex+offset];
-        if(!sample || sample.index!==anchor.index+offset)break;
-        reference=sample;
-      }
-      // Fall back to the nearest distinct timestamp when the edge poses are sparse.
-      if(frames[reference.index].ms===frames[anchor.index].ms){
-        const neighbours=start?anchors:anchors.slice().reverse();
-        reference=neighbours.find(sample=>frames[sample.index].ms!==frames[anchor.index].ms)||anchor;
-      }
-      const held=reference===anchor;
-      for(let j=anchor.index-step;start?j>=end:j<=end;j-=step){
-        const elapsed=frames[j].ms-frames[anchor.index].ms;
-        const interval=frames[reference.index].ms-frames[anchor.index].ms;
-        const xyz=anchor.pose.xyz.map((v,k)=>held?v:v+(reference.pose.xyz[k]-v)*elapsed/interval);
-        positions.set(frames[j].id,{kind:'extrapolated',xyz,held});
-      }
-      if(!held)segments.push({kind:'extrapolated',points:[anchor.pose.xyz,positions.get(frames[end].id).xyz]});
-    }
-  }
-
-  const oriented=anchors.flatMap(({pose,index})=>{
-    const axes=cameraAxes(pose);
-    return axes?[{index,axes,quat:orientationQuaternion(axes)}]:[];
-  });
-  if(oriented.length){
-    let next=0;
-    frames.forEach((frame,index)=>{
-      while(next<oriented.length && oriented[next].index<index)next++;
-      const left=oriented[next-1],right=oriented[next];
-      if(right?.index===index)return;
-      const fraction=left&&right?frameFraction(frames,index,left.index,right.index):0;
-      directions.set(frame.id,blendDirection(left,right,fraction));
-    });
-  }
-  return {segments,positions,directions};
-}
-
-// The path the viewer shows: a regenerated depth path, else the camera map's poses.
-function displayedPoses(){
-  const layers=scene.layers;
-  return layers.find(l=>l.type==='Camera path')?.poses||layers.find(l=>l.type==='Camera map')?.poses||model?.poses||[];
-}
+function displayedPoses(){return displayedLayer()?.poses||[];}
+// A pose's kind of estimate, or '' for a given (mapped) pose.
+const estimateOf=pose=>pose?.source&&pose.source!=='mapped'?(pose.source==='held'?'extrapolated':pose.source):'';
+// Route segments between consecutive poses: styled by the estimated end (routeStyles), or as a jump when given poses
+// are not on consecutive recorded frames and nothing estimated the frames between.
 function updateReplayRoute(){
-  const recorded=model?.run===timelineRun && timeline.length>0;
-  const frames=recorded?timeline:(model?.path_frames||model?.sampled_frames||[]).map((id,ms)=>({id,ms}));
-  const route=buildReplayRoute(displayedPoses(),frames,recorded);
-  routeSegments=route.segments;
-  replayEstimates=route.positions;
-  replayDirections=route.directions;
+  const poses=displayedPoses(),order=new Map(timeline.map((f,i)=>[f.id,i]));
+  routeSegments=[];
+  for(let i=1;i<poses.length;i++){
+    const a=poses[i-1],b=poses[i],estimate=estimateOf(b)||estimateOf(a);
+    const ia=order.get(a.frame),ib=order.get(b.frame);
+    const kind=estimate||(ia!=null&&ib!=null&&ib>ia+1?'jump':'mapped');
+    routeSegments.push({kind,points:[a.xyz,b.xyz]});
+  }
   updateRouteLegend();
 }
-
-function updateRouteLegend(){
-  for(const kind of ['interpolated','extrapolated']){
-    $('legend-'+kind).hidden=!$('route').checked || !routeSegments.some(segment=>segment.kind===kind);
-  }
-}
+function updateRouteLegend(){if(typeof renderShown==='function')renderShown();}
 
 function droneCamera(){
   const id=timeline[cursor]?.id;
   const pose=posesByFrame.get(id);
-  const estimated=replayEstimates.get(id);
-  const xyz=pose?.xyz||estimated?.xyz;
-  const savedAxes=cameraAxes(pose);
-  const axes=savedAxes||replayDirections.get(id);
+  const xyz=pose?.xyz,axes=cameraAxes(pose);
   if(!xyz||!axes)return null;
-  const status=estimated
-    ? estimated.held?'Estimated path · held at nearest mapped pose':
-      estimated.kind==='interpolated'?'Estimated path · straight-line interpolation':'Estimated path · extrapolated end'
-    : !savedAxes?'Camera direction estimated from nearby frames':!pose.rotation?'Camera roll estimated from map up':'';
+  const status=estimateOf(pose)?routeSource[pose.source]:pose.direction==='blended'?'Camera direction blended between mapped poses'
+    :!pose.rotation?'Camera roll estimated from map up':'';
 
   const [right,down,forward]=axes;
   const yawCos=Math.cos(droneYaw), yawSin=Math.sin(droneYaw);
@@ -433,7 +339,7 @@ function draw() {
     {axes:orbitAxes,xyz:centre.map((v,i)=>v-orbitAxes[2][i]*focal/scale)}:null;
   const axes=camera?.axes||orbitAxes;
   updateAxisGizmo(droneView?multiply(axes,columns(correction)):worldAxes);
-  if(droneView&&!viewBindings().some(p=>p.type==='Camera map')){droneView=false;updateViewControls();draw();return;}
+  if(droneView&&!displayedPoses().length){droneView=false;updateViewControls();draw();return;}
   if(droneView && !camera){
     status.textContent='Camera pose unavailable for this frame';
     status.hidden=false;
@@ -477,24 +383,8 @@ function draw() {
     const mesh=layer.mesh;
     if(!mesh?.patches?.length)continue;
     if(clouds.length)visibility??=new SurfaceVisibility(w,h);
-    const timed=mesh.patches.some(p=>p.first!=null);
-    const frame=timed && replay && $('surfaceTime').checked && timeline[cursor]?.id;
-    const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
-      mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
-    const cutPercent=Number(layer.cut??0);
-    if(mesh.heightRange && mesh.heightRange.up!==correction[2]){
-      let min=Infinity,max=-Infinity;
-      for(const face of mesh.patches)for(const v of face.vertices){
-        const z=dot3(correction[2],v);min=Math.min(min,z);max=Math.max(max,z);
-      }
-      mesh.heightRange={min,max,up:correction[2]};
-    }
-    const cut=mesh.heightRange && cutPercent>0
-      ? mesh.heightRange.max-(mesh.heightRange.max-mesh.heightRange.min)*cutPercent/100 : null;
-    const patches=visible.flatMap(p=>{
-      const outerRing=cut===null?p.vertices:clipHeight(p.vertices,cut,true,false,correction[2]);
-      if(outerRing.length<3)return [];
-      const rings=[outerRing,...(p.holes||[])];
+    const patches=shownPatches(layer).flatMap(({p,outer:outerRing,holes})=>{
+      const rings=[outerRing,...holes];
       if(!camera)return [{p,rings:rings.map(r=>r.map(projectWithDepth)),
         z:outerRing.reduce((sum,v)=>sum+depth(v),0)/outerRing.length}];
       const clipped=rings.map(r=>clipNear(r.map(cameraPoint),near));
@@ -539,7 +429,7 @@ function draw() {
       if(visibility?.members.has(id)){
         vertices.push(screen);
       }else{
-        ctx.fillStyle='rgb('+p.slice(3).map(v=>Math.round(55+.78*v)).join(',')+')';
+        ctx.fillStyle='rgb('+p.slice(3,6).map(v=>Math.round(v)).join(',')+')';   // the colours as recorded
         ctx.fillRect(x-1,y-1,2,2);
       }
     });
@@ -547,7 +437,7 @@ function draw() {
     for(const [x,y] of vertices)ctx.fillRect(x-2,y-2,4,4);
     $('vertexKey').hidden=!visibility?.members.size;
   }
-  for(const layer of layers)if(layer.line){
+  for(const layer of layers)if(layer.line&&layer!==displayedLayer()){   // (the followed path is drawn as the route)
     ctx.beginPath();ctx.strokeStyle=tone('--good');ctx.lineWidth=2;
     let connected=false;
     for(const point of layer.line){
@@ -568,7 +458,7 @@ function draw() {
   const gaussian=!!activeGaussian;
   if(gaussian && $('tofEvidenceToggle').checked)drawTofEvidence(project,cameraPoint,projectCamera,camera,near);
   if(gaussian && !camera)drawClearanceEnvelope(project,scale);
-  if(!$('route').checked||!viewBindings().some(p=>p.type==='Camera map')||!displayedPoses().length)return;
+  if(!$('route').checked||!displayedPoses().length)return;
   ctx.lineWidth=2;
   for(const [kind,style] of Object.entries(routeStyles)){
     ctx.strokeStyle=style.color;
@@ -591,7 +481,7 @@ function draw() {
     if(!screen)continue;
     const [x,y]=screen;
     const fraction=parseInt(p.frame)/Math.max(1,(state?.frames||1)-1);
-    ctx.fillStyle='hsl('+(167-130*fraction)+' 78% 71%)';
+    ctx.fillStyle=mixTone('--good','--warn',fraction);
     ctx.fillRect(x-2,y-2,4,4);
   }
   const poses=displayedPoses(), first=poses[0], last=poses.at(-1);
@@ -607,12 +497,11 @@ function draw() {
   };
   marker(first,parseInt(first.frame)===0?'Start':'First mapped pose',tone('--good'));
   marker(last,parseInt(last.frame)===state.frames-1?'Finish':state.recording?'Latest pose':'Last mapped pose',tone('--warn'),true);
-  const replayId=timeline[cursor]?.id, inferred=replayEstimates.get(replayId);
-  const selected=!droneView&&replay&&(posesByFrame.get(replayId)||inferred);
+  const replayId=timeline[cursor]?.id, selected=!droneView&&replay&&posesByFrame.get(replayId);
   const selectedScreen=selected&&project(selected.xyz);
   if(selectedScreen){
-    const [x,y]=selectedScreen;
-    ctx.strokeStyle=inferred?routeStyles[inferred.kind].color:tone('--accent');
+    const [x,y]=selectedScreen, estimate=estimateOf(selected);
+    ctx.strokeStyle=estimate?routeStyles[estimate].color:tone('--accent');
     ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
   }
 }
@@ -628,7 +517,7 @@ function fitMapView(){
     if(layer.solid)for(const v of layer.solid.vertices)samples.push(v);
     if(layer.splats)for(let i=0;i<layer.splats.xyz.length;i+=3*Math.max(1,Math.floor(layer.splats.order.length/2000)))samples.push(layer.splats.xyz.subarray(i,i+3));
   }
-  if(viewBindings().some(p=>p.type==='Camera map'))for(const pose of displayedPoses())samples.push(pose.xyz);
+  for(const pose of displayedPoses())samples.push(pose.xyz);
   if(!samples.length) return;
   const min=[Infinity,Infinity,Infinity], max=min.map(n=>-n);
   for(const p of samples) for(let i=0;i<3;i++){min[i]=Math.min(min[i],p[i]);max[i]=Math.max(max[i],p[i]);}
@@ -989,7 +878,7 @@ function syncTofReading(){
 async function refreshTofEvidence(){
   const enabled=model && activeGaussian && $('tofEvidenceToggle').checked;
   $('tofEvidencePanel').hidden=!enabled;
-  const key=enabled?gaussianUrl('tof-evidence.json')+'&version='+state.version:'';
+  const key=enabled?gaussianUrl('tof-evidence.json')+'&'+new URLSearchParams({mesh:activeMesh||'mesh-v1',version:state.version}):'';
   if(evidenceKey===key)return;
   evidenceKey=key;
   const ticket=++evidenceTicket;
@@ -1168,6 +1057,30 @@ function timingText(t){
   const stages=Object.entries(t.stages||{}).map(([name,seconds])=>name+' '+seconds.toFixed(2)+' s');
   return [t.seconds.toFixed(2)+' s total',t.frames?Math.round(1000*t.seconds/t.frames)+' ms/frame · '+(t.frames/t.seconds).toFixed(1)+' fps':'',...stages].filter(Boolean).join(' · ');
 }
+// The surface patches a mesh layer shows now: during replay, those built by the replay frame (for surfaces that grow
+// over a walk), and each cut at the height cut. Drawing and Send to World both use this.
+function shownPatches(layer){
+  const mesh=layer.mesh;
+  if(!mesh?.patches?.length)return [];
+  const timed=mesh.patches.some(p=>p.first!=null);
+  const frame=timed && replay && $('surfaceTime').checked && timeline[cursor]?.id;
+  const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
+    mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
+  const cutPercent=Number(layer.cut??0);
+  if(mesh.heightRange && mesh.heightRange.up!==correction[2]){
+    let min=Infinity,max=-Infinity;
+    for(const face of mesh.patches)for(const v of face.vertices){
+      const z=dot3(correction[2],v);min=Math.min(min,z);max=Math.max(max,z);
+    }
+    mesh.heightRange={min,max,up:correction[2]};
+  }
+  const cut=mesh.heightRange && cutPercent>0
+    ? mesh.heightRange.max-(mesh.heightRange.max-mesh.heightRange.min)*cutPercent/100 : null;
+  return visible.flatMap(p=>{
+    const outer=cut===null?p.vertices:clipHeight(p.vertices,cut,true,false,correction[2]);
+    return outer.length<3?[]:[{p,outer,holes:p.holes||[]}];
+  });
+}
 function refreshDisplayedPath(){
   posesByFrame=new Map(displayedPoses().map(p=>[p.frame,p]));
   updateReplayRoute();updateGaps();refreshReplay();
@@ -1311,10 +1224,9 @@ function drawTimeline(){
   const g=plot.getContext('2d');g.scale(d,d);
   const duration=Math.max(1,timeline.at(-1).ms);
   const x=ms=>2+ms/duration*(width-4);
-  const registered=new Map(displayedPoses().map(p=>[p.frame,p.method]));
   for(const frame of timeline){
-    const inferred=replayEstimates.get(frame.id);
-    g.fillStyle=inferred?routeStyles[inferred.kind].color:registered.has(frame.id)?(registered.get(frame.id)?tone('--accent'):tone('--good')):tone('--line-strong');
+    const pose=posesByFrame.get(frame.id),estimate=estimateOf(pose);
+    g.fillStyle=timelineTone(pose,estimate);
     g.fillRect(x(frame.ms),3,2,7);
   }
   g.fillStyle=tone('--accent');g.fillRect(x(timeline[cursor].ms)-1,0,3,13);
@@ -1355,12 +1267,9 @@ function refreshReplay(){
   $('frameNo').textContent=seconds(frame.ms)+' / '+seconds(timeline.at(-1).ms)+' · Frame '+parseInt(frame.id);
   $('rate').textContent='Recorded · '+(frame.tof_m!=null?'ToF '+frame.tof_m.toFixed(2)+' m':'ToF unavailable')+
     ' · '+(frame.gyro?'IMU paired':'No paired IMU');
-  const hasPose=posesByFrame.get(frame.id), inferred=replayEstimates.get(frame.id);
-  $('timelineStatus').textContent=hasPose
+  const shown=posesByFrame.get(frame.id), hasPose=!estimateOf(shown)&&shown;
+  $('timelineStatus').textContent=estimateOf(shown)?routeSource[shown.source]:hasPose
     ? (hasPose.method==='depth_track'?'Pose estimated from depth-image matches':hasPose.method==='aligned_window'?'Pose aligned from overlapping views':hasPose.method?'Pose recovered from nearby frames':'Pose registered in the map')
-    : inferred?.held?'Estimated path · held at nearest mapped pose'
-    : inferred?.kind==='interpolated'?'Estimated path · straight line between mapped poses'
-    : inferred?.kind==='extrapolated'?'Estimated path · extrapolated from mapped motion'
     : model?.sampled_frames?.includes(frame.id)
       ? 'Unmapped · sampled but pose unresolved in the main map'
       : 'Unmapped · outside the initial sample and no recovery passed';
@@ -1410,7 +1319,7 @@ $('play').onclick=()=>{
 $('cameraMode').onclick=()=>{
   $('framesStep').open=true;pauseReplay();replay=!replay;if(!replay)droneView=false;refreshReplay();};
 function updateGaps(){
-  const mapped=new Set(displayedPoses().map(p=>p.frame));
+  const mapped=new Set(displayedPoses().filter(p=>!estimateOf(p)).map(p=>p.frame));
   gapRanges=[];
   if(model){
     let start=null;

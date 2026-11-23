@@ -89,6 +89,15 @@ details .controls{margin:var(--space-12) 0 2px}
 .panelhead span,.legend{color:var(--muted);font-size:var(--text-sm)}
 #viewerOutput{font-weight:400;color:var(--muted);margin-left:var(--space-8);font-size:var(--text-sm)}
 #sendWorldSay{margin:0 var(--space-14) var(--space-8)}
+.shown{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr));gap:var(--space-8) var(--space-16);padding:var(--space-10) var(--space-14);border-top:1px solid var(--line)}
+.shown>strong{grid-column:1/-1;font-family:var(--f-display);font-weight:600;font-size:var(--text-sm);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.shown-layer{display:flex;flex-direction:column;gap:var(--space-3);font-size:var(--text-sm);color:var(--ink-2)}
+.shown-head{font-weight:600;color:var(--ink)}
+.shown-route{display:flex;flex-direction:column;gap:var(--space-3);margin-top:var(--space-4);padding-left:var(--space-8);border-left:2px solid var(--line)}
+.shown-rule{display:flex;align-items:baseline;gap:var(--space-6)}
+.swatch{display:inline-block;flex:none;width:14px;height:8px;border-radius:2px;vertical-align:middle;margin-right:var(--space-4)}
+.shown-key{display:inline-flex;align-items:center;margin-right:var(--space-10)}
+#timelineKey{margin-top:var(--space-4);max-width:none}
 .imagebox,.mapbox{position:relative;background:var(--viewport);display:grid;place-items:center;min-height:180px;flex:1;color:var(--muted);text-align:center}
 .imagebox{aspect-ratio:4/3;--split:50%}
 .imagebox img,.mapbox canvas{position:absolute;width:100%;height:100%;object-fit:contain}
@@ -258,6 +267,8 @@ details .controls{margin:var(--space-12) 0 2px}
 #viewerInputs{padding:var(--space-10) 0}
 #viewerInputs:not([hidden]){display:flex;gap:var(--space-12);flex-wrap:wrap}
 #runTraceData{max-height:300px;overflow:auto}
+#sourceList pre{max-height:420px;white-space:pre;tab-size:4}
+#sourcePanel summary small{font-weight:400;margin-left:var(--space-6)}
 #codePanel{padding:var(--space-9) 0}
 #codePanel textarea,#controlsPanel textarea,#nodeProgram{display:block;width:100%;margin:var(--space-8) 0;background:var(--panel-2);color:var(--ink);padding:var(--space-10);font:var(--text-sm)/1.5 var(--f-mono);tab-size:2;border:1px solid var(--line-strong);border-radius:var(--radius-control)}
 #codeSchema{white-space:pre-wrap;color:var(--ink-2)}

@@ -62,6 +62,26 @@ class OperatorTests(unittest.TestCase):
             self.assertIsNone(operators.range_scale(report, "relative"))
             self.assertIsNone(operators.range_scale(Path(directory)/"missing.json", "relative"))
 
+    def test_every_operator_shows_its_code(self):
+        for op in operators.OPERATORS:
+            if op["id"] == "code":
+                continue
+            listed = operators.sources(op)
+            self.assertTrue(listed, op["id"])
+            for item in listed:
+                self.assertTrue(operators.source_text(item["file"], item.get("name")), item)
+        self.assertIn({"file": "gaussian_mesh.py"}, operators.sources(operators.OPERATORS_BY_ID["gaussian-mesh"]))
+        for bad in (("../server.py", None), ("server.py", "os.system"), ("secrets.txt", None), ("server.py", "__import__")):
+            with self.assertRaises(ValueError):
+                operators.source_text(*bad)
+
+    def test_gaussian_mesh_settings_keep_the_default_folder(self):
+        import gaussian_mesh
+        self.assertEqual(gaussian_mesh.folder(), "mesh-v1")
+        self.assertEqual(gaussian_mesh.folder({"views": 120}), "mesh-v1")
+        self.assertRegex(gaussian_mesh.folder({"views": 60}), r"^mesh-v1-[0-9a-f]{8}$")
+        self.assertNotEqual(gaussian_mesh.folder({"views": 60}), gaussian_mesh.folder({"voxels_across": 200}))
+
     def test_every_type_declares_a_display(self):
         kinds = {"tables", "table", "frames", "pixels", "map", "path", "points", "polygons", "triangles", "splats", "report"}
         for name, spec in operators.TYPES.items():

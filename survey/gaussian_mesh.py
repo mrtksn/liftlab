@@ -18,6 +18,78 @@ from fusion import load_observations
 from node_params import pairing_ns, sensor_settings
 
 WIDTH, HEIGHT, FOCAL = W * 2, H * 2, F * 2
+
+# The surface extraction's settings (the gaussian-mesh operator's), defaults as the mesh was always built. A build
+# with other settings goes in its own folder (folder()), beside the default mesh-v1.
+PARAMS = (
+    dict(group="Views", key="views", label="Depth views rendered", kind="int", default=120, min=3, max=5000,
+         help="Spread evenly over the registered poses."),
+    dict(group="Views", key="render_range", label="Render range", kind="number", unit="× scene size", default=4.0,
+         min=.1, max=100.0, help="Splats farther than this from a view are not rendered."),
+    dict(group="Depth checks", key="neighbour_views", label="Views that check each depth image", kind="int", default=16,
+         min=1, max=1000),
+    dict(group="Depth checks", key="neighbour_reach", label="Nearest candidates to pick them from", kind="int",
+         default=40, min=1, max=5000, help="The checking views are spread over this many nearest candidates."),
+    dict(group="Depth checks", key="min_baseline", label="Shortest baseline to a checking view", kind="number",
+         unit="× scene size", default=.007, min=0.0, max=1.0),
+    dict(group="Depth checks", key="min_view_agreement", label="Smallest agreement of view directions", kind="number",
+         default=.4, min=-1.0, max=1.0, help="Cosine of the angle between the two cameras' forward axes."),
+    dict(group="Depth checks", key="min_parallax", label="Smallest parallax", kind="number", unit="rad", default=.018,
+         min=0.0, max=1.0, help="Sine of the angle between the two rays to the point."),
+    dict(group="Depth checks", key="depth_tolerance", label="Depth agreement", kind="number", unit="× depth",
+         default=.04, min=.0001, max=1.0),
+    dict(group="Depth checks", key="min_votes", label="Checking views that must agree", kind="int", default=2, min=1,
+         max=1000),
+    dict(group="Fusion", key="sample_stride", label="Use every Nth depth pixel", kind="int", default=3, min=1, max=64),
+    dict(group="Fusion", key="extent_trim_pct", label="Ignore the outermost depth samples", kind="number", unit="%",
+         default=.5, min=0.0, max=25.0, help="On each side of each axis, when sizing the voxel grid."),
+    dict(group="Fusion", key="voxels_across", label="Voxels across the scene", kind="int", default=180, min=10,
+         max=2000),
+    dict(group="Fusion", key="band_voxels", label="Search band around the depth samples", kind="int", unit="voxels",
+         default=4, min=0, max=100),
+    dict(group="Fusion", key="truncation_voxels", label="Surface truncation", kind="number", unit="voxels",
+         default=3.0, min=.1, max=100.0),
+    dict(group="Fusion", key="min_observations", label="Views needed per voxel", kind="int", default=2, min=1,
+         max=1000),
+    dict(group="Planar regions", key="flatten", label="Flatten planar regions", kind="bool", default=True),
+    dict(group="Planar regions", key="plane_neighbours", label="Neighbours in each local plane fit", kind="int",
+         default=32, min=4, max=1000),
+    dict(group="Planar regions", key="seed_stride", label="Try every Nth vertex as a region seed", kind="int",
+         default=6, min=1, max=100000, help="Smoothest first."),
+    dict(group="Planar regions", key="seed_roughness", label="Roughest seed", kind="number", default=.07, min=0.0,
+         max=1.0, help="Smallest over middle eigenvalue of the local fit."),
+    dict(group="Planar regions", key="grow_roughness", label="Roughest vertex added to a region", kind="number",
+         default=.18, min=0.0, max=1.0),
+    dict(group="Planar regions", key="seed_reach_voxels", label="Widest seed neighbourhood", kind="number",
+         unit="voxels", default=6.0, min=.1, max=1000.0),
+    dict(group="Planar regions", key="plane_distance_voxels", label="Farthest from the seed's plane", kind="number",
+         unit="voxels", default=.8, min=0.0, max=100.0),
+    dict(group="Planar regions", key="min_normal_agreement", label="Smallest normal agreement", kind="number",
+         default=.86, min=0.0, max=1.0, help="Cosine of the angle between a vertex normal and the seed's."),
+    dict(group="Planar regions", key="min_region_vertices", label="Smallest region", kind="int", unit="vertices",
+         default=50, min=3, max=10000000),
+    dict(group="Simplify", key="simplify_ratio", label="Keep one triangle in", kind="int", default=6, min=1,
+         max=1000, help="1 keeps every triangle."),
+    dict(group="Simplify", key="min_triangles", label="Fewest triangles kept", kind="int", default=500, min=4,
+         max=10000000, help="Meshes smaller than this are not simplified."),
+    dict(group="Simplify", key="simplify_aggression", label="Simplification aggressiveness", kind="int", default=4,
+         min=0, max=10, help="fast_simplification's agg: higher is faster and coarser."),
+)
+
+
+def settings(params=None):
+    """The settings, completed with the defaults (validated)."""
+    from node_params import validate
+    return validate(PARAMS, params)
+
+
+def folder(params=None):
+    """mesh-v1 for the default settings, else mesh-v1-<hash of the changed ones>."""
+    import hashlib
+    from node_params import defaults, validate
+    params, base = validate(PARAMS, params), defaults(PARAMS)
+    changed = {k: v for k, v in params.items() if v != base[k]}
+    return 'mesh-v1' + ('-' + hashlib.sha1(json.dumps(changed, sort_keys=True).encode()).hexdigest()[:8] if changed else '')
 CX, CY = (WIDTH - 1) / 2, (HEIGHT - 1) / 2
 
 
@@ -137,40 +209,44 @@ def sample_depth(points, eye, rotation, image):
     return z, sampled
 
 
-def confirm_depths(images, eyes, rotations, size):
+def confirm_depths(images, eyes, rotations, size, p=None):
+    p = settings(p)
     result = []
     for i, image in enumerate(images):
         points, y, x = unproject(image, eyes[i], rotations[i])
         distances = np.linalg.norm(eyes-eyes[i], axis=1)
-        candidates = np.flatnonzero((distances > size*.007) & (rotations[:, :, 2] @ rotations[i, :, 2] > .4))
+        candidates = np.flatnonzero((distances > size*p['min_baseline']) &
+                                    (rotations[:, :, 2] @ rotations[i, :, 2] > p['min_view_agreement']))
         candidates = candidates[np.argsort(distances[candidates])]
         # Include short and medium baselines, even during a slow part of the walk.
-        if len(candidates) > 16:
-            candidates = candidates[np.linspace(0, min(40, len(candidates)-1), 16).astype(int)]
+        if len(candidates) > p['neighbour_views']:
+            candidates = candidates[np.linspace(0, min(p['neighbour_reach'], len(candidates)-1),
+                                                p['neighbour_views']).astype(int)]
         votes = np.zeros(len(points), int)
         rays = points-eyes[i]
         for j in candidates:
             z, seen = sample_depth(points, eyes[j], rotations[j], images[j])
             other = points-eyes[j]
             parallax = np.linalg.norm(np.cross(rays, other), axis=1)
-            enough = parallax > .018*np.linalg.norm(rays, axis=1)*np.linalg.norm(other, axis=1)
-            votes += enough & (seen > 0) & (np.abs(seen-z) < .04*z)
-        good = votes >= 2
+            enough = parallax > p['min_parallax']*np.linalg.norm(rays, axis=1)*np.linalg.norm(other, axis=1)
+            votes += enough & (seen > 0) & (np.abs(seen-z) < p['depth_tolerance']*z)
+        good = votes >= p['min_votes']
         accepted = np.zeros_like(image)
         accepted[y[good], x[good]] = image[y[good], x[good]]
         result.append(accepted)
     return result
 
 
-def flatten_planar_regions(vertices, faces, voxel):
+def flatten_planar_regions(vertices, faces, voxel, p=None):
     """Fit connected, locally planar mesh regions without adding edges across holes."""
+    p = settings(p)
     from scipy.spatial import cKDTree
     from scipy.sparse import coo_matrix
 
     # Local covariance proposes orientations in 3D; graph connectivity separates
     # nearby, disconnected sheets. Fix transition vertices shared with other regions.
     tree = cKDTree(vertices)
-    dist, neighbors = tree.query(vertices, k=min(32, len(vertices)))
+    dist, neighbors = tree.query(vertices, k=min(p['plane_neighbours'], len(vertices)))
     local = vertices[neighbors]
     delta = local-local.mean(axis=1, keepdims=True)
     eigen, axes = np.linalg.eigh(delta.transpose(0,2,1) @ delta)
@@ -182,8 +258,8 @@ def flatten_planar_regions(vertices, faces, voxel):
     labels = np.full(len(vertices),-1)
     explored = np.zeros(len(vertices),int)
     fits = []
-    for visit, seed in enumerate(np.argsort(roughness)[::6], 1):
-        if labels[seed]>=0 or roughness[seed]>.07 or dist[seed,-1]>6*voxel:
+    for visit, seed in enumerate(np.argsort(roughness)[::p['seed_stride']], 1):
+        if labels[seed]>=0 or roughness[seed]>p['seed_roughness'] or dist[seed,-1]>p['seed_reach_voxels']*voxel:
             continue
         normal = normals[seed]
         stack = [seed]
@@ -196,10 +272,10 @@ def flatten_planar_regions(vertices, faces, voxel):
             adjacent = adjacent[(labels[adjacent]<0) & (explored[adjacent]!=visit)]
             explored[adjacent] = visit
             if len(adjacent):
-                close = np.abs((vertices[adjacent]-vertices[seed]) @ normal) < voxel*.8
-                aligned = np.abs(normals[adjacent] @ normal) > .86
-                stack.extend(adjacent[close & aligned & (roughness[adjacent]<.18)])
-        if len(group)<50:
+                close = np.abs((vertices[adjacent]-vertices[seed]) @ normal) < voxel*p['plane_distance_voxels']
+                aligned = np.abs(normals[adjacent] @ normal) > p['min_normal_agreement']
+                stack.extend(adjacent[close & aligned & (roughness[adjacent]<p['grow_roughness'])])
+        if len(group)<p['min_region_vertices']:
             continue
         pts = vertices[group]
         centre = pts.mean(axis=0)
@@ -217,32 +293,34 @@ def flatten_planar_regions(vertices, faces, voxel):
     return len(fits)
 
 
-def fuse(images, eyes, rotations):
-    samples = np.concatenate([unproject(im, eye, rot, 3)[0] for im, eye, rot in zip(images, eyes, rotations)])
+def fuse(images, eyes, rotations, p=None):
+    p = settings(p)
+    samples = np.concatenate([unproject(im, eye, rot, p['sample_stride'])[0] for im, eye, rot in zip(images, eyes, rotations)])
     if len(samples) < 50:
         raise ValueError('Too few consistent depth returns to build a mesh')
-    lo, hi = np.percentile(samples, [.5, 99.5], axis=0)
-    voxel = np.max(hi-lo)/180
+    lo, hi = np.percentile(samples, [p['extent_trim_pct'], 100-p['extent_trim_pct']], axis=0)
+    voxel = np.max(hi-lo)/p['voxels_across']
     if not np.isfinite(voxel) or voxel <= 0:
         raise ValueError('Insufficient spatial extent')
-    origin = lo - 5*voxel
-    shape = np.ceil((hi-lo)/voxel).astype(int)+11
+    margin = p['band_voxels']+1   # room for the search band and marching cubes' border
+    origin = lo - margin*voxel
+    shape = np.ceil((hi-lo)/voxel).astype(int)+2*margin+1
     indices = np.rint((samples-origin)/voxel).astype(int)
     inside = ((indices >= 0) & (indices < shape)).all(axis=1)
     band = np.zeros(shape, bool)
     band[tuple(indices[inside].T)] = True
-    nodes = np.argwhere(ndimage.binary_dilation(band, iterations=4))
+    nodes = np.argwhere(ndimage.binary_dilation(band, iterations=p['band_voxels']) if p['band_voxels'] else band)
     points = origin + nodes*voxel
     weight = np.zeros(len(nodes), 'i')
     total = np.zeros(len(nodes), 'f')
     for im, eye, rot in zip(images, eyes, rotations):
         z, seen = sample_depth(points, eye, rot, im)
-        sdf = (seen-z)/(3*voxel)
+        sdf = (seen-z)/(p['truncation_voxels']*voxel)
         good = (seen > 0) & (sdf >= -1)
         total[good] += np.minimum(sdf[good], 1)
         weight[good] += 1
     known = np.zeros(shape, bool)
-    good = weight >= 2
+    good = weight >= p['min_observations']
     keys = tuple(nodes[good].T)
     known[keys] = True
     field = np.ones(shape, 'f')
@@ -257,10 +335,11 @@ def fuse(images, eyes, rotations):
     vertices, faces, _, _ = marching_cubes(field, level=0, mask=cells, allow_degenerate=False)
     vertices = origin + vertices*voxel
     original = len(faces)
-    regions = flatten_planar_regions(vertices, faces, voxel)
-    if original > 500:
+    regions = flatten_planar_regions(vertices, faces, voxel, p) if p['flatten'] else 0
+    if original > p['min_triangles'] and p['simplify_ratio'] > 1:
         # Quadric edge collapse preferentially removes flat, coplanar triangles.
-        vertices, faces = fast_simplification.simplify(vertices, faces, target_count=max(500, original//6), agg=4)
+        vertices, faces = fast_simplification.simplify(vertices, faces, agg=p['simplify_aggression'],
+                                                       target_count=max(p['min_triangles'], original//p['simplify_ratio']))
     return vertices, faces, voxel, original, regions
 
 
@@ -387,15 +466,17 @@ def write_ply(path, vertices, faces):
         file.write(packed.tobytes())
 
 
-def build(run, model, root, progress=lambda message: None):
-    dest = root/'mesh-v1'
+def build(run, model, root, progress=lambda message: None, params=None):
+    from node_params import validate
+    p = validate(PARAMS, params)
+    dest = root/folder(p)
     report_path = dest/'report.json'
     if report_path.exists():
         return json.loads(report_path.read_text())
     poses = sorted((p for p in model['poses'] if 'rotation' in p and not p.get('method')), key=lambda p:p['frame'])
     if len(poses) < 3:
         raise ValueError('At least three registered poses are required')
-    selected = [poses[i] for i in np.linspace(0,len(poses)-1,min(120,len(poses))).round().astype(int)]
+    selected = [poses[i] for i in np.linspace(0,len(poses)-1,min(p['views'],len(poses))).round().astype(int)]
     eyes = np.asarray([p['xyz'] for p in selected], 'f')
     rotations = np.asarray([p['rotation'] for p in selected], 'f')
     splats = read_splats(root/'gaussians.ply')
@@ -404,16 +485,16 @@ def build(run, model, root, progress=lambda message: None):
     for i, (eye, rot) in enumerate(zip(eyes, rotations)):
         if i%12 == 0:
             progress(f'Rendering Gaussian depth · {i+1}/{len(eyes)} views')
-        images.append(render_depth(splats, eye, rot, 4*size))
+        images.append(render_depth(splats, eye, rot, p['render_range']*size))
     progress('Checking depths against neighboring registered views')
-    accepted = confirm_depths(images, eyes, rotations, size)
+    accepted = confirm_depths(images, eyes, rotations, size, p)
     progress('Fusing depth and simplifying the surface')
-    vertices, faces, voxel, raw, regions = fuse(accepted, eyes, rotations)
+    vertices, faces, voxel, raw, regions = fuse(accepted, eyes, rotations, p)
     progress('Comparing mesh intersections with recorded ToF ranges')
     report = dict(views=len(selected), triangles=len(faces), raw_triangles=raw, planar_regions=regions, vertices=len(vertices),
                   voxel_size=float(voxel), units=model['units'], accepted_pixels=int(sum(np.count_nonzero(im) for im in accepted)),
                   rendered_pixels=int(sum(np.count_nonzero(im) for im in images)),
-                  tof=range_evidence(run, model, vertices, faces, poses)[0])
+                  tof=range_evidence(run, model, vertices, faces, poses)[0], settings=p)
     with tempfile.TemporaryDirectory(dir=root, prefix='.mesh-') as tmp:
         ready = Path(tmp)/'ready'
         ready.mkdir()

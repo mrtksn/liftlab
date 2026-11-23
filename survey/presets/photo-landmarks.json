@@ -23,12 +23,30 @@
     }
    },
    {
+    "id": "route",
+    "op": "replay-path",
+    "inputs": {
+     "poses": {
+      "node": "map",
+      "port": "map"
+     },
+     "frames": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
     "id": "view",
     "op": "viewer",
     "inputs": [
      {
       "node": "map",
       "port": "map"
+     },
+     {
+      "node": "route",
+      "port": "path"
      }
     ]
    }

@@ -23,6 +23,20 @@
     }
    },
    {
+    "id": "route",
+    "op": "replay-path",
+    "inputs": {
+     "poses": {
+      "node": "map",
+      "port": "map"
+     },
+     "frames": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
     "id": "planes",
     "op": "ai-depth-planes",
     "inputs": {
@@ -47,6 +61,10 @@
      {
       "node": "planes",
       "port": "mesh"
+     },
+     {
+      "node": "route",
+      "port": "path"
      }
     ]
    }

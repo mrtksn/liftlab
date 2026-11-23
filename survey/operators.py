@@ -41,7 +41,8 @@ TYPES = {
     "Camera map": dict(display="map",
         description="{ poses, points, units }. Each point is [x, y, z, red, green, blue]."),
     "Camera path": dict(display="path",
-        description="Array of poses {frame, xyz, rotation?} in map coordinates."),
+        description="Array of poses {frame, xyz, rotation?} in map coordinates. A replay path's poses also say how "
+                    "each was made: source mapped, interpolated, extrapolated or held (replay-path.js)."),
     "Depth frames": dict(display="frames",
         description="Array of {frame, ms, method}. await readFrame(ref) returns width, height and float depth pixels "
                     "in native model units."),
@@ -355,16 +356,20 @@ def run_gaussian_mesh(ctx):
     root, suffix = splat_root(ctx, ctx.ref("splats"))
     if not (root/"gaussians.ply").is_file():
         raise ValueError("Run the Gaussian map first.")
+    import gaussian_mesh
     index = ctx.model["feature_index"]
-    report = root/"mesh-v1"/"report.json"
+    name = gaussian_mesh.folder(ctx.params)
+    report = root/name/"report.json"
     if report.is_file():
-        mesh = dict(url=artifact("/gaussian-artifact", ctx.run, index, "mesh-v1/mesh.ply", variant=suffix),
-                    format="mesh-ply", index=index, variant=suffix)
+        mesh = dict(url=artifact("/gaussian-artifact", ctx.run, index, name + "/mesh.ply", variant=suffix),
+                    report=artifact("/gaussian-artifact", ctx.run, index, name + "/report.json", variant=suffix),
+                    format="mesh-ply", index=index, variant=suffix, mesh=name)
         scale = range_scale(report, ctx.model.get("units"))
         if scale:
             mesh["scale"] = scale
         return dict(mesh=mesh)
-    ctx.start("Opening trained Gaussian splats", ctx.survey.build_gaussian_geometry, ctx.run, ctx.model, root, False)
+    ctx.start("Opening trained Gaussian splats", ctx.survey.build_gaussian_geometry, ctx.run, ctx.model, root, False,
+              ctx.params)
 
 
 def run_clearance(ctx):
@@ -383,7 +388,36 @@ def run_clearance(ctx):
 
 
 import clearance as _clearance
+import gaussian_mesh as _gaussian_mesh
 CLEARANCE_PARAMS = _clearance.PARAMS
+
+SPLAT_FIT_PARAMS = (   # gaussian-view.js fitGaussianAttributes
+    number("extent_trim_pct", "Ignore the outermost points when sizing cells", 2.0, 0.0, 49.0, unit="%", group="Cells",
+           help="On each side of each axis."),
+    number("cells_per_sqrt_point", "Cells across per square root of the point count", .5, .001, 100.0, group="Cells"),
+    number("min_cells", "Fewest cells across", 8, 1, 10000, kind="int", group="Cells"),
+    number("cell_samples", "Points sampled from each neighbouring cell", 32, 1, 10000, kind="int", group="Neighbours"),
+    number("neighbours", "Nearest points in each fit", 12, 1, 1000, kind="int", group="Neighbours"),
+    number("radius_neighbour", "Radius from the distance to the Nth nearest point", 3, 1, 1000, kind="int", group="Size"),
+    number("radius_scale", "Radius scale", .78, .001, 100.0, group="Size"),
+    number("min_radius", "Smallest radius", .04, 0.0, 100.0, unit="× cell", group="Size"),
+    number("max_radius", "Largest radius", .7, .001, 100.0, unit="× cell", group="Size"),
+    number("lone_radius", "Radius of a point with no neighbours", .15, 0.0, 100.0, unit="× cell", group="Size"),
+    number("min_thickness", "Thinnest splat", .12, 0.0, 1.0, unit="× radius", group="Size",
+           help="Flat neighbourhoods give thin splats, down to this."),
+    number("opacity", "Opacity", .82, 0.0, 1.0, group="Look"),
+)
+
+REPLAY_PATH_PARAMS = (
+    flag("fill_gaps", "Fill unmapped stretches with straight lines", True,
+         help="Frames between two given poses get a position on the line between them, at their time."),
+    flag("extend_ends", "Extend to the walk's first and last frames", True,
+         help="Frames before the first and after the last given pose move on at the speed measured at that end."),
+    number("end_frames", "Given poses that measure an end's speed", 4, 2, 1000, kind="int",
+           help="Consecutive given poses at each end of the walk."),
+    flag("blend_directions", "Blend camera directions between given poses", True,
+         help="Frames without a saved direction turn smoothly between the nearest given poses."),
+)
 
 LINGBOT_PARAMS = (number("stride", "Use every Nth rectified frame", 8, 1, 100, kind="int"),)
 
@@ -474,7 +508,7 @@ OPERATORS = [
          outputs=[port("splats", "Trained Gaussian map")], params=list(GAUSSIAN_PARAMS), run=run_gaussian_map,
          description="Brush trains 3D Gaussian splats from the registered photos."),
     dict(id="gaussian-mesh", label="Gaussian surface mesh", group="Gaussians",
-         inputs=[port("splats", "Trained Gaussian map")], outputs=[port("mesh", "Polygon mesh")], params=[],
+         inputs=[port("splats", "Trained Gaussian map")], outputs=[port("mesh", "Polygon mesh")], params=list(_gaussian_mesh.PARAMS),
          run=run_gaussian_mesh, description="Depth rendered from several views, fused, meshed and simplified."),
     dict(id="clearance", label="Walk clearance", group="Gaussians",
          inputs=[port("splats", "Trained Gaussian map"), port("map", "Camera map")],
@@ -490,17 +524,95 @@ OPERATORS += [
     dict(id="code", label="Code transform", group="Code", runner="code", inputs=[], outputs=[], params=[],
          default_type="JSON records",
          description="JavaScript over typed inputs. Its ports, output type and controls are part of the node."),
-    dict(id="splat-fit", label="Fit splats to points", group="Gaussians", runner="browser", params=[],
+    dict(id="replay-path", label="Replay path", group="Camera", runner="browser", params=list(REPLAY_PATH_PARAMS),
+         source=["replay-path.js"],
+         inputs=[port("poses", "Camera map", "Camera path"), port("frames", "Telemetry")],
+         outputs=[port("path", "Camera path")],
+         description="One camera pose per recorded frame, in this browser: the given poses as they are, the frames "
+                     "between and beyond them estimated as the settings say. Each pose says how it was made."),
+    dict(id="splat-fit", label="Fit splats to points", group="Gaussians", runner="browser", params=list(SPLAT_FIT_PARAMS),
+         source=["gaussian-view.js"],
          inputs=[port("points", "Colored points", "Registered depth points")], outputs=[port("splats", "Point-fitted splats")],
          description="Gaussian splats sized from the local point spacing, in this browser."),
     dict(id="viewer", label="Viewer", group="Display", runner="viewer", inputs=[], outputs=[], params=[],
+         source=["ui.js", "graph.js"],
          description="Draws its connected outputs. Edit its code to compose plot layers."),
 ]
 OPERATORS_BY_ID = {o["id"]: o for o in OPERATORS}
 
 
+HERE = Path(__file__).resolve().parent
+
+
+def sources(operator):
+    """The code that does an operator's work, for the inspector to show: its run function, the operators.py helpers and
+    survey server methods it calls (ctx.survey.…), and the survey modules any of them use, else the browser files it
+    names (source)."""
+    import inspect
+    import re as _re
+    import server
+    if "run" not in operator:
+        return [dict(file=f) for f in operator.get("source", [])]
+    found, files, queue = [], [], [("operators.py", operator["run"].__name__, operator["run"])]
+    seen = set()
+    while queue:
+        file, name, target = queue.pop(0)
+        if (file, name) in seen:
+            continue
+        seen.add((file, name))
+        found.append(dict(file=file, name=name))
+        code = inspect.getsource(target)
+        scope = getattr(target, "__globals__", {})
+        for call in _re.findall(r"\b([a-z_][a-z0-9_]*)\(", code):
+            helper = scope.get(call)
+            if not inspect.isfunction(helper):
+                continue
+            home = Path(inspect.getsourcefile(helper)).resolve()
+            if home == Path(inspect.getsourcefile(target)).resolve():
+                queue.append((home.name, call, helper))   # a helper beside it (operators.py, server.py)
+            elif home.parent == HERE and home.name not in files:
+                files.append(home.name)                    # a survey module it imported the function from
+        for method in _re.findall(r"\b(?:ctx\.survey|self\.survey|survey)\.([a-z_][a-z0-9_]*)", code) + \
+                (_re.findall(r"\bself\.([a-z_][a-z0-9_]*)", code) if name.startswith("Survey.") else []):
+            target = getattr(server.Survey, method, None)
+            if callable(target):
+                queue.append(("server.py", "Survey." + method, target))
+        for method in _re.findall(r"\bctx\.([a-z_][a-z0-9_]*)\(", code):
+            target = getattr(Context, method, None)
+            if callable(target):
+                queue.append(("operators.py", "Context." + method, target))
+        names = set(_re.findall(r"\b([a-z_][a-z0-9_]*)\.", code)) | \
+            set(_re.findall(r"^\s*(?:import|from)\s+([a-z_][a-z0-9_]*)", code, _re.M))
+        for module in sorted(names):
+            if module not in ("operators", "server") and (HERE/(module + ".py")).is_file() and module + ".py" not in files:
+                files.append(module + ".py")
+    return found + [dict(file=f) for f in files]
+
+
+def source_text(file, name=None):
+    """A survey source file's text, or one function of it (name)."""
+    import inspect
+    import re as _re
+    if not _re.fullmatch(r"[a-z0-9_\-]+\.(py|js)", file or "") or not (HERE/file).is_file():
+        raise ValueError("Unknown source file")
+    text = (HERE/file).read_text()
+    if name:
+        if not file.endswith(".py") or not _re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)?", name):
+            raise ValueError("Unknown function")
+        import importlib
+        target = importlib.import_module(file[:-3])
+        for part in name.split("."):
+            target = getattr(target, part, None)
+        # Only a function or class written in that file (not one it imported).
+        if not (inspect.isfunction(target) or inspect.isclass(target)) or \
+                Path(inspect.getsourcefile(target) or "").resolve() != (HERE/file).resolve():
+            raise ValueError("Unknown function")
+        text = inspect.getsource(target)
+    return text
+
+
 def catalog():
-    public = [{k: v for k, v in o.items() if k != "run"} for o in OPERATORS]
+    public = [{**{k: v for k, v in o.items() if k != "run"}, "sources": sources(o)} for o in OPERATORS]
     depth = [dict(id=k, label=v, units=replay_depth.UNITS[k]) for k, v in replay_depth.LABELS.items()]
     return dict(operators=public, types=TYPES, compatible=COMPATIBLE, depth_methods=depth)
 

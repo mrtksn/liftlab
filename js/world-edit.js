@@ -96,6 +96,8 @@ function solidShapeControls({ detail, shown, id, onDetail, onShown, disabled = f
 function worldObjCollisionFields(o) {
   const voxel=o.h?(o.h<.1?`${Math.round(o.h*1000)} mm`:`${o.h.toFixed(2)} m`):'';
   const update=()=>{worldObjSolidify(o);worldEditSolidShown(o);if(worldMotionEditor.id===o.id)worldMotionEdit(o);else worldEditChanged();worldEditRender();};
+  // A model of only points or lines (a survey's landmarks) has nothing to collide with.
+  if(o.base&&!o.triangles)return el('p',{class:'hint',text:'Only points and lines: nothing to collide with.'});
   return solidShapeControls({detail:o.detail,shown:wedit.showSolid,id:'worldObjSolid',disabled:!o.base,collision:o.collision||'boxes',
     onCollision:key=>{o.collision=key;update();},onDetail:key=>{if(key!==o.detail){o.detail=key;update();}},
     onShown:shown=>{wedit.showSolid=shown;worldEditSolidShown(o);},
