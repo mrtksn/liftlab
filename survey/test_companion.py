@@ -70,6 +70,12 @@ class ServerTests(unittest.TestCase):
         response, _ = self.request("GET", "/api.js")
         self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
 
+    def test_liftlab_styles_are_shared(self):
+        for path in ("/css/tokens.css", "/css/base.css", "/css/components.css", "/look.js"):
+            response, data = self.request("GET", path)
+            self.assertEqual(response.status, 200, path)
+            self.assertTrue(data, path)
+
     def test_other_sites_are_refused(self):
         response, _ = self.request("GET", "/api.js", "https://evil.example")
         self.assertEqual(response.status, 403)

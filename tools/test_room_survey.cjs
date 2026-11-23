@@ -15,7 +15,7 @@ const server=http.createServer((req,res)=>{
 
 // A 4 × 3 m room, 2.5 m high, Z up: floor, four walls (the front one with a doorway), no ceiling; the walk in the middle.
 const W=4,D=3,H=2.5;
-const room={type:'liftlab-survey-surface',id:'t1',name:'Gaussian surface mesh · 20261122-100049-c7a0f',units:'m',levelled:true,
+const room={type:'liftlab-survey-scene',id:'t1',name:'Gaussian surface mesh · 20261122-100049-c7a0f',units:'m',levelled:true,
   polygons:[
     {outer:[[0,0,0],[0,D,0],[W,D,0],[W,0,0]]},                                     // floor, wound to face down
     {outer:[[0,0,0],[W,0,0],[W,0,H],[0,0,H]],holes:[[[1.5,0,0.01],[2.5,0,0.01],[2.5,0,2],[1.5,0,2]]]},   // front, with a door
@@ -24,6 +24,7 @@ const room={type:'liftlab-survey-surface',id:'t1',name:'Gaussian surface mesh ·
     {outer:[[W,0,0],[W,D,0],[W,D,H],[W,0,H]]},
     {outer:[[0,0,H],[W,0,H],[W,D,H]]},                                             // a triangle (a Triangle list output)
   ],
+  points:[[1,1,1,255,0,0],[2,2,1,0,255,0],[3,1,2,0,0,255]],paths:[[[1,1.5,1.2],[2,1.5,1.2],[3,1.5,1.2]]],
   viewpoints:[[1,1.5,1.2],[2,1.5,1.2],[3,1.5,1.2]]};
 
 (async()=>{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));let browser;
@@ -59,12 +60,14 @@ try{
   assert(r.world&&!r.selected&&r.context==='world'&&!r.dlg,'opens in the World editor: '+JSON.stringify({...r,obj:''}));
   assert.strictEqual(r.up,'z');assert.strictEqual(r.units,'m');
   [W,D,H].forEach((v,i)=>assert(Math.abs(r.size[i]-v)<1e-6,'size '+r.size));
-  assert(/triangles from the survey/.test(r.say)&&/metres/.test(r.say),r.say);
+  assert(/triangles, 3 points and 1 path from the survey\./.test(r.say)&&/metres/.test(r.say),r.say);
+  const drawn=await page.evaluate(()=>{const kinds={};partImport.preview?.traverse?.(o=>{if(o.isPoints)kinds.points=[o.geometry.attributes.position.count,o.material.size,!!o.geometry.attributes.color];if(o.isLine)kinds.line=o.geometry.attributes.position.count;});return kinds;});
+  assert(drawn.points&&drawn.points[0]===3&&drawn.points[1]>=3&&drawn.points[2]&&drawn.line===4,'points and path drawn '+JSON.stringify(drawn));
   assert(r.name.startsWith('Gaussian surface mesh'),r.name);
 
   // Every face points into the room (toward the walk), and the doorway is left open.
   const v=[],faces=[];
-  for(const line of r.obj.split('\n')){const t=line.split(' ');if(t[0]==='v')v.push(t.slice(1).map(Number));if(t[0]==='f')faces.push(t.slice(1).map(i=>v[i-1]));}
+  for(const line of r.obj.split('\n')){const t=line.split(' ');if(t[0]==='v')v.push(t.slice(1,4).map(Number));if(t[0]==='f')faces.push(t.slice(1).map(i=>v[i-1]));}
   assert(faces.length>=12,'faces '+faces.length);
   for(const [a,b,c] of faces){
     const n=[(b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1]),(b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2]),(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])];
@@ -82,10 +85,25 @@ try{
   r=await page.evaluate(()=>({collision:worldObjects.list[0].collision,asset:objectLibrary.list[0].worldCollision}));
   assert.strictEqual(r.collision,'mesh');assert.strictEqual(r.asset,'mesh');
 
+  // Only points and a path: drawn, nothing to collide with.
+  await page.evaluate(()=>worldEditSet(false));
+  reply=await send({...room,id:'t5',polygons:[]});assert(reply.ok,reply.text);
+  await page.waitForFunction(()=>partImport.active&&partImport.draft&&!partImport.busy);
+  r=await page.evaluate(()=>({say:$('#objectImportSay').textContent,hint:partImport.hints.worldCollision}));
+  assert(/^3 points and 1 path from the survey \(no surfaces/.test(r.say)&&r.hint==='boxes',JSON.stringify(r));
+  await page.locator('#objectImportSave').click();
+  await page.locator('#objectLibraryDlg [data-object-use]').first().click();
+  await page.waitForFunction(()=>worldObjects.list.length===2&&!wedit.busy);
+  r=await page.evaluate(()=>{const o=worldObjects.list[1];let pts=0;o.base.traverse(m=>{if(m.isPoints)pts+=m.geometry.attributes.position.count;});return {boxes:o.boxes.length,pts};});
+  assert(r.boxes===0&&r.pts===3,'points-only copy '+JSON.stringify(r));
+  await page.evaluate(()=>worldEditSet(false));
+  reply=await send({...room,id:'t6',polygons:[],points:[],paths:[]});
+  assert(!reply.ok&&/nothing to send/.test(reply.text),reply.text);
+
   // A map without metres, sized from the ToF estimate the output carried; a measured map ignores one.
   await page.evaluate(()=>worldEditSet(false));
   const half=v=>v.map(x=>x/2),relative={...room,id:'t3',units:'relative',viewpoints:room.viewpoints.map(half),
-    polygons:room.polygons.map(p=>({outer:p.outer.map(half),holes:(p.holes||[]).map(h=>h.map(half))})),
+    polygons:room.polygons.map(p=>({outer:p.outer.map(half),holes:(p.holes||[]).map(h=>h.map(half))})),points:[],paths:[],
     scale:{metres_per_unit:2,median_error_m:.157,p80_error_m:.435,hits:36,eligible:46}};
   reply=await send(relative);assert(reply.ok,reply.text);
   await page.waitForFunction(()=>partImport.active&&partImport.draft&&!partImport.busy);
@@ -105,5 +123,5 @@ try{
   assert(!reply.ok&&/100,000/.test(reply.text),reply.text);
 
   assert.deepStrictEqual(errors,[]);
-  console.log('Room survey to World: import, orientation, doorway, mesh collision, ToF size and refusals passed');
+  console.log('Room survey to World: surfaces, points and paths, orientation, doorway, mesh collision, ToF size and refusals passed');
 }catch(e){console.error(e);process.exitCode=1;}finally{await browser?.close();server.close();}})();

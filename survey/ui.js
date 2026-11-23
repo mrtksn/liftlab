@@ -11,9 +11,9 @@ let lastSourceWalk=null;
 let timeline=[], timelineRun, replay=false, cursor=0, animation=0, displayedFrame;
 let routeSegments=[], replayEstimates=new Map(), replayDirections=new Map();
 const routeStyles={
-  mapped:{color:'#a5efd1',dash:[]},
-  interpolated:{color:'#f7cc7f',dash:[7,5]},
-  extrapolated:{color:'#cfb1f7',dash:[2,5]}
+  mapped:{get color(){return tone('--good');},dash:[]},
+  interpolated:{get color(){return tone('--warn');},dash:[7,5]},
+  extrapolated:{get color(){return tone('--src-sim');},dash:[2,5]}
 };
 let gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
@@ -51,9 +51,9 @@ function rotateLevel(axis,angle,base){
   r[j][k]=-Math.sin(angle);r[k][j]=Math.sin(angle);
   correction=multiply(r,base);draw();
 }
-const rings=['#ed645b','#56bf74','#669cff'].map((color,axis)=>{
+const rings=['--ax-x','--ax-y','--ax-z'].map((color,axis)=>{
   const ring=document.createElementNS('http://www.w3.org/2000/svg','path');
-  ring.setAttribute('stroke',color);ring.setAttribute('tabindex','0');ring.setAttribute('role','slider');
+  ring.style.stroke='var('+color+')';ring.setAttribute('tabindex','0');ring.setAttribute('role','slider');
   ring.setAttribute('aria-label','Rotate around '+'XYZ'[axis]+' axis');
   const title=document.createElementNS(ring.namespaceURI,'title');
   title.textContent='Drag to rotate about '+'XYZ'[axis]+' · arrow keys adjust 1°';ring.append(title);
@@ -543,12 +543,12 @@ function draw() {
         ctx.fillRect(x-1,y-1,2,2);
       }
     });
-    ctx.fillStyle='#ffffff';
+    ctx.fillStyle=tone('--ink');
     for(const [x,y] of vertices)ctx.fillRect(x-2,y-2,4,4);
     $('vertexKey').hidden=!visibility?.members.size;
   }
   for(const layer of layers)if(layer.line){
-    ctx.beginPath();ctx.strokeStyle='#a5efd1';ctx.lineWidth=2;
+    ctx.beginPath();ctx.strokeStyle=tone('--good');ctx.lineWidth=2;
     let connected=false;
     for(const point of layer.line){
       const xy=projectWithDepth(point);
@@ -561,7 +561,7 @@ function draw() {
   if(!camera && estimate?.xyz && viewBindings().some(p=>p.type==='Camera map')){
     const a=project(estimate.xyz), v=estimate.rotation.map(row=>row[2]);
     const b=project(estimate.xyz.map((x,i)=>x+v[i]*extent*.10));
-    ctx.strokeStyle='#58baff';ctx.fillStyle='#58baff';ctx.lineWidth=3;
+    ctx.strokeStyle=ctx.fillStyle=tone('--accent');ctx.lineWidth=3;
     ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
     ctx.beginPath();ctx.arc(...a,6,0,Math.PI*2);ctx.fill();
   }
@@ -603,16 +603,16 @@ function draw() {
     ctx.font='600 12px system-ui';
     const tx=Math.min(w-ctx.measureText(label).width-8,Math.max(5,x+9));
     const ty=Math.min(h-5,Math.max(13,y+(below?17:-10)));
-    ctx.strokeStyle='#0b1012';ctx.lineWidth=4;ctx.strokeText(label,tx,ty);ctx.fillText(label,tx,ty);
+    ctx.strokeStyle=tone('--viewport');ctx.lineWidth=4;ctx.strokeText(label,tx,ty);ctx.fillText(label,tx,ty);
   };
-  marker(first,parseInt(first.frame)===0?'Start':'First mapped pose','#a5efd1');
-  marker(last,parseInt(last.frame)===state.frames-1?'Finish':state.recording?'Latest pose':'Last mapped pose','#ffcf80',true);
+  marker(first,parseInt(first.frame)===0?'Start':'First mapped pose',tone('--good'));
+  marker(last,parseInt(last.frame)===state.frames-1?'Finish':state.recording?'Latest pose':'Last mapped pose',tone('--warn'),true);
   const replayId=timeline[cursor]?.id, inferred=replayEstimates.get(replayId);
   const selected=!droneView&&replay&&(posesByFrame.get(replayId)||inferred);
   const selectedScreen=selected&&project(selected.xyz);
   if(selectedScreen){
     const [x,y]=selectedScreen;
-    ctx.strokeStyle=inferred?routeStyles[inferred.kind].color:'#72caff';
+    ctx.strokeStyle=inferred?routeStyles[inferred.kind].color:tone('--accent');
     ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.stroke();
   }
 }
@@ -841,7 +841,7 @@ async function locate(){
     const img=new Image();img.src='data:image/jpeg;base64,'+q.image;await img.decode();if(token!==generation)return;
     estimate=q;draw();const el=$('matches');el.width=img.naturalWidth;el.height=img.naturalHeight;
     const c=el.getContext('2d');el.hidden=false;c.drawImage(img,0,0);
-    c.fillStyle='#38ff9e';for(const [x,y] of q.pixels||[])c.fillRect(x-2,y-2,4,4);
+    c.fillStyle=tone('--good');for(const [x,y] of q.pixels||[])c.fillRect(x-2,y-2,4,4);
     $('tracking').textContent=q.status+' · '+q.inliers+' inliers / '+q.matches+' matches · '+(source==='live'?'camera '+(q.stamp/1e6).toFixed(2)+' s':'frame '+q.stamp);
   }catch(e){if(token===generation){resetTracking();$('tracking').textContent=e.message;}}
   finally{estimating=false;}
@@ -855,10 +855,10 @@ function gaussianUrl(file){
 }
 let clearanceReport=null, clearanceKey='';
 const clearanceStates={
-  fits:{label:'Fits observed space',color:'#89dfb2'},
-  conflict:{label:'Obstacle conflict',color:'#ff8275'},
-  unknown:{label:'Unknown space',color:'#ecbf75'},
-  missing:{label:'No reliable pose',color:'#88969f'}
+  fits:{label:'Fits observed space',get color(){return tone('--good');}},
+  conflict:{label:'Obstacle conflict',get color(){return tone('--bad');}},
+  unknown:{label:'Unknown space',get color(){return tone('--warn');}},
+  missing:{label:'No reliable pose',get color(){return tone('--muted');}}
 };
 function envelopeRadius(){
   const body=$('bodyRadius'), margin=$('clearanceMargin');
@@ -1023,7 +1023,7 @@ function drawTofEvidence(project,cameraPoint,projectCamera,camera,near){
   ctx.save();
   function marker(row,selected){
     const end=row.endpoint && project(row.endpoint);
-    const color=row.hit?'#6ce3e7':'#ff9a49';
+    const color=row.hit?tone('--src-tlm'):tone('--drag');
     if(selected && row.endpoint){
       const beam=camera?clipNear([row.origin,row.endpoint].map(cameraPoint),near,false).map(projectCamera):[project(row.origin),end];
       if(beam.length===2){
@@ -1032,17 +1032,17 @@ function drawTofEvidence(project,cameraPoint,projectCamera,camera,near){
     }
     if(end){
       const [x,y]=end, r=selected?7:row.hit?2.8:4.5;
-      ctx.fillStyle=color;ctx.strokeStyle='#152025';ctx.lineWidth=1.3;ctx.beginPath();
+      ctx.fillStyle=color;ctx.strokeStyle=tone('--viewport');ctx.lineWidth=1.3;ctx.beginPath();
       if(row.hit)ctx.arc(x,y,r,0,Math.PI*2);
       else{ctx.moveTo(x,y-r);ctx.lineTo(x+r,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r,y);ctx.closePath();}
       ctx.fill();ctx.stroke();
-      if(selected){ctx.strokeStyle='white';ctx.beginPath();ctx.arc(x,y,r+3,0,Math.PI*2);ctx.stroke();}
+      if(selected){ctx.strokeStyle=tone('--ink');ctx.beginPath();ctx.arc(x,y,r+3,0,Math.PI*2);ctx.stroke();}
     }
     const hit=selected && row.intersection && project(row.intersection);
     if(hit){
       const [x,y]=hit;
       ctx.beginPath();ctx.moveTo(x-5,y);ctx.lineTo(x+5,y);ctx.moveTo(x,y-5);ctx.lineTo(x,y+5);
-      ctx.strokeStyle='#162022';ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();
+      ctx.strokeStyle=tone('--viewport');ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle=tone('--ink');ctx.lineWidth=2;ctx.stroke();
     }
   }
   // Draw misses and the selected frame last so they stay visible in dense clusters.
@@ -1123,7 +1123,7 @@ for(const name of ['persp','ortho'])$(name).onclick=()=>{
   droneView=false;orbitPerspective=name==='persp';updateViewControls();draw();
 };
 const gizmoNodes=[];
-for(const [axis,sides,color] of [[0,['left','side'],'#eb6256'],[1,['back','front'],'#50ba72'],[2,['bottom','top'],'#6599ff']]){
+for(const [axis,sides,color] of [[0,['left','side'],'var(--ax-x)'],[1,['back','front'],'var(--ax-y)'],[2,['bottom','top'],'var(--ax-z)']]){
   for(const sign of [-1,1]){
     const svg=tag=>document.createElementNS('http://www.w3.org/2000/svg',tag);
     const group=svg('g'),line=svg('line'),circle=svg('circle'),label=svg('text'),title=svg('title');
@@ -1132,7 +1132,7 @@ for(const [axis,sides,color] of [[0,['left','side'],'#eb6256'],[1,['back','front
     group.setAttribute('role','button');group.setAttribute('tabindex','0');group.setAttribute('aria-label',title.textContent);
     line.setAttribute('stroke',color);line.setAttribute('stroke-width','2');
     line.setAttribute('x1','42');line.setAttribute('y1','42');
-    circle.setAttribute('r','7.5');circle.setAttribute('fill',sign>0?color:'#20292c');circle.setAttribute('stroke',color);
+    circle.setAttribute('r','7.5');circle.style.fill=sign>0?color:'var(--panel)';circle.style.stroke=color;
     label.textContent=sign>0?'XYZ'[axis]:'';
     group.append(title,line,circle,label);$('axisGizmo').append(group);
     group.onclick=()=>setOverview(...presets[sides[sign>0?1:0]]);
@@ -1314,10 +1314,10 @@ function drawTimeline(){
   const registered=new Map(displayedPoses().map(p=>[p.frame,p.method]));
   for(const frame of timeline){
     const inferred=replayEstimates.get(frame.id);
-    g.fillStyle=inferred?routeStyles[inferred.kind].color:registered.has(frame.id)?(registered.get(frame.id)?'#72caff':'#a5efd1'):'#556469';
+    g.fillStyle=inferred?routeStyles[inferred.kind].color:registered.has(frame.id)?(registered.get(frame.id)?tone('--accent'):tone('--good')):tone('--line-strong');
     g.fillRect(x(frame.ms),3,2,7);
   }
-  g.fillStyle='#72caff';g.fillRect(x(timeline[cursor].ms)-1,0,3,13);
+  g.fillStyle=tone('--accent');g.fillRect(x(timeline[cursor].ms)-1,0,3,13);
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
 function replaySnapshot(){

@@ -787,10 +787,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/index.html":"index.html","/api.js":"api.js","/target.html":"target.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/index.html":"index.html","/api.js":"api.js","/look.js":"look.js","/target.html":"target.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
+        # LiftLab's tokens and components, which the page shares (../css/ beside survey/, as on LiftLab's site).
+        if path in ("/css/tokens.css", "/css/base.css", "/css/components.css"):
+            return self.send((HERE.parent/"css"/path.removeprefix("/css/")).read_bytes(), "text/css")
         if path in ("/gaussian-artifact","/lingbot-artifact"):
             query = parse_qs(url.query)
             with survey.lock:

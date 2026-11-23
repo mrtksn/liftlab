@@ -105,24 +105,28 @@
   $('surveyRetry').onclick = connect;
   $('surveyClose').onclick = () => dlg.close();
 
-  // Send to World: the survey page posts a surface it built ({type: 'liftlab-survey-surface'}) and this page opens it
-  // in the World editor's object import, as a Z-up OBJ, for you to size and save to the object library. Placed copies
-  // of it collide with its triangles (Follows model), as a room's walls should. Only from this page's own frame.
+  // Send to World: the survey page posts what its viewer shows ({type: 'liftlab-survey-scene'}) and this page opens it
+  // in the World editor's object import as one Z-up OBJ, for you to size and save to the object library. Its surfaces
+  // collide (placed copies use Follows model, as a room's walls should); its points and paths are drawn. Only from
+  // this page's own frame.
   addEventListener('message', async e => {
-    if (e.origin !== location.origin || e.source !== frame.contentWindow || e.data?.type !== 'liftlab-survey-surface') return;
+    if (e.origin !== location.origin || e.source !== frame.contentWindow || e.data?.type !== 'liftlab-survey-scene') return;
     const reply = (ok, text) => e.source.postMessage({ type: 'liftlab-survey-reply', id: e.data.id, ok, text }, location.origin);
     try {
-      const room = surveyRoom(e.data);
+      const room = surveyModel(e.data);
       if (fleet.selected && !fleetSelect(null)) throw Error('Finish what the selected drone is doing, then send it again.');
       worldEditSet(true);
       if (!worldEditOn()) throw Error('The World editor can\'t open now (a live drone or another edit is active).');
       dlg.close();
       const file = { name: room.name + '.obj', arrayBuffer: async () => new TextEncoder().encode(room.obj).buffer };
+      const parts = [[room.triangles, 'triangle'], [room.points, 'point'], [room.paths, 'path']].filter(([n]) => n)
+        .map(([n, what]) => n.toLocaleString() + ' ' + what + (n === 1 ? '' : 's'));
       const started = await objectImportStart([file], 'world', {
-        up: 'z', units: room.metres ? 'm' : 'custom', scale: room.scale?.k, worldCollision: 'mesh',
-        say: room.triangles.toLocaleString() + ' triangles from the survey. ' + (room.metres
-          ? 'Measured in metres from the range sensor.' : room.scale ? room.scale.text
-          : 'Relative scale: set the room\'s longest side.') +
+        up: 'z', units: room.metres ? 'm' : 'custom', scale: room.scale?.k, worldCollision: room.triangles ? 'mesh' : 'boxes',
+        say: parts.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' from the survey' +
+          (room.triangles ? '' : ' (no surfaces, so nothing to collide with)') + '. ' +
+          (room.metres ? 'Measured in metres from the range sensor.' : room.scale ? room.scale.text
+            : 'Relative scale: set the room\'s longest side.') +
           (room.levelled ? '' : ' The map isn\'t levelled: level it under Survey leveling, or turn the placed copy.'),
       });
       if (started === false) throw Error('Another import or edit is open in LiftLab.');
@@ -131,20 +135,33 @@
   });
 })();
 
-// A survey surface as an OBJ model: polygons (outer ring and holes, map coordinates already levelled, Z up)
-// triangulated, each triangle facing the nearest walk position, since that's the side the camera saw (and LiftLab
-// draws front faces). Throws on anything malformed.
-function surveyRoom(data) {
+// What the survey viewer showed as one OBJ model, Z up, map coordinates already levelled:
+//   surfaces  polygons (outer ring and holes) triangulated, each triangle facing the nearest walk position, since
+//             that's the side the camera saw (and LiftLab draws front faces);
+//   points    [x, y, z, r, g, b] (0–255) as an OBJ point cloud with vertex colours;
+//   paths     polylines (camera paths), in the accent colour.
+// Throws on anything malformed or too big for a world object.
+function surveyModel(data) {
   const point = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
   const ring = r => Array.isArray(r) && r.length >= 3 && r.length <= 100000 && r.every(point);
-  if (!Array.isArray(data.polygons) || !data.polygons.length || data.polygons.length > 200000)
-    throw Error('The survey sent no surfaces.');
+  const list = (a, max, what) => {
+    if (a === undefined) return [];
+    if (!Array.isArray(a) || a.length > max) throw Error('The survey sent too many ' + what + ' (' + max.toLocaleString() + ' at most).');
+    return a;
+  };
+  const polygons = list(data.polygons, 200000, 'surfaces'), points = list(data.points, 500000, 'points'), paths = list(data.paths, 100, 'paths');
+  if (!polygons.length && !points.length && !paths.length) throw Error('The viewer shows nothing to send.');
   const views = Array.isArray(data.viewpoints) ? data.viewpoints.filter(point).slice(0, 20000) : [];
-  const verts = [], ids = new Map(), faces = [];
+  const out = ['# LiftLab room survey'], colour = c => c.map(v => +v.toFixed(3)).join(' ');
+  let next = 1;
+  const vertex = (p, c) => { out.push('v ' + p.map(v => +v.toFixed(5)).join(' ') + ' ' + colour(c)); return next++; };
+
+  // Surfaces
+  const ids = new Map(), faces = [], grey = [.8, .8, .8], surfaceVerts = [];
   const vid = p => {
     const key = p.map(v => +v.toFixed(5)).join(' ');
     let i = ids.get(key);
-    if (i === undefined) { i = verts.length + 1; ids.set(key, i); verts.push('v ' + key); }
+    if (i === undefined) { i = next + surfaceVerts.length; ids.set(key, i); surfaceVerts.push(p); }
     return i;
   };
   const open = r => r.length > 3 && r[0].every((v, i) => v === r[r.length - 1][i]) ? r.slice(0, -1) : r;
@@ -159,7 +176,7 @@ function surveyRoom(data) {
     }
     faces.push('f ' + vid(a) + ' ' + vid(b) + ' ' + vid(c));
   };
-  for (const poly of data.polygons) {
+  for (const poly of polygons) {
     if (!ring(poly?.outer)) throw Error('The survey sent a malformed surface.');
     const outer = open(poly.outer), holes = (Array.isArray(poly.holes) ? poly.holes : []).filter(ring).map(open);
     if (outer.length === 3 && !holes.length) { face(...outer); continue; }
@@ -175,10 +192,32 @@ function surveyRoom(data) {
     const all = [outer, ...holes].flat();
     for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(flat(outer), holes.map(flat))) face(all[i], all[j], all[k]);
   }
-  if (!faces.length) throw Error('The surfaces have no area.');
   if (faces.length > 100000) throw Error(faces.length.toLocaleString() + ' triangles: a world object takes 100,000 at most. Simplify the surface in the survey first.');
+  if (faces.length) { out.push('o surfaces'); for (const p of surfaceVerts) vertex(p, grey); out.push(...faces); }
+
+  // Points
+  const kept = points.filter(p => Array.isArray(p) && p.length >= 3 && p.slice(0, 3).every(Number.isFinite));
+  if (kept.length) {
+    out.push('o points');
+    const first = next;
+    for (const p of kept) vertex(p.slice(0, 3), [3, 4, 5].map(k => Math.min(1, Math.max(0, (Number.isFinite(p[k]) ? p[k] : 200) / 255))));
+    for (let i = first; i < next; i += 1000) out.push('p ' + Array.from({ length: Math.min(1000, next - i) }, (_, k) => i + k).join(' '));
+  }
+
+  // Paths, as segments (the OBJ reader draws a line's vertices in pairs)
+  const accent = colorOf('--accent').toArray();
+  let pathCount = 0;
+  for (const line of paths) {
+    const pts = Array.isArray(line) ? line.filter(point) : [];
+    if (pts.length < 2 || pts.length > 100000) continue;
+    out.push('o path-' + ++pathCount);
+    const first = next;
+    for (const p of pts) vertex(p, accent);
+    for (let i = first; i + 1 < next; i++) out.push('l ' + i + ' ' + (i + 1));
+  }
+  if (!faces.length && !kept.length && !pathCount) throw Error('The surfaces have no area.');
   const name = (typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Room survey').replace(/[^\w .·()-]+/g, ' ').slice(0, 60);
-  return { name, obj: '# LiftLab room survey\n' + verts.join('\n') + '\n' + faces.join('\n') + '\n', triangles: faces.length,
+  return { name, obj: out.join('\n') + '\n', triangles: faces.length, points: kept.length, paths: pathCount,
     metres: data.units === 'm', levelled: !!data.levelled, scale: data.units === 'm' ? null : surveyScale(data.scale) };
 }
 

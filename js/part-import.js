@@ -58,8 +58,9 @@ function partSolidifyDraft(c, base) {
   const levels = Object.keys(WORLD_OBJ_DETAIL); let level = levels.indexOf(c.model.detail), result;
   do { result = voxelBoxes(Float32Array.from(tri), WORLD_OBJ_DETAIL[levels[level]].cells); if (result.boxes.length <= WORLD_OBJ_MAX_BOXES) break; } while (level-- > 0);
   disposeGroup(group);
-  if (!result.boxes.length) throw new Error('The model has no solid surfaces');
-  c.model.triangles=tri; validateCollisionGeometry(c.model.collision,tri);
+  // A drone part needs a solid for its mass; a world object may be only points or lines to look at (a survey's).
+  if (!result.boxes.length && partImport.context !== 'world') throw new Error('The model has no solid surfaces');
+  c.model.triangles=tri.length?tri:undefined; validateCollisionGeometry(c.model.collision,tri.length?tri:null);
   c.model.detail = levels[Math.max(0, level)]; c.model.boxes = result.boxes.map(b => [...b.lo, ...b.hi]);
   c.size = c.model.rawSize.map(v => Math.max(.0001, v * c.model.scale));
 }

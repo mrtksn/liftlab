@@ -41,6 +41,14 @@ async function parseModel(rec) {
   if (ext === 'obj') {
     const g = new THREE.OBJLoader().parse(new TextDecoder().decode(main.data));
     g.traverse(o => { if (o.isMesh) { o.material = worldObjMats.plain; if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals(); } });   // (its .mtl isn't read)
+    // Points and lines: the reader caches materials by name only, so in a file that also has faces they get the faces'
+    // mesh material, and it draws points 1 px wide. Give them their own, keeping their vertex colours.
+    g.traverse(o => {
+      const colours = !!o.geometry?.attributes.color;
+      if (o.isPoints && !o.material.isPointsMaterial) o.material = new THREE.PointsMaterial({ size: 3, sizeAttenuation: false, vertexColors: colours });
+      else if (o.isPoints) o.material.size = Math.max(o.material.size, 3);
+      if (o.isLine && !o.material.isLineBasicMaterial) o.material = new THREE.LineBasicMaterial({ vertexColors: colours });
+    });
     return g;
   }
   const urls = [], byName = new Map(rec.files.filter(f => f !== main).map(f => [f.name.split('/').pop(), f]));
@@ -144,8 +152,8 @@ function worldObjSolidify(o) {
   for (; ; k--) { r = voxelBoxes(tri, WORLD_OBJ_DETAIL[keys[k]].cells); if (r.boxes.length <= WORLD_OBJ_MAX_BOXES || k === 0) break; }
   o.coarsened = keys[k] !== o.detail ? keys[k] : null;
   o.boxes = r.boxes; o.h = r.h;
-  o.triangles = Array.from(tri);
-  validateCollisionGeometry(o.collision, o.triangles);
+  o.triangles = tri.length ? Array.from(tri) : undefined;   // (none: a model of only points or lines, nothing to collide with)
+  validateCollisionGeometry(o.collision, o.triangles ?? null);
   worldObjectsChanged();
 }
 

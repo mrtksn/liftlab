@@ -177,7 +177,7 @@ function recordDisplay(host,data,config={},save=()=>{}){
     [xmin,xmax]=bounds('x',xmin,xmax);[ymin,ymax]=bounds('y',ymin,ymax);
     if(xmin>xmax||ymin>ymax){content.textContent='Each axis minimum must be below its maximum.';return;}
     const ctx=plot.getContext('2d');ctx.save();ctx.beginPath();ctx.rect(64,10,728,125);ctx.clip();
-    ctx.strokeStyle=ctx.fillStyle='#a5efd1';ctx.lineWidth=2;ctx.beginPath();
+    ctx.strokeStyle=ctx.fillStyle=tone('--accent');ctx.lineWidth=2;ctx.beginPath();
     let connected=false;
     for(const [a,b] of xy){
       if(!Number.isFinite(a)||!Number.isFinite(b)){connected=false;continue;}
@@ -185,7 +185,7 @@ function recordDisplay(host,data,config={},save=()=>{}){
       if(mode==='scatter'){ctx.fillRect(px-1,py-1,2,2);continue;}
       if(connected)ctx.lineTo(px,py);else ctx.moveTo(px,py);connected=true;
     }
-    ctx.stroke();ctx.restore();ctx.fillStyle='#bdd1d2';ctx.font='14px monospace';
+    ctx.stroke();ctx.restore();ctx.fillStyle=tone('--ink-2');ctx.font='14px '+tone('--f-mono');
     ctx.fillText(ymax.toPrecision(4),2,14);ctx.fillText(ymin.toPrecision(4),2,136);
     ctx.fillText(xmin.toPrecision(4),64,157);ctx.textAlign='right';ctx.fillText(xmax.toPrecision(4),792,157);
   }

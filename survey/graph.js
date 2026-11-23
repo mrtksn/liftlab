@@ -377,7 +377,7 @@ function renderOutputs(node){
       const output=results.get(node.id)?.outputs?.[p.name];
       if(!output){body.textContent=results.get(node.id)?.error||'Run to node to produce this output.';return;}
       body.textContent='Reading…';
-      try{showValue(body,await materialize(output,p.types[0]),p.types[0],output,nodeLabel(node));}catch(e){body.textContent=e.message;}
+      try{showValue(body,await materialize(output,p.types[0]),p.types[0],output);}catch(e){body.textContent=e.message;}
     };
     host.append(box);
   }
@@ -674,7 +674,7 @@ async function showScene(node,built){
     if(!output)continue;
     if(isTableType(type)||isImageType(type)){feeds.push({...b,type,output});continue;}
     panels.push({type,panel:catalog.types[type]?.panel,output,node:nodeById(b.node)});
-    try{const layer=await layerFor(output,type);if(layer)layers.push({...layer,type,source:b.node});}
+    try{const layer=await layerFor(output,type);if(layer)layers.push({...layer,type,source:b.node,output});}
     catch(e){feeds.push({...b,type,error:e.message});}
   }
   for(const g of built.geometry)layers.push({...g,type:'Plot',source:node.id});
@@ -684,7 +684,7 @@ async function showScene(node,built){
   $('viewerOutput').textContent=[...new Set([...layers,...feeds].map(l=>l.type)),...(built.replayViews.length?['Frame comparison']:[])].join(' + ')||'Nothing connected';
   $('viewerFrames').dataset.key='';
   $('surfaceTimeControl').hidden=!layers.some(l=>l.mesh?.patches?.some(p=>p.first!=null));
-  showTypePanels(panels);refreshDisplayedPath();fitMapView();draw();
+  showTypePanels(panels);refreshDisplayedPath();fitMapView();draw();updateSendWorld();
 }
 async function refreshViewer(){
   const view=viewerNode();
@@ -785,7 +785,7 @@ function mountReplayFrames(host,view){
   };
 }
 // Inspect any value by its type.
-function showValue(body,value,type,output={},label=''){
+function showValue(body,value,type,output={}){
   body.replaceChildren();
   const text=s=>{const p=document.createElement('pre');p.textContent=s;body.append(p);return p;};
   const rows=(label,count,get,initial=0)=>{
@@ -833,7 +833,6 @@ function showValue(body,value,type,output={},label=''){
   if(Array.isArray(value)){
     rows({points:'Point',polygons:'Face',triangles:'Triangle',path:'Pose'}[kind]||'Record',value.length,i=>value[i]);
     if(kind==='points')plot(value);
-    if(kind==='polygons'||kind==='triangles')sendToWorld(body,value,output,label);
     if(output.summary)text(JSON.stringify(output.summary,null,2));
     return;
   }
@@ -845,32 +844,56 @@ function consoleLine([label,...values]){
 }
 
 // Send to World ---------------------------------------------------------------------------------
-// Inside LiftLab (its Room Survey dialog, which shares this page's origin), a surface output becomes a model in
-// LiftLab's World editor. It goes as this view shows it: the map's levelling plus any Survey leveling correction,
-// Z up, with the walk's camera positions so LiftLab can face each triangle toward the side the camera saw. A map
-// without a scale sends the output's own estimate when it has one (output.scale, e.g. the Gaussian mesh's ToF check).
+// Inside LiftLab (its Room Survey dialog, which shares this page's origin), the viewer's button sends what the viewer
+// shows to LiftLab's World editor as one model: surfaces (meshes, polygons, triangles), points (landmarks, depth
+// points, splat centres, with their colours) and paths (camera paths). It goes as the view shows it: the map's
+// levelling plus any Survey leveling correction, Z up, with the walk's camera positions so LiftLab can face each
+// triangle toward the side the camera saw. A map without a scale sends an output's own estimate when one has it
+// (output.scale, e.g. the Gaussian mesh's ToF check).
 function liftlabWindow(){try{return parent!==window&&parent.location.origin===location.origin?parent:null;}catch{return null;}}
-function sendToWorld(body,value,output,label){
-  const row=document.createElement('div'),say=document.createElement('small'),host=liftlabWindow();
-  row.className='controls';say.setAttribute('role','status');row.append(say);body.append(row);
-  if(!host){say.textContent='Open this survey from LiftLab (World → Room survey → Room Survey…) to send this surface to the World.';return;}
-  const button=document.createElement('button');button.type='button';button.textContent='Send to World';row.prepend(button);
-  button.onclick=()=>{
-    const level=v=>correction.map(r=>r[0]*v[0]+r[1]*v[1]+r[2]*v[2]);
-    const corrected=correction.some((r,i)=>r.some((v,j)=>Math.abs(v-(i===j?1:0))>1e-9));
-    const id=String(Date.now())+Math.random();
-    const reply=({source,data})=>{
-      if(source!==host||data?.type!=='liftlab-survey-reply'||data.id!==id)return;
-      removeEventListener('message',reply);say.textContent=data.text;button.disabled=false;
-    };
-    addEventListener('message',reply);button.disabled=true;say.textContent='Sending to LiftLab…';
-    host.postMessage({type:'liftlab-survey-surface',id,name:[label,state?.run].filter(Boolean).join(' · '),
-      units:output.units||model?.units||'relative',levelled:!!model?.gravity_aligned||corrected,
-      scale:(output.units||model?.units)==='m'?null:output.scale||null,
-      polygons:value.map(p=>Array.isArray(p)?{outer:p.map(level)}:{outer:p.vertices.map(level),holes:(p.holes||[]).map(h=>h.map(level))}),
-      viewpoints:(model?.poses||[]).filter(p=>Array.isArray(p.xyz)).map(p=>level(p.xyz))},location.origin);
-  };
+function viewerScenePayload(){
+  const level=v=>correction.map(r=>r[0]*v[0]+r[1]*v[1]+r[2]*v[2]);
+  const corrected=correction.some((r,i)=>r.some((v,j)=>Math.abs(v-(i===j?1:0))>1e-9));
+  const polygons=[],points=[],paths=[],viewpoints=[];let scale=null;
+  const path=poses=>{const line=poses.filter(p=>Array.isArray(p?.xyz)).map(p=>level(p.xyz));if(line.length>1)paths.push(line);viewpoints.push(...line);};
+  for(const l of scene.layers){
+    if(l.output?.scale&&!scale)scale=l.output.scale;
+    for(const p of l.mesh?.patches||[]){
+      const ring=Array.isArray(p.vertices?.vertices)?p.vertices.vertices:p.vertices;
+      if(Array.isArray(ring))polygons.push({outer:ring.map(level),holes:(p.holes||[]).map(h=>h.map(level))});
+    }
+    if(l.solid)for(let i=0;i+2<l.solid.indices.length;i+=3)polygons.push({outer:[0,1,2].map(k=>level(l.solid.vertices[l.solid.indices[i+k]]))});
+    for(const p of l.points||[])points.push([...level(p),p[3]??200,p[4]??200,p[5]??200]);
+    if(l.splats){
+      const a=l.splats.attributes,n=l.splats.order.length;
+      for(let i=0;i<n;i++){const o=16*i;if(a[o+3]>=.1)points.push([...level([a[o],a[o+1],a[o+2]]),...[4,5,6].map(k=>Math.round(255*Math.min(1,Math.max(0,a[o+k]))))]);}
+    }
+    if(l.poses)path(l.poses);else if(l.line)path(l.line.map(xyz=>({xyz})));
+  }
+  if(!viewpoints.length)viewpoints.push(...(model?.poses||[]).filter(p=>Array.isArray(p.xyz)).map(p=>level(p.xyz)));
+  const units=model?.units||'relative';
+  const shown=[...new Set(scene.layers.map(l=>l.type==='Plot'?$('viewerName').textContent:nodeLabel(nodeById(l.source))))].join(' + ');
+  return {name:[shown,state?.run].filter(Boolean).join(' · '),units,levelled:!!model?.gravity_aligned||corrected,
+    scale:units==='m'?null:scale,polygons,points,paths,viewpoints};
 }
+function updateSendWorld(){
+  const button=$('sendWorld'),host=liftlabWindow();
+  button.hidden=!host;
+  button.disabled=!scene.layers.some(l=>l.mesh?.patches?.length||l.solid||l.points?.length||l.splats||l.line?.length||l.poses?.length);
+  button.title=button.disabled?'Connect something spatial to the viewer: surfaces, points, splats or a path.':'Send what the viewer shows to LiftLab’s World editor';
+}
+$('sendWorld').onclick=()=>{
+  const host=liftlabWindow(),say=$('sendWorldSay'),button=$('sendWorld');
+  if(!host)return;
+  const id=String(Date.now())+Math.random();
+  const reply=({source,data})=>{
+    if(source!==host||data?.type!=='liftlab-survey-reply'||data.id!==id)return;
+    removeEventListener('message',reply);say.textContent=data.text;button.disabled=false;
+  };
+  addEventListener('message',reply);button.disabled=true;say.hidden=false;say.textContent='Sending to LiftLab…';
+  host.postMessage({type:'liftlab-survey-scene',id,...viewerScenePayload()},location.origin);
+};
+updateSendWorld();
 
 // Presets ---------------------------------------------------------------------------------------
 let presetList=[];
