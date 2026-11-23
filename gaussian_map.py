@@ -19,8 +19,9 @@ K = np.array([[FOCAL, 0, (WIDTH-1)/2], [0, FOCAL, (HEIGHT-1)/2], [0, 0, 1.]])
 BRUSH_CACHE = Path.home() / 'Library/Caches/RoomSurvey/brush-v0.3.0/brush_app'
 
 
-def artifact_dir(run, index):
-    return run / ('gaussian-v1-' + index_path(run,index).stem)
+def artifact_dir(run, index, variant=''):
+    """Splats trained with non-default settings live beside the default ones."""
+    return run / ('gaussian-v1-' + index_path(run,index).stem + (f'-{variant}' if variant else ''))
 
 
 def rectified_frames(run, model, frames):

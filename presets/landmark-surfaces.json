@@ -1,0 +1,87 @@
+{
+ "name": "Landmark surfaces",
+ "description": "Surfaces grown from the camera map's landmarks. Pick the method and distance here.",
+ "controls": [
+  {
+   "key": "method",
+   "label": "Surface method",
+   "kind": "choice",
+   "options_from": {
+    "op": "landmark-surfaces",
+    "param": "method"
+   }
+  },
+  {
+   "key": "distance",
+   "label": "Distance",
+   "unit": "cm",
+   "kind": "number",
+   "default": 20,
+   "min": 0.1,
+   "max": 1000
+  },
+  {
+   "key": "build",
+   "label": "Surfaces",
+   "kind": "button",
+   "button": "Build surfaces",
+   "run": "surfaces"
+  }
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "surfaces",
+    "op": "landmark-surfaces",
+    "inputs": {
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    },
+    "settings": {
+     "method": {
+      "var": "method"
+     },
+     "distance_cm": {
+      "var": "distance"
+     }
+    }
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "map",
+      "port": "map"
+     },
+     {
+      "node": "surfaces",
+      "port": "mesh"
+     }
+    ]
+   }
+  ],
+  "selected": "surfaces",
+  "viewer": "view"
+ }
+}

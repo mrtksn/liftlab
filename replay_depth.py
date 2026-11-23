@@ -17,6 +17,8 @@ CACHE = Path.home()/'Library/Caches/RoomSurvey'
 LABELS = {'anything':'Depth Anything V2', 'apple':'Apple Depth Pro 2',
           'lingbot':'LingBot-Map', 'gaussian':'Gaussian'}
 METHODS = tuple(LABELS)
+# Units of the saved depth values; 'map' means the camera map's own units.
+UNITS = {'anything': 'relative inverse depth', 'apple': 'm', 'lingbot': 'relative depth', 'gaussian': 'map'}
 
 
 def output(run, index, method):

@@ -4,8 +4,12 @@ from pathlib import Path
 
 import numpy as np
 
+from node_params import pairing_ns, sensor_settings, tof_metres
+
 
 STREAMS = ("camera", "tof", "gyro", "accel", "barometer")
+STREAM_LABELS = {"camera": "Camera", "tof": "ToF", "gyro": "Gyroscope", "accel": "Accelerometer",
+                 "barometer": "Barometer"}
 
 
 def gyro_attitudes(motion, times):
@@ -35,7 +39,9 @@ def gyro_attitudes(motion, times):
     return result
 
 
-def load_observations(run, streams=STREAMS):
+def load_observations(run, streams=STREAMS, sensors=None):
+    sensors = sensors or sensor_settings(run)
+    window = pairing_ns(sensors)*1e-9
     def rows(name):
         path = Path(run) / name
         if path.exists():
@@ -49,15 +55,15 @@ def load_observations(run, streams=STREAMS):
     for row in rows("timestamps.csv"):
         obs = data[row["frame"]] = {}
         if "tof" in streams and row.get("tof_raw"):
-            raw = int(row["tof_raw"])
-            if 0 < raw < 250:
-                obs["range"] = raw / 104.0  # wall checks: 52 counts at 0.50 m and 104 at 1.00 m
+            metres = tof_metres(row["tof_raw"], sensors)
+            if metres is not None:
+                obs["range"] = metres
         if not times.size or not row.get("pi_encoder_callback_ns"):
             continue
         t = float(row["pi_encoder_callback_ns"]) * 1e-9
         j = int(times.searchsorted(t))
         k = min((i for i in (j-1, j) if 0 <= i < len(times)), key=lambda i: abs(times[i]-t))
-        if abs(times[k]-t) > .08:
+        if abs(times[k]-t) > window:
             continue
         r = motion[k]
         if "gyro" in streams and "accel" in streams:
@@ -253,7 +259,7 @@ def _errors_deg(rotations, ups, up, mount):
     return np.degrees(np.arccos(np.clip(np.sum(predicted*ups, axis=1), -1, 1)))
 
 
-def up_alignment(rotations, ups):
+def up_alignment(rotations, ups, max_uncertainty=10):
     """Up direction of the visual world from IMU up vectors.
 
     rotations are world_from_camera for views with an up vector measured in
@@ -282,7 +288,7 @@ def up_alignment(rotations, ups):
     test = np.arange(len(rotations)) % 3 == 0
     train_up, train_mount, _ = _fit_up(rotations[~test], ups[~test], grid)
     holdout = float(np.percentile(_errors_deg(rotations[test], ups[test], train_up, train_mount), 80))
-    if uncertainty > 10 or holdout > 6:
+    if uncertainty > max_uncertainty or holdout > 6:
         return None
     camera_up = mount.T @ ups.mean(axis=0)
     camera_up /= np.linalg.norm(camera_up)

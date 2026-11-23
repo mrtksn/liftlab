@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 
 METHOD = "cloud-planes-v1"
+LABEL = "Cloud planes"
+DISTANCE_LABEL = "Maximum landmark gap"
 MIN_SUPPORT = 16
 
 

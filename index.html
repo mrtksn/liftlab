@@ -15,32 +15,29 @@
 <p id="gapEvidence" class="muted" role="status" hidden></p>
 
 </section>
+<section class="replay frames-section"><details id="framesStep"><summary>Frames <small id="sourceSummary"></small></summary><div class="controls map-controls"></div><div id="frameStage"><section id="cameraPanel"><div class="panelhead"><h2 id="cameraTitle">Camera</h2><span id="rate">OV5647 · 640 × 480</span></div><div id="frameControls" class="map-controls" hidden><label hidden><span id="leftSourceLabel">Preview</span> <select id="frameMethod"><option value="photo">Recorded photo</option><option value="anything">Depth Anything V2</option><option value="apple">Apple Depth Pro 2</option><option value="lingbot">LingBot-Map depth</option><option value="gaussian">Gaussian rendered depth</option></select></label> <label><input type="checkbox" id="compareFrames"> Compare</label> <label id="rightChoice" hidden>Right <select id="rightSource"></select></label> <button id="buildFrameDepth" type="button" hidden>Generate all frames</button><small id="frameDepthStatus"></small><small id="depthTiming"></small><details id="profilePanel"><summary>Processing times</summary><div id="timingTable"></div></details></div><div class="imagebox"><div id="comparisonRight" hidden><img id="rightPhoto" alt="Right comparison frame"><span id="rightMissing" hidden>Right frame unavailable</span></div><input type="range" id="wipe" min="0" max="100" value="50" aria-label="Comparison divider" hidden><span id="wipeLine" hidden aria-hidden="true"></span><span id="depthMissing" hidden>Depth unavailable for this frame</span><img id="replayImage" alt="Recorded camera frame" hidden><img id="preview" alt="Live fisheye camera preview" hidden><span id="cameraempty">Waiting for the Pi camera</span></div></section>
+</div></details></section>
 <section id="pipeline" class="replay">
-<div class="controls replayhead"><h2>Processing pipeline</h2><label>Preset <select id="pipelinePreset"></select></label><input id="presetName" aria-label="Preset name" placeholder="Preset name" maxlength="64"><button id="savePreset">Save preset</button><button id="runPipeline" class="primary" disabled>Run to node</button><small id="pipelineProgress" role="status"></small><small id="presetStatus" role="status"></small></div>
+<div class="controls replayhead"><h2>Processing pipeline</h2><label>Preset <select id="pipelinePreset"></select></label><input id="presetName" aria-label="Preset name" placeholder="Preset name" maxlength="64"><button id="savePreset">Save preset</button><button id="deletePreset" hidden>Delete preset</button><button id="runPipeline" class="primary" disabled>Run to node</button><small id="pipelineProgress" role="status"></small><small id="presetStatus"></small></div>
+<p id="presetDescription" class="muted"></p>
+<div id="presetControls" class="node-settings" hidden></div>
 <div class="node-scroll" tabindex="0" aria-label="Processing graph"><div id="nodeBoard"><svg id="nodeWires" aria-hidden="true"></svg><div id="nodeCards"></div></div></div>
-<div id="nodeInspector" class="controls"><strong id="nodeTitle"></strong><label id="appendLabel">Connect <select id="nodeType"></select></label><button id="addNode">Add node</button><button id="undoGraph" disabled>Undo</button><button id="removeNode">Remove node</button></div>
-<details id="codePanel"><summary id="codeSummary">Node code</summary>
-<div class="controls" id="codeControls"><label>Name <input id="codeTitle" maxlength="64"></label><label>Input type <select id="codeIn"></select></label><label>Output type <select id="codeOut"></select></label></div>
-<div class="controls" id="extraInputs" hidden></div><label><input type="checkbox" id="bindReplay"> Pass walk replay cursor to this node</label> <small id="codeCursor"></small><pre id="codeSchema"></pre><textarea id="nodeProgram" rows="9" spellcheck="false" aria-label="Node JavaScript"></textarea>
-<div class="controls"><small>Run the draft or select an expression to inspect. Use console.log() for local variables.</small><button id="codeRun" type="button">Run code</button><button id="codeApply" type="button">Apply code</button><span role="status" id="codeMessage"></span></div><div id="codeConsole" aria-live="polite" style="white-space:pre-wrap;max-height:24em;overflow:auto" hidden></div></details><details id="runTrace" hidden><summary>Last run · steps and data flow</summary><pre id="runTraceData"></pre></details><div id="viewerInputs" class="controls" hidden></div><div class="node-ports"><section><h3>Inputs</h3><div id="portInputs"></div></section><section><h3>Outputs</h3><div id="portOutputs"></div></section></div><details class="stage" id="framesStep"><summary>Frames <small id="sourceSummary"></small></summary><div class="controls map-controls"><label id="nodeDepthChoice">Depth method <select id="nodeDepthMethod"></select></label><select id="geometrySource" hidden aria-label="Active geometry source"></select></div><div id="frameStage"><section id="cameraPanel"><div class="panelhead"><h2 id="cameraTitle">Camera</h2><span id="rate">OV5647 · 640 × 480</span></div><div id="frameControls" class="map-controls" hidden><label hidden><span id="leftSourceLabel">Preview</span> <select id="frameMethod"><option value="photo">Recorded photo</option><option value="anything">Depth Anything V2</option><option value="apple">Apple Depth Pro 2</option><option value="lingbot">LingBot-Map depth</option><option value="gaussian">Gaussian rendered depth</option></select></label> <label><input type="checkbox" id="compareFrames"> Compare</label> <label id="rightChoice" hidden>Right <select id="rightSource"></select></label> <button id="buildFrameDepth" type="button" hidden>Generate all frames</button><small id="frameDepthStatus"></small><small id="depthTiming"></small><details id="profilePanel"><summary>Processing times</summary><div id="timingTable"></div></details></div><div class="imagebox"><div id="comparisonRight" hidden><img id="rightPhoto" alt="Right comparison frame"><span id="rightMissing" hidden>Right frame unavailable</span></div><input type="range" id="wipe" min="0" max="100" value="50" aria-label="Comparison divider" hidden><span id="wipeLine" hidden aria-hidden="true"></span><span id="depthMissing" hidden>Depth unavailable for this frame</span><img id="replayImage" alt="Recorded camera frame" hidden><img id="preview" alt="Live fisheye camera preview" hidden><span id="cameraempty">Waiting for the Pi camera</span></div></section>
-</div></details>
-<details id="poseStep" class="stage"><summary>Camera path and sensors</summary><section id="reconstructionInputs" class="replay" hidden>
-<div class="controls replayhead"><h2>Camera map inputs</h2><button id="rebuild">Rebuild with selection</button></div>
-<div id="inputStreams" class="controls" role="group" aria-label="Streams used for reconstruction"></div>
-<p id="streamSummary" class="muted"></p>
-
-</section>
-<div class="controls map-controls"><label id="pipelinePathLabel" hidden>Camera path <select id="pipelinePath"><option value="saved">Saved photo path</option><option value="regenerated">Regenerated depth path</option></select></label><button id="regeneratePath" type="button">Regenerate path</button><button id="previousPhotoMap" type="button" hidden>Switch to previous photo map</button><label id="pathChoice" hidden><input type="checkbox" id="useDepthPath" checked> Use regenerated path</label></div></details>
-<details id="geometryStep" class="stage" open><summary>Geometry <small id="geometrySummary"></small></summary><div id="depthStages" class="controls map-controls" hidden><label id="depthTrainingChoice" hidden><input id="depthTraining" type="checkbox"> Train depth correction before fitting points</label><label>Output <select id="depthOutput"><option value="points">Depth points</option><option value="splats">Depth-fitted splats</option><option value="mesh">Surface mesh</option></select></label></div><div id="surfaceSettings" class="controls map-controls" hidden><label for="surfaceMethod" id="methodTitle">Reconstruction method</label>
-  <select id="surfaceMethod"><option value="camera-ray-seeds-v1">Seed growth</option><option value="first-return-cloth-v1">Ray cloth</option><option value="cloud-planes-v1">Cloud planes</option><option value="depth-anything-v2-v1">AI depth planes</option><option value="lingbot-map">LingBot-Map (Apple Metal)</option><option value="gaussian-map">Gaussian mapping</option></select>
-</div><details id="methodConfig" hidden><summary>Method settings</summary><div class="controls map-controls">
-  <label id="surfaceSpanLabel" for="surfaceEdge">Growth distance (cm)</label>
-  <input id="surfaceEdge" type="number" min="0" step="any" value="20" required>
-  <button id="rebuildSurfaces" type="button">Rebuild surfaces</button>
-</div><div id="lingbotPanel" class="map-controls" hidden><span id="lingbotStatus" role="status"></span>
-<button id="buildLingbot" type="button" hidden>Build on Apple Metal</button> <a id="lingbotCloud" download="cloud.ply" hidden>Download point cloud</a></div><div id="gaussianPanel" class="map-controls" hidden>
-  <div class="controls"><label>Display <select id="gaussianMode"><option value="gaussians.ply">Gaussian splats</option><option value="mesh">Surface mesh</option><option value="overlay">Splats + mesh overlay</option><option value="cloud.ply">Dense point cloud</option></select></label>
-  <button id="trainGaussian" type="button" hidden>Build Gaussian map</button><button id="buildGaussianMesh" type="button" hidden>Extract mesh</button><a id="gaussianDownload" hidden>Download PLY</a></div>
+<div id="nodeInspector" class="controls"><strong id="nodeTitle"></strong><small id="nodeOp" class="muted"></small><label id="appendLabel">Add after this <select id="nodeType"></select></label><button id="addNode">Add node</button><button id="undoGraph" disabled>Undo</button><button id="removeNode">Remove node</button></div>
+<p id="nodeDescription" class="muted"></p>
+<div id="nodeWiring" class="node-settings"></div>
+<div id="nodeSettings" class="node-settings" hidden></div>
+<details id="codePanel"><summary>Node code</summary>
+<div class="controls" id="codeControls"><label>Name <input id="codeTitle" maxlength="64"></label><label>Output type <select id="codeOut"></select></label></div>
+<label><input type="checkbox" id="bindReplay"> Pass walk replay cursor to this node</label> <small id="codeCursor"></small><pre id="codeSchema"></pre><textarea id="nodeProgram" rows="9" spellcheck="false" aria-label="Node JavaScript"></textarea>
+<div class="controls"><small>Run the draft, or select an expression to inspect it. Use console.log() for local variables.</small><button id="codeRun" type="button">Run code</button><button id="codeApply" type="button">Apply code</button><span role="status" id="codeMessage"></span></div><div id="codeConsole" aria-live="polite" style="white-space:pre-wrap;max-height:24em;overflow:auto" hidden></div></details>
+<details id="controlsPanel"><summary>Controls as JSON</summary><p class="muted">This node's controls override the operator's by key (label, default, min, max, options, help, hidden); code and viewer nodes can add their own. Preset controls are shared variables: bind a node setting to one with {"var": "key"}, or use a control of kind "button" with "run": node id.</p>
+<label>This node <textarea id="controlsJson" rows="6" spellcheck="false"></textarea></label><label>Preset <textarea id="presetControlsJson" rows="6" spellcheck="false"></textarea></label>
+<div class="controls"><button id="applyControls" type="button">Apply controls</button><small id="controlsMessage" role="status"></small></div></details>
+<div id="nodeOutputs"></div>
+<details id="runTrace" hidden><summary>Last run</summary><pre id="runTraceData"></pre></details>
+<div id="typePanels" class="map-controls" hidden><div id="gaussianPanel" class="map-controls" hidden>
+  <div class="controls">
+  <a id="gaussianDownload" hidden>Download PLY</a></div>
   <p id="gaussianStatus" class="muted" role="status"></p>
   <label><input type="checkbox" id="tofEvidenceToggle"> Show ToF evidence</label>
   <div id="tofEvidencePanel" hidden>
@@ -52,9 +49,14 @@
     </div>
     <small id="tofRayDetail"></small>
   </div>
-  <details id="clearancePanel"><summary>Walk clearance</summary>
+  
+  <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
+    <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
+    <figure><img width="192" id="gaussianRender" alt="Gaussian rendering"><figcaption>Rendered</figcaption></figure></div>
+  </details>
+</div><details id="clearancePanel"><summary>Walk clearance</summary>
     <p id="clearanceStatus" class="muted" role="status"></p>
-    <button type="button" id="buildClearance" hidden>Build clearance map</button>
+    
     <div id="clearanceControls" hidden>
       <div class="controls">
         <label>Body radius (cm) <input type="number" min="1" max="200" step="any" value="15" id="bodyRadius"></label>
@@ -66,26 +68,13 @@
       <div id="clearanceTrack"><canvas id="clearancePlot" aria-hidden="true"></canvas><input type="range" min="0" step="1" value="0" id="clearanceSeek"></div>
       <div id="clearanceCounts" class="controls"></div><p id="clearanceReading"></p>
     </div>
-  </details>
-  <details id="gaussianEval" hidden><summary>Compare withheld images</summary><label>Frame <select id="gaussianTestFrame"></select></label>
-    <div class="controls"><figure><img width="192" id="gaussianPhoto" alt="Rectified recording"><figcaption>Recorded</figcaption></figure>
-    <figure><img width="192" id="gaussianRender" alt="Gaussian rendering"><figcaption>Rendered</figcaption></figure></div>
-  </details>
-</div><div id="depthPanel" class="map-controls" hidden>
-  <div class="controls"><span id="depthProgress" role="status"></span><button id="cancelDepth" type="button" hidden>Cancel depth inference</button></div>
-  <figure id="depthPreview" hidden style="margin:8px 0"><img id="depthPhoto" alt="Rectified recorded frame" width="144"><canvas id="depthImage" width="96" height="72" style="width:144px;vertical-align:baseline" aria-label="Predicted relative depth"></canvas><figcaption id="depthCaption"></figcaption></figure>
-</div><p id="surfaceInfo" class="muted surface-info" hidden></p></details><div class="map-controls" id="geometryReport" hidden role="status"></div><div id="depthSurfaceControls" class="map-controls" hidden>
-<div class="controls"><label>Surface method <select id="depthSurfaceMethod"></select></label>
-<span id="balloonControls" hidden><label>Mesh detail <input id="balloonDetail" type="number" min="0.001" step="any" value="8" style="width:5em"></label>
-<label>Inflation limit <input id="balloonReach" type="number" min="0.001" step="any" value="200" style="width:5em"></label> <span id="balloonUnits"></span></span>
-<label><input type="checkbox" id="depthSurfaceTof"> Include ToF returns</label>
-<button id="buildDepthSurfaces" type="button">Generate surfaces</button></div>
-<div class="controls" id="balloonCutControl" hidden><label>Cut from top <input type="range" id="balloonCut" min="0" max="95" value="40" aria-valuetext="40 percent of balloon height"></label> <output id="balloonCutValue" for="balloonCut">40%</output></div>
-<small id="depthSurfaceStatus" role="status"></small></div></details></section>
+  </details><div id="lingbotPanel" class="map-controls" hidden><span id="lingbotStatus" role="status"></span>
+ <a id="lingbotCloud" download="cloud.ply" hidden>Download point cloud</a></div><div class="controls" id="balloonCutControl" hidden><label>Cut from top <input type="range" id="balloonCut" min="0" max="95" value="40" aria-valuetext="40 percent of balloon height"></label> <output id="balloonCutValue" for="balloonCut">40%</output></div></div>
+</section>
 <div id="views" class="views"><section id="mapPanel"><div class="panelhead"><h2 id="viewerName">Reconstruction</h2><small id="viewerOutput" role="status"></small><div class="controls"><span id="units">Relative scale</span><button type="button" id="enlarge" aria-controls="views" aria-expanded="false">Enlarge</button></div></div><div id="viewerFrames" hidden></div><div id="mapViewport" class="mapbox"><iframe id="lingbotView" title="LingBot-Map reconstruction" style="position:absolute;inset:0;width:100%;height:100%;border:0;background:#10191b;z-index:1" hidden></iframe><div id="viewNav" aria-label="Reconstruction view controls" role="group" hidden>
 <svg id="axisGizmo" viewBox="0 0 84 84" aria-label="Snap view to a world axis"></svg>
 <div class="view-buttons"><button id="persp" title="Perspective projection">Persp</button><button id="ortho" title="Orthographic projection">Ortho</button><button id="top">Top</button><button id="front">Front</button><button id="side">Side</button><button id="iso">Iso</button></div></div><svg id="levelRings" viewBox="-100 -100 200 200" aria-label="Map orientation rotation rings" hidden></svg><div id="levelTools" hidden><span>Rotate map</span><button id="levelUndo" type="button">Reset correction</button><button id="levelDone" type="button">Done</button></div><canvas id="map" aria-label="Orbitable 3D landmarks and camera trajectory"></canvas><button type="button" id="recenterDrone" hidden>Re-center</button><span id="droneStatus" hidden></span><span id="mapempty">Landmarks appear after overlapping views register.</span></div><div class="legend"><span class="path-key"><i></i>Mapped path</span> <span class="points-key"><i></i>Points</span> <span id="vertexKey" hidden>Surface vertices</span> <span class="route-key interpolated" id="legend-interpolated" hidden>Interpolated</span>
-<span class="route-key extrapolated" id="legend-extrapolated" hidden>Extrapolated</span> <span id="mapHelp">Drag to orbit · ⌘ or ⌥ + drag to pan · scroll to zoom</span></div><div class="controls map-controls"><label><input type="checkbox" id="surfaceLayer" disabled> Surfaces</label><label id="surfaceTimeControl" hidden><input type="checkbox" id="surfaceTime"> Follow replay</label><label><input type="checkbox" id="cloud" checked> <span id="cloudLabel">Landmarks</span></label><label><input type="checkbox" id="splatLayer"> Splats</label><button id="trainLayer" type="button" hidden>Train photo splats</button><small id="splatLayerStatus" role="status"></small><label><input type="checkbox" id="route" checked> Path</label><button id="editLevel" type="button" aria-pressed="false">Correct orientation</button><button id="droneView" type="button" aria-pressed="false" disabled>Drone view</button><span id="coverage"></span></div></section></div>
+<span class="route-key extrapolated" id="legend-extrapolated" hidden>Extrapolated</span> <span id="mapHelp">Drag to orbit · ⌘ or ⌥ + drag to pan · scroll to zoom</span></div><div class="controls map-controls"><label id="surfaceTimeControl" hidden><input type="checkbox" id="surfaceTime"> Follow replay</label><label><input type="checkbox" id="route" checked> Path</label><button id="editLevel" type="button" aria-pressed="false">Correct orientation</button><button id="droneView" type="button" aria-pressed="false" disabled>Drone view</button><span id="coverage"></span></div></section></div>
 
 <div class="metrics"><div><small>Saved frames</small><strong id="frames">0</strong></div><div><small>Registered views</small><strong id="poses">—</strong></div><div><small>3D landmarks</small><strong id="points">—</strong></div><div><small>Reprojection error</small><strong id="residual">—</strong></div></div>
 <div class="progress" role="status"><b id="walk">No walk selected</b><span id="message">Ready</span></div>
@@ -98,4 +87,4 @@
 <details><summary>Metric scale</summary><p>During recording, mark two camera positions a measured distance apart. In replay, scrub to a mapped frame and mark A, then scrub to B, enter the measured straight-line separation in metres, and mark B to rebuild.</p><div class="controls"><button id="markA">Mark A</button><label>Separation (m) <input id="metres" type="number" min="0.01" step="0.01" placeholder="1.00"></label><button id="markB">Mark B</button><span id="refs"></span></div></details>
 <details><summary>Fisheye calibration <span id="lens"></span></summary><p>Open the target on a flat screen or print it. Keep the white margin visible. Collect at least 12 sharp views at different tilts, distances and positions, including the edges. You can also record now and rebuild after calibration.</p><div class="controls"><a href="/target" target="_blank">Open checkerboard ↗</a><button id="sample">Add board view</button><span id="samples">0 views</span><button id="calibrate">Fit lens</button><button id="reset">Clear samples</button></div></details>
 
-</main><script src="/gaussian-mesh-view.js"></script><script src="/gaussian-view.js"></script><script src="/pipeline-data.js"></script><script src="/ui.js"></script></body></html>
+</main><script src="/gaussian-mesh-view.js"></script><script src="/gaussian-view.js"></script><script src="/pipeline-data.js"></script><script src="/ui.js"></script><script src="/graph.js"></script></body></html>

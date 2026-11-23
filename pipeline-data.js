@@ -1,36 +1,3 @@
-// These presets are ordinary graphs. Their edits are saved with the graph.
-const sourcePass = 'return input;';
-const viewPass = 'return input; // connected layers, in display order';
-const nativePass = `const nativeResult = await runNative(settings);
-const output = nativeResult; // Edit the value sent to the output port here.
-return output;`;
-function recordingPreset(rangeChart=false){
-  const nodes=[{id:'walk',type:'walk',settings:{program:sourcePass}}], inputs=[];
-  if(rangeChart){
-    nodes.push({id:'range',type:'code',input:'walk',settings:{
-      name:'Range samples',inputType:'Recording tables',outputType:'JSON records',
-      program:"return (input['range.csv'] || []).map(row => ({\n  seconds: row.pi_read_end_ns / 1e9,\n  raw: row.tof_raw,\n  metres: row.tof_raw > 0 && row.tof_raw < 250 ? row.tof_raw / 104 : null\n}));"
-    }});
-    inputs.push({source:'range',type:'JSON records',presentation:{mode:'plot',x:'seconds',y:'metres'}});
-  }
-  nodes.push({id:'viewer',type:'viewer',settings:{inputs,program:viewPass}});
-  return {graph:{nodes,selected:rangeChart?'viewer':'walk',viewer:'viewer'}};
-}
-
-function replayComparePreset(){
-  const photo={source:'walk',type:'Recorded photos'};
-  const depth={source:'depth',type:'Depth frames'};
-  return {graph:{selected:'viewer',viewer:'viewer',nodes:[
-    {id:'walk',type:'walk',settings:{}},
-    {id:'depth',type:'depth',input:'walk',settings:{geometrySource:'anything'}},
-    {id:'viewer',type:'viewer',settings:{inputs:[photo,depth],useReplay:true,program:
-`// Each port supplies a frame sequence. The viewer matches frame IDs as replay moves.
-const [left, right] = input.filter(port => plot.isFramePort(port));
-if (left && right) return [plot.compareFrames(left, right)];
-return [left, right].filter(Boolean).map(port => plot.replayFrame(port));`}}
-  ]}};
-}
-
 function isTableType(type){return ['Recording tables','Telemetry','JSON records'].includes(type);}
 function isImageType(type){return type==='Recorded photos'||type==='Depth frames'||type==='Pixel frames';}
 
@@ -44,9 +11,6 @@ function readTables(run){
     }).catch(error=>{if(run===recordedTablesRun)recordedTablesRequest=null;throw error;});
   }
   return recordedTablesRequest;
-}
-function frameRefs(type,source){
-  return timeline.map(f=>({frame:f.id,ms:f.ms,...(type==='Depth frames'?{method:source.settings.geometrySource}:{})}));
 }
 function pixelReader(refs,run,index){
   const permitted=new Set(refs.map(f=>JSON.stringify([f.frame,f.method||''])));
@@ -84,7 +48,7 @@ function viewerPlotTools(){
 
 // Each execution gets an opaque frame and a worker. Only image refs on connected
 // ports can be read by the host. Node source never executes in the editor.
-function runProgram(program,input,inputs={},readFrame=null,native=null,replay=null,onLog=null){
+function runProgram(program,input,inputs={},readFrame=null,native=null,replay=null,onLog=null,settings={}){
   return new Promise((resolve,reject)=>{
     const frame=document.createElement('iframe');frame.hidden=true;frame.sandbox='allow-scripts';
     let timer;
@@ -150,7 +114,7 @@ function runProgram(program,input,inputs={},readFrame=null,native=null,replay=nu
     }
     const source='const plot=('+viewerPlotTools.toString()+')();\nasync function processNode(input,inputs,readFrame,runNative,settings,replay){\n'+program+'\n}\n('+workerMain.toString()+')();';
     window.addEventListener('message',receive);renew();
-    frame.onload=()=>frame.contentWindow.postMessage({source,input,inputs,replay,debug:!!onLog,settings:native?.settings},'*');
+    frame.onload=()=>frame.contentWindow.postMessage({source,input,inputs,replay,debug:!!onLog,settings:native?.settings??settings},'*');
     frame.srcdoc='<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' blob:; worker-src blob:; connect-src \'none\'"><script>('+frameMain.toString()+')();<\/script>';
     document.body.append(frame);
   });
@@ -228,82 +192,6 @@ function recordDisplay(host,data,config={},save=()=>{}){
   render();
 }
 
-function extraInputs(node){
-  const host=$('extraInputs');host.replaceChildren();host.hidden=node.type!=='code';
-  if(host.hidden)return;
-  const list=node.settings.extra||[];
-  function edit(value){node.settings.extra=value;markGraphEdited();renderGraph();draw();}
-  for(const port of list){
-    const row=document.createElement('div'),remove=document.createElement('button');
-    row.textContent='inputs.'+port.name+' ← '+nodeLabel(nodeById(port.source))+' · '+port.type+' ';
-    remove.textContent='Remove';remove.onclick=()=>edit(list.filter(p=>p!==port));row.append(remove);host.append(row);
-  }
-  const select=document.createElement('select'),name=document.createElement('input'),button=document.createElement('button');
-  name.placeholder='Input name';name.setAttribute('aria-label','Additional input name');
-  select.setAttribute('aria-label','Additional input source');
-  for(const source of nodeGraph.nodes){
-    if(dependsOn(source,node.id))continue;
-    for(const type of produced(source).filter(t=>Object.hasOwn(codeTypes,t)))
-      select.add(new Option(nodeLabel(source)+' · '+type,JSON.stringify({source:source.id,type})));
-  }
-  button.textContent='Add input';button.disabled=!select.length;button.onclick=()=>{
-    const alias=name.value.trim();
-    if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)||list.some(p=>p.name===alias)){
-      name.setCustomValidity('Enter a unique input name using letters, digits or underscores.');name.reportValidity();return;
-    }
-    edit([...list,{...JSON.parse(select.value),name:alias}]);
-  };
-  name.oninput=()=>name.setCustomValidity('');host.append(name,select,button);
-}
-
-function tofPixelPreset(){
-  // This body is the program in the preset and can be edited in the node.
-  async function correctPixels(input, inputs, readFrame){
-    const {map,tables}=inputs;
-    if(map.units!=='m')throw Error('This preset needs camera positions in metres.');
-    // Approximate a centred, forward-facing beam. Correct only its local patch.
-    const maxTimeMs=40, maxResidualM=0.20, pixelRadius=2;
-    const poses=new Map(map.poses.map(p=>[p.frame,p]));
-    const stamps=new Map((tables['timestamps.csv']||[]).map(r=>[r.frame,r]));
-    const ranges=(tables['range.csv']||[]).filter(r=>Number.isFinite(r.pi_read_end_ns)).sort((a,b)=>a.pi_read_end_ns-b.pi_read_end_ns);
-    const rows=[];
-    let k=0;
-    for(const ref of input){
-      const pose=poses.get(ref.frame),stamp=stamps.get(ref.frame);
-      if(!pose?.rotation||!stamp)continue;
-      const t=stamp.pi_encoder_callback_ns;
-      if(!Number.isFinite(t))continue;
-      while(k+1<ranges.length&&Math.abs(ranges[k+1].pi_read_end_ns-t)<Math.abs(ranges[k].pi_read_end_ns-t))k++;
-      const sample=ranges[k]||{pi_read_end_ns:stamp.pi_tof_read_end_ns,tof_raw:stamp.tof_raw};
-      if(!Number.isFinite(sample.pi_read_end_ns)||Math.abs(sample.pi_read_end_ns-t)>maxTimeMs*1e6||!(sample.tof_raw>0&&sample.tof_raw<250))continue;
-      const {width,height,pixels}=await readFrame(ref);
-      const cx=Math.floor(width/2),cy=Math.floor(height/2),f=width*64/96;
-      const centre=pixels[cy*width+cx],rangeM=sample.tof_raw/104;
-      if(!(centre>0)||Math.abs(rangeM-centre)>maxResidualM)continue;
-      for(let y=cy-pixelRadius;y<=cy+pixelRadius;y++)for(let x=cx-pixelRadius;x<=cx+pixelRadius;x++){
-        const raw=pixels[y*width+x];
-        if(!(raw>0)||Math.abs(raw-centre)>0.05)continue;
-        const z=raw+rangeM-centre;
-        if(z<=0)continue;
-        const ray=[(x+.5-width/2)*z/f,(y+.5-height/2)*z/f,z];
-        const xyz=pose.rotation.map((axis,i)=>pose.xyz[i]+axis.reduce((sum,v,j)=>sum+v*ray[j],0));
-        rows.push({frame:ref.frame,x,y,depth_m:raw,range_m:rangeM,corrected_m:z,xyz});
-      }
-    }
-    return rows;
-  }
-  const program='return ('+correctPixels.toString()+')(input, inputs, readFrame);';
-  return {graph:{selected:'viewer',viewer:'viewer',nodes:[
-    {id:'walk',type:'walk',settings:{}},
-    {id:'pose',type:'pose',input:'walk',settings:{}},
-    {id:'depth',type:'depth',input:'walk',settings:{geometrySource:'apple'}},
-    {id:'correct',type:'code',input:'depth',settings:{name:'Correct beam pixels',inputType:'Depth frames',outputType:'JSON records',program,
-      extra:[{name:'map',source:'pose',type:'Camera map'},{name:'tables',source:'walk',type:'Recording tables'}]}},
-    {id:'dots',type:'code',input:'correct',settings:{name:'Corrected dots',inputType:'JSON records',outputType:'Colored points',program:'return input.map(row => [...row.xyz, 110, 226, 192]);'}},
-    {id:'viewer',type:'viewer',settings:{inputs:[{source:'dots',type:'Colored points'}]}}
-  ]}};
-}
-
 function sameData(left,right){
   if(Object.is(left,right))return true;
   if(!left||!right||typeof left!=='object'||typeof right!=='object'||left.constructor!==right.constructor)return false;
@@ -346,4 +234,81 @@ function paintFramePixels(canvas,{pixels,width,height,format}){
       }
     }
     ctx.putImageData(image,0,0);
+}
+
+// Outputs of code nodes must match their declared type.
+function validateTransform(type,value){
+  const invalid=()=>{throw Error('Invalid '+type+' output. '+codeTypes[type]);};
+  const vector=(v,n)=>Array.isArray(v)&&v.length===n&&v.every(Number.isFinite);
+  if(type==='Point-fitted splats'){
+    if(!(value instanceof Float32Array)||value.length%16!==0||!value.every(Number.isFinite))invalid();
+    for(let i=0;i<value.length;i+=16){
+      if(value[i+3]<0||value[i+3]>1||value.subarray(i+4,i+7).some(v=>v<0||v>1)||value.subarray(i+8,i+11).some(v=>v<0))invalid();
+    }
+    return;
+  }
+  if(!Array.isArray(value))invalid();
+  if(type==='Pixel frames'&&!value.every(f=>f&&typeof f.frame==='string'&&Number.isSafeInteger(f.width)&&f.width>0&&Number.isSafeInteger(f.height)&&f.height>0&&
+      (f.format==='depth'&&f.pixels instanceof Float32Array&&f.pixels.length===f.width*f.height||
+       f.format==='rgba'&&f.pixels instanceof Uint8ClampedArray&&f.pixels.length===4*f.width*f.height)))invalid();
+  if(type==='Colored points'&&!value.every(p=>vector(p,6)&&p.slice(3).every(v=>v>=0&&v<=255)))invalid();
+  if(type==='Triangle list'&&!value.every(t=>Array.isArray(t)&&t.length===3&&t.every(v=>vector(v,3))))invalid();
+  if(type==='JSON records'){
+    const isRecord=v=>v!==null&&typeof v==='object'&&Object.getPrototypeOf(v)===Object.prototype;
+    const ancestors=new Set();
+    function check(v){
+      if(v===null||typeof v==='string'||typeof v==='boolean'||Number.isFinite(v))return;
+      if((!Array.isArray(v)&&!isRecord(v))||ancestors.has(v))invalid();
+      ancestors.add(v);
+      for(const child of Object.values(v))check(child);
+      ancestors.delete(v);
+    }
+    if(!value.every(isRecord))invalid();
+    check(value);
+  }
+}
+
+function inspectConsoleValue(label,value,depth=0,parents=new Set()){
+  const simple=text=>{
+    const row=document.createElement('div');
+    row.textContent=label+'  '+text;
+    return row;
+  };
+  if(value===null||typeof value!=='object')return simple(typeof value==='string'?JSON.stringify(value):String(value));
+  if(parents.has(value))return simple('[Circular reference]');
+  if(value instanceof Date||value instanceof RegExp||value instanceof Error)return simple(String(value));
+  const identity=value;
+  if(value instanceof Map||value instanceof Set)value=Array.from(value);
+  if(value instanceof ArrayBuffer)value=new Uint8Array(value);
+  if(value instanceof DataView)value=new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+
+  const indexed=Array.isArray(value)||ArrayBuffer.isView(value);
+  const keys=indexed?null:Object.keys(value),length=indexed?value.length:keys.length;
+  const box=document.createElement('details'),header=document.createElement('summary'),children=document.createElement('div');
+  header.textContent=label+'  '+(indexed?(Array.isArray(value)?'Array':value.constructor.name)+'('+length+')':'{'+length+' fields}');
+  children.style.paddingLeft='1.2em';
+  box.append(header,children);
+  const pageSize=50;
+  function populate(){
+    if(children.childElementCount)return;
+    const body=document.createElement('div'),ancestors=new Set(parents).add(identity);
+    function page(n){
+      body.replaceChildren();
+      for(let i=n*pageSize;i<Math.min(length,(n+1)*pageSize);i++){
+        const key=indexed?i:keys[i];
+        body.append(inspectConsoleValue(String(key),value[key],depth+1,ancestors));
+      }
+    }
+    if(length>pageSize){
+      const control=document.createElement('label'),field=document.createElement('input');
+      field.type='number';field.min=1;field.max=Math.ceil(length/pageSize);field.value=1;
+      control.append('Page ',field,' of '+field.max+' · '+pageSize+' entries per page');
+      field.oninput=()=>{if(field.value&&field.validity.valid)page(field.valueAsNumber-1);};
+      children.append(control);
+    }
+    children.append(body);page(0);
+  }
+  box.ontoggle=()=>{if(box.open)populate();};
+  if(depth===0){box.open=true;populate();}
+  return box;
 }

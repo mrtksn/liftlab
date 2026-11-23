@@ -1,0 +1,40 @@
+{
+ "name": "Photo landmarks",
+ "description": "The camera map: registered camera path and triangulated landmarks.",
+ "controls": [],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "map",
+      "port": "map"
+     }
+    ]
+   }
+  ],
+  "selected": "map",
+  "viewer": "view"
+ },
+ "default": true
+}

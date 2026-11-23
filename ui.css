@@ -96,10 +96,10 @@
 .stage>summary small,#viewerOutput{font-weight:400;color:#a9baba;margin-left:.5rem}
 #frameStage #cameraPanel{max-width:860px;margin:.6rem auto;background:#151c1e}
 #frameStage .imagebox{height:clamp(170px,34vh,380px);min-height:0;aspect-ratio:auto}
-#pipeline #reconstructionInputs{margin:.6rem 0}
-#pipeline #reconstructionInputs h2{font-size:1rem}
 
-#pipeline #pathChoice{display:none}
+
+
+
 
 .node-scroll{overflow:auto;margin:15px 0 0;border:1px solid #364448;border-radius:9px;background-color:#12191b;background-image:radial-gradient(#324044 1px,transparent 1px);background-size:16px 16px}
 #nodeBoard{position:relative;min-width:100%}
@@ -114,12 +114,13 @@
 .node-card::before{left:-5px}.node-card::after{right:-5px}
 .node-card.root::before,.node-card.terminal::after{display:none}
 #nodeInspector{padding:12px 0;border-bottom:1px solid #354145}
+.node-settings{padding:12px 0;border-bottom:1px solid #354145}.node-settings>strong{font-size:14px}.settings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr));gap:10px 18px;margin:10px 0}.replay .setting{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:3px 10px;font-size:13px;white-space:normal}.setting small{grid-column:1/-1;color:#a2b3b6}.setting small:empty{display:none}.setting.changed>span{color:#b5ebce}.setting input[type=number]{width:104px;padding:5px 7px}.setting input[type=checkbox]{width:auto;justify-self:end}.node-settings .controls{gap:10px}.node-settings .controls button{padding:6px 10px}.node-settings .controls label{font-size:13px}.node-settings .controls input[type=checkbox]{width:auto}.setting select{max-width:230px;padding:5px 7px}.setting.disabled{opacity:.5}.node-settings>div+div{margin-top:12px}
 #nodeTitle{margin-right:auto}
-#pipeline .stage{border:0;margin:0}
-#pipeline .stage>summary{display:none}
-#pipeline .stage[hidden],#depthOutput,#depthOutputLabel{display:none}
-#pipeline[data-inspect=walk] #geometrySource,#pipeline[data-inspect=walk] label[for=geometrySource]{display:none}
-#pipeline[data-inspect=points] #depthSurfaceControls,#pipeline[data-inspect=mesh] #depthStages,#pipeline[data-inspect=splats] #depthStages{display:none}
+
+
+
+
+
 #pipeline:not([data-inspect=points]) #pipelinePathLabel{display:none}
 #pipeline[data-inspect=depth] #geometrySource option[value=photo]{display:none}
 #pipeline[data-inspect=pose] #regeneratePath{display:none}
@@ -175,3 +176,20 @@
 .replay-compare:has(input)::after{content:"";position:absolute;z-index:2;pointer-events:none;inset:0 auto 0 var(--split);width:2px;background:white}
 .replay-compare input[type=range]{position:absolute;z-index:3;top:50%;left:0;width:100%;margin:0;transform:translateY(-50%);appearance:none;background:transparent;cursor:ew-resize}
 .replay-compare input::-webkit-slider-thumb{appearance:none;width:26px;height:26px;background:#fff;border:3px solid #465958;border-radius:50%}
+.node-card[data-state=done]{border-left:3px solid #8fd8b4}
+.node-card[data-state=error]{border-left:3px solid #ff9f93}
+#nodeOp{margin-right:auto}
+#nodeDescription,#presetDescription{margin:6px 0 0}
+#nodeDescription:empty,#presetDescription:empty{display:none}
+.setting select.binding{grid-column:1/-1;justify-self:start;font-size:11px;padding:2px 5px;color:#a2b3b6;background:transparent;border-color:#3b494c}
+.setting input:disabled{opacity:.6}
+#nodeWiring .setting select{max-width:260px}
+#controlsPanel label{display:block;margin-top:8px;font-size:13px}
+#controlsPanel textarea,#nodeProgram{width:100%;font:12px ui-monospace,monospace;background:#13191b;color:#e5ebea;border:1px solid #465457;border-radius:6px;padding:8px}
+#nodeOutputs .port-data{border-top:1px solid #354145;padding:8px 0}
+#nodeOutputs .port-data summary{font-weight:500;font-size:13px}
+.frames-section>details>summary{font-weight:650}
+#typePanels{border-top:1px solid #354145;margin-top:10px}
+.setting select.binding{visibility:hidden}
+.setting:hover select.binding,.setting:focus-within select.binding,.setting select.binding.bound{visibility:visible}
+.setting select.binding.bound{color:#b5ebce;border-color:#5f8d77}

@@ -14,6 +14,17 @@ Use **Download walk ZIP** to export the walk selected in the dropdown, including
 
 A failed solve leaves the last successful snapshot available and reports the failure. Frame filenames in `survey.json` correspond to `timestamps.csv`. The reprojection error is a pixel fit diagnostic. Ground-truth accuracy requires independent measurements. The current prototype runs structure from motion on the Mac. The Pi reads camera and ToF data and listens on loopback UDP port 14681 for flight telemetry.
 
+## Processing pipeline
+
+The pipeline panel draws and runs a graph described entirely as data. Nothing in the page names a method.
+
+- **Operators** (`operators.py`) are the processing steps the Mac can run: camera map, depth models, backprojection, landmark and depth surfaces, AI depth planes, Gaussian map, Gaussian mesh, walk clearance and LingBot-Map. Each declares typed inputs and outputs and its parameters, with the control to draw for each (number, whole number, checkbox, choice), its range, default and help. Choice options come from the modules that implement them. `GET /operators` returns the catalogue. `POST /operator` runs one: it returns outputs, reports a background job as pending, or asks the browser for work it does there (depth predictions for AI depth planes). Results built with non-default settings, such as Gaussian training steps, are kept beside the default ones.
+- **Nodes** are an operator, its input connections and its settings. A node can override its operator's controls by key (label, default, range, options, help, hidden). Code nodes declare their own ports, output type and controls, and read the values as `settings`. Any operator node can carry code that calls `runNative(settings)` and edits its first output.
+- **Presets** are JSON files: built-ins in `presets/`, yours in `presets/user/` (Save preset). A preset can define its own controls (checkbox, choice, number, button). A node setting follows one when it holds `{"var": "key"}`; in the inspector, choose “New preset control” beside any setting to create and bind one. A button control runs the pipeline to the node named in `run`. Choice controls can take their options from an operator parameter with `options_from`.
+- **Viewer** nodes choose which outputs the 3D view and the frame panel show. Panels for Gaussian maps, clearance and LingBot results appear when the viewer shows that data type.
+
+Opening a preset collects outputs that already exist and stops at the first node that would start new work. Run to node builds the selected node and everything it needs.
+
 ## Frame depth replay
 
 Open a saved walk and use **Frame view** above the recorded image to switch between the original photo and four depth sources. The shared timeline selects the same frame in both views. The original photo includes the full fisheye field of view. All four depth previews use the central rectified camera view. In **Reconstruction**, select a method to see its build and display controls.

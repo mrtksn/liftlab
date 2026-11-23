@@ -15,6 +15,7 @@ from skimage.measure import marching_cubes
 
 from ai_surfaces import W, H, F
 from fusion import load_observations
+from node_params import pairing_ns, sensor_settings
 
 WIDTH, HEIGHT, FOCAL = W * 2, H * 2, F * 2
 CX, CY = (WIDTH - 1) / 2, (HEIGHT - 1) / 2
@@ -300,7 +301,7 @@ def paired_range_rays(run, model, poses):
             paired = set()
             for row in csv.DictReader(stream):
                 camera, tof = row.get('pi_encoder_callback_ns'), row.get('pi_tof_read_end_ns')
-                if camera and tof and abs(int(camera)-int(tof)) <= 80_000_000:
+                if camera and tof and abs(int(camera)-int(tof)) <= pairing_ns(sensor_settings(run)):
                     paired.add(row['frame'])
         valid = [p for p in poses if p['frame'] in paired and 'range' in observations.get(p['frame'], {})]
     # Reserve validation frames before intersecting rays, so misses count in coverage.

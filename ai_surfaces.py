@@ -13,6 +13,8 @@ from cloud_planes import build_planes
 from fusion import load_observations, STREAMS
 
 METHOD = "depth-anything-v2-v1"
+LABEL = "AI depth planes"
+DISTANCE_LABEL = "Maximum landmark gap"
 W, H = 96, 72
 F = 64.  # virtual pinhole focal length in depth-map pixels
 MAX_VIEWS = 36

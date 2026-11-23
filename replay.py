@@ -3,8 +3,12 @@ from bisect import bisect_left
 import csv
 import math
 
+from node_params import pairing_ns, sensor_settings, tof_metres
+
 
 def read_timeline(run):
+    sensors = sensor_settings(run)
+    window = pairing_ns(sensors)*1e-9
     def read(name):
         path = run / name
         if path.is_file():
@@ -32,13 +36,13 @@ def read_timeline(run):
         if origin is None:
             origin = stamp
         frame = dict(id=row["frame"], ms=round((stamp-origin)/1000),
-                     tof=number(row, "tof_raw"))
+                     tof=number(row, "tof_raw"), tof_m=tof_metres(row.get("tof_raw"), sensors))
         clock = number(row, "pi_encoder_callback_ns")
         if clock is not None and times:
             t = clock * 1e-9
             right = bisect_left(times, t)
             index = min({max(0, right-1), min(right, len(times)-1)}, key=lambda i: abs(times[i]-t))
-            if abs(times[index]-t) <= .08:
+            if abs(times[index]-t) <= window:
                 sample = motion[index][1]
                 frame.update(
                     gyro=[number(sample, k+"_rad_s") for k in ("gx","gy","gz")],

@@ -1,0 +1,44 @@
+{
+ "name": "Range history",
+ "description": "Every ToF reading over the walk, in metres from the walk's sensor settings.",
+ "controls": [],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "range",
+    "op": "code",
+    "label": "Range samples",
+    "ports": [
+     {
+      "name": "input",
+      "type": "Recording tables"
+     }
+    ],
+    "output": "JSON records",
+    "inputs": {
+     "input": {
+      "node": "walk",
+      "port": "tables"
+     }
+    },
+    "program": "// Sensor settings belong to the walk: edit them on the Recorded walk node.\nconst sensors = input['sensors.json'][0];\nconst valid = raw => raw >= sensors.tof_min_raw && raw <= sensors.tof_max_raw;\nreturn (input['range.csv'] || []).map(row => ({\n  seconds: row.pi_read_end_ns / 1e9,\n  raw: row.tof_raw,\n  metres: valid(row.tof_raw) ? row.tof_raw / sensors.tof_counts_per_metre : null\n}));"
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "range",
+      "port": "value"
+     }
+    ]
+   }
+  ],
+  "selected": "range",
+  "viewer": "view"
+ }
+}

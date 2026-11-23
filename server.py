@@ -34,6 +34,9 @@ import pycolmap as sfm
 from localize import Locator
 from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
+import node_params
+import operators
+from node_params import CAMERA_MAP_PARAMS, SENSOR_PARAMS, default_sensor_settings, pairing_ns, sensor_settings, tof_metres
 
 SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth, PLANE_METHOD: build_planes, ai_surfaces.METHOD: ai_surfaces.build_ai}
 HERE = Path(__file__).resolve().parent
@@ -52,6 +55,44 @@ def surface_mesh(run, model, method, distance):
         observations = load_observations(run, model.get("streams", STREAMS))
         return build_planes(model, distance, observations)
     return SURFACE_BUILDERS.get(method, build_surfaces)(model, distance)
+
+
+def preset_files(root):
+    return [(path, False) for path in sorted(root.glob("*.json"))] + \
+           [(path, True) for path in sorted((root/"user").glob("*.json"))]
+
+
+def list_presets(root):
+    """Presets are graph files: built-ins in presets/, yours in presets/user/."""
+    result = []
+    for path, editable in preset_files(root):
+        try:
+            preset = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        result.append(dict(preset, file=path.name, editable=editable))
+    return result
+
+
+def change_preset(root, body, delete):
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 64:
+        raise ValueError("Enter a preset name of up to 64 characters.")
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-") or "preset"
+    path = root/"user"/(slug + ".json")
+    if delete:
+        if not path.is_file():
+            raise ValueError("Only your own presets can be deleted.")
+        path.unlink()
+        return list_presets(root)
+    preset = body.get("preset")
+    if not isinstance(preset, dict) or not isinstance(preset.get("graph"), dict):
+        raise ValueError("A preset needs a graph.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(dict(preset, name=name.strip()), indent=1, ensure_ascii=False, allow_nan=False) + "\n")
+    tmp.replace(path)
+    return list_presets(root)
 
 
 class Survey:
@@ -78,6 +119,9 @@ class Survey:
         self.version = 0
         self.next_build = 12
         self.calib = root / "ov5647-640x480.json"
+        self.live_sensors = default_sensor_settings(root)
+        self.operator_jobs = {}
+        self.presets = HERE / "presets"
 
     @property
     def busy(self):
@@ -119,7 +163,7 @@ class Survey:
                     prior = next((row for row in reversed(ranging) if row[1] <= callback_ns), None)
                     if prior is None and self.tof and self.tof[1]:
                         prior = (0, self.tof[1], self.tof[2])
-                    if prior and 0 <= callback_ns-prior[1] <= 80_000_000:
+                    if prior and 0 <= callback_ns-prior[1] <= pairing_ns(self.live_sensors):
                         tof = (callback_ns, prior[1], prior[2])
                     else:
                         tof = (callback_ns, "", -1)
@@ -141,7 +185,8 @@ class Survey:
                     self.latest, self.stamp, self.arrival = data, stamp, time.monotonic()
                     self.tof = tof
                     if ranging:
-                        self.range_stats.extend((end, 0 < raw < 250) for _, end, raw in ranging)
+                        self.range_stats.extend((end, tof_metres(raw, self.live_sensors) is not None)
+                                                for _, end, raw in ranging)
                         cutoff = ranging[-1][1] - 2_000_000_000
                         while self.range_stats and self.range_stats[0][0] < cutoff:
                             self.range_stats.popleft()
@@ -203,6 +248,8 @@ class Survey:
             atomic_json(self.run/"level-start.json",{k:level[k] for k in ('pitch','roll')})
         if self.calib.exists():
             shutil.copyfile(self.calib, self.run / "calibration.json")
+        # The walk keeps the sensor settings it was recorded with.
+        atomic_json(self.run / "sensors.json", self.live_sensors)
         self.log = (self.run / "timestamps.csv").open("w")
         self.log.write("frame,pi_camera_relative_us,pi_encoder_callback_ns,pi_tof_read_end_ns,tof_raw\n")
         self.motion_log = (self.run / "motion.csv").open("w")
@@ -239,7 +286,8 @@ class Survey:
             self.log = None
             self.schedule()
 
-    def schedule(self, streams=STREAMS):
+    def schedule(self, streams=STREAMS, params=None):
+        params = node_params.validate(CAMERA_MAP_PARAMS, params)
         if len(self.keys) < 4:
             self.message = "Need at least four overlapping views from different positions."
             return
@@ -248,10 +296,11 @@ class Survey:
         else:
             # Denser overlap for turns and doorways on the final reconstruction.
             frames = sorted(p.name for p in (self.run/"frames").glob("*.jpg"))
-            candidates, limit = sorted(set(frames[::2] + frames[-1:])), 400
+            candidates = sorted(set(frames[::params["frame_stride"]] + frames[-1:]))
+            limit = params["max_views"]
         selected = [candidates[i] for i in np.linspace(0,len(candidates)-1,min(len(candidates),limit),dtype=int)]
         names = sorted(set(selected + [self.refs[k] for k in ("A","B") if k in self.refs]))
-        self.build_queue.append((self.run, names, self.refs.copy(), not self.log, streams))
+        self.build_queue.append((self.run, names, self.refs.copy(), not self.log, streams, params))
         if self.busy:
             self.message = "Recording saved · reconstruction queued"
         else:
@@ -262,14 +311,14 @@ class Survey:
         self.building = job[0]
         threading.Thread(target=self.map, args=job, daemon=True).start()
 
-    def map(self, run, names, refs, recover=False, streams=STREAMS):
+    def map(self, run, names, refs, recover=False, streams=STREAMS, params=None):
         def report(message):
             with self.lock:
                 if self.run == run:
                     self.message = message
         try:
-            model = build(run, names, report, recover=recover, streams=streams)
-            if recover:
+            model = build(run, names, report, recover=recover, streams=streams, params=params)
+            if recover and model["params"]["recover_gaps"]:
                 recover_gaps(run, model, report)
             positions = {p["frame"]:np.array(p["xyz"]) for p in model["poses"]}
             if all(refs.get(k) in positions for k in ("A","B")):
@@ -355,9 +404,9 @@ class Survey:
                     self.message = " · ".join(parts)
                 self.finish_build()
 
-    def train_gaussians(self, run, model, target):
+    def train_gaussians(self, run, model, target, steps=1500, dense_seed=True):
         try:
-            result = gaussian_map.build(run, model, target, os.getenv("ROOM_SURVEY_BRUSH"))
+            result = gaussian_map.build(run, model, target, os.getenv("ROOM_SURVEY_BRUSH"), steps, dense_seed)
             message = f"Gaussian map ready · {result['test_views']} evaluation images"
         except Exception as exc:
             message = f"Gaussian mapping failed · {exc}"
@@ -393,14 +442,14 @@ class Survey:
                     self.version += 1
                 self.finish_build()
 
-    def train_lingbot(self, run, model, target):
+    def train_lingbot(self, run, model, target, stride=8):
         try:
             cache = Path.home() / "Library/Caches/RoomSurvey/lingbot"
             with tempfile.TemporaryDirectory(dir=run, prefix=".lingbot-") as tmp:
                 stage = Path(tmp)
                 gaussian_map.export_droid(run, model, stage/"rectified")
                 proc = subprocess.run([str(cache/"env/bin/python"), str(HERE/"lingbot_apple.py"),
-                    str(stage/"rectified"), str(cache/"lingbot-map.pt"), str(stage/"result"), "--stride", "8"],
+                    str(stage/"rectified"), str(cache/"lingbot-map.pt"), str(stage/"result"), "--stride", str(stride)],
                     env=dict(os.environ,PYTHONPATH=str(cache/"source"),PYTORCH_ENABLE_MPS_FALLBACK="1"),
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
                 if proc.returncode:
@@ -550,22 +599,6 @@ class Survey:
                 self.stop()
             elif action in ("A","B"):
                 self.mark(action,float(body.get("metres") or 0))
-            elif action == "previous-photo-map":
-                if self.busy or self.log or not self.run or body.get("run")!=self.run.name:
-                    raise ValueError("Open an idle saved walk.")
-                path = self.run/"survey.json"
-                archive = self.run/"previous-photo-map.json"
-                old = json.loads(archive.read_bytes())
-                current = json.loads(path.read_bytes())
-                if current.get("feature_index")!=body.get("index") or old.get("run")!=self.run.name:
-                    raise ValueError("Reopen the walk before switching photo maps.")
-                # Keep the outgoing revision independently until both pointers have switched.
-                outgoing = self.run/("saved-"+ai_surfaces.index_path(self.run,current["feature_index"]).stem+".json")
-                atomic_json(outgoing,current)
-                atomic_json(path,old)
-                atomic_json(archive,current)
-                self.version += 1
-                self.message = "Switched photo map and its matching reconstruction assets"
             elif action == "load":
                 self.load(body["name"])
             elif action == "delete":
@@ -583,7 +616,7 @@ class Survey:
                     raise ValueError("Enter the measured camera separation in metres.")
                 self.refs = {"A": a, "B": b, "metres": distance}
                 atomic_json(self.run/"reference.json", self.refs)
-                self.schedule(model.get("streams", STREAMS))
+                self.schedule(model.get("streams", STREAMS), model.get("params"))
             elif action == "build-frame-depth":
                 import replay_depth
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
@@ -603,71 +636,16 @@ class Survey:
                     self.building = self.run
                     self.message = "Generating depth for every saved frame"
                     threading.Thread(target=self.build_frame_depth,args=(self.run,index,methods),daemon=True).start()
-            elif action in ("build-gaussians","build-lingbot","build-gaussian-mesh","build-clearance"):
+            elif action == "sensor-settings":
                 if self.busy or self.log or not self.run or self.run.name != body.get("run"):
                     raise ValueError("Choose an idle, finished walk.")
-                model = json.loads((self.run/"survey.json").read_bytes())
-                if body.get("index") != model.get("feature_index"):
-                    raise ValueError("The camera map changed. Reopen the walk.")
-                target = gaussian_map.artifact_dir(self.run, model.get("feature_index"))
-                lingbot = action == "build-lingbot"
-                if lingbot:
-                    target = self.run / ("lingbot-v1-" + ai_surfaces.index_path(self.run,model["feature_index"]).stem)
-                if action in ("build-gaussian-mesh", "build-clearance"):
-                    if not (target/"gaussians.ply").is_file():
-                        raise ValueError("Build the Gaussian map first.")
-                    clearance_map = action == "build-clearance"
-                    artifact = target/"mesh-v1"
-                    if clearance_map:
-                        import clearance
-                        artifact = clearance.artifact_dir(self.run, target)
-                    if not (artifact/"report.json").is_file():
-                        self.building = self.run
-                        self.message = "Opening trained Gaussian splats"
-                        threading.Thread(target=self.build_gaussian_geometry, args=(self.run, model, target, clearance_map), daemon=True).start()
-                elif not target.is_dir():
-                    self.building = self.run
-                    self.message = "Triangulating points and training Gaussian splats on this Mac"
-                    if lingbot:
-                        self.message = "Running LingBot-Map on Apple Metal"
-                    threading.Thread(target=self.train_lingbot if lingbot else self.train_gaussians,args=(self.run,model,target),daemon=True).start()
-            elif action == "rebuild-surfaces":
-                if self.busy or self.log or not self.run or self.run.name != body.get("run"):
-                    raise ValueError("Choose a finished walk.")
-                try:
-                    centimetres = float(body.get("growth_distance_cm", body.get("max_edge_cm")))
-                except (TypeError, ValueError):
-                    raise ValueError("Enter a positive growth distance in centimetres.") from None
-                distance = centimetres / 100
-                if not math.isfinite(distance) or distance <= 0:
-                    raise ValueError("Enter a positive growth distance in centimetres.")
-                model = json.loads((self.run / "survey.json").read_bytes())
-                method = body.get("method", (model.get("surfaces") or {}).get("method", "camera-ray-seeds-v1"))
-                if not isinstance(method, str) or method not in SURFACE_BUILDERS:
-                    raise ValueError("Choose a supported surface method.")
-                if model["units"] != "m" or (method != PLANE_METHOD and not model.get("landmark_views")):
-                    raise ValueError("Surface growth needs metric scale and seed methods need landmark tracks.")
-                if method == ai_surfaces.METHOD:
-                    if body.get("index") != model.get("feature_index") or body.get("version") != self.version:
-                        raise ValueError("The map changed. Reopen the walk and retry depth inference.")
-                    if "predictions" in body:
-                        ai_surfaces.save_predictions(self.run,model,body["predictions"])
-                    elif not ai_surfaces.cached_frames(self.run,model["feature_index"]):
-                        raise ValueError("Depth predictions unavailable. Retry browser inference.")
-                self.building = self.run
-                self.message = "Rebuilding surfaces from saved landmarks"
-                threading.Thread(target=self.rebuild_surfaces, args=(self.run, model, distance, method),
-                                 daemon=True).start()
-            elif action == "rebuild":
-                if not self.run or self.busy or self.log:
-                    raise ValueError("Choose a finished walk.")
-                requested = body.get("streams", list(STREAMS))
-                if not isinstance(requested,list) or "camera" not in requested or any(k not in STREAMS for k in requested):
-                    raise ValueError("Select Camera for a 3D reconstruction.")
-                streams = tuple(k for k in STREAMS if k in requested)
-                if self.calib.exists():
-                    shutil.copyfile(self.calib, self.run / "calibration.json")
-                self.schedule(streams)
+                values = node_params.validate(SENSOR_PARAMS, body.get("values"))
+                atomic_json(self.run / "sensors.json", values)
+                if body.get("default") is True:
+                    atomic_json(self.root / "sensors.json", values)
+                    self.live_sensors = values
+                self.version += 1
+                self.message = "Sensor settings saved for this walk" + (" and new walks" if body.get("default") is True else "")
             elif action == "sample":
                 if self.log or not self.state()["fresh"]:
                     raise ValueError("Use the live preview before starting a walk.")
@@ -737,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
@@ -748,6 +726,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not run or survey.log or query.get("run") != [run.name]:
                     return self.send(b"Select a finished walk","text/plain",404)
             name = query.get("file",[""])[0]
+            suffix = query.get("variant",[""])[0]
+            if not re.fullmatch(r"[0-9a-f]{0,8}", suffix):
+                return self.send(b"Invalid variant","text/plain",400)
             allowed = name in ("report.json","cloud.ply","gaussians.ply","mesh-v1/mesh.ply","mesh-v1/report.json",
                                "clearance-v1/report.json","clearance-v1/grid.npz") or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
@@ -755,7 +736,7 @@ class Handler(BaseHTTPRequestHandler):
                 if name in ("view.html","cloud.ply","trajectory.json","predictions.npz"):
                     try:
                         index = ai_surfaces.index_path(run,query.get("index",[""])[0]).stem
-                        file = run/("lingbot-v1-"+index)/name
+                        file = run/("lingbot-v1-"+index+(f"-{suffix}" if suffix else ""))/name
                         return self.send(file.read_bytes(),{".html":"text/html",".json":"application/json"}.get(file.suffix,"application/octet-stream"))
                     except (ValueError,OSError):
                         pass
@@ -776,7 +757,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(str(exc).encode(), "text/plain", 400)
             if allowed:
                 try:
-                    root = gaussian_map.artifact_dir(run,query.get("index",[""])[0])
+                    root = gaussian_map.artifact_dir(run,query.get("index",[""])[0],suffix)
                     file = root/name
                     if name.startswith("clearance-v1/"):
                         import clearance
@@ -797,9 +778,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(asset.read_bytes(), mime[asset.suffix])
             except (OSError,ValueError,subprocess.SubprocessError) as exc:
                 return self.send(str(exc).encode(),"text/plain",503)
-        if path == "/depth-surface-methods":
-            from depth_surfaces import METHODS
-            return self.send(json.dumps({k:v[0] for k,v in METHODS.items()}).encode(),"application/json")
+        if path == "/operators":
+            return self.send(json.dumps(operators.catalog()).encode(), "application/json")
+        if path == "/presets":
+            return self.send(json.dumps(list_presets(survey.presets)).encode(), "application/json")
         if path in ("/frame-depth.png","/frame-depth-status","/frame-depth-sample", "/frame-depth.bin"):
             import replay_depth
             query = parse_qs(url.query)
@@ -864,7 +846,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(b"Depth view unavailable","text/plain",404)
         if path == "/walk.zip":
             return self.download_walk(parse_qs(url.query).get("run", [""])[0])
-        if path in ("/timeline", "/recording-tables", "/recorded.jpg"):
+        if path in ("/timeline", "/recording-tables", "/sensor-settings", "/recorded.jpg"):
             query = parse_qs(url.query)
             with survey.lock:
                 run = survey.run
@@ -872,9 +854,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(b"Select a finished walk", "text/plain", 404)
             try:
                 if path == "/recording-tables":
-                    return self.send(json.dumps(read_recording_tables(run), allow_nan=False).encode(), "application/json")
+                    tables = read_recording_tables(run)
+                    tables["sensors.json"] = [sensor_settings(run)]
+                    return self.send(json.dumps(tables, allow_nan=False).encode(), "application/json")
                 if path == "/timeline":
                     return self.send(json.dumps(read_timeline(run), allow_nan=False).encode(), "application/json")
+                if path == "/sensor-settings":
+                    return self.send(json.dumps(sensor_settings(run)).encode(), "application/json")
                 frame = query.get("frame", [""])[0]
                 if re.fullmatch(r"[0-9]{7}\.jpg", frame):
                     return self.send((run / "frames" / frame).read_bytes(), "image/jpeg")
@@ -906,41 +892,18 @@ class Handler(BaseHTTPRequestHandler):
             if origin and origin != "http://" + self.headers["Host"]:
                 raise ValueError("Local dashboard required")
             size = int(self.headers.get("Content-Length","0"))
-            limit = {"/rebuild-surfaces":360_000, "/mesh-input":16_000_000}.get(self.path, 2048)
+            limit = {"/operator":64_000_000,
+                     "/save-preset":2_000_000}.get(self.path, 2048)
             if not 0 < size <= limit:
                 raise ValueError("Invalid command")
-            if self.path in ("/depth-cloud","/depth-surfaces","/regenerate-path","/mesh-input"):
-                import depth_cloud
-                body = json.loads(self.rfile.read(size))
-                with survey.lock:
-                    run = survey.run
-                    if not run or survey.log or run.name != body.get("run"):
-                        raise ValueError("Open a finished walk.")
-                    if self.path=="/regenerate-path" and survey.busy:
-                        raise ValueError("Wait for the current reconstruction to finish.")
-                if self.path == "/mesh-input":
-                    from depth_surfaces import fit_cloud
-                    points = body.get("points")
-                    if not isinstance(points, list) or not 3 <= len(points) <= 100_000 or any(
-                            not isinstance(row, list) or len(row) != 6 for row in points):
-                        raise ValueError("Supply 3 to 100,000 colored points.")
-                    model = json.loads((run/"survey.json").read_bytes()) if (run/"survey.json").is_file() else {}
-                    if model.get("feature_index") != body.get("index"):
-                        raise ValueError("The selected map changed.")
-                    cloud = dict(points=points, units=model.get("units", "relative"), method="input")
-                    result = fit_cloud(run, model, cloud, body.get("method"), body.get("tof", False),
-                                       body.get("detail"), body.get("reach"))
-                elif self.path == "/depth-surfaces":
-                    import depth_surfaces
-                    result = depth_surfaces.build(run,body.get("index"),body.get("source"),
-                                                  body.get("method"),body.get("tof",False),
-                                                  body.get("detail"),body.get("reach"),body.get("savedOnly") is True, trained=body.get("trained") is True)
-                else:
-                    result = depth_cloud.reconstruct(run,body.get("index"),body.get("method"),
-                                                    regenerate=self.path=="/regenerate-path",
-                                                    saved_only=body.get("savedOnly") is True, trained=body.get("trained") is True)
-                return self.send(json.dumps(result,separators=(",",":")).encode(),"application/json")
-            result = survey.action(self.path.removeprefix("/"),json.loads(self.rfile.read(size)))
+            body = json.loads(self.rfile.read(size))
+            if self.path == "/operator":
+                return self.send(json.dumps(operators.execute(survey, body), separators=(",",":"), allow_nan=False).encode(),
+                                 "application/json")
+            if self.path in ("/save-preset", "/delete-preset"):
+                return self.send(json.dumps(change_preset(survey.presets, body, self.path == "/delete-preset")).encode(),
+                                 "application/json")
+            result = survey.action(self.path.removeprefix("/"),body)
             self.send(json.dumps(result).encode(),"application/json")
         except (ValueError, OSError, KeyError) as exc:
             self.send(json.dumps({"error":str(exc)}).encode(),"application/json",400)

@@ -12,12 +12,15 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation, Slerp
 
 from gaussian_mesh import CX, CY, FOCAL, confirm_depths, read_splats, render_depth, unproject
+from node_params import pairing_ns, sensor_settings, tof_metres
 
 UNKNOWN, FREE, OCCUPIED = 0, 1, 2
 MAX_POSE_GAP_S = .55
 
 
 def range_samples(run, frames):
+    sensors = sensor_settings(run)
+    window = pairing_ns(sensors)
     path = run/'range.csv'
     independent = path.is_file()
     rows = frames
@@ -30,15 +33,16 @@ def range_samples(run, frames):
             raw = int(row['tof_raw'])
             if independent:
                 start, end = int(row['pi_read_start_ns']), int(row['pi_read_end_ns'])
-                if not 0 <= end-start <= 80_000_000:
+                if not 0 <= end-start <= window:
                     continue
                 stamp = (start+end)//2
             else:
                 stamp = int(row['pi_tof_read_end_ns'])
-                if abs(int(row['pi_encoder_callback_ns'])-stamp)>80_000_000:
+                if abs(int(row['pi_encoder_callback_ns'])-stamp)>window:
                     continue
-            if 0 < raw < 250:
-                samples.append((stamp, raw/104.))
+            metres = tof_metres(raw, sensors)
+            if metres is not None:
+                samples.append((stamp, metres))
         except (ValueError, KeyError, TypeError):
             continue
     return sorted(samples), 'independent ToF' if independent else 'camera-paired ToF'
@@ -169,7 +173,8 @@ def replay_distances(grid, origin, voxel, points, valid):
 def artifact_dir(run, root):
     # A mount correction or replaced range log invalidates the derived grid.
     digest = hashlib.sha256()
-    for path in (run/'range.csv', run/'timestamps.csv', run/'tof-extrinsics.json', root/'gaussians.ply'):
+    for path in (run/'range.csv', run/'timestamps.csv', run/'tof-extrinsics.json', run/'sensors.json',
+                 root/'gaussians.ply'):
         if path.exists():
             stat = path.stat()
             digest.update(f'{path.name}:{stat.st_size}:{stat.st_mtime_ns};'.encode())
@@ -215,11 +220,12 @@ def build(run, model, root, progress=lambda msg: None):
     if model['units']!='m' and np.any(offset):
         raise ValueError('Set a measured baseline to apply the ToF offset to this relative map.')
     paired = {}
+    sensors = sensor_settings(run)
     for name,row in by_name.items():
-        if row.get('tof_raw') and row.get('pi_tof_read_end_ns') and abs(int(row['pi_tof_read_end_ns'])-int(row['pi_encoder_callback_ns']))<=80_000_000:
-            raw=int(row['tof_raw'])
-            if 0<raw<250:
-                paired[name]=raw/104.
+        if row.get('tof_raw') and row.get('pi_tof_read_end_ns') and abs(int(row['pi_tof_read_end_ns'])-int(row['pi_encoder_callback_ns']))<=pairing_ns(sensors):
+            metres=tof_metres(row['tof_raw'],sensors)
+            if metres is not None:
+                paired[name]=metres
     scale,scale_source,scale_error = select_scale(model,[poses[i] for i in indices],accepted,paired,axis)
     progress('Clearance · integrating splat and ToF sightlines')
     # Restrict this replay grid to the neighborhood of the recorded walk.

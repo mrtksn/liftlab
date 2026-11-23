@@ -1,7 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let state, version = -1, model, active = false, yaw = -.38, pitch = .42, zoom = 1;
-let layerViewer,layerSource=null,layerLoaded=false,layerRequest=0;
 let replayMark=null, orbitPerspective=false;
 let droneView=false, droneZoom=1, droneYaw=0, dronePitch=0;
 let posesByFrame=new Map();
@@ -13,7 +12,7 @@ const routeStyles={
   interpolated:{color:'#f7cc7f',dash:[7,5]},
   extrapolated:{color:'#cfb1f7',dash:[2,5]}
 };
-let mapRun, gapRanges=[], gapRequest=0;
+let gapRanges=[], gapRequest=0;
 let estimate=null, tracking=false, estimating=false, generation=0;
 let centre = [0,0,0], extent = 1, panX = 0, panY = 0, drag;
 const canvas = $('map'), ctx = canvas.getContext('2d');
@@ -196,19 +195,10 @@ function buildReplayRoute(poses,frames,estimateEnds){
   return {segments,positions,directions};
 }
 
+// The path the viewer shows: a regenerated depth path, else the camera map's poses.
 function displayedPoses(){
-  const view=typeof nodeGraph!=='undefined'&&nodeGraph&&viewerNode();
-  if(view){
-    const ports=viewBindings(view),map=ports.find(p=>p.type==='Camera map');
-    if(!map)return [];
-    const value=outputs.get(outputKey(nodeById(map.source)));
-    if(value?.poses)return value.poses;
-    for(const p of ports)if(p.type==='Registered depth points'){
-      const poses=outputs.get(outputKey(nodeById(p.source)))?.pathPoses;
-      if(poses)return poses;
-    }
-  }
-  return model?.poses||[];
+  const layers=scene.layers;
+  return layers.find(l=>l.type==='Camera path')?.poses||layers.find(l=>l.type==='Camera map')?.poses||model?.poses||[];
 }
 function updateReplayRoute(){
   const recorded=model?.run===timelineRun && timeline.length>0;
@@ -417,7 +407,7 @@ function paintContactShadows(context, patches, width, height) {
 }
 
 function draw() {
-  syncPipelineLabels();
+  if(typeof viewerFrames!=='function')return;   // graph.js loads after this file
   const w=canvas.clientWidth, h=canvas.clientHeight, d=devicePixelRatio;
   canvas.width=w*d; canvas.height=h*d; ctx.setTransform(d,0,0,d,0,0);
   const status=$('droneStatus');
@@ -484,19 +474,19 @@ function draw() {
     const mesh=layer.mesh;
     if(!mesh?.patches?.length)continue;
     if(clouds.length)visibility??=new SurfaceVisibility(w,h);
-    const depthGeometry=['mesh','code','viewer'].includes(layer.node.type);
-    const frame=!depthGeometry && replay && $('surfaceTime').checked && timeline[cursor]?.id;
+    const timed=mesh.patches.some(p=>p.first!=null);
+    const frame=timed && replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
-    const cutPercent=Number(layer.node.settings.balloonCut??40);
-    if(depthGeometry && mesh.heightRange && mesh.heightRange.up!==correction[2]){
+    const cutPercent=Number(layer.cut??0);
+    if(mesh.heightRange && mesh.heightRange.up!==correction[2]){
       let min=Infinity,max=-Infinity;
       for(const face of mesh.patches)for(const v of face.vertices){
         const z=dot3(correction[2],v);min=Math.min(min,z);max=Math.max(max,z);
       }
       mesh.heightRange={min,max,up:correction[2]};
     }
-    const cut=depthGeometry && mesh.heightRange && cutPercent>0
+    const cut=mesh.heightRange && cutPercent>0
       ? mesh.heightRange.max-(mesh.heightRange.max-mesh.heightRange.min)*cutPercent/100 : null;
     const patches=visible.flatMap(p=>{
       const outerRing=cut===null?p.vertices:clipHeight(p.vertices,cut,true,false,correction[2]);
@@ -572,7 +562,7 @@ function draw() {
     ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
     ctx.beginPath();ctx.arc(...a,6,0,Math.PI*2);ctx.fill();
   }
-  const gaussian=layers.some(layer=>layer.node.settings.surfaceMethod==='gaussian-map'||layer.node.type==='gaussMesh');
+  const gaussian=!!activeGaussian;
   if(gaussian && $('tofEvidenceToggle').checked)drawTofEvidence(project,cameraPoint,projectCamera,camera,near);
   if(gaussian && !camera)drawClearanceEnvelope(project,scale);
   if(!$('route').checked||!viewBindings().some(p=>p.type==='Camera map')||!displayedPoses().length)return;
@@ -651,127 +641,15 @@ function fitMapView(){
   zoom=1;
   panX=panY=0;
 }
-const aiMethod='depth-anything-v2-v1';
-let depthWorker=null, depthPreviewKey='', depthRequest=0, checkingDepth=false;
-
-function depthPair(frame,raw){
-  const params=new URLSearchParams({run:model.run,index:model.feature_index,frame});
-  $('depthPhoto').src='/depth-input.jpg?'+params;
-  $('depthPreview').hidden=false;
-  $('depthCaption').textContent='Frame '+parseInt(frame)+ ' · brighter is nearer'+(raw?'':' · '+(model.surfaces?.ai?.verdicts?.[frame]||'Predicted depth'));
-  const ctx=$('depthImage').getContext('2d');
-  if(raw){
-    const image=ctx.createImageData(96,72);
-    raw.forEach((v,i)=>{image.data.set([v,v,v,255],i*4);});
-    ctx.putImageData(image,0,0);
-  }else{
-    const key=depthPreviewKey, image=new Image();
-    ctx.clearRect(0,0,96,72);
-    image.onload=()=>{if(key===depthPreviewKey && !depthWorker)ctx.drawImage(image,0,0);};
-    image.src='/depth-preview.png?'+params;
-  }
-}
-
-function replayDepth(){
-  if(depthWorker || $('depthPanel').hidden)return;
-  const frames=model?.surfaces?.ai?.frames;
-  if(!frames?.length){$('depthPreview').hidden=true;return;}
-  const id=parseInt(timeline[cursor]?.id||frames[0]);
-  const frame=frames.reduce((best,f)=>Math.abs(parseInt(f)-id)<Math.abs(parseInt(best)-id)?f:best);
-  const key=model.run+model.feature_index+frame;
-  if(depthPreviewKey!==key){depthPreviewKey=key;depthPair(frame);}
-}
-
-function stopDepth(message){
-  depthRequest++;
-  checkingDepth=false;
-  depthWorker?.terminate();
-  depthWorker=null;
-  depthPreviewKey='';
-  $('cancelDepth').hidden=true;
-  $('depthProgress').textContent=message;
-}
-$('cancelDepth').onclick=()=>{stopDepth('Depth inference cancelled. Completed views are cached.');replayDepth();};
-
-async function buildDepth(span){
-  const candidates=model.poses.filter(p=>p.rotation && model.landmark_views?.[p.frame]?.length>=15);
-  if(candidates.length<2){
-    $('depthProgress').textContent='This walk needs two mapped camera views with landmark tracks.';
-    return;
-  }
-  const count=Math.min(36,candidates.length), frames=Array.from({length:count},(_,i)=>
-    candidates[Math.round(i*(candidates.length-1)/(count-1))].frame);
-  const run=model.run,index=model.feature_index,mapVersion=version;
-  $('depthProgress').textContent='Preparing local model · first use downloads about 38 MB';
-  $('cancelDepth').hidden=false;
-  $('rebuildSurfaces').disabled=$('surfaceMethod').disabled=$('surfaceEdge').disabled=true;
-  const request=++depthRequest;
-  checkingDepth=true;
-  let cached=[];
-  try{
-    const response=await fetch('/depth-cache?'+new URLSearchParams({run,index}));
-    if(response.ok)cached=await response.json();
-  }catch{}
-  if(request!==depthRequest)return;
-  checkingDepth=false;
-  if(model?.run!==run || version!==mapVersion || $('surfaceMethod').value!==aiMethod){stopDepth('Map changed.');return;}
-  if(cached.length===frames.length && frames.every(f=>cached.includes(f))){
-    stopDepth('Fitting surfaces from saved depth predictions…');
-    await act('rebuild-surfaces',{run,index,version:mapVersion,method:aiMethod,growth_distance_cm:span});
-    return;
-  }
-  const worker=new Worker('/depth-worker.js',{type:'module'});
-  depthWorker=worker;
-  worker.onerror=e=>stopDepth(e.message||'The local depth runtime could not load. Retry to download the model.');
-  worker.onmessage=async({data})=>{
-    if(worker!==depthWorker)return;
-    if(model?.run!==run || state.version!==mapVersion){
-      stopDepth('The selected map changed. Start depth inference again.');
-      return;
-    }
-    if(data.error){stopDepth(data.error);return;}
-    if(data.status)$('depthProgress').textContent=data.status;
-    if(data.raw)depthPair(data.frame,data.raw);
-    if(data.predictions){
-      stopDepth('Checking predictions against mapped views and fitting planes…');
-      await act('rebuild-surfaces',{run,index,version:mapVersion,method:aiMethod,growth_distance_cm:span,predictions:data.predictions});
-      if($('error').textContent)$('depthProgress').textContent=$('error').textContent;
-    }
-  };
-  worker.postMessage({run,index,frames});
-}
-
-function growthDistanceCm(mesh){
-  return Number(((mesh?.growth_distance_m??mesh?.max_edge_m??.20)*100).toPrecision(12));
-}
 function showMap(m) {
-  if(checkingDepth||depthWorker)stopDepth("The map changed. Start depth inference again.");
-  depthPreviewKey="";
-  $('depthProgress').textContent="";
-  if(m?.surfaces && !['camera-ray-seeds-v1','first-return-cloth-v1','cloud-planes-v1',aiMethod].includes(m.surfaces.method)) delete m.surfaces;
   const sameMap=m && model && m.run===model.run && m.units===model.units &&
     m.feature_index && m.feature_index===model.feature_index;
-  const pipelineSettings=sameMap?readPipeline():null;
-  const keepLingbot=sameMap && $('surfaceMethod').value==='lingbot-map';
-  const keepGaussian=sameMap && $('surfaceMethod').value==='gaussian-map';
-  if(!sameMap){resetSplatLayer();clearDepthSurface();$('geometrySource').value='photo';activeDepthCloud=null;pathLoading=false;$('pathChoice').hidden=true;++cloudTicket;}
   if(!sameMap){loadCorrection(m);editingLevel=false;$('levelRings').setAttribute('hidden','');$('levelTools').hidden=true;$('editLevel').setAttribute('aria-pressed',false);}
+  const walkChanged=m?.run!==model?.run;
   model=m;
   posesByFrame=new Map(displayedPoses().map(p=>[p.frame,p]));
   updateViewControls();
-  $('surfaceEdge').value=growthDistanceCm(m?.surfaces);
-  const hasTracks=!!Object.keys(m?.landmark_views||{}).length;
-  for(const option of $('surfaceMethod').options)option.disabled=(!hasTracks && option.value!=='cloud-planes-v1') || (option.value===aiMethod && !m?.feature_index);
-  for(const opt of $('surfaceMethod').options){
-    if(['gaussian-map','lingbot-map'].includes(opt.value))opt.disabled=!m?.feature_index;
-    else if(m?.units!=='m')opt.disabled=true;
-  }
-  const relativeGaussian=m?.feature_index && m.units!=='m';
-  $('surfaceMethod').value=keepLingbot?'lingbot-map':(keepGaussian || relativeGaussian)?'gaussian-map':hasTracks?(m?.surfaces?.method||'camera-ray-seeds-v1'):'cloud-planes-v1';
-  updateSpanLabel();
-  updateSurfaceInfo();
   updateGaps();
-  updateStreamControls();
   updateReplayRoute();
   $('estimate').disabled=$('continuous').disabled=!m;
   const label=m ? 'Frames '+parseInt(m.poses[0].frame)+'–'+parseInt(m.poses.at(-1).frame)+' · '+state.frames+' saved' : '';
@@ -783,13 +661,9 @@ function showMap(m) {
   if(m?.level_status)$('units').textContent+=' · '+m.level_status;
   if(m?.gravity_aligned) $('units').textContent+=m.up_fit?' · IMU levelled ±'+m.up_fit.uncertainty_deg+'°':' · IMU aligned';
   if(!sameMap)fitMapView();
-  if(m && !sameMap && m.run!==pipelineRebuildingRun)restorePipeline(m.run);
-  else if(pipelineSettings){
-    $('surfaceMethod').value=pipelineSettings.surfaceMethod;
-    $('surfaceEdge').value=pipelineSettings.surfaceEdge;
-    updateSpanLabel();updateSurfaceInfo();
-  }
-  syncPipelineLabels();
+  // Another walk opens its preset; a rebuilt map of the same walk keeps the graph being edited.
+  if(m && walkChanged)restorePipeline(m.run);
+  else if(m && !sameMap && !pipelineRunning)runQuiet(viewerNode());
   draw();
 }
 canvas.onpointerdown=e=>{
@@ -846,7 +720,7 @@ async function update() {
   $('captureWarning').hidden=!s.fresh||s.motionFresh;
   $('message').textContent=s.message; $('samples').textContent=s.samples+' views'; $('lens').textContent=s.calibrated?'Calibrated':'Self-estimate available';
   $('download').hidden=!s.hasMap;
-  updateStreamControls();
+  updatePipelineButton();
   $('load').disabled=s.busy||s.recording; $('sample').disabled=!s.fresh||s.recording;
   $('calibrate').disabled=s.samples<12||s.recording;
   const replayPose=replay && !s.busy && model?.run===s.run && model.poses.some(p=>p.frame===timeline[cursor]?.id);
@@ -874,24 +748,14 @@ async function update() {
   if(!s.fresh||replay)delete $('framesStep').dataset.live;
   if(s.version!==version) {
     const m=s.hasMap?await(await fetch('/survey.json')).json():null;
-    if(mapRun!==s.run){
-      setStreams(m?.streams||streamChoices.map(choice=>choice.key));
-      mapRun=s.run;
-    }
     resetTracking(); showMap(m); version=s.version;
-    if(!m&&run&&lastSourceWalk!==run&&pipelineRebuildingRun!==run)restorePipeline(run);
+    if(!m&&run&&lastSourceWalk!==run)restorePipeline(run);
     lastSourceWalk=run;
     refreshReplay();
     const list=await(await fetch('/runs')).json(), old=$('runs').value;
     $('runs').replaceChildren(...list.map(n=>new Option(n,n)));
     $('runs').value=list.includes(old)?old:(s.run||list[0]||'');
   }
-  const surfaceBusy=checkingDepth || !!depthWorker || s.recording || s.busy || model?.run!==s.run;
-  $('surfaceMethod').disabled=$('surfaceEdge').disabled=$('rebuildSurfaces').disabled=surfaceBusy;
-  $('buildClearance').disabled=surfaceBusy;
-  if(s.busy && $('clearancePanel').open && !$('buildClearance').hidden)$('clearanceStatus').textContent=s.message;
-  $('buildGaussianMesh').disabled=$('buildLingbot').disabled=$('trainGaussian').disabled=surfaceBusy;
-  if(s.busy && !$('buildGaussianMesh').hidden)$('gaussianStatus').textContent=s.message;
   updateWalkActions();
 }
 async function act(key,body={}) {
@@ -980,77 +844,9 @@ async function locate(){
 $('estimate').onclick=locate;$('continuous').onclick=()=>{tracking=!tracking;$('continuous').textContent=tracking?'Pause tracking':'Start tracking';if(tracking)locate();};
 setInterval(()=>{if(tracking&&!document.hidden)locate();},750);
 $('source').onchange=resetTracking;
-function updateSurfaceInfo(){
-  const patches=model?.surfaces?.patches||[];
-  const toggle=$('surfaceLayer'), info=$('surfaceInfo');
-  toggle.disabled=!patches.length;
-  const gaussian=$('surfaceMethod').value==='gaussian-map';
-  $('surfaceSettings').hidden=!model?.points.length || (model.units!=='m' && !model.feature_index);
-  const fromDepth=$('geometrySource').value!=='photo';
-  $('surfaceMethod').hidden=$('methodTitle').hidden=fromDepth;
-  $('geometryReport').hidden=!fromDepth;
-  $('depthSurfaceControls').hidden=$('pipeline').dataset.inspect!=='mesh';
-  $('buildDepthSurfaces').disabled=pipelineRunning||!state?.run||!$('depthSurfaceMethod').value;
-  const balloon=$('depthSurfaceMethod').value==='balloon';
-  $('balloonControls').hidden=!balloon;
-  $('balloonCutControl').hidden=!balloon||!depthSurfaceMesh?.heightRange||!toggle.checked;
-  const balloonUnits=model?.units==='m'?'cm':'% of map span';
-  if($('balloonUnits').textContent!==balloonUnits){
-    $('balloonUnits').textContent=balloonUnits;
-    $('balloonDetail').value=balloonUnits==='cm'?8:1;
-    $('balloonReach').value=balloonUnits==='cm'?200:25;
-  }
-  $('depthSurfaceTof').disabled=model?.units!=='m';
-  if(model?.units!=='m')$('depthSurfaceTof').checked=false;
-  $('methodConfig').hidden=$('surfaceSettings').hidden||fromDepth;
-  if(fromDepth){toggle.disabled=!depthSurfaceMesh?.patches.length;info.hidden=$('surfaceTimeControl').hidden=true;return;}
-  if(gaussian || $('surfaceMethod').value==='lingbot-map'){
-    toggle.disabled=true;
-    $('surfaceTimeControl').hidden=info.hidden=true;
-    return;
-  }
-  $('surfaceTimeControl').hidden=!patches.length || !toggle.checked;
-  info.hidden=!(model&&(!patches.length||toggle.checked));
-  const mesh=model?.surfaces;
-  $('vertexKey').textContent=mesh?.method==='cloud-planes-v1'?'Plane support':'Surface vertices';
-  if(!mesh){ info.textContent='Rebuild this walk to grow surfaces from its landmark tracks.';return; }
-  if(mesh.status==='needs_scale'){
-    info.textContent='Surface growth needs metric scale. Under Metric scale, mark two mapped replay frames and enter their measured separation.';
-    return;
-  }
-  if(mesh.status==='needs_tracks'){info.textContent='Rebuild this walk to associate landmarks with the cameras that observed them.';return;}
-  if(mesh.method===aiMethod){
-    const a=mesh.ai;
-    info.textContent=a?'Depth Anything V2 · '+patches.length+' inferred planes · '+a.aligned_views+'/'+a.frames.length+
-      ' views passed depth checks · '+a.confirmed_points.toLocaleString()+' cross-view samples · ToF rejections '+a.tof_rejected:
-      'Rebuild surfaces to predict depth for this camera map.';
-    if(a && !patches.length)info.textContent+=' · Insufficient consistent planar support';
-    return;
-  }
-  if(mesh.method==='cloud-planes-v1'){
-    info.textContent='Cloud planes · '+patches.length+' polygons · '+mesh.support_count.toLocaleString()+
-      ' supporting landmarks · '+Math.round(mesh.tolerance_m*1000)+' mm fitting tolerance';
-    if(mesh.indoor){
-      const e=mesh.indoor;
-      info.textContent+=' · '+e.regularized+' aligned to room directions · '+e.range_matches+'/'+e.intersected+
-        ' intersecting ToF rays agree · '+e.range_adjusted+' range-adjusted plates · '+e.attitude_samples+' paired attitudes · '+e.height_samples+
-        ' barometric heights · Vertical direction '+e.up_source;
-    }
-    return;
-  }
-  if(mesh.method==='first-return-cloth-v1'){
-    info.textContent='Ray cloth · '+patches.length+' triangles · '+growthDistanceCm(mesh)+' cm maximum span · '+
-      mesh.unconfirmed+' landmarks lacked a second viewpoint · '+mesh.isolated+' lacked nearby support';
-    return;
-  }
-  info.textContent='Seed growth · '+patches.length+' triangles · '+mesh.seeds+' single seeds · '+mesh.open_pairs+' open pairs · '+
-    mesh.deferred_landmarks.length+' landmarks still occluded · '+growthDistanceCm(mesh)+(mesh.growth_distance_m==null?' cm maximum edge · rebuild to use growth distance':' cm growth distance');
-
-}
-let gaussianMeshViewer, gaussianMeshReady=false, loadedMeshUrl, loadedSplatUrl;
-let gaussianViewer, gaussianReady=false, gaussianRequest=0;
+// Files of the Gaussian map the viewer shows, including non-default training variants.
 function gaussianUrl(file){
-  return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
+  return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:activeGaussian?.index||model.feature_index,variant:activeGaussian?.variant||'',file});
 }
 let clearanceReport=null, clearanceKey='';
 const clearanceStates={
@@ -1113,11 +909,11 @@ function paintClearanceTrack(){
   syncClearance();
 }
 async function refreshClearance(){
-  const open=model && $('surfaceMethod').value==='gaussian-map' && $('clearancePanel').open;
+  const open=model && activeGaussian && !$('clearancePanel').hidden && $('clearancePanel').open;
   const key=open?gaussianUrl('clearance-v1/report.json')+'&version='+state.version:'';
   if(clearanceKey===key)return;
   clearanceKey=key;clearanceReport=null;
-  $('clearanceControls').hidden=$('buildClearance').hidden=true;
+  $('clearanceControls').hidden=true;
   if(!key)return;
   const status=$('clearanceStatus');
   status.textContent='Opening clearance map…';
@@ -1125,9 +921,7 @@ async function refreshClearance(){
     const response=await fetch(key);
     if(clearanceKey!==key)return;
     if(response.status===404){
-      status.textContent=state.message?.startsWith('Walk clearance failed')?state.message:
-        'Build from the trained Gaussian map and recorded ToF sightlines.';
-      $('buildClearance').hidden=false;return;
+      status.textContent='Run the Walk clearance node to build it.';return;
     }
     if(!response.ok)throw Error('Could not load clearance data.');
     const data=await response.json();
@@ -1155,7 +949,6 @@ function drawClearanceEnvelope(project,screenScale){
   ctx.fill();ctx.stroke();ctx.restore();
 }
 $('clearancePanel').ontoggle=()=>{refreshClearance();draw();};
-$('buildClearance').onclick=()=>act('build-clearance',{run:model.run,index:model.feature_index});
 for(const id of ['bodyRadius','clearanceMargin'])$(id).oninput=()=>{paintClearanceTrack();draw();};
 $('clearanceSeek').oninput=()=>{pauseReplay();replay=true;seek($('clearanceSeek').valueAsNumber);};
 new ResizeObserver(paintClearanceTrack).observe($('clearancePlot'));
@@ -1189,7 +982,7 @@ function syncTofReading(){
 }
 
 async function refreshTofEvidence(){
-  const enabled=model && $('surfaceMethod').value==='gaussian-map' && $('tofEvidenceToggle').checked;
+  const enabled=model && activeGaussian && $('tofEvidenceToggle').checked;
   $('tofEvidencePanel').hidden=!enabled;
   const key=enabled?gaussianUrl('tof-evidence.json')+'&version='+state.version:'';
   if(evidenceKey===key)return;
@@ -1272,182 +1065,13 @@ $('tofRayFrame').onchange=()=>jumpToTofFrame($('tofRayFrame').value);
 $('tofPrev').onclick=()=>stepTofReading(false);
 $('tofNext').onclick=()=>stepTofReading(true);
 
+$('gaussianTestFrame').onchange=()=>gaussianPair();
 function gaussianPair(){
   const frame=$('gaussianTestFrame').value;
   if(!frame)return;
   $('gaussianPhoto').src=gaussianUrl('reference/'+frame);
   $('gaussianRender').src=gaussianUrl('renders/'+frame.replace('.jpg','.png'));
 }
-async function loadPointLayer(source,fromDepth){
-  const ticket=++layerRequest;
-  layerSource=source;layerLoaded=false;
-  $('trainLayer').hidden=true;
-  const status=$('splatLayerStatus');
-  status.textContent='Loading splats…';
-  try{
-    let response,trained=false;
-    if(!fromDepth&&model.feature_index){
-      response=await fetch(gaussianUrl('gaussians.ply'));
-      trained=response.ok;
-      if(!trained&&response.status!==404)throw Error('Could not open the trained splats.');
-    }
-    const buffer=trained?await response.arrayBuffer():null;
-    if(ticket!==layerRequest)return;
-    layerViewer??=new GaussianView();
-    const count=trained?layerViewer.load(buffer,false):layerViewer.fitPoints(source.points);
-    $('trainLayer').hidden=trained||fromDepth||!model.feature_index;
-    layerLoaded=true;
-    status.textContent=count.toLocaleString()+(trained?' photo-trained splats':fromDepth?' depth-fitted splats':' sparse preview splats · photo splats untrained');
-    draw();
-  }catch(error){if(ticket===layerRequest)status.textContent=error.message;}
-}
-function resetSplatLayer(){
-  $('trainLayer').hidden=true;++layerRequest;layerSource=null;layerLoaded=false;$('splatLayerStatus').textContent='';
-}
-$('splatLayer').onchange=()=>{resetSplatLayer();draw();};
-async function loadGaussian(){
-  const ticket=++gaussianRequest;
-  refreshTofEvidence();
-  gaussianMeshReady=gaussianReady=false;
-  $('buildGaussianMesh').hidden=true;
-  $('gaussianEval').hidden=$('gaussianDownload').hidden=$('trainGaussian').hidden=true;
-  $('gaussianStatus').textContent='Opening Gaussian map…';
-  draw();
-  try{
-    const response=await fetch(gaussianUrl('report.json'));
-    if(ticket!==gaussianRequest)return;
-    if(response.status===404){
-      $('gaussianStatus').textContent='Build from the registered camera views on this Mac.';
-      $('trainGaussian').hidden=false; return;
-    }
-    if(!response.ok)throw Error('Could not open the Gaussian map.');
-    const report=await response.json();
-    if(ticket!==gaussianRequest)return;
-    const mode=$('gaussianMode').value, mesh=mode==='mesh' || mode==='overlay';
-    const file=mesh?'mesh-v1/mesh.ply':mode, url=gaussianUrl(file);
-    $('gaussianTestFrame').replaceChildren(...report.evaluation.map(e=>new Option(parseInt(e.frame)+' · '+e.psnr_db+' dB',e.frame)));
-    gaussianPair(); $('gaussianEval').hidden=false;
-    let message;
-    if(mesh){
-      const response=await fetch(gaussianUrl('mesh-v1/report.json'));
-      if(ticket!==gaussianRequest)return;
-      if(response.status===404){
-        $('gaussianStatus').textContent='Extract surfaces from the trained splats on this Mac.';
-        $('buildGaussianMesh').hidden=false;
-        return;
-      }
-      if(!response.ok)throw Error('Could not open the mesh report.');
-      const stats=await response.json();
-      if(ticket!==gaussianRequest)return;
-      if(loadedMeshUrl!==url){
-        const result=await fetch(url);
-        if(!result.ok)throw Error('Could not load the mesh.');
-        const buffer=await result.arrayBuffer();
-        if(ticket!==gaussianRequest)return;
-        gaussianMeshViewer=new GaussianMeshView();
-        gaussianMeshViewer.load(buffer); loadedMeshUrl=url;
-      }
-      const tof=stats.tof;
-      message=stats.triangles.toLocaleString()+' triangles · '+stats.planar_regions+' planar regions · '+stats.views+' registered views · '+
-        (stats.units==='m'?'metric map':'relative scale')+' · ToF hits '+(tof.hits||0)+'/'+(tof.eligible||0)+
-        (tof.median_error_m!=null?' · median difference '+(100*tof.median_error_m).toFixed(1)+' cm'+
-          (stats.units==='m'?'':' after provisional scaling')+' · 80th percentile '+(100*tof.p80_error_m).toFixed(1)+' cm':'')+' · '+(tof.reason||tof.beam);
-      gaussianMeshReady=true;
-    }
-    if(!mesh || mode==='overlay'){
-      const splatUrl=gaussianUrl(mesh?'gaussians.ply':file), cloud=file==='cloud.ply';
-      if(loadedSplatUrl!==splatUrl){
-        const ply=await fetch(splatUrl);
-        if(!ply.ok)throw Error('Could not load the PLY file.');
-        const buffer=await ply.arrayBuffer();
-        if(ticket!==gaussianRequest)return;
-        gaussianViewer=new GaussianView();
-        gaussianViewer.load(buffer,cloud); loadedSplatUrl=splatUrl;
-      }
-      gaussianReady=true;
-      if(!mesh)message=gaussianViewer.order.length.toLocaleString()+(cloud?' colored points':' trained splats')+' · '+report.train_views+' training views · '+report.test_views+' withheld · '+report.mean_psnr_db+' dB PSNR · saved camera poses';
-    }
-    if(['gaussMesh','photo'].includes(currentNode().type)&&(!currentNode().settings.program||currentNode().settings.program===nativePass))publishOutput(currentNode(),{
-      solid:gaussianMeshReady?gaussianMeshViewer:null,splats:gaussianReady?gaussianViewer:null});
-    $('gaussianStatus').textContent=message;
-    $('gaussianDownload').hidden=false; $('gaussianDownload').href=url;
-    $('gaussianDownload').download=file.split('/').at(-1);
-    draw();
-  }catch(error){if(ticket===gaussianRequest)$('gaussianStatus').textContent=error.message;}
-}
-$('gaussianMode').onchange=()=>{
-  $('splatLayer').checked=['gaussians.ply','overlay'].includes($('gaussianMode').value);
-  resetSplatLayer();loadGaussian();
-};
-$('gaussianTestFrame').onchange=gaussianPair;
-$('buildGaussianMesh').onclick=()=>act('build-gaussian-mesh',{run:model.run,index:model.feature_index});
-$('trainLayer').onclick=$('trainGaussian').onclick=()=>act('build-gaussians',{run:model.run,index:model.feature_index});
-let lingbotRequest=0;
-$('buildLingbot').onclick=()=>act('build-lingbot',{run:model.run,index:model.feature_index});
-async function updateLingbot(selected){
-  const ticket=++lingbotRequest, viewer=$('lingbotView');
-  $('viewNav').hidden=selected||!model;
-  if(selected&&editingLevel)editOrientation(false);
-  $('lingbotPanel').hidden=!selected;
-  $('mapHelp').closest('.legend').hidden=selected;
-  $('route').closest('.map-controls').hidden=selected;
-  viewer.hidden=true;
-  if(!selected){viewer.removeAttribute('src');return;}
-  $('lingbotStatus').textContent='Opening reconstruction…';
-  $('buildLingbot').hidden=$('lingbotCloud').hidden=true;
-  const url=file=>'/lingbot-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file});
-  try{
-    const response=await fetch(url('trajectory.json'));
-    if(ticket!==lingbotRequest)return;
-    if(response.status===404){
-      $('lingbotStatus').textContent='Sample every eighth image across this walk.';
-      $('buildLingbot').hidden=false;return;
-    }
-    if(!response.ok)throw Error('Could not open the saved trajectory.');
-    const report=await response.json();
-    if(ticket!==lingbotRequest)return;
-    $('lingbotStatus').textContent=report.views+' predicted poses · '+report.points.toLocaleString()+' depth samples · relative scale';
-    viewer.src=url('view.html');viewer.hidden=false;
-    $('lingbotCloud').href=url('cloud.ply');$('lingbotCloud').hidden=false;
-  }catch(error){if(ticket===lingbotRequest)$('lingbotStatus').textContent=error.message;}
-}
-function updateSpanLabel(){
-  const fromPhoto=$('geometrySource').value==='photo';
-  $('cloudLabel').textContent=fromPhoto?'Landmarks':'Depth points';
-  const lingbot=fromPhoto&&$('surfaceMethod').value==='lingbot-map'&&currentNode()?.enabled!==false;
-  updateLingbot(lingbot);
-  const gaussian=fromPhoto&&$('surfaceMethod').value==='gaussian-map';
-  if(gaussian && $('gaussianPanel').hidden){
-    resetSplatLayer();
-    $('splatLayer').checked=['gaussians.ply','overlay'].includes($('gaussianMode').value);
-  }
-  $('gaussianPanel').hidden=!gaussian;
-  refreshClearance();
-  for(const id of ['surfaceSpanLabel','surfaceEdge','rebuildSurfaces'])$(id).hidden=gaussian || lingbot;
-  if(gaussian && model)loadGaussian();
-  else{++gaussianRequest;gaussianMeshReady=gaussianReady=false;refreshTofEvidence();}
-  $('depthPanel').hidden=$('surfaceMethod').value!==aiMethod;
-  replayDepth();
-  const labels={[aiMethod]:'Maximum landmark gap (cm)','cloud-planes-v1':'Maximum landmark gap (cm)','first-return-cloth-v1':'Maximum span (cm)'};
-  $('surfaceSpanLabel').textContent=labels[$('surfaceMethod').value]||'Growth distance (cm)';
-}
-$('surfaceMethod').onchange=()=>{updateSpanLabel();updateSurfaceInfo();draw();};
-$('rebuildSurfaces').onclick=()=>{
-  const edge=$('surfaceEdge');
-  edge.setCustomValidity(edge.valueAsNumber<=0?'Enter a positive growth distance.':'');
-  if(!edge.reportValidity())return;
-  $('surfaceLayer').checked=true;
-  if($('surfaceMethod').value===aiMethod){buildDepth(edge.valueAsNumber);return;}
-  act('rebuild-surfaces',{run:model.run,method:$('surfaceMethod').value,growth_distance_cm:edge.valueAsNumber});
-};
-$('surfaceEdge').oninput=()=>{$('surfaceEdge').setCustomValidity('');};
-$('surfaceEdge').onkeydown=e=>{
-  if(e.key==='Enter')$('rebuildSurfaces').click();
-};
-$('surfaceTime').onchange=draw;
-$('surfaceLayer').onchange=()=>{updateSurfaceInfo();draw();};
-$('cloud').onchange=draw;
-$('route').onchange=()=>{updateRouteLegend();draw();};
 function updateViewControls(){
   $('droneView').disabled=!model || !timeline.length;
   if($('droneView').disabled)droneView=false;
@@ -1526,33 +1150,14 @@ function updateAxisGizmo(axes){
 }
 $('range').onclick=async()=>{try{const r=await fetch('/range',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:Number($('address').value)})});
 const q=await r.json();$('reading').textContent=r.ok?'Raw reading '+q.raw:q.error;}catch(e){$('reading').textContent=e.message;}};
-let depthSurfaceMesh=null;
-function clearDepthSurface(){
-  depthSurfaceMesh=null;
-  $('depthSurfaceStatus').textContent='';
-}
-function surfaceOptionsChanged(){
-  clearDepthSurface();updateSurfaceInfo();draw();
-}
 $('balloonCut').oninput=()=>{
   const percent=$('balloonCut').value;
   $('balloonCutValue').value=percent+'%';
   $('balloonCut').setAttribute('aria-valuetext',percent+' percent of balloon height');
+  for(const layer of graphLayers())if(layer.cut!=null)layer.cut=+percent;
   draw();
 };
-$('balloonDetail').oninput=$('balloonReach').oninput=surfaceOptionsChanged;
-$('depthSurfaceMethod').onchange=$('depthSurfaceTof').onchange=surfaceOptionsChanged;
-const surfaceMethodsReady=fetch('/depth-surface-methods').then(r=>r.json()).then(methods=>{
-  $('depthSurfaceMethod').replaceChildren(...Object.entries(methods).map(([id,label])=>new Option(label,id)));
-  updateSurfaceInfo();
-}).catch(()=>{$('depthSurfaceStatus').textContent='Surface methods unavailable. Reload the dashboard.';});
-$('buildDepthSurfaces').onclick=()=>runPipeline();
-let activeDepthCloud=null, cloudTicket=0, rightKey='';
-for(const opt of $('frameMethod').options){
-  $('rightSource').add(new Option(opt.text,opt.value));
-  $('geometrySource').add(new Option(opt.value==='photo'?'Recorded photos':opt.text,opt.value));
-}
-$('rightSource').value='apple';
+let rightKey='';
 function timingText(t){
   if(!t)return '';
   const stages=Object.entries(t.stages||{}).map(([name,seconds])=>name+' '+seconds.toFixed(2)+' s');
@@ -1562,57 +1167,6 @@ function refreshDisplayedPath(){
   posesByFrame=new Map(displayedPoses().map(p=>[p.frame,p]));
   updateReplayRoute();updateGaps();refreshReplay();
 }
-let pathLoading=false;
-async function loadGeometry(regenerate=false,savedOnly=false){
-  const method=$('geometrySource').value, ticket=++cloudTicket;
-  pathLoading=method!=='photo';
-  updateStreamControls();
-  clearDepthSurface();updateSpanLabel();updateSurfaceInfo();
-  if(method==='photo'||!model){refreshDisplayedPath();return;}
-  const report=$('geometryReport');
-  report.textContent=regenerate?'Estimating camera poses from the selected depth frames…':method==='anything'&&$('depthTraining').checked?'Preparing trained depth points…':'Loading depth reconstruction…';
-  $('cloud').checked=true;
-  try{
-    const response=await fetch(regenerate?'/regenerate-path':'/depth-cloud',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({run:model.run,index:model.feature_index,method,savedOnly,trained:method==='anything'&&$('depthTraining').checked})});
-    const result=await response.json();
-    if(ticket!==cloudTicket)return;
-    if(!response.ok)throw Error(result.error||'Depth reconstruction unavailable');
-    resetSplatLayer();activeDepthCloud=result;
-    const target=currentNode();
-    const producer=target.type==='points'?target:nodeById(target.input);
-    if(producer?.type==='points'&&(!producer.settings.program||producer.settings.program===nativePass)){
-      publishOutput(producer,{points:result.points,pathPoses:result.path?.poses});
-      if(target.type==='splats'&&target.settings.program===undefined&&producer.type==='points'){
-        const splats=new GaussianView();splats.fitPoints(result.points);publishOutput(target,{splats});
-      }
-    }
-    selectDepthOutput();
-    $('pathChoice').hidden=!result.path&&!savedOnly;
-    $('useDepthPath').checked=!!result.path;
-    const pathInfo=result.path?'Regenerated path · '+result.path.poses.length+'/'+result.path.frames+' poses · '+result.path.seconds.toFixed(2)+' s · anchored to photo map'+(method==='gaussian'?' · depth rendered from saved poses':''):'Saved camera path';
-    report.textContent=pathInfo+(method==='anything'?(result.training?' · Depth correction trained on '+result.training.frames+' views':' · Depth training skipped'):'')+' · Depth point cloud · '+result.points.length.toLocaleString()+' displayed · '+result.used+'/'+result.poses+
-      ' oriented frames contributed · '+timingText({...result,frames:result.poses});
-    return result;
-  }catch(e){if(ticket===cloudTicket){report.textContent=e.message;$('useDepthPath').checked=!!activeDepthCloud?.path;}}
-  finally{if(ticket===cloudTicket){pathLoading=false;updateStreamControls();updateSurfaceInfo();refreshDisplayedPath();syncPipelineLabels();}}
-}
-$('geometrySource').onchange=()=>{
-  if($('pipeline').dataset.inspect==='depth'){
-    $('frameMethod').value=$('geometrySource').value;$('frameMethod').onchange();return;
-  }
-  resetSplatLayer();activeDepthCloud=null;$('pathChoice').hidden=true;
-  $('frameMethod').value=$('geometrySource').value;
-  $('frameMethod').onchange();
-  refreshDisplayedPath();loadGeometry(false,$('pipelinePath').value==='saved');
-};
-
-$('useDepthPath').onchange=()=>loadGeometry(false,!$('useDepthPath').checked);
-$('previousPhotoMap').onclick=()=>act('previous-photo-map',{run:model.run,index:model.feature_index});
-$('regeneratePath').onclick=()=>{
-  if($('geometrySource').value==='photo')act('rebuild',{streams:selectedStreams()});
-  else { $('pipelinePath').value='regenerated'; loadGeometry(true); }
-};
 function comparisonUrl(method,frame){
   const query=depthQuery();
   const endpoint=method==='photo'?'/depth-input.jpg?':'/frame-depth.png?';
@@ -1723,7 +1277,6 @@ async function pollFrameDepth(){
     const retry=next.saved!==frameDepthStatus.saved&&!$('depthMissing').hidden;
     const newlyComplete=next.saved===timeline.length && frameDepthStatus.saved!==next.saved;
     frameDepthStatus=next; describeFrameDepth();
-    if(newlyComplete && query.method===$('geometrySource').value && !pathLoading && !activeDepthCloud)loadGeometry(false,$('pipelinePath').value==='saved');
     if(retry){displayedFrame=null;refreshReplay();}
   }catch{}
 }
@@ -1755,7 +1308,7 @@ function drawTimeline(){
   const x=ms=>2+ms/duration*(width-4);
   const registered=new Map(displayedPoses().map(p=>[p.frame,p.method]));
   for(const frame of timeline){
-    const inferred=selectedStreams().includes('camera')&&replayEstimates.get(frame.id);
+    const inferred=replayEstimates.get(frame.id);
     g.fillStyle=inferred?routeStyles[inferred.kind].color:registered.has(frame.id)?(registered.get(frame.id)?'#72caff':'#a5efd1'):'#556469';
     g.fillRect(x(frame.ms),3,2,7);
   }
@@ -1775,7 +1328,6 @@ function refreshReplay(){
   showReplayBinding();
   syncClearance();
   syncTofReading();
-  replayDepth();
   updateViewControls();
   updateCamera();
   const frame=timeline[cursor];
@@ -1796,7 +1348,7 @@ function refreshReplay(){
   }
   const seconds=ms=>(ms/1000).toFixed(2)+' s';
   $('frameNo').textContent=seconds(frame.ms)+' / '+seconds(timeline.at(-1).ms)+' · Frame '+parseInt(frame.id);
-  $('rate').textContent='Recorded · '+(frame.tof>0&&frame.tof<250?'ToF '+(frame.tof/104).toFixed(2)+' m':'ToF unavailable')+
+  $('rate').textContent='Recorded · '+(frame.tof_m!=null?'ToF '+frame.tof_m.toFixed(2)+' m':'ToF unavailable')+
     ' · '+(frame.gyro?'IMU paired':'No paired IMU');
   const hasPose=posesByFrame.get(frame.id), inferred=replayEstimates.get(frame.id);
   $('timelineStatus').textContent=hasPose
@@ -1852,41 +1404,6 @@ $('play').onclick=()=>{
 };
 $('cameraMode').onclick=()=>{
   $('framesStep').open=true;pauseReplay();replay=!replay;if(!replay)droneView=false;refreshReplay();};
-const streamNames={camera:'Camera',tof:'ToF',gyro:'Gyroscope',accel:'Accelerometer',barometer:'Barometer'};
-const streamChoices=Object.entries(streamNames).map(([key,name])=>{
-  const input=document.createElement('input');
-  input.type='checkbox';input.checked=true;
-  const label=document.createElement('label');label.append(input,' '+name);
-  $('inputStreams').append(label);
-  input.onchange=()=>{clearGapEvidence();updateStreamControls();refreshReplay();};
-  return {key,input};
-});
-function selectedStreams(){return streamChoices.filter(({input})=>input.checked).map(({key})=>key);}
-function setStreams(keys){for(const {key,input} of streamChoices) input.checked=keys.includes(key);}
-function updateStreamControls(){
-  const selected=selectedStreams(), visual=selected.includes('camera');
-  $('reconstructionInputs').hidden=!state?.run||!!state?.recording;
-  $('runPipeline').disabled=pipelineRunning||!state?.run||state.run!==timelineRun||state.hasMap&&model?.run!==state.run||state?.busy||state?.recording;
-  const photo=$('geometrySource').value==='photo';
-  $('depthTrainingChoice').hidden=$('geometrySource').value!=='anything';
-  $('depthTraining').disabled=!model||pathLoading;
-  $('regeneratePath').textContent=photo?'Rebuild photo map and path':'Regenerate path';
-  $('previousPhotoMap').hidden=!photo||!state?.hasPreviousMap;
-  $('previousPhotoMap').disabled=$('trainLayer').disabled=!!(state?.busy||state?.recording);
-  $('regeneratePath').disabled=!model||state?.busy||state?.recording||pathLoading;
-  $('useDepthPath').disabled=pathLoading;
-  $('rebuild').hidden=!visual;
-  $('rebuild').disabled=!state?.run||state.busy||state.recording;
-
-  $('mapPanel').hidden=false;
-  $('posePanel').hidden=!visual;
-  const used=model?.streams;
-  const saved=used?'Saved map inputs · '+used.map(key=>streamNames[key]).join(', '):
-    model?'Saved map inputs · legacy reconstruction':'No saved reconstruction';
-  $('streamSummary').textContent=visual?((used||Object.keys(streamNames)).join(',')!==selected.join(',')?'Selection changed · rebuild to apply. ':'')+saved:
-    'Enable the camera to run the camera mapper.';
-}
-$('rebuild').onclick=()=>act('rebuild',{streams:selectedStreams()});
 function updateGaps(){
   const mapped=new Set(displayedPoses().map(p=>p.frame));
   gapRanges=[];
@@ -1927,1280 +1444,3 @@ $('inspectGap').onclick=async()=>{
     output.textContent='Frame '+frame+' · '+detail;
   }catch(e){if(token===gapRequest)output.textContent=e.message;}
 };
-const pipelineFields=['geometrySource','surfaceMethod','depthTraining','depthOutput','depthSurfaceMethod',
-  'depthSurfaceTof','balloonDetail','balloonReach','balloonCut','surfaceEdge','gaussianMode','useDepthPath'];
-const presetStorage='room-survey-pipelines-v1';
-function storedPresets(){
-  try{return JSON.parse(localStorage.getItem(presetStorage))||{};}catch{return {};}
-}
-function readPipeline(){
-  const config={streams:selectedStreams()};
-  for(const id of pipelineFields)config[id]=$(id).type==='checkbox'?$(id).checked:$(id).value;
-  config.useDepthPath=$('geometrySource').value!=='photo'&&$('pipelinePath').value==='regenerated';
-  return config;
-}
-const builtins=new Map([['Empty pipeline',recordingPreset()],['Replay · photo and depth comparison',replayComparePreset()],['Range history',recordingPreset(true)],['ToF-corrected depth pixels',tofPixelPreset()]]);
-const defaults={...readPipeline(),depthSurfaceMethod:'planes',useDepthPath:false,depthOutput:'points'};
-for(const option of $('surfaceMethod').options){
-  builtins.set(option.text,{...defaults,geometrySource:'photo',surfaceMethod:option.value});
-}
-for(const option of $('geometrySource').options){
-  if(option.value!=='photo')builtins.set(option.text,{...defaults,geometrySource:option.value});
-}
-function listPresets(name){
-  const select=$('pipelinePreset');
-  const names=new Set([...builtins.keys(),...Object.keys(storedPresets())]);
-  select.replaceChildren(new Option('Current settings',''),...Array.from(names,n=>new Option(n,n)));
-  select.value=name||'';
-}
-function syncPipelineLabels(){
-  const inspector=$('pipeline').dataset.inspect;
-  for(const opt of $('gaussianMode').options){
-    const meshMode=['mesh','overlay'].includes(opt.value);
-    opt.hidden=inspector==='gaussMesh'?!meshMode:inspector==='photo'&&meshMode;
-  }
-  const depth=$('geometrySource').value!=='photo';
-  $('depthStages').hidden=!depth;
-  $('pipelinePathLabel').hidden=!depth;
-  $('depthSurfaceControls').hidden=inspector!=='mesh';
-  $('sourceSummary').textContent=$('geometrySource').selectedOptions[0]?.text||'';
-  $('geometrySummary').textContent=(depth?$('depthOutput'):$('surfaceMethod')).selectedOptions[0]?.text||'';
-  let output='Waiting for mapped frames';
-  if(model){
-    output='Photo landmarks and path';
-    if(depth&&activeDepthCloud){
-      output=depthSurfaceMesh&&$('surfaceLayer').checked?'Depth surface mesh':
-        $('splatLayer').checked?'Depth-fitted splats':'Depth points and path';
-    }else if(!depth){
-      if(!$('lingbotView').hidden)output='LingBot point cloud';
-      else if(gaussianMeshReady)output='Gaussian surface mesh';
-      else if(gaussianReady)output='Gaussian reconstruction';
-      else if($('surfaceLayer').checked&&model.surfaces?.patches?.length)output='Surface mesh';
-      else if(layerLoaded&&$('splatLayer').checked)output='Splats and path';
-    }
-  }
-  const view=nodeGraph&&viewerNode();
-  $('viewerOutput').textContent=view?viewBindings(view).map(p=>p.type).join(' + '):output;
-}
-function selectDepthOutput(){
-  const value=$('depthOutput').value;
-  $('splatLayer').checked=value==='splats';
-  $('surfaceLayer').checked=value==='mesh'&&!!depthSurfaceMesh?.patches?.length;
-  $('cloud').checked=value==='points'||(value==='mesh'&&!$('surfaceLayer').checked);
-  resetSplatLayer();updateSurfaceInfo();syncPipelineLabels();draw();
-}
-let applyTicket=0;
-async function applyPipeline(config){
-  const ticket=++applyTicket;
-  const current=model?.feature_index,run=model?.run;
-  await surfaceMethodsReady;
-  if(ticket!==applyTicket||current!==model?.feature_index||run!==model?.run)return;
-  for(const id of pipelineFields){
-    const el=$(id),value=config[id];
-    if(value==null)continue;
-    if(el.type==='checkbox')el.checked=value;
-    else if(!el.options||Array.from(el.options).some(o=>o.value===value))el.value=value;
-  }
-  $('pipelinePath').value=config.useDepthPath?'regenerated':'saved';
-  if(Array.isArray(config.streams))setStreams(config.streams);
-  $('frameMethod').value=$('geometrySource').value;
-  $('frameMethod').onchange();
-  $('balloonCut').oninput();
-  resetSplatLayer();activeDepthCloud=null;$('pathChoice').hidden=true;
-  const depth=$('geometrySource').value!=='photo';
-  // Inspection changes controls. The graph runner owns processing and publishing.
-  const node=currentNode(),saved=outputs.get(outputKey(node));
-  depthSurfaceMesh=node.type==='mesh'?saved?.mesh:null;
-  $('geometryReport').textContent=saved?'Output available in the node ports.':'Run to node to produce this output.';
-  updateSpanLabel();updateSurfaceInfo();
-  if(depth)selectDepthOutput();
-  else { $('cloud').checked=true; $('surfaceLayer').checked=model?.surfaces?.method===config.surfaceMethod; draw(); }
-  syncPipelineLabels();
-}
-function restorePipeline(run){
-  const name=localStorage.getItem('room-survey-active-preset-'+run);
-  const saved=storedPresets();
-  const config=name&&(Object.hasOwn(saved,name)?saved[name]:builtins.get(name));
-  listPresets(config?name:'');
-  $('presetName').value=config?name:'';
-  $('presetStatus').textContent='';
-  openNodeGraph(config||(model?readPipeline():recordingPreset()));
-}
-$('pipelinePreset').onchange=()=>{
-  const name=$('pipelinePreset').value;
-  if(!name)return;
-  $('presetName').value=name;
-  $('presetStatus').textContent='';
-  if(state?.run)localStorage.setItem('room-survey-active-preset-'+state.run,name);
-  openNodeGraph(storedPresets()[name]||builtins.get(name));
-};
-$('savePreset').onclick=()=>{
-  const name=$('presetName').value.trim();
-  if(!name){$('presetStatus').textContent='Enter a preset name.';$('presetName').focus();return;}
-  localStorage.setItem(presetStorage,JSON.stringify({...storedPresets(),[name]:{...readPipeline(),graph:structuredClone(nodeGraph)}}));
-  if(state?.run)localStorage.setItem('room-survey-active-preset-'+state.run,name);
-  listPresets(name);$('presetStatus').textContent='Saved in this browser';
-};
-$('depthOutput').onchange=selectDepthOutput;
-
-$('pipeline').addEventListener('change',e=>{
-  if(e.target.id==='pipelinePath'||pipelineFields.includes(e.target.id)||$('inputStreams').contains(e.target)){
-    ++applyTicket;
-    $('pipelinePreset').value='';
-    $('presetStatus').textContent='Edited';
-    if(state?.run)localStorage.removeItem('room-survey-active-preset-'+state.run);
-    syncPipelineLabels();
-  }
-});
-const runContexts=new WeakMap();
-let pipelineRunning=false,pipelineRebuildingRun=null;
-function executionOrder(target){
-  const ordered=[],done=new Set(),visiting=new Set();
-  function visit(node){
-    if(done.has(node.id))return;
-    if(visiting.has(node.id))throw Error('The pipeline contains a cycle.');
-    visiting.add(node.id);
-    for(const port of ports(node)){
-      const source=nodeById(port.source);
-      if(node.type==='viewer'&&source?.enabled===false)continue;
-      if(!source||!produced(source).includes(port.type))
-        throw Error(nodeLabel(node)+' needs an input of type '+port.type+'.');
-      visit(source);
-    }
-    visiting.delete(node.id);done.add(node.id);ordered.push(node);
-  }
-  visit(target);return ordered;
-}
-
-function viewerProgram(node){
-  const lines=[];
-  (node.settings.inputs||[]).forEach((p,i)=>{
-    const port='input.find(p => p.source === '+JSON.stringify(p.source)+' && p.type === '+JSON.stringify(p.type)+')';
-    const data='inputs['+JSON.stringify(p.source)+']?.['+JSON.stringify(p.type)+']';
-    const name='port'+(i+1);
-    lines.push('const '+name+' = '+port+';');
-    const add=expr=>lines.push('if ('+name+') layers.push('+expr+');');
-    if(p.type==='Camera map'){add('plot.points('+data+'.points)');add('plot.path('+name+')');}
-    else if(['Registered depth points','Colored points'].includes(p.type))add('plot.points('+data+')');
-    else if(['Point-fitted splats','Trained Gaussian map'].includes(p.type))add('plot.splats('+data+')');
-    else if(p.type==='Polygon mesh')add('plot.polygons('+data+')');
-    else add('plot.layer('+name+')');
-  });
-  return ['const layers = [];',...lines,'return layers;'].join('\n');
-}
-function editorProgram(node){
-  if(node.type==='viewer'&&(!node.settings.program||node.settings.program===viewPass))return viewerProgram(node);
-  return node.settings.program??(node.type==='splats'?defaultFitSource():node.type==='walk'?sourcePass:nativePass);
-}
-function viewerScene(value,scope,node){
-  const bindings=scope.input;
-  if(!Array.isArray(value))throw Error('Return an array of plot layers.');
-  const geometry=[],live=[],replayViews=[];
-  for(const p of value){
-    if(p?.draw==='replayFrames'){
-      if(node.settings.useReplay===false)throw Error('Enable the replay cursor on this viewer.');
-      if(!Array.isArray(p.ports)||p.ports.length<1||p.ports.length>2)throw Error('Choose one or two connected image ports.');
-      replayViews.push({split:50,streams:p.ports.map(port=>{
-        const binding=bindings.find(b=>b.source===port?.source&&b.type===port.type&&isImageType(b.type));
-        if(!binding)throw Error('Choose a connected image port.');
-        const frames=scope.inputs[binding.source][binding.type];
-        return {binding,byFrame:new Map(frames.map(f=>[f.frame,f]))};
-      })});
-    }else if(p?.draw==='points'){
-      validateTransform('Colored points',p.rows);geometry.push({points:p.rows});
-    }else if(p?.draw==='line'){
-      if(!Array.isArray(p.vertices)||!p.vertices.every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite)))throw Error('plot.line expects [x,y,z] vertices.');
-      geometry.push({line:p.vertices});
-    }else if(p?.draw==='splats'){
-      validateTransform('Point-fitted splats',p.values);geometry.push(transformLayer('Point-fitted splats',p.values));
-    }else if(p?.draw==='polygons')geometry.push(nativeLayer('Polygon mesh',p.faces));
-    else if(bindings.some(b=>b.source===p?.source&&b.type===p.type)&&(!p.draw||p.draw==='path'&&p.type==='Camera map'))live.push(p);
-    else throw Error('Expected a plot command or a connected layer.');
-  }
-  return {bindings:live,geometry,replayViews};
-}
-async function editorScope(node,results){
-  const bindings=ports(node).filter(p=>node.type!=='viewer'||nodeById(p.source)?.enabled!==false);
-  const inputs=Object.create(null),refs=[];
-  let input;
-  for(const [i,p] of bindings.entries()){
-    const src=nodeById(p.source);
-    if(!src)throw Error('Connect '+p.type+' first.');
-    const value=await transformInput(p.type,src,results.get(src.id));
-    if(i===0)input=value;
-    if(node.type==='viewer')(inputs[src.id]??=Object.create(null))[p.type]=value;
-    else if(node.type==='code'){if(i)inputs[p.name]=value;}
-    else if(node.type!=='splats')inputs[p.type]=value;
-    if(isImageType(p.type))for(const ref of value)refs.push(ref);
-  }
-  if(node.type==='viewer')input=bindings;
-  if(node.type==='walk')input={'Recorded photos':frameRefs('Recorded photos',node),'Telemetry':timeline,'Recording tables':await readTables(state.run)};
-  return {input,inputs,refs};
-}
-
-async function runPipeline(draft=null,inspectOnly=false){
-  if(pipelineRunning||!state?.run||state.busy||state.recording)return;
-  const target=currentNode(),run=state.run,key={run,index:model?.feature_index};
-  const signature=JSON.stringify(nodeGraph),results=new Map(),progress=$('pipelineProgress'),steps=[];
-  function guard(){
-    if(state.run!==run||(model?.feature_index!==key.index&&pipelineRebuildingRun!==run)||JSON.stringify(nodeGraph)!==signature)
-      throw Error('Walk or pipeline changed during processing.');
-  }
-  async function request(url,body){
-    guard();
-    const response=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...key,...body})}:undefined);
-    const value=await response.json();
-    if(!response.ok)throw Error(value.error||'Processing failed.');
-    guard();return value;
-  }
-  async function job(action,params={}){
-    let s=await request('/'+action,params);
-    while(s.busy){
-      await new Promise(resolve=>setTimeout(resolve,500));
-      s=await request('/state');
-    }
-    if(/fail|error/i.test(s.message))throw Error(s.message);
-  }
-  async function ensureArtifact(file,action){
-    const res=await fetch(gaussianUrl(file));guard();
-    if(res.status===404)await job(action);
-    else if(!res.ok)throw Error('Could not read '+file);
-  }
-  const snapshot=replaySnapshot();
-  function executeCode(node,program,input,inputs,reader,native){
-    return runProgram(program,input,inputs,reader,native,node.settings.useReplay!==false?snapshot:null);
-  }
-  const operations=operationRegistry({target,run,key,guard,request,job,ensureArtifact,executeCode});
-  pipelineRunning=true;$('runPipeline').disabled=true;
-  try{
-    if(draft!==null)for(const n of nodeGraph.nodes){
-      const previous=runContexts.get(n);
-      if(previous?.key===outputKey(n))results.set(n.id,previous.result);
-    }
-    const ordered=draft===null?executionOrder(target):[target];
-    for(const [i,node] of ordered.entries()){
-      guard();progress.textContent=(i+1)+' / '+ordered.length+' · '+nodeLabel(node);
-      const started=performance.now();
-      const native=!['walk','code','viewer','splats'].includes(node.type);
-      const upstream=results.get(node.input);
-      const invoke=async settings=>{
-        for(const p of ports(node))if(results.get(p.source)?.changed?.includes(p.type)&&!(node.type==='mesh'&&p.primary))
-          throw Error(nodeLabel(node)+' uses the saved '+p.type+' file. Read the edited input in node code or a Code transform.');
-        if(!settings||typeof settings!=='object'||Array.isArray(settings))throw Error('runNative expects a settings object.');
-        if(produced({...node,settings})[0]!==produced(node)[0])throw Error('The native method must produce the declared output type.');
-        guard();
-        return operations[node.type](node,upstream,results,settings);
-      };
-      let result;
-      if(draft!==null){
-        const scope=await editorScope(node,results);
-        const {program,connections,useReplay,...settings}=node.settings;
-        const nativeCall=native?{settings,execute:async options=>{
-          if(['mesh','points'].includes(node.type)&&!upstream)throw Error('Run to node first to prepare the upstream processing context.');
-          const result=await invoke(options);return transformInput(produced(node)[0],node,result);
-        }}:null;
-        const value=await runProgram(draft,scope.input,scope.inputs,pixelReader(scope.refs,run,key.index),nativeCall,
-          node.settings.useReplay!==false?snapshot:null,entry=>consoleLine(entry));
-        guard();consoleLine(['return',value]);
-        if(!inspectOnly&&node.type==='viewer'&&Array.isArray(value)){
-          const scene=viewerScene(value,scope,node);
-          publishOutput(node,scene);nodeGraph.viewer=node.id;refreshDisplayedPath();fitMapView();draw();
-        }
-        progress.textContent='Code finished';return;
-      }
-      if(native&&node.settings.program&&node.settings.program!==nativePass){
-        const type=produced(node)[0],inputs=Object.create(null),refs=[];
-        for(const p of ports(node)){
-          const data=await transformInput(p.type,nodeById(p.source),results.get(p.source));
-          inputs[p.type]=data;if(isImageType(p.type))refs.push(...data);
-        }
-        const {program,connections,useReplay,...settings}=node.settings;
-        let called=false,original;
-        const value=await executeCode(node,program,inputs[ports(node)[0]?.type],inputs,pixelReader(refs,run,key.index),{
-          settings,execute:async options=>{
-            if(called)throw Error('The native operator can run once per execution.');
-            called=true;outputs.delete(outputKey(node));
-            result=await invoke(options);guard();original=await transformInput(type,node,result);return original;
-          }
-        });
-        guard();const layer=nativeLayer(type,value),artifacts={[type]:value};
-        const changed=called&&sameData(value,original)?[]:[type];
-        publishOutput(node,{...layer,artifacts});result={...result,artifacts,changed};
-      }else result=native?await invoke(node.settings):await operations[node.type](node,upstream,results);
-      results.set(node.id,result);runContexts.set(node,{key:outputKey(node),result});
-      steps.push({node:nodeLabel(node),inputs:ports(node).map(p=>p.type+' from '+nodeLabel(nodeById(p.source))),
-        outputs:produced(node),replay:node.settings.useReplay!==false?snapshot:null,seconds:Number(((performance.now()-started)/1000).toFixed(3))});
-    }
-    guard();refreshDisplayedPath();draw();progress.textContent='Output ready';
-    $('runTrace').hidden=false;$('runTraceData').textContent=JSON.stringify(steps,null,2);
-    for(const opened of document.querySelectorAll('.port-data[open]'))opened.ontoggle();
-  }catch(e){progress.textContent=e.message;if(draft!==null)consoleLine(['error',e.message]);}
-  finally{pipelineRunning=false;updateStreamControls();}
-}
-
-function operationRegistry({target,run,key,guard,request,job,ensureArtifact,executeCode}){
-  return {
-    code:async(node,upstream,results)=>{
-      const {inputType,outputType,program}=node.settings;
-      const input=await transformInput(inputType,nodeById(node.input),upstream),inputs=Object.create(null);
-      const refs=isImageType(inputType)?input.slice():[];
-      for(const p of node.settings.extra||[]){
-        inputs[p.name]=await transformInput(p.type,nodeById(p.source),results.get(p.source));
-        if(isImageType(p.type))refs.push(...inputs[p.name]);
-      }
-      const value=await executeCode(node,program,input,inputs,pixelReader(refs,run,key.index));
-      guard();validateTransform(outputType,value);
-      const layer=transformLayer(outputType,value);publishOutput(node,layer);
-      return {value,...layer};
-    },
-    viewer:async(node,upstream,results)=>{
-      const scope=await editorScope(node,results);
-      const value=await executeCode(node,editorProgram(node),scope.input,scope.inputs,pixelReader(scope.refs,run,key.index));
-      guard();publishOutput(node,viewerScene(value,scope,node));nodeGraph.viewer=node.id;viewerFrames();fitMapView();draw();
-    },
-    walk:async node=>{
-      const raw={'Recorded photos':frameRefs('Recorded photos',node),'Telemetry':timeline,'Recording tables':await readTables(run)};
-      const artifacts=node.settings.program&&node.settings.program!==sourcePass?await executeCode(node,node.settings.program,raw):raw;
-      guard();
-      for(const t of produced(node)){
-        if(t==='Recording tables'){
-          if(!artifacts?.[t]||Array.isArray(artifacts[t])||typeof artifacts[t]!=='object')throw Error('Recording tables must be keyed by table name.');
-          for(const rows of Object.values(artifacts[t]))validateTransform('JSON records',rows);
-        }else validateTransform('JSON records',artifacts?.[t]);
-      }
-      const changed=artifacts===raw?[]:produced(node).filter(t=>JSON.stringify(raw[t])!==JSON.stringify(artifacts[t]));
-      publishOutput(node,{artifacts});return {artifacts,changed};
-    },
-    pose:async(node,_upstream,_results,settings)=>{
-      const streams=settings.streams||model?.streams||defaults.streams;
-      if(!streams.includes('camera'))throw Error('Camera map needs the camera stream.');
-      if(!model||model.streams&&model.streams.slice().sort().join()!==streams.slice().sort().join()){
-        pipelineRebuildingRun=run;
-        try{
-          await job('rebuild',{streams});await update();guard();
-          if(!model?.feature_index)throw Error('Camera rebuild produced no registered map.');
-          key.index=model.feature_index;
-        }finally{pipelineRebuildingRun=null;}
-      }
-      return key;
-    },
-    depth:async(node,_upstream,_results,settings)=>{
-      const method=settings.geometrySource;
-      const status=await request('/frame-depth-status?'+new URLSearchParams({...key,method}));
-      if(!status.complete)await job('build-frame-depth',{method});
-      return {method};
-    },
-    points:async(node,input,_results,settings)=>{
-      const method=input.method,trained=method==='anything'&&!!settings.depthTraining;
-      const params={method,trained,savedOnly:!settings.useDepthPath};
-      let cloud=await request('/depth-cloud',params);
-      if(settings.useDepthPath&&!cloud.path)cloud=await request('/regenerate-path',params);
-      publishOutput(node,{points:cloud.points,pathPoses:cloud.path?.poses});
-      activeDepthCloud=cloud;
-      return {method,cloud};
-    },
-    splats:async(node,input)=>{
-      const points=await transformInput(ports(node)[0].type,nodeById(node.input),input);
-      const values=node.settings.program===undefined?fitGaussianAttributes(points):await executeCode(node,node.settings.program,points);
-      guard();validateTransform('Point-fitted splats',values);
-      const layer=transformLayer('Point-fitted splats',values);publishOutput(node,layer);
-      return layer;
-    },
-    mesh:async(node,input,_results,s)=>{
-      const options={method:s.depthSurfaceMethod,tof:!!s.depthSurfaceTof,detail:Number(s.balloonDetail),reach:Number(s.balloonReach)};
-      const mesh=input.cloud&&!input.changed?.length?await request('/depth-surfaces',{
-        ...options,source:input.method,trained:!!input.cloud.training,savedOnly:!input.cloud.path
-      }):await request('/mesh-input',{...options,points:await transformInput(ports(node)[0].type,nodeById(node.input),input)});
-      if(mesh.balloon)mesh.heightRange={};
-      depthSurfaceMesh=mesh;generatedMeshes.set(meshKey(),{mesh});publishOutput(node,{mesh});
-      $('depthSurfaceStatus').textContent=mesh.patches.length.toLocaleString()+' polygons · '+mesh.points.toLocaleString()+' input points';
-      $('surfaceLayer').checked=true;updateSurfaceInfo();return mesh;
-    },
-    photo:async(node,_upstream,_results,settings)=>{
-      const method=settings.surfaceMethod;
-      if(method==='gaussian-map'){
-        await ensureArtifact('report.json','build-gaussians');
-        if(target===node&&!node.settings.program)await loadGaussian();
-        else if(!outputs.has(outputKey(node))){
-          const res=await fetch(gaussianUrl('gaussians.ply'));if(!res.ok)throw Error('Gaussian PLY unavailable.');
-          const splats=new GaussianView();splats.load(await res.arrayBuffer(),false);guard();publishOutput(node,{splats});
-        }
-      }else if(method==='lingbot-map'){
-        await updateLingbot(true);
-        if(!$('buildLingbot').hidden)await job('build-lingbot');
-        await updateLingbot(true);
-      }else if(method===aiMethod){
-        await buildDepth(Number(settings.surfaceEdge));
-        if(checkingDepth||depthWorker)throw Error('Depth inference is running. See node progress.');
-      }else{
-        await job('rebuild-surfaces',{method,growth_distance_cm:Number(settings.surfaceEdge)});
-        await update();
-      }
-      return key;
-    },
-    gaussMesh:async node=>{
-      await ensureArtifact('mesh-v1/report.json','build-gaussian-mesh');
-      if(target!==node||node.settings.program){
-        const res=await fetch(gaussianUrl('mesh-v1/mesh.ply'));if(!res.ok)throw Error('Mesh PLY unavailable.');
-        const solid=new GaussianMeshView();solid.load(await res.arrayBuffer());guard();publishOutput(node,{solid});
-      }else await loadGaussian();
-      return key;
-    }
-  };
-}
-// Browser transforms exchange structured-cloneable data in map coordinates.
-const codeTypes={
-  'Pixel frames':'Array of {frame, width, height, format, pixels}. Use Float32Array for depth, Uint8ClampedArray for rgba.',
-  'Recording tables':'Object keyed by CSV filename. Each value is the complete array of rows in recording order.',
-  'Recorded photos':'Array of {frame, ms}. await readFrame(ref) returns width, height and RGBA pixels.',
-  'Depth frames':'Array of {frame, ms, method}. await readFrame(ref) returns width, height and float depth pixels in native model units.',
-  'LingBot trajectory and points':'Saved trajectory descriptors in LingBot coordinates.',
-  'Camera map':'{ poses, points, units }. Each point is [x, y, z, red, green, blue].',
-  'Telemetry':'Array of frame-paired sensor records, in recording order.',
-  'Registered depth points':'Array of [x, y, z, red, green, blue] rows in the map frame.',
-  'Colored points':'Array of [x, y, z, red, green, blue] rows. RGB channels range from 0 to 255.',
-  'Polygon mesh':'Array of polygon records. Each has vertices [[x, y, z], …] and may have holes containing inner rings.',
-  'Triangle list':'Array of triangles, each containing three [x, y, z] vertices in map coordinates.',
-  'Point-fitted splats':'Float32Array of 16 values per splat: xyz, opacity, RGB (0–1), padding, radii XYZ, padding, quaternion WXYZ.',
-  'Trained Gaussian map':'Float32Array of 16 values per trained splat, in the same layout as point-fitted splats.',
-  'JSON records':'Array of JSON objects.'
-};
-const writableTypes=['Colored points','Triangle list','Point-fitted splats','JSON records','Pixel frames'];
-function codeDefaults(source){
-  const inputType=produced(source).find(t=>Object.hasOwn(codeTypes,t));
-  const outputType=writableTypes.includes(inputType)?inputType:
-    ['Telemetry','Recording tables','Recorded photos','Depth frames','Polygon mesh','LingBot trajectory and points'].includes(inputType)?'JSON records':inputType==='Trained Gaussian map'?'Point-fitted splats':'Colored points';
-  return {inputType,outputType,name:'Code transform',program:inputType==='Camera map'?'return input.points;':inputType==='Recording tables'?'return Object.values(input)[0] || [];':'return input;'};
-}
-function validateTransform(type,value){
-  const invalid=()=>{throw Error('Invalid '+type+' output. '+codeTypes[type]);};
-  const vector=(v,n)=>Array.isArray(v)&&v.length===n&&v.every(Number.isFinite);
-  if(type==='Point-fitted splats'){
-    if(!(value instanceof Float32Array)||value.length%16!==0||!value.every(Number.isFinite))invalid();
-    for(let i=0;i<value.length;i+=16){
-      if(value[i+3]<0||value[i+3]>1||value.subarray(i+4,i+7).some(v=>v<0||v>1)||value.subarray(i+8,i+11).some(v=>v<0))invalid();
-    }
-    return;
-  }
-  if(!Array.isArray(value))invalid();
-  if(type==='Pixel frames'&&!value.every(f=>f&&typeof f.frame==='string'&&Number.isSafeInteger(f.width)&&f.width>0&&Number.isSafeInteger(f.height)&&f.height>0&&
-      (f.format==='depth'&&f.pixels instanceof Float32Array&&f.pixels.length===f.width*f.height||
-       f.format==='rgba'&&f.pixels instanceof Uint8ClampedArray&&f.pixels.length===4*f.width*f.height)))invalid();
-  if(type==='Colored points'&&!value.every(p=>vector(p,6)&&p.slice(3).every(v=>v>=0&&v<=255)))invalid();
-  if(type==='Triangle list'&&!value.every(t=>Array.isArray(t)&&t.length===3&&t.every(v=>vector(v,3))))invalid();
-  if(type==='JSON records'){
-    const isRecord=v=>v!==null&&typeof v==='object'&&Object.getPrototypeOf(v)===Object.prototype;
-    const ancestors=new Set();
-    function check(v){
-      if(v===null||typeof v==='string'||typeof v==='boolean'||Number.isFinite(v))return;
-      if((!Array.isArray(v)&&!isRecord(v))||ancestors.has(v))invalid();
-      ancestors.add(v);
-      for(const child of Object.values(v))check(child);
-      ancestors.delete(v);
-    }
-    if(!value.every(isRecord))invalid();
-    check(value);
-  }
-}
-function transformInput(type,source,result){
-  const artifacts=result?.artifacts||outputs.get(outputKey(source))?.artifacts;
-  if(artifacts&&Object.hasOwn(artifacts,type))return artifacts[type];
-  const cached=outputs.get(outputKey(source));
-  if(source.type==='code'){
-    const data=result?.value??cached?.value??cached?.points??cached?.frames??cached?.records;
-    if(data!==undefined)return data;
-    if(type==='Triangle list'&&cached?.mesh)return cached.mesh.patches.map(p=>p.vertices);
-    if(!cached)throw Error('Run '+nodeLabel(source)+' to produce '+type+'.');
-  }
-  if(isImageType(type))return frameRefs(type,type==='Depth frames'&&result?.method?{settings:{geometrySource:result.method}}:source);
-  if(type==='Recording tables')return readTables(state.run);
-  if(type==='Camera map'&&model)return {poses:model.poses,points:model.points,units:model.units};
-  if(type==='Telemetry')return timeline;
-  if(type==='Registered depth points'&&(result?.cloud||cached?.points))return result?.cloud?.points??cached.points;
-  const layer=outputs.get(outputKey(source));
-  if(type==='LingBot trajectory and points')return fetch('/lingbot-artifact?'+new URLSearchParams({run:state.run,index:model.feature_index,file:'trajectory.json'})).then(r=>{if(!r.ok)throw Error('Missing trajectory');return r.json();});
-  if(type==='Polygon mesh'){
-    const mesh=layer?.mesh||(model?.surfaces?.method===source.settings.surfaceMethod&&model.surfaces);
-    if(mesh?.patches)return mesh.patches;
-    if(layer?.solid){
-      const {vertices,indices}=layer.solid;
-      return Array.from({length:indices.length/3},(_,i)=>({vertices:[0,1,2].map(k=>vertices[indices[3*i+k]])}));
-    }
-  }
-  if(result?.records instanceof Float32Array)return result.records;
-  const splats=result?.splats||layer?.splats;
-  if(splats)return splats.attributes.subarray(0,splats.order.length*16);
-  if(type==='Trained Gaussian map'&&(!source.settings.program||source.settings.program===nativePass)){
-    return fetch(gaussianUrl('gaussians.ply')).then(async response=>{
-      if(!response.ok)throw Error('Run '+nodeLabel(source)+' to generate Gaussian splats.');
-      const g=new GaussianView();g.load(await response.arrayBuffer(),false);return g.attributes.subarray(0,g.order.length*16);
-    });
-  }
-  throw Error('Run '+nodeLabel(source)+' to produce '+type+'.');
-}
-function transformLayer(type,value){
-  if(type==='Pixel frames')return {frames:value};
-  if(type==='Colored points')return {points:value};
-  if(type==='Triangle list')return {mesh:{patches:value.map(vertices=>({vertices,landmarks:[]})),retired:[]}};
-  if(type==='Point-fitted splats'&&value.length){
-    const splats=new GaussianView();splats.loadAttributes(value);return {splats};
-  }
-  return {records:value};
-}
-function nativeLayer(type,value){
-  if(type==='Camera map'){
-    validateTransform('Colored points',value?.points);
-    if(!Array.isArray(value.poses)||!value.poses.every(p=>Array.isArray(p.xyz)&&p.xyz.length===3&&p.xyz.every(Number.isFinite)&&typeof p.frame==='string'))throw Error('Camera map requires frame poses.');
-    return {points:value.points,poses:value.poses};
-  }
-  if(type==='Polygon mesh'){
-    if(!Array.isArray(value)||!value.every(p=>p.vertices?.length>=3&&p.vertices.every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite))))throw Error('Expected polygon vertex rings.');
-    return {mesh:{patches:value.map(p=>({...p,landmarks:p.landmarks||[]})),retired:[]}};
-  }
-  if(isImageType(type)){validateTransform('JSON records',value);return {};}
-  if(type==='LingBot trajectory and points')return {records:Array.isArray(value)?value:[value]};
-  const shape=type==='Registered depth points'?'Colored points':type==='Trained Gaussian map'?'Point-fitted splats':type;
-  validateTransform(shape,value);return transformLayer(shape,value);
-}
-function codePanel(node){
-  const custom=node.type==='code',fit=node.type==='splats';
-  $('codeControls').hidden=!custom;
-  $('codeMessage').textContent='';
-
-  $('nodeProgram').value=editorProgram(node);
-  if($('codeConsole').dataset.node!==node.id){$('codeConsole').hidden=true;$('codeConsole').dataset.node=node.id;}
-  $('codeSummary').textContent='Edit node code';
-  if(custom){
-    $('codeTitle').value=node.settings.name;
-    $('codeIn').replaceChildren(...produced(nodeById(node.input)).filter(t=>Object.hasOwn(codeTypes,t)).map(t=>new Option(t,t)));
-    $('codeIn').value=node.settings.inputType;
-    $('codeOut').replaceChildren(...writableTypes.map(t=>new Option(t,t)));
-    $('codeOut').value=node.settings.outputType;
-  }
-  $('bindReplay').checked=node.settings.useReplay!==false;
-  $('bindReplay').onchange=()=>{
-    node.settings.useReplay=$('bindReplay').checked;
-    markGraphEdited();rememberGraph();describe();
-  };
-  function describe(){
-    showReplayBinding();
-    const native=!['viewer','walk','code','splats'].includes(node.type);
-    const incoming=ports(node), outgoing=custom?[$('codeOut').value]:produced(node);
-    const producer=id=>nodeById(id)?nodeLabel(nodeById(id)):'disconnected';
-    const primary=custom?$('codeIn').value:incoming[0]?.type;
-    const lines=['Available in this node'];
-    lines.push('input = '+(node.type==='walk'?'recording object keyed by output port':node.type==='viewer'?'connected layer descriptors {source, type, presentation}':(primary||'none')+(incoming[0]?' from '+producer(incoming[0].source):'')));
-    const named=custom?(node.settings.extra||[]):native?incoming:[];
-    if(node.type==='viewer'){
-      for(const p of incoming)lines.push('inputs['+JSON.stringify(p.source)+']['+JSON.stringify(p.type)+'] ← '+producer(p.source));
-      lines.push('plot.replayFrame(port) · plot.compareFrames(leftPort, rightPort) follow the walk cursor by frame ID.','plot.points(rows) · [x,y,z,r,g,b] rows. plot.line(vertices) · [x,y,z] vertices.','plot.splats(values) · plot.polygons(faces) · plot.path(cameraMapPort) · plot.layer(port)');
-    }else if(!named.length)lines.push('inputs = {}');
-    for(const p of named)lines.push('inputs['+JSON.stringify(custom?p.name:p.type)+'] ← '+producer(p.source)+' · '+p.type);
-    if(native){
-      const {program,connections,useReplay,...settings}=node.settings;
-      lines.push('settings = '+JSON.stringify(settings),'await runNative(settings) → '+outgoing[0]+' from '+nodeLabel(node));
-    }
-    if((custom||native)&&incoming.some(p=>isImageType(p.type)))lines.push('await readFrame(ref) → {width, height, pixels, format}');
-    lines.push('replay = '+(node.settings.useReplay!==false?'snapshot {frameId, index, timeMs} or null if no frame. Scrub, then Run to node.':'null (cursor disabled)'));
-    if(node.settings.useReplay!==false&&incoming.some(p=>isImageType(p.type)))lines.push('Frame references match ref.frame === replay?.frameId');
-    for(const type of outgoing){
-      const users=nodeGraph.nodes.filter(n=>ports(n).some(p=>p.source===node.id&&p.type===type));
-      lines.push('return'+(node.type==='walk'?'['+JSON.stringify(type)+']':'')+' → '+type+' → '+(users.map(nodeLabel).join(', ')||'no downstream connection'));
-      if(codeTypes[type])lines.push(codeTypes[type]);
-    }
-    $('codeSchema').textContent=lines.join('\n');
-  }
-  $('codeIn').onchange=$('codeOut').onchange=describe;describe();
-}
-function defaultFitSource(){return 'return ('+fitGaussianAttributes.toString()+')(input);';}
-
-// Nodes hold their own parameters. Each typed input points to a producer.
-// The camera map is shared by every depth backprojection in a walk.
-const nodeTypes={
-  code:{title:"Code transform"},
-  viewer:{title:'Reconstruction viewer',port:'Viewer output'},
-  walk:{title:'Recorded walk',port:'Photos & telemetry',column:0},
-  pose:{title:'Camera map',port:'Poses & landmarks',column:1,input:'walk'},
-  depth:{title:'Estimate depth',port:'Depth frames',column:1,input:'walk'},
-  points:{title:'Backproject depth',port:'Depth points',column:2,input:'depth'},
-  photo:{title:'Photo reconstruction',port:'Photo geometry',column:2,input:'pose'},
-  gaussMesh:{title:'Extract Gaussian mesh',port:'Polygon mesh',column:3,input:'photo'},
-  splats:{title:'Fit splats',port:'Gaussian splats',column:3,input:'points'},
-  mesh:{title:'Generate surfaces',port:'Polygon mesh',column:3,input:'points'}
-};
-let nodeGraph;
-let graphSelectionTicket=0;
-const generatedMeshes=new Map();
-function meshKey(){
-  return JSON.stringify([model?.run,model?.feature_index,version,$('geometrySource').value,!!activeDepthCloud?.path,
-    !!activeDepthCloud?.training,...meshFields.filter(id=>id!=='balloonCut').map(id=>$(id).type==='checkbox'?$(id).checked:$(id).value)]);
-}
-const nodeById=id=>nodeGraph.nodes.find(n=>n.id===id);
-const currentNode=()=>nodeById(nodeGraph.selected);
-const frameSelect=$('geometrySource');
-const meshFields=['depthSurfaceMethod','depthSurfaceTof','balloonDetail','balloonReach','balloonCut'];
-const photoFields=['surfaceMethod','surfaceEdge','gaussianMode'];
-const pickFields=(config,keys)=>Object.fromEntries(keys.map(k=>[k,config[k]]));
-function graphFromRecipe(config){
-  const nodes=[{id:'walk',type:'walk',settings:{}},{id:'pose',type:'pose',input:'walk',settings:{streams:config.streams}}];
-  if(config.geometrySource==='photo'){
-    nodes.push({id:'photo',type:'photo',input:'pose',settings:pickFields(config,photoFields)});
-    if(config.surfaceMethod==='gaussian-map'&&['mesh','overlay'].includes(config.gaussianMode)){
-      nodes[2].settings.gaussianMode='gaussians.ply';
-      nodes.push({id:'gaussMesh',type:'gaussMesh',input:'photo',settings:{gaussianMode:config.gaussianMode}});
-    }
-  }else{
-    nodes.push({id:'depth',type:'depth',input:'walk',settings:{geometrySource:config.geometrySource}},
-      {id:'points',type:'points',input:'depth',settings:pickFields(config,['depthTraining','useDepthPath'])});
-    if(['mesh','splats'].includes(config.depthOutput))nodes.push({id:config.depthOutput,type:config.depthOutput,input:'points',settings:pickFields(config,meshFields)});
-  }
-  const selected=nodes.at(-1).id;
-  const inputs=nodes.filter(n=>!['walk','depth'].includes(n.type)).map(n=>({source:n.id,type:produced(n)[0]}));
-  inputs.push({source:'walk',type:'Recorded photos',presentation:{enlargedOnly:true}});
-  nodes.push({id:'viewer',type:'viewer',settings:{inputs}});
-  return {nodes,selected,viewer:'viewer'};
-}
-function connectFrameSource(node){
-  if(node.settings.geometrySource!=='gaussian'){node.input='walk';return;}
-  const prior=nodeById(node.input);
-  if(prior?.settings.surfaceMethod==='gaussian-map')return;
-  let seed=nodeGraph.nodes.find(n=>n.type==='photo'&&n.settings.surfaceMethod==='gaussian-map');
-  if(!seed){
-    seed={id:crypto.randomUUID(),type:'photo',input:'pose',settings:{surfaceMethod:'gaussian-map',gaussianMode:'gaussians.ply'}};
-    nodeGraph.nodes.push(seed);
-  }
-  node.input=seed.id;
-}
-function nodeConfig(node){
-  const config={...defaults,...nodeById('pose')?.settings};
-  const chain=[];
-  for(let cur=node;cur;cur=nodeById(cur.input))chain.unshift(cur);
-  for(const cur of chain)Object.assign(config,cur.settings);
-  config.depthOutput=['mesh','splats'].includes(node.type)?node.type:'points';
-  return config;
-}
-function nodeName(n){
-  if(n.type==='code')return n.settings.name||'Code transform';
-  const options=n.type==='depth'?frameSelect.options:n.type==='photo'?$('surfaceMethod').options:[];
-  const value=n.settings.geometrySource||n.settings.surfaceMethod;
-  return Array.from(options).find(o=>o.value===value)?.text||nodeTypes[n.type].title;
-}
-function nodeLabel(n){
-  const peers=nodeGraph.nodes.filter(other=>nodeName(other)===nodeName(n));
-  return nodeName(n)+(peers.length>1?' '+(peers.indexOf(n)+1):'');
-}
-const outputs=new Map(), undoStack=[];
-let lastGraph=null;
-function outputKey(node){
-  const config=nodeConfig(node);
-  delete config.balloonCut;
-  const transforms=[],visited=new Set();
-  function add(n){
-    if(!n||visited.has(n.id))return;visited.add(n.id);transforms.push([n.id,n.settings]);
-    for(const p of ports(n))add(nodeById(p.source));
-  }
-  add(node);
-  return JSON.stringify([state?.run,model?.feature_index,node.id,node.input,config,transforms,node.type==='viewer'?ports(node).map(p=>nodeById(p.source)?.enabled!==false):null]);
-}
-let outputRevision=0;
-function publishOutput(node,value){
-  outputRevision++;
-  const key=outputKey(node);
-  outputs.delete(key);outputs.set(key,value);
-  if(outputs.size>Math.max(32,nodeGraph.nodes.length*2))outputs.delete(outputs.keys().next().value);
-}
-function viewerNode(){return nodeById(nodeGraph?.viewer)||nodeGraph?.nodes.find(n=>n.type==='viewer');}
-function addBinding(view,source,type){
-  if(!view.settings.inputs.some(p=>p.source===source.id&&p.type===type))view.settings.inputs.push({source:source.id,type});
-}
-function inspectPort(source,type){
-  const box=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('div');
-  title.textContent='Inspect '+type.toLowerCase();box.className='port-data';if(['Recorded photos','Depth frames','Telemetry','Viewer output'].includes(type))box.dataset.frame='';box.append(title,body);
-  box.ontoggle=()=>{if(box.open)showData(body,source,type);};return box;
-}
-function showData(body,node,type){
-  body.replaceChildren();
-  const text=s=>{const p=document.createElement('pre');p.textContent=s;body.append(p);return p;};
-  const rows=(label,count,get,initial=0)=>{
-    if(!count){text('No samples available.');return;}
-    const control=document.createElement('label'),input=document.createElement('input');
-    input.type='number';input.min=1;input.max=count;input.value=Math.min(count,initial+1);
-    control.append(label+' ',input,' of '+count.toLocaleString());body.append(control);
-    const out=text('');const refresh=()=>{const i=input.valueAsNumber-1;if(Number.isInteger(i)&&i>=0&&i<count)out.textContent=JSON.stringify(get(i),null,2);};
-    input.oninput=refresh;refresh();
-  };
-  function pointPlot(points){
-    const box=document.createElement('details'),title=document.createElement('summary'),plot=document.createElement('div');
-    title.textContent='Plot point coordinates';box.append(title,plot);body.append(box);
-    box.ontoggle=()=>{
-      if(!box.open||plot.childElementCount)return;
-      const records=Array.from(points,([x,y,z,red,green,blue])=>({x,y,z,red,green,blue}));
-      recordDisplay(plot,records,{mode:'scatter',x:'x',y:'y'});
-    };
-  }
-  const value=outputs.get(outputKey(node));
-  if(type==='Pixel frames'){displayPixels(body,value?.frames);return;}
-  if(isTableType(type)){
-    const records=value?.artifacts?.[type]??value?.records;
-    if(records!==undefined){recordDisplay(body,records);return;}
-    if(node.type==='walk'&&(!node.settings.program||node.settings.program===sourcePass)){
-      if(type==='Telemetry'){recordDisplay(body,timeline);return;}
-      text('Reading tables…');
-      if(state?.run)readTables(state.run).then(tables=>recordDisplay(body,tables)).catch(e=>{body.textContent=e.message;});
-      return;
-    }
-    text('Run this node to inspect its records.');return;
-  }
-  if(type==='Viewer output'){
-    for(const v of value?.replayViews||[])mountReplayFrames(body,v)();
-    if(value?.replayViews?.length&&!value.geometry.length&&!value.bindings.length)return;
-    const mixed=viewBindings(node).filter(p=>isTableType(p.type)||isImageType(p.type));
-    for(const p of mixed){const feed=document.createElement('div');body.append(feed);showData(feed,nodeById(p.source),p.type);}
-    if(!value?.geometry?.length&&mixed.length&&mixed.length===node.settings.inputs.length)return;
-    if(viewerNode()?.id!==node.id){text('Select this viewer to inspect its rendered output.');return;}
-    const pic=document.createElement('img');pic.alt='Current rendered geometry';pic.src=canvas.toDataURL();body.append(pic);
-    const shown=viewBindings(node).map(p=>(p.draw||p.type)+' ← '+nodeLabel(nodeById(p.source)));
-    for(const layer of value?.geometry||[])shown.push(layer.points?layer.points.length+' plotted points':layer.line?layer.line.length+' line vertices':layer.mesh?layer.mesh.patches.length+' polygons':(layer.splats?.order.length||0)+' splats');
-    text(shown.join('\n')||'No layers');
-    return;
-  }
-  if(['Recorded photos','Depth frames','Telemetry'].includes(type)){
-    const refs=value?.artifacts?.[type];
-    if(node.settings.program&&![sourcePass,nativePass].includes(node.settings.program)&&!refs){text('Run the node to inspect its frames.');return;}
-    const ref=refs?.find(r=>r.frame===timeline[cursor]?.id);
-    if(refs&&!ref){text('Selected frame is outside this output.');return;}
-    const f=ref?{id:ref.frame,ms:ref.ms}:timeline[cursor];if(!f){text('Open a recorded walk.');return;}
-    if(type==='Telemetry'){rows('Frame-paired sample',timeline.length,i=>timeline[i],cursor);return;}
-    const query=new URLSearchParams({run:timelineRun,index:model?.feature_index||'',method:ref?.method||node.settings.geometrySource||'photo',frame:f.id});
-    const image=document.createElement('img');image.alt=type+' · '+f.id;image.src=(type==='Recorded photos'?'/recorded.jpg?':'/frame-depth.png?')+query;
-    image.onerror=()=>image.replaceWith(document.createTextNode('Frame unavailable. Run the connected source.'));
-    body.append(image);text(f.id+' · '+(f.ms/1000).toFixed(2)+' s');
-    if(type==='Depth frames'){
-      const value=text('Reading depth sample…');let request=0;
-      const sample=async(x,y)=>{
-        const ticket=++request;
-        const q=new URLSearchParams(query);
-        if(x!==undefined){q.set('x',x);q.set('y',y);}
-        try{
-          const response=await fetch('/frame-depth-sample?'+q);
-          if(!response.ok)throw Error();
-          const s=await response.json();if(ticket!==request)return;
-          const units={anything:'relative inverse depth',lingbot:'relative depth',apple:'m',gaussian:model?.units||'map units'};
-          value.textContent='Pixel ('+s.x+', '+s.y+') · '+(s.value??'missing')+' '+units[node.settings.geometrySource]+' · '+s.width+' × '+s.height;
-          image.title='Click a pixel to inspect depth';
-          image.onclick=e=>{const b=image.getBoundingClientRect();sample(Math.min(s.width-1,Math.floor((e.clientX-b.left)*s.width/b.width)),Math.min(s.height-1,Math.floor((e.clientY-b.top)*s.height/b.height)));};
-        }catch{if(ticket===request)value.textContent='Depth sample unavailable';}
-      };sample();
-    }return;
-  }
-  if(type==='Camera map'&&model){
-    const map=value?.artifacts?.[type]||(!node.settings.program||node.settings.program===nativePass?model:null);
-    if(!map){text('Run to node to inspect the edited map.');return;}
-    rows('Pose',map.poses.length,i=>map.poses[i]);rows('Landmark',map.points.length,i=>({xyz:map.points[i].slice(0,3),rgb:map.points[i].slice(3)}));pointPlot(map.points);return;
-  }
-  if(value?.records){rows('Record',value.records.length,i=>value.records[i]);return;}
-  if(value?.points){rows('Point',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));pointPlot(value.points);return;}
-  const mesh=value?.mesh||(model?.surfaces?.method===node.settings.surfaceMethod?model?.surfaces:null);
-  if(mesh?.patches){rows('Face',mesh.patches.length,i=>mesh.patches[i]);return;}
-  if(value?.solid){const m=value.solid;rows('Triangle',m.indices.length/3,i=>Array.from(m.indices.slice(i*3,i*3+3),j=>m.vertices[j]));return;}
-  if(value?.splats){
-    const splats=value.splats;
-    rows('Splat',splats.order.length,i=>{
-      const field=(offset,length)=>Array.from(splats.attributes.subarray(16*i+offset,16*i+offset+length));
-      return {center:field(0,3),opacity:field(3,1)[0],rgb:field(4,3),radii:field(8,3),rotation_wxyz:field(12,4)};
-    });return;
-  }
-  if(type==='Trained Gaussian map'&&model){
-    const link=document.createElement('a');link.href=gaussianUrl('gaussians.ply');link.download='gaussians.ply';link.textContent='Open saved Gaussian PLY';
-    fetch(gaussianUrl('report.json')).then(r=>{if(!r.ok)throw Error();return r.json();}).then(report=>{text(JSON.stringify(report,null,2));body.append(link);}).catch(()=>text('No saved Gaussian map for this walk.'));return;
-  }
-  if(type==='LingBot trajectory and points'&&model){
-    const url='/lingbot-artifact?'+new URLSearchParams({run:model.run,index:model.feature_index,file:'trajectory.json'});
-    fetch(url).then(r=>{if(!r.ok)throw Error();return r.json();}).then(v=>text(JSON.stringify(v,null,2))).catch(()=>text('Run the LingBot node to produce this artifact.'));return;
-  }
-  text('Run this node to inspect its output.');
-}
-function viewBindings(view=viewerNode()){
-  if(!view)return [];
-  const saved=outputs.get(outputKey(view))?.bindings;
-  const inputs=saved||(!view.settings.program||view.settings.program===viewPass?view.settings.inputs:[]);
-  return (inputs||[]).filter(p=>nodeById(p.source)?.enabled!==false);
-}
-function mountReplayFrames(host,view){
-  const title=document.createElement('strong'),stage=document.createElement('div');
-  stage.className='replay-compare';
-  const panes=view.streams.map(({binding})=>{
-    const pane=document.createElement('div');
-    pane.className='replay-pane';stage.append(pane);
-    return {pane,label:nodeLabel(nodeById(binding.source))+' · '+binding.type};
-  });
-  host.append(title,stage);
-  if(panes.length===2){
-    const slider=document.createElement('input');
-    slider.type='range';slider.min=0;slider.max=100;slider.value=view.split;
-    slider.setAttribute('aria-label','Comparison divider');
-    slider.oninput=()=>{
-      view.split=slider.valueAsNumber;
-      stage.style.setProperty('--split',view.split+'%');
-    };
-    slider.oninput();stage.append(slider);
-  }
-  let previous;
-  return ()=>{
-    const frameId=replaySnapshot()?.frameId;
-    if(frameId===previous&&title.textContent)return;
-    previous=frameId;
-    title.textContent=panes.map(p=>p.label).join('  |  ')+' · '+(frameId||'No replay frame');
-    const refs=view.streams.map(s=>s.byFrame.get(frameId));
-    for(const [i,{pane,label}] of panes.entries()){
-      const ref=refs[i];pane.replaceChildren();
-      if(!ref){pane.textContent='No matching frame';continue;}
-      if(ref.pixels){
-        const canvas=document.createElement('canvas');paintFramePixels(canvas,ref);pane.append(canvas);continue;
-      }
-      const image=document.createElement('img');image.alt=label+' · '+frameId;
-      const rectified=refs.some(f=>f?.method);
-      const endpoint=ref.method?'/frame-depth.png':rectified?'/depth-input.jpg':'/recorded.jpg';
-      image.onerror=()=>image.replaceWith(document.createTextNode('Frame unavailable · '+frameId));
-      image.src=endpoint+'?'+new URLSearchParams({run:timelineRun,index:model?.feature_index||'',frame:ref.frame,method:ref.method||'photo'});
-      pane.append(image);
-    }
-  };
-}
-function viewerFrames(){
-  const view=viewerNode(),panel=$('viewerFrames'),bindings=viewBindings(view);
-  const replayViews=(view&&outputs.get(outputKey(view))?.replayViews)||[];
-  const feeds=bindings.filter(p=>(isTableType(p.type)||isImageType(p.type))&&(!p.presentation?.enlargedOnly||$('views').classList.contains('enlarged')));
-  const spatial=!!(view&&outputs.get(outputKey(view))?.geometry?.length)||bindings.some(p=>!isTableType(p.type)&&!isImageType(p.type));
-  $('mapPanel').classList.toggle('frames-only',!spatial);
-  $('mapPanel').classList.toggle('has-path',bindings.some(p=>p.type==='Camera map'));
-  $('mapPanel').classList.toggle('has-points',!!(view&&outputs.get(outputKey(view))?.geometry?.some(g=>g.points))||bindings.some(p=>['Camera map','Registered depth points','Colored points'].includes(p.type)));
-  const key=JSON.stringify([view?.id,timelineRun,spatial,feeds.some(p=>isImageType(p.type))?cursor:null,outputRevision,feeds]);
-  if(panel.dataset.key===key){for(const update of panel.replayUpdates||[])update();return;}
-  panel.dataset.key=key;panel.replaceChildren();panel.hidden=!feeds.length&&!replayViews.length&&spatial;
-  panel.replayUpdates=replayViews.map(v=>{const group=document.createElement('section');panel.append(group);const update=mountReplayFrames(group,v);update();return update;});
-  if(!bindings.length&&!spatial&&!replayViews.length){panel.textContent=view?.settings.inputs?.length?'Run to node to display the connected outputs.':'Connect an output to this viewer.';return;}
-  for(const p of feeds){
-    const group=document.createElement('section'),heading=document.createElement('strong'),el=document.createElement('div');
-    const src=nodeById(p.source);heading.textContent=nodeLabel(src)+' · '+p.type;
-    group.append(heading,el);panel.append(group);
-    if(!isTableType(p.type)){showData(el,src,p.type);continue;}
-    const layer=outputs.get(outputKey(src));
-    let records=layer?.artifacts?.[p.type]??layer?.records;
-    if(!records&&src.type==='walk'&&(!src.settings.program||src.settings.program===sourcePass))
-      records=p.type==='Recording tables'&&state?.run?readTables(state.run):timeline;
-    if(!records){el.textContent='Run to node to view records.';continue;}
-    const pref={...p.presentation};
-    Promise.resolve(records).then(rows=>recordDisplay(el,rows,pref,()=>{
-      const port=view.settings.inputs.find(b=>b.type===p.type&&b.source===p.source);
-      if(port){port.presentation={...pref};markGraphEdited();rememberGraph();}
-    })).catch(e=>{el.textContent=e.message;});
-  }
-}
-function graphLayers(){
-  if(!nodeGraph)return [];
-  const view=viewerNode();
-  const layers=(view&&outputs.get(outputKey(view))?.geometry||[]).map(layer=>({...layer,node:view}));
-  for(const p of viewBindings()){
-    if(p.draw==='path')continue;
-    if(isTableType(p.type)||isImageType(p.type))continue;
-    const node=nodeById(p.source);
-    let data=outputs.get(outputKey(node));
-    const original=!node.settings.program||node.settings.program===nativePass;
-    if(!data&&original&&p.type==='Camera map'&&model)data={points:model.points,poses:model.poses};
-    if(!data&&original&&node.type==='photo'&&model?.surfaces?.method===node.settings.surfaceMethod)data={mesh:model.surfaces};
-    if(data&&!data.records)layers.push({...data,node});
-  }
-  return layers;
-}
-function rememberGraph(){
-  if(lastGraph&&JSON.stringify(lastGraph.nodes)!==JSON.stringify(nodeGraph.nodes)){
-    undoStack.push(lastGraph);if(undoStack.length>60)undoStack.shift();
-  }
-  lastGraph=structuredClone(nodeGraph);
-  $('undoGraph').disabled=!undoStack.length;
-}
-function undoGraph(){
-  if(!undoStack.length)return;
-  nodeGraph=undoStack.pop();lastGraph=structuredClone(nodeGraph);
-  markGraphEdited();inspectNode(currentNode());draw();
-}
-$('undoGraph').onclick=undoGraph;
-document.addEventListener('keydown',e=>{
-  if(!(e.metaKey||e.ctrlKey)||e.shiftKey||e.key.toLowerCase()!=='z'||!undoStack.length||
-    e.target.closest('input,textarea,[contenteditable=true]'))return;
-  e.preventDefault();undoGraph();
-});
-// Port types describe the artifacts the processing backends can actually consume.
-function produced(node){
-  if(node.type==='code')return [node.settings.outputType];
-  if(node.type==='viewer')return ['Viewer output'];
-  if(node.type==='photo'){
-    if(node.settings.surfaceMethod==='gaussian-map')return ['Trained Gaussian map'];
-    if(node.settings.surfaceMethod==='lingbot-map')return ['LingBot trajectory and points'];
-    return ['Polygon mesh'];
-  }
-  return {walk:['Recording tables','Recorded photos','Telemetry'],pose:['Camera map'],depth:['Depth frames'],
-    points:['Registered depth points'],splats:['Point-fitted splats'],mesh:['Polygon mesh'],
-    gaussMesh:['Polygon mesh']}[node.type];
-}
-function ports(node){
-  if(node.type==='code')return [{type:node.settings.inputType,source:node.input,primary:true},...(node.settings.extra||[])];
-
-  if(node.type==='viewer')return node.settings.inputs||[];
-  const raw='Recorded photos', cameras='Camera map', trained='Trained Gaussian map';
-  const primary={pose:raw,photo:cameras,depth:node.settings.geometrySource==='gaussian'?trained:raw,
-    points:'Depth frames',mesh:nodeById(node.input)?.type==='code'?'Colored points':'Registered depth points',splats:nodeById(node.input)?.type==='code'?'Colored points':'Registered depth points',gaussMesh:trained}[node.type];
-  const list=primary?[{type:primary,source:node.input,primary:true}]:[];
-  const side=(type,original)=>{
-    const source=node.settings.connections?.[type]||original;
-    list.push({type,source,secondary:true});
-  };
-  if(node.type==='pose' && (node.settings.streams||defaults.streams).some(s=>s!=='camera'))side('Telemetry','walk');
-  if(node.type==='points'){side(cameras,'pose');side(raw,'walk');}
-  if(node.type==='photo'&&['gaussian-map','lingbot-map',aiMethod].includes(node.settings.surfaceMethod))side(raw,'walk');
-  if(node.type==='depth'&&primary===trained)side(cameras,'pose');
-  if(node.type==='mesh'&&node.settings.depthSurfaceTof)side('Telemetry','walk');
-  if(node.type==='mesh'&&(node.settings.depthSurfaceTof||node.settings.depthSurfaceMethod==='balloon')&&nodeById('pose'))side(cameras,'pose');
-  return list;
-}
-function dependsOn(source,id,seen=new Set()){
-  if(!source||seen.has(source.id))return false;
-  if(source.id===id)return true;seen.add(source.id);
-  return ports(source).some(p=>dependsOn(nodeById(p.source),id,seen));
-}
-function canWire(source,target){
-  if(target.id&&dependsOn(source,target.id))return false;
-  if(target.type==='mesh'&&target.settings.depthSurfaceTof&&!nodeById('pose'))return false;
-  if(['code','splats','mesh'].includes(target.type)){
-    const types=target.type!=='code'?['Colored points','Registered depth points']:
-      target.settings.inputType?[target.settings.inputType]:Object.keys(codeTypes);
-    if(!produced(source).some(t=>types.includes(t)))return false;
-    for(let n=source;n;n=nodeById(n.input))if(n===target)return false;
-    return true;
-  }
-  if(target.type==='viewer')return source.type!=='viewer';
-  const primary=ports(target)[0];
-  if(!primary||!produced(source).includes(primary.type))return false;
-  for(let n=source;n;n=nodeById(n.input))if(n===target)return false;
-  return true;
-}
-function wire(source,target){
-  if(!canWire(source,target)||target.input===source.id)return;
-  target.input=source.id;
-  markGraphEdited();inspectNode(target);
-}
-function showPorts(node){
-  const inlet=$('portInputs'),outlet=$('portOutputs');
-  inlet.replaceChildren();outlet.replaceChildren();
-  if(!ports(node).length)inlet.textContent=node.type==='viewer'?'Choose viewer inputs below.':'Source recording on disk';
-  for(const port of ports(node)){
-    const row=document.createElement('label');
-    row.append(port.name?port.name+' · '+port.type:port.type);
-    const options=nodeGraph.nodes.filter(n=>port.primary?canWire(n,node):
-      port.secondary?produced(n).includes(port.type)&&!dependsOn(n,node.id):n.id===port.source);
-    if(options.length===1)row.append(document.createTextNode(' ← '+nodeLabel(options[0])));
-    else{
-      const select=document.createElement('select');
-      select.setAttribute('aria-label',port.type+' source');
-      select.replaceChildren(...options.map(n=>new Option(nodeLabel(n),n.id)));
-      select.value=port.source;
-      select.onchange=()=>{
-        if(port.secondary){
-          node.settings.connections={...node.settings.connections,[port.type]:select.value};
-          markGraphEdited();inspectNode(node);
-        }else wire(nodeById(select.value),node);
-      };
-      row.append(select);
-    }
-    row.append(inspectPort(nodeById(port.source),port.type));inlet.append(row);
-  }
-  for(const type of produced(node)){
-    const row=document.createElement('div');
-    const consumers=nodeGraph.nodes.filter(n=>ports(n).some(p=>p.type===type&&p.source===node.id));
-    row.textContent=type+(consumers.length?' → '+consumers.map(nodeLabel).join(', '):'');
-    const targets=nodeGraph.nodes.filter(n=>n.type!=='viewer'&&n.input!==node.id&&
-      (ports(n)[0]?.type===type||['splats','mesh'].includes(n.type)&&['Registered depth points','Colored points'].includes(type))&&canWire(node,n));
-    if(targets.length){
-      const select=document.createElement('select');
-      select.setAttribute('aria-label','Connect '+type+' to');
-      select.replaceChildren(new Option('Connect to…',''),...targets.map(n=>new Option(nodeLabel(n),n.id)));
-      select.onchange=()=>{if(select.value)wire(node,nodeById(select.value));};
-      row.append(select);
-    }
-    row.append(inspectPort(node,type));outlet.append(row);
-  }
-}
-
-function inspectConsoleValue(label,value,depth=0,parents=new Set()){
-  const simple=text=>{
-    const row=document.createElement('div');
-    row.textContent=label+'  '+text;
-    return row;
-  };
-  if(value===null||typeof value!=='object')return simple(typeof value==='string'?JSON.stringify(value):String(value));
-  if(parents.has(value))return simple('[Circular reference]');
-  if(value instanceof Date||value instanceof RegExp||value instanceof Error)return simple(String(value));
-  const identity=value;
-  if(value instanceof Map||value instanceof Set)value=Array.from(value);
-  if(value instanceof ArrayBuffer)value=new Uint8Array(value);
-  if(value instanceof DataView)value=new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
-
-  const indexed=Array.isArray(value)||ArrayBuffer.isView(value);
-  const keys=indexed?null:Object.keys(value),length=indexed?value.length:keys.length;
-  const box=document.createElement('details'),header=document.createElement('summary'),children=document.createElement('div');
-  header.textContent=label+'  '+(indexed?(Array.isArray(value)?'Array':value.constructor.name)+'('+length+')':'{'+length+' fields}');
-  children.style.paddingLeft='1.2em';
-  box.append(header,children);
-  const pageSize=50;
-  function populate(){
-    if(children.childElementCount)return;
-    const body=document.createElement('div'),ancestors=new Set(parents).add(identity);
-    function page(n){
-      body.replaceChildren();
-      for(let i=n*pageSize;i<Math.min(length,(n+1)*pageSize);i++){
-        const key=indexed?i:keys[i];
-        body.append(inspectConsoleValue(String(key),value[key],depth+1,ancestors));
-      }
-    }
-    if(length>pageSize){
-      const control=document.createElement('label'),field=document.createElement('input');
-      field.type='number';field.min=1;field.max=Math.ceil(length/pageSize);field.value=1;
-      control.append('Page ',field,' of '+field.max+' · '+pageSize+' entries per page');
-      field.oninput=()=>{if(field.value&&field.validity.valid)page(field.valueAsNumber-1);};
-      children.append(control);
-    }
-    children.append(body);page(0);
-  }
-  box.ontoggle=()=>{if(box.open)populate();};
-  if(depth===0){box.open=true;populate();}
-  return box;
-}
-function consoleLine([label,...values]){
-  const box=$('codeConsole');
-  box.hidden=false;
-  for(const value of values)box.append(inspectConsoleValue(label,value));
-}
-$('codeRun').onclick=async()=>{
-  const editor=$('nodeProgram'),selected=editor.value.slice(editor.selectionStart,editor.selectionEnd);
-  $('codeConsole').textContent='';
-  if(!state?.run||pipelineRunning||state.busy||state.recording){consoleLine(['status','Open an idle walk to run code.']);return;}
-  const draft=selected?'return (\n'+selected+'\n);':editor.value;
-  $('codeRun').disabled=true;
-  try{await runPipeline(draft,!!selected);}finally{$('codeRun').disabled=false;}
-};
-$('codeRun').title='Run the draft, or select a JavaScript expression to inspect its value. Use console.log() to inspect local variables.';
-$('codeApply').onclick=()=>{
-  const node=currentNode();
-  if(node.type==='code'){
-    const next=$('codeOut').value;
-    const conflict=nodeGraph.nodes.find(n=>n.type!=='viewer'&&ports(n).some(p=>p.source===node.id&&p.type!==next&&!(['splats','mesh'].includes(n.type)&&next==='Colored points')));
-    if(conflict){$('codeMessage').textContent='Reconnect '+nodeLabel(conflict)+' before changing the output type.';return;}
-    Object.assign(node.settings,{name:$('codeTitle').value.trim()||'Code transform',inputType:$('codeIn').value,outputType:next});
-    for(const view of nodeGraph.nodes.filter(n=>n.type==='viewer'))for(const p of view.settings.inputs)if(p.source===node.id)p.type=next;
-  }
-  node.settings.program=$('nodeProgram').value;
-  markGraphEdited();renderGraph();draw();$('codeMessage').textContent='Applied · Run to node to process.';
-};
-function renderGraph(){
-  rememberGraph();
-  const current=currentNode(), board=$('nodeBoard'), positions=new Map(),rows=[0,0,0,0];
-  const cards=document.createDocumentFragment(), wires=document.createDocumentFragment();
-  const columns=new Map();
-  function column(n){
-    if(!columns.has(n.id)){
-      const parents=ports(n).map(p=>nodeById(p.source)).filter(Boolean);
-      columns.set(n.id,parents.length?1+Math.max(...parents.map(column)):0);
-    }
-    return columns.get(n.id);
-  }
-  for(const n of nodeGraph.nodes){
-    const col=column(n);
-    const row=rows[col]||0;rows[col]=row+1;
-    const x=22+col*226,y=22+row*90;
-    positions.set(n.id,{x,y});
-    const card=document.createElement('button');
-    card.type='button';card.className='node-card'+(n.type==='walk'?' root':'')+(['splats','mesh','gaussMesh'].includes(n.type)||(n.type==='photo'&&n.settings.surfaceMethod!=='gaussian-map')?' terminal':'');
-    card.dataset.node=n.id;card.style.left=x+'px';card.style.top=y+'px';
-    card.setAttribute('aria-pressed',String(n===current));
-    const name=document.createElement('strong'),port=document.createElement('small');
-    name.textContent=nodeLabel(n);port.textContent=produced(n).join(' · ');card.append(name,port);
-    card.onclick=()=>inspectNode(n);cards.append(card);
-    if(!['walk','depth','viewer'].includes(n.type)){
-      const toggle=document.createElement('button');toggle.className='node-visible';
-      toggle.style.left=(x+130)+'px';toggle.style.top=(y+4)+'px';
-      toggle.setAttribute('aria-label','Show '+nodeLabel(n)+' in reconstruction');
-      toggle.setAttribute('aria-pressed',String(n.enabled!==false));
-      toggle.textContent=n.enabled===false?'Off':'On';
-      card.classList.toggle('muted-node',n.enabled===false);
-      toggle.onclick=()=>{n.enabled=n.enabled===false;markGraphEdited();renderGraph();if(n.settings.surfaceMethod==='lingbot-map'&&n===currentNode())updateLingbot(n.enabled!==false);draw();};
-      cards.append(toggle);
-    }
-  }
-  for(const n of nodeGraph.nodes){
-    const inputs=new Set(ports(n).map(port=>port.source));
-    for(const id of inputs){
-      const a=positions.get(id),b=positions.get(n.id);
-      const wire=document.createElementNS('http://www.w3.org/2000/svg','path');
-      const x=a.x+170,y=a.y+35,end=b.y+35,mid=(x+b.x)/2;
-      wire.setAttribute('d',`M ${x} ${y} C ${mid} ${y}, ${mid} ${end}, ${b.x} ${end}`);
-      if(n===current)wire.classList.add('selected');
-      wires.append(wire);
-    }
-  }
-  board.style.width=(214+226*rows.findLastIndex(Boolean))+'px';
-  board.style.height=(26+Math.max(...rows)*90)+'px';
-  $('nodeCards').replaceChildren(cards);$('nodeWires').replaceChildren(wires);
-  $('nodeTitle').textContent=nodeLabel(current);
-  showPorts(current);codePanel(current);extraInputs(current);
-  const editor=$('viewerInputs');editor.replaceChildren();editor.hidden=current.type!=='viewer';
-  if(!editor.hidden){
-    for(const src of nodeGraph.nodes.filter(n=>n.type!=='viewer'))for(const type of produced(src)){
-      const label=document.createElement('label'),toggle=document.createElement('input');toggle.type='checkbox';
-      toggle.checked=current.settings.inputs.some(p=>p.source===src.id&&p.type===type);
-      label.append(toggle,' '+nodeLabel(src)+' · '+type);editor.append(label);
-      toggle.onchange=()=>{if(toggle.checked)addBinding(current,src,type);else current.settings.inputs=current.settings.inputs.filter(p=>p.source!==src.id||p.type!==type);
-        markGraphEdited();renderGraph();draw();};
-    }
-  }
-  $('viewerName').textContent=viewerNode()?nodeLabel(viewerNode()):'Reconstruction';
-  const choices=Object.keys(nodeTypes).filter(type=>type!=='walk'&&(type!=='pose'||!nodeById('pose'))&&(type!=='points'||nodeById('pose'))&&canWire(current,{
-    type,settings:{geometrySource:produced(current).includes('Trained Gaussian map')?'gaussian':'anything'}
-  }));
-  $('nodeType').replaceChildren(...choices.map(k=>new Option(nodeTypes[k].title,k)));
-  $('appendLabel').hidden=$('addNode').hidden=!choices.length;
-  $('removeNode').hidden=current.type==='walk';
-  $('removeNode').disabled=nodeGraph.nodes.some(n=>n.type!=='viewer'&&ports(n).some(p=>p.source===current.id))||(current.type==='viewer'&&nodeGraph.nodes.filter(n=>n.type==='viewer').length===1);
-  $('removeNode').title=$('removeNode').disabled?'Remove or reconnect downstream nodes first':'Remove this node';
-}
-function markGraphEdited(){
-  $('runTrace').hidden=true;
-  $('pipelinePreset').value='';$('presetStatus').textContent='Edited';
-  if(state?.run)localStorage.removeItem('room-survey-active-preset-'+state.run);
-}
-function storeConnections(node){
-  if(['code','viewer'].includes(node.type))return;
-  const links=Object.fromEntries(ports(node).filter(p=>p.secondary).map(p=>[p.type,p.source]));
-  if(Object.keys(links).length)node.settings.connections=links;
-}
-function openNodeGraph(config){
-  $('runTrace').hidden=true;
-  outputs.clear();undoStack.length=0;lastGraph=null;
-  nodeGraph=config.graph?structuredClone(config.graph):graphFromRecipe({...defaults,...config});
-  for(const n of nodeGraph.nodes)if(!['walk','viewer','code','splats'].includes(n.type)&&n.settings.program==='return await runNative(settings);')n.settings.program=nativePass;
-  for(const n of nodeGraph.nodes.filter(n=>n.type==='depth'))connectFrameSource(n);
-  if(!nodeGraph.nodes.some(n=>n.type==='viewer')){
-    const inputs=nodeGraph.nodes.filter(n=>!['walk','depth'].includes(n.type)).map(n=>({source:n.id,type:produced(n)[0]}));
-    nodeGraph.nodes.push({id:'viewer',type:'viewer',settings:{inputs}});
-  }
-  nodeGraph.nodes.forEach(storeConnections);
-  inspectNode(currentNode());
-}
-async function inspectNode(node){
-  nodeGraph.selected=node.id;
-  if(node.type==='viewer')nodeGraph.viewer=node.id;
-  const ticket=++graphSelectionTicket;
-  ++applyTicket;
-  renderGraph();
-  const type=node.type,config=nodeConfig(node);
-  $('pipeline').dataset.inspect=type;
-  for(const [id,visible] of Object.entries({framesStep:type==='depth'||type==='walk'&&state?.recording,poseStep:type==='pose',geometryStep:['points','mesh','photo','gaussMesh','splats'].includes(type)})){
-    $(id).hidden=!visible;$(id).open=visible;
-  }
-  $('pipelineProgress').textContent='';
-  draw();
-  if(type==='mesh'&&nodeById(node.input)?.type==='code'){
-    await surfaceMethodsReady;if(ticket!==graphSelectionTicket)return;
-    $('depthSurfaceControls').hidden=false;
-    $('depthSurfaceMethod').value=node.settings.depthSurfaceMethod;
-    $('depthSurfaceTof').checked=!!node.settings.depthSurfaceTof;
-    $('balloonDetail').value=node.settings.balloonDetail;$('balloonReach').value=node.settings.balloonReach;
-    $('balloonControls').hidden=node.settings.depthSurfaceMethod!=='balloon';updateStreamControls();return;
-  }
-  if(type==='code'||type==='splats'&&(node.settings.program!==undefined||nodeById(node.input)?.type==='code')){
-    $('codePanel').open=true;return;
-  }
-  if(type==='viewer'){
-    refreshDisplayedPath();
-    const lingbot=node.settings.inputs.some(p=>p.type==='LingBot trajectory and points'&&nodeById(p.source)?.enabled!==false);
-    updateLingbot(lingbot&&!!model);viewerFrames();return;
-  }
-  if(type==='walk'||type==='depth'){
-    if(!$('lingbotView').hidden)updateLingbot(false);
-    if(type==='walk')$('compareFrames').checked=false;
-    $('rightSource').replaceChildren(new Option('Recorded photo','photo'));
-    $('nodeDepthMethod').value=config.geometrySource;
-    $('frameMethod').value=config.geometrySource;$('frameMethod').onchange();
-    return;
-  }
-  if(type==='pose'){
-    setStreams(config.streams||defaults.streams);
-    frameSelect.value='photo';$('surfaceMethod').value='cloud-planes-v1';
-    $('cloud').checked=true;$('splatLayer').checked=$('surfaceLayer').checked=false;
-    activeDepthCloud=null;resetSplatLayer();await loadGeometry();updateStreamControls();
-    return;
-  }
-  await applyPipeline(config);
-  if(ticket!==graphSelectionTicket)return;
-  if(type==='mesh'&&activeDepthCloud){
-    depthSurfaceMesh=generatedMeshes.get(meshKey())?.mesh||null;
-    if(depthSurfaceMesh)publishOutput(node,{mesh:depthSurfaceMesh});
-    selectDepthOutput();
-    $('depthSurfaceStatus').textContent=depthSurfaceMesh?depthSurfaceMesh.patches.length+' polygons':'Run to node to generate this mesh.';
-  }
-  if(type==='photo'||type==='gaussMesh'){
-    $('cloud').checked=config.surfaceMethod!=='gaussian-map';
-    $('splatLayer').checked=config.surfaceMethod==='gaussian-map'&&['gaussians.ply','overlay'].includes(config.gaussianMode);
-    draw();
-  }
-}
-$('addNode').onclick=()=>{
-  const parent=currentNode(),type=$('nodeType').value;
-  if(!nodeTypes[type])return;
-  const settings=type==='depth'?{geometrySource:produced(parent).includes('Trained Gaussian map')?'gaussian':'anything'}:type==='points'?{depthTraining:false,useDepthPath:false}:
-    type==='gaussMesh'?{gaussianMode:'mesh'}:type==='mesh'?pickFields({...defaults,depthSurfaceMethod:'planes'},meshFields):type==='photo'?{...pickFields(defaults,photoFields),surfaceMethod:'gaussian-map'}:{};
-  const node={id:type==='pose'?'pose':crypto.randomUUID(),type,input:parent.id,settings:type==='code'?codeDefaults(parent):settings};
-  if(!canWire(parent,node))return;
-  if(type==='viewer'){delete node.input;node.settings={inputs:produced(parent).map(type=>({type,source:parent.id}))};}
-
-  nodeGraph.nodes.push(node);storeConnections(node);markGraphEdited();inspectNode(node);
-  $('nodeCards').querySelector('[aria-pressed=true]').scrollIntoView({block:'nearest',inline:'nearest'});
-};
-$('removeNode').onclick=()=>{
-  const n=currentNode();
-  if($('removeNode').disabled||(!n.input&&n.type!=='viewer'))return;
-  for(const v of nodeGraph.nodes.filter(n=>n.type==='viewer'))v.settings.inputs=v.settings.inputs.filter(p=>p.source!==n.id);
-  nodeGraph.nodes=nodeGraph.nodes.filter(other=>other!==n);
-  markGraphEdited();inspectNode(nodeById(n.input)||nodeById('walk'));
-};
-$('pipeline').addEventListener('change',e=>{
-  const node=currentNode(),id=e.target.id,config=readPipeline();
-  if(node.type==='depth'&&id==='nodeDepthMethod'){
-    node.settings.geometrySource=e.target.value;connectFrameSource(node);$('frameMethod').value=e.target.value;$('frameMethod').onchange();
-  }
-  else if(node.type==='pose'&&$('inputStreams').contains(e.target))node.settings.streams=config.streams;
-  else if(node.type==='points'&&id==='depthTraining')node.settings.depthTraining=config.depthTraining;
-  else if(node.type==='points'&&id==='pipelinePath')node.settings.useDepthPath=config.useDepthPath;
-  else if(node.type==='mesh'&&meshFields.includes(id))node.settings[id]=config[id];
-  else if(node.type==='photo'&&photoFields.includes(id)){
-    if(id==='surfaceMethod'&&nodeGraph.nodes.some(child=>child.input===node.id&&!produced({...node,settings:{...node.settings,surfaceMethod:config[id]}}).includes(ports(child)[0].type))){
-      $('surfaceMethod').value=node.settings.surfaceMethod;
-      $('pipelineProgress').textContent='Reconnect downstream nodes before changing the output type.';return;
-    }
-    node.settings[id]=config[id];
-  }else if(node.type==='gaussMesh'&&id==='gaussianMode')node.settings.gaussianMode=config.gaussianMode;
-  else return;
-  for(const v of nodeGraph.nodes.filter(n=>n.type==='viewer')){
-    for(const p of v.settings.inputs)if(p.source===node.id&&!produced(node).includes(p.type))p.type=produced(node)[0];
-  }
-  markGraphEdited();renderGraph();draw();
-});
-$('runPipeline').onclick=()=>runPipeline();
-$('nodeDepthMethod').replaceChildren(...Array.from(frameSelect.options).filter(o=>o.value!=='photo').map(o=>new Option(o.text,o.value)));
-$('depthOutput').parentElement.id='depthOutputLabel';
-$('geometryReport').before($('pipelinePathLabel'));
-openNodeGraph(readPipeline());
-
-listPresets();
-
-poll();

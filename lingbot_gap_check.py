@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from node_params import pairing_ns, sensor_settings, tof_metres
+
 # Exploratory tolerances for this offline comparison, in metres and degrees.
 MIN_GAP_S = 1.
 MAX_ANCHORS = 8
@@ -82,12 +84,14 @@ def pose_errors(fit, keys, predicted, reference):
 
 
 def read_ranges(run, frames):
+    sensors = sensor_settings(run)
+    window = pairing_ns(sensors)
     independent = (run/'range.csv').is_file()
     readings = []
     if independent:
         for row in load_csv(run/'range.csv'):
             a, b = int(row['pi_read_start_ns']), int(row['pi_read_end_ns'])
-            if 0 <= b-a <= 80_000_000:
+            if 0 <= b-a <= window:
                 readings.append(((a+b)//2, int(row['tof_raw'] or 0)))
         readings.sort()
     clocks = np.array([r[0] for r in readings])
@@ -102,8 +106,9 @@ def read_ranges(run, frames):
             stamp, raw = int(row['pi_tof_read_end_ns']), int(row['tof_raw'])
         else:
             continue
-        if abs(stamp-camera) <= 80_000_000 and 0 < raw < 250:
-            by_frame[i] = raw/104.
+        metres = tof_metres(raw, sensors)
+        if abs(stamp-camera) <= window and metres is not None:
+            by_frame[i] = metres
     return by_frame, 'nearest independent read' if independent else 'camera-paired read'
 
 

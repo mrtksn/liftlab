@@ -5,6 +5,8 @@ import numpy as np
 
 
 METHOD = "first-return-cloth-v1"
+LABEL = "Ray cloth"
+DISTANCE_LABEL = "Maximum span"
 
 
 @lru_cache(maxsize=1)

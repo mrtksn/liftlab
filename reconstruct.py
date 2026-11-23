@@ -7,6 +7,7 @@ import tempfile
 from fusion import (STREAMS, gravity_alignment, estimate_scale, levelling_rotation, range_ratio,
                     load_observations, sensor_pairs, up_alignment)
 from localize import save_index
+from node_params import CAMERA_MAP_PARAMS, validate
 from recover import align_gap, recover_poses
 import cv2
 import numpy as np
@@ -19,25 +20,27 @@ def atomic_json(path, value):
     tmp.replace(path)
 
 
-def build(run, names, report, *, recover=False, index=True, streams=STREAMS):
+def build(run, names, report, *, recover=False, index=True, streams=STREAMS, params=None):
+    params = validate(CAMERA_MAP_PARAMS, params)
     observations = load_observations(run, streams)
-    calibrated = (run / "calibration.json").exists()
+    calibrated = params["use_calibration"] and (run / "calibration.json").exists()
     reader = sfm.ImageReaderOptions()
     reader.camera_model = "SIMPLE_RADIAL_FISHEYE"
-    # Equidistant initial guess for this 640x480 stream. The uncalibrated
+    # Equidistant initial guess centred on the recorded image. The uncalibrated
     # solve refines it; COLMAP requires an explicit prior for fisheye pairs.
-    reader.camera_params = "260,320,240,0"
+    height, width = cv2.imread(str(run / "frames" / names[0]), cv2.IMREAD_GRAYSCALE).shape
+    reader.camera_params = f"{params['focal_guess_px']},{width/2},{height/2},0"
     if calibrated:
         calib = json.loads((run / "calibration.json").read_text())
         reader.camera_model = "OPENCV_FISHEYE"
         reader.camera_params = ",".join(map(str, calib["params"]))
     extract = sfm.FeatureExtractionOptions(num_threads=3)
-    extract.sift.max_num_features = 2500
+    extract.sift.max_num_features = params["sift_features"]
     matcher = sfm.FeatureMatchingOptions(num_threads=3)
     options = sfm.IncrementalPipelineOptions(num_threads=3, multiple_models=True,
                                               min_model_size=4, max_num_models=20,
                                               image_names=names)
-    options.mapper.init_min_tri_angle = 6
+    options.mapper.init_min_tri_angle = params["init_min_tri_angle"]
     if calibrated:
         options.ba_refine_focal_length = options.ba_refine_extra_params = False
         options.mapper.abs_pose_refine_focal_length = options.mapper.abs_pose_refine_extra_params = False
@@ -50,12 +53,14 @@ def build(run, names, report, *, recover=False, index=True, streams=STREAMS):
         report(f"Finding features in {len(names)} views")
         sfm.extract_features(database, image_path, names, sfm.CameraMode.SINGLE, reader, extract, sfm.Device.cpu)
         report("Matching overlapping views")
-        if len(names) <= 45:
+        if len(names) <= params["exhaustive_below"]:
             sfm.match_exhaustive(database, matcher, device=sfm.Device.cpu)
         else:
-            # Include return visits to the start of the walk.
-            pairs = { (a,b) for i,a in enumerate(names) for b in names[i+1:i+9] }
-            pairs.update((a,b) for a in names[:6] for b in names[-10:] if a < b)
+            near = params["neighbour_matches"]
+            pairs = { (a,b) for i,a in enumerate(names) for b in names[i+1:i+1+near] }
+            if params["loop_matches"]:
+                # Include return visits to the start of the walk.
+                pairs.update((a,b) for a in names[:6] for b in names[-10:] if a < b)
             # Retrieve visually similar non-neighbours throughout the walk.
             # COLMAP verifies each candidate using local features and geometry.
             thumbs = []
@@ -66,8 +71,8 @@ def build(run, names, report, *, recover=False, index=True, streams=STREAMS):
                 thumbs.append(thumb / max(np.linalg.norm(thumb), 1))
             similarity = np.asarray(thumbs) @ np.asarray(thumbs).T
             for i, row in enumerate(similarity):
-                distant = [j for j in range(len(names)) if abs(j-i) > 8]
-                for j in sorted(distant, key=lambda j: row[j], reverse=True)[:8]:
+                distant = [j for j in range(len(names)) if abs(j-i) > near]
+                for j in sorted(distant, key=lambda j: row[j], reverse=True)[:params["similar_matches"]]:
                     pairs.add(tuple(sorted((names[i], names[j]))))
             pairs.update(sensor_pairs(names, similarity, observations))
             pair_file = work / "pairs.txt"
@@ -82,12 +87,14 @@ def build(run, names, report, *, recover=False, index=True, streams=STREAMS):
             raise ValueError("No connected reconstruction yet. Move sideways past textured objects with overlapping views.")
         model = max(models.values(), key=lambda m: (m.num_reg_images(), m.num_points3D()))
         recovery_frames = sorted(p.name for p in image_path.glob("*.jpg")
-                                 if names[0] <= p.name <= names[-1]) if recover else []
-        if recover:
+                                 if names[0] <= p.name <= names[-1]) if recover and params["recover_skipped"] else []
+        if recovery_frames:
             report("Recovering skipped camera poses against mapped landmarks")
         result = export_model(run, model, names, calibrated, observations, recovery_frames, indexed=index,
-                              gravity="gyro" in streams and "accel" in streams)
+                              gravity="gyro" in streams and "accel" in streams,
+                              up_limit=params["up_max_uncertainty_deg"])
         result["streams"] = list(streams)
+        result["params"] = params
         return result
 
 
@@ -126,7 +133,7 @@ def startup_rotation(run, images):
     return camera_level @ first, 'Level start'
 
 
-def export_model(run, model, names, calibrated, observations, recovery_frames=(), *, indexed=True, gravity=True):
+def export_model(run, model, names, calibrated, observations, recovery_frames=(), *, indexed=True, gravity=True, up_limit=10):
     images = sorted((model.image(i) for i in model.reg_image_ids()), key=lambda im: im.name)
     if len(images) < 3 or not model.num_points3D():
         raise ValueError("Too few registered views for a room survey.")
@@ -149,7 +156,7 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
         # frame from IMU up vectors instead, keeping its heading along +Y.
         levelled = [im for im in images if "up" in observations.get(im.name,{})]
         up_fit = up_alignment([im.cam_from_world().rotation.matrix().T for im in levelled],
-                              [observations[im.name]["up"] for im in levelled])
+                              [observations[im.name]["up"] for im in levelled], max_uncertainty=up_limit)
         if up_fit is not None:
             rotation = levelling_rotation(rotation @ up_fit.pop("up")) @ rotation
     origin = first.projection_center()
@@ -204,7 +211,8 @@ def recover_gaps(run, model, report):
                            frames[right-16:min(last,right+18)]))
         report(f"Checking overlap across frames {int(frames[left][:7])}–{int(frames[right][:7])}")
         try:
-            local = build(run, names, lambda _: None, recover=True, index=False, streams=model["streams"])
+            local = build(run, names, lambda _: None, recover=True, index=False, streams=model["streams"],
+                          params=model.get("params"))
         except ValueError:
             continue
         model["poses"].extend(align_gap(model, local, frames[left], frames[right]))

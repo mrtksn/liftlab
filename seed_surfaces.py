@@ -6,6 +6,9 @@ from math import prod
 import numpy as np
 
 
+METHOD = "camera-ray-seeds-v1"
+LABEL = "Seed growth"
+DISTANCE_LABEL = "Growth distance"
 MAX_EDGE = .20
 NEIGHBOURS = tuple(product((-1, 0, 1), repeat=3))
 
