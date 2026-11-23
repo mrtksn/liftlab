@@ -167,3 +167,11 @@
 .views.enlarged #mapPanel{position:relative}.views.enlarged #mapPanel:not(.frames-only) #viewerFrames:has(img):not(:has(.record-controls)){position:absolute;z-index:3;top:58px;left:12px;max-width:27%;background:#13191b}.views.enlarged #viewerFrames img{max-width:100%}
 
 .pixel-preview{display:block;max-width:min(360px,100%);height:auto}
+
+.replay-compare{position:relative;aspect-ratio:4/3;background:#101719;overflow:hidden;--split:50%}
+.replay-compare .replay-pane{position:absolute;inset:0;display:grid;place-items:center;background:#101719;color:#bad0cf}
+#viewerFrames .replay-pane img,.replay-pane img,.replay-pane canvas{width:100%;height:100%;max-width:none;max-height:none;object-fit:contain}
+.replay-pane:first-child:has(+ .replay-pane){z-index:1;clip-path:inset(0 calc(100% - var(--split)) 0 0)}
+.replay-compare:has(input)::after{content:"";position:absolute;z-index:2;pointer-events:none;inset:0 auto 0 var(--split);width:2px;background:white}
+.replay-compare input[type=range]{position:absolute;z-index:3;top:50%;left:0;width:100%;margin:0;transform:translateY(-50%);appearance:none;background:transparent;cursor:ew-resize}
+.replay-compare input::-webkit-slider-thumb{appearance:none;width:26px;height:26px;background:#fff;border:3px solid #465958;border-radius:50%}

@@ -1,7 +1,9 @@
 // These presets are ordinary graphs. Their edits are saved with the graph.
 const sourcePass = 'return input;';
 const viewPass = 'return input; // connected layers, in display order';
-const nativePass = 'return await runNative(settings);';
+const nativePass = `const nativeResult = await runNative(settings);
+const output = nativeResult; // Edit the value sent to the output port here.
+return output;`;
 function recordingPreset(rangeChart=false){
   const nodes=[{id:'walk',type:'walk',settings:{program:sourcePass}}], inputs=[];
   if(rangeChart){
@@ -13,6 +15,20 @@ function recordingPreset(rangeChart=false){
   }
   nodes.push({id:'viewer',type:'viewer',settings:{inputs,program:viewPass}});
   return {graph:{nodes,selected:rangeChart?'viewer':'walk',viewer:'viewer'}};
+}
+
+function replayComparePreset(){
+  const photo={source:'walk',type:'Recorded photos'};
+  const depth={source:'depth',type:'Depth frames'};
+  return {graph:{selected:'viewer',viewer:'viewer',nodes:[
+    {id:'walk',type:'walk',settings:{}},
+    {id:'depth',type:'depth',input:'walk',settings:{geometrySource:'anything'}},
+    {id:'viewer',type:'viewer',settings:{inputs:[photo,depth],useReplay:true,program:
+`// Each port supplies a frame sequence. The viewer matches frame IDs as replay moves.
+const [left, right] = input.filter(port => plot.isFramePort(port));
+if (left && right) return [plot.compareFrames(left, right)];
+return [left, right].filter(Boolean).map(port => plot.replayFrame(port));`}}
+  ]}};
 }
 
 function isTableType(type){return ['Recording tables','Telemetry','JSON records'].includes(type);}
@@ -52,9 +68,23 @@ function pixelReader(refs,run,index){
   };
 }
 
+function viewerPlotTools(){
+  return {
+    isFramePort:port=>['Recorded photos','Depth frames','Pixel frames'].includes(port.type),
+    replayFrame:port=>({draw:"replayFrames",ports:[port]}),
+    compareFrames:(left,right)=>({draw:"replayFrames",ports:[left,right]}),
+    points:rows=>({draw:'points',rows}),
+    line:vertices=>({draw:'line',vertices}),
+    path:port=>({...port,draw:'path'}),
+    splats:values=>({draw:'splats',values}),
+    polygons:faces=>({draw:'polygons',faces}),
+    layer:port=>port
+  };
+}
+
 // Each execution gets an opaque frame and a worker. Only image refs on connected
 // ports can be read by the host. Node source never executes in the editor.
-function runProgram(program,input,inputs={},readFrame=null,native=null){
+function runProgram(program,input,inputs={},readFrame=null,native=null,replay=null,onLog=null){
   return new Promise((resolve,reject)=>{
     const frame=document.createElement('iframe');frame.hidden=true;frame.sandbox='allow-scripts';
     let timer;
@@ -62,6 +92,7 @@ function runProgram(program,input,inputs={},readFrame=null,native=null){
     const renew=()=>{clearTimeout(timer);timer=setTimeout(()=>finish(reject,Error('Node code timed out.')),30000);};
     async function receive(e){
       if(e.source!==frame.contentWindow)return;
+      if(e.data?.consoleEntry){onLog?.(e.data.consoleEntry);return;}
       if(e.data?.read||e.data?.compute){
         try{
           const id=e.data.read||e.data.compute;
@@ -97,7 +128,12 @@ function runProgram(program,input,inputs={},readFrame=null,native=null){
           const p=waiting.get(data.reply);if(!p)return;waiting.delete(data.reply);
           if(data.error)p.reject(Error(data.error));else p.resolve(data.value);return;
         }
-        try{postMessage({ok:true,value:await processNode(data.input,data.inputs,readFrame,runNative,data.settings)});}
+        if(data.debug){
+          for(const name of ['log','info','warn','error','dir','table','debug']){
+            console[name]=(...values)=>postMessage({consoleEntry:[name,...values.map(v=>typeof v==="function"||typeof v==="symbol"?String(v):v)]});
+          }
+        }
+        try{postMessage({ok:true,value:await processNode(data.input,data.inputs,readFrame,runNative,data.settings,data.replay)});}
         catch(e){postMessage({ok:false,error:String(e.message||e)});}
       };
     };
@@ -109,12 +145,12 @@ function runProgram(program,input,inputs={},readFrame=null,native=null){
         const url=URL.createObjectURL(new Blob([data.source],{type:'text/javascript'}));
         worker=new Worker(url);worker.onmessage=e=>parent.postMessage(e.data,'*');
         worker.onerror=e=>parent.postMessage({ok:false,error:e.message},'*');
-        worker.postMessage({input:data.input,inputs:data.inputs,settings:data.settings});
+        worker.postMessage({input:data.input,inputs:data.inputs,settings:data.settings,replay:data.replay,debug:data.debug});
       };
     }
-    const source='async function processNode(input,inputs,readFrame,runNative,settings){\n'+program+'\n}\n('+workerMain.toString()+')();';
+    const source='const plot=('+viewerPlotTools.toString()+')();\nasync function processNode(input,inputs,readFrame,runNative,settings,replay){\n'+program+'\n}\n('+workerMain.toString()+')();';
     window.addEventListener('message',receive);renew();
-    frame.onload=()=>frame.contentWindow.postMessage({source,input,inputs,settings:native?.settings},'*');
+    frame.onload=()=>frame.contentWindow.postMessage({source,input,inputs,replay,debug:!!onLog,settings:native?.settings},'*');
     frame.srcdoc='<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' blob:; worker-src blob:; connect-src \'none\'"><script>('+frameMain.toString()+')();<\/script>';
     document.body.append(frame);
   });
@@ -139,7 +175,7 @@ function recordDisplay(host,data,config={},save=()=>{}){
     const rows=tables[table]||[],count=document.createElement('small');
     count.textContent=rows.length.toLocaleString()+' rows';form.append(count);
     if(!rows.length)return;
-    const mode=choice('Display',[['rows','Records'],['plot','Line plot']],config.mode,v=>set('mode',v));
+    const mode=choice('Display',[['rows','Records'],['plot','Line plot'],['scatter','Scatter plot']],config.mode,v=>set('mode',v));
     if(mode==='rows'){
       const row=document.createElement('input'),out=document.createElement('pre');
       row.type='number';row.min=1;row.max=rows.length;row.value=1;row.setAttribute('aria-label','Record number');
@@ -155,26 +191,39 @@ function recordDisplay(host,data,config={},save=()=>{}){
     const fields=Array.from(numeric,k=>[k,k]);
     if(!fields.length){content.textContent='No numeric fields in this table.';return;}
     const x=choice('X',[['','Row number'],...fields],config.x,v=>set('x',v));
-    const y=choice('Y',fields,config.y,v=>set('y',v));
+    const y=choice('Y',[...fields,['','Row number']],config.y,v=>set('y',v));
     const at=(r,k)=>k.split('.').reduce((v,p)=>v?.[p],r);
-    const xy=rows.map((r,i)=>[x?at(r,x):i+1,at(r,y)]);
+    const xy=rows.map((r,i)=>[x?at(r,x):i+1,y?at(r,y):i+1]);
     const plot=document.createElement('canvas');plot.width=800;plot.height=160;plot.className='record-plot';
-    plot.setAttribute('aria-label',y+' by '+(x||'row number'));content.append(plot);
+    plot.setAttribute('aria-label',(y||'row number')+' by '+(x||'row number'));content.append(plot);
     let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
     for(const [a,b] of xy)if(Number.isFinite(a)&&Number.isFinite(b)){
       xmin=Math.min(xmin,a);xmax=Math.max(xmax,a);ymin=Math.min(ymin,b);ymax=Math.max(ymax,b);
     }
     if(!Number.isFinite(ymin)){content.textContent='No paired numeric values.';return;}
-    const ctx=plot.getContext('2d');ctx.strokeStyle='#a5efd1';ctx.lineWidth=2;ctx.beginPath();
+    function bounds(axis,autoMin,autoMax){
+      return ['min','max'].map((end,i)=>{
+        const key=axis+end, label=document.createElement('label'),field=document.createElement('input');
+        field.type='number';field.step='any';field.placeholder='Auto';field.style.width='6em';
+        field.value=config[key]??'';label.append(axis.toUpperCase()+' '+end+' ',field);form.append(label);
+        field.onchange=()=>set(key,field.value===''?null:field.valueAsNumber);
+        return config[key]??(i?autoMax:autoMin);
+      });
+    }
+    [xmin,xmax]=bounds('x',xmin,xmax);[ymin,ymax]=bounds('y',ymin,ymax);
+    if(xmin>xmax||ymin>ymax){content.textContent='Each axis minimum must be below its maximum.';return;}
+    const ctx=plot.getContext('2d');ctx.save();ctx.beginPath();ctx.rect(64,10,728,125);ctx.clip();
+    ctx.strokeStyle=ctx.fillStyle='#a5efd1';ctx.lineWidth=2;ctx.beginPath();
     let connected=false;
     for(const [a,b] of xy){
       if(!Number.isFinite(a)||!Number.isFinite(b)){connected=false;continue;}
       const px=64+728*(a-xmin)/(xmax-xmin||1),py=135-125*(b-ymin)/(ymax-ymin||1);
+      if(mode==='scatter'){ctx.fillRect(px-1,py-1,2,2);continue;}
       if(connected)ctx.lineTo(px,py);else ctx.moveTo(px,py);connected=true;
     }
-    ctx.stroke();ctx.fillStyle='#bdd1d2';ctx.font='14px monospace';
+    ctx.stroke();ctx.restore();ctx.fillStyle='#bdd1d2';ctx.font='14px monospace';
     ctx.fillText(ymax.toPrecision(4),2,14);ctx.fillText(ymin.toPrecision(4),2,136);
-    ctx.fillText(String(xmin),64,157);ctx.textAlign='right';ctx.fillText(String(xmax),792,157);
+    ctx.fillText(xmin.toPrecision(4),64,157);ctx.textAlign='right';ctx.fillText(xmax.toPrecision(4),792,157);
   }
   render();
 }
@@ -272,8 +321,20 @@ function displayPixels(host,frames){
   function render(){
     const f=frames[selector.valueAsNumber-1];if(!f)return;
     const {pixels,width,height,format}=f;
-    canvas.width=width;canvas.height=height;canvas.className='pixel-preview';
+    paintFramePixels(canvas,f);
     caption.textContent=' / '+frames.length+' · '+(f.frame||'Image')+' · '+width+' × '+height;
+    canvas.onclick=e=>{
+      const b=canvas.getBoundingClientRect(),x=Math.floor((e.clientX-b.left)*width/b.width),y=Math.floor((e.clientY-b.top)*height/b.height);
+      const i=y*width+x;
+      caption.textContent=' ('+x+', '+y+') · '+(format==='rgba'?Array.from(pixels.subarray(i*4,i*4+4)).join(', '):pixels[i]);
+    };
+  }
+  selector.oninput=render;render();
+}
+
+function paintFramePixels(canvas,{pixels,width,height,format}){
+    canvas.width=width;canvas.height=height;canvas.className='pixel-preview';
+
     const ctx=canvas.getContext('2d'),image=ctx.createImageData(width,height);
     if(format==='rgba')image.data.set(pixels);
     else{
@@ -285,11 +346,4 @@ function displayPixels(host,frames){
       }
     }
     ctx.putImageData(image,0,0);
-    canvas.onclick=e=>{
-      const b=canvas.getBoundingClientRect(),x=Math.floor((e.clientX-b.left)*width/b.width),y=Math.floor((e.clientY-b.top)*height/b.height);
-      const i=y*width+x;
-      caption.textContent=' ('+x+', '+y+') · '+(format==='rgba'?Array.from(pixels.subarray(i*4,i*4+4)).join(', '):pixels[i]);
-    };
-  }
-  selector.oninput=render;render();
 }

@@ -484,7 +484,7 @@ function draw() {
     const mesh=layer.mesh;
     if(!mesh?.patches?.length)continue;
     if(clouds.length)visibility??=new SurfaceVisibility(w,h);
-    const depthGeometry=['mesh','code'].includes(layer.node.type);
+    const depthGeometry=['mesh','code','viewer'].includes(layer.node.type);
     const frame=!depthGeometry && replay && $('surfaceTime').checked && timeline[cursor]?.id;
     const visible=frame ? mesh.patches.filter(p=>p.first<=frame).concat(
       mesh.retired.filter(p=>p.first<=frame && frame<p.until)) : mesh.patches;
@@ -554,6 +554,17 @@ function draw() {
     for(const [x,y] of vertices)ctx.fillRect(x-2,y-2,4,4);
     $('vertexKey').hidden=!visibility?.members.size;
   }
+  for(const layer of layers)if(layer.line){
+    ctx.beginPath();ctx.strokeStyle='#a5efd1';ctx.lineWidth=2;
+    let connected=false;
+    for(const point of layer.line){
+      const xy=projectWithDepth(point);
+      if(!xy){connected=false;continue;}
+      if(connected)ctx.lineTo(xy[0],xy[1]);else ctx.moveTo(xy[0],xy[1]);
+      connected=true;
+    }
+    ctx.stroke();
+  }
   if(!camera && estimate?.xyz && viewBindings().some(p=>p.type==='Camera map')){
     const a=project(estimate.xyz), v=estimate.rotation.map(row=>row[2]);
     const b=project(estimate.xyz.map((x,i)=>x+v[i]*extent*.10));
@@ -616,6 +627,7 @@ function fitMapView(){
   if(!canvas.clientWidth||!canvas.clientHeight)return;
   const samples=[];
   for(const layer of graphLayers()){
+    if(layer.line)for(const point of layer.line)samples.push(point);
     if(layer.points?.length){
       for(let i=0;i<layer.points.length;i+=Math.max(1,Math.floor(layer.points.length/2000)))samples.push(layer.points[i]);
     }
@@ -1750,7 +1762,17 @@ function drawTimeline(){
   g.fillStyle='#72caff';g.fillRect(x(timeline[cursor].ms)-1,0,3,13);
 }
 new ResizeObserver(drawTimeline).observe($('timelinePlot'));
+function replaySnapshot(){
+  const frame=timeline[cursor];
+  return frame?{frameId:frame.id,index:cursor,timeMs:frame.ms}:null;
+}
+function showReplayBinding(){
+  const el=$('codeCursor');
+  const frame=replaySnapshot();
+  el.textContent=$('bindReplay').checked?(frame?'Current cursor · '+JSON.stringify(frame):'No replay frame is loaded'):'Cursor disabled for this node';
+}
 function refreshReplay(){
+  showReplayBinding();
   syncClearance();
   syncTofReading();
   replayDepth();
@@ -1917,7 +1939,7 @@ function readPipeline(){
   config.useDepthPath=$('geometrySource').value!=='photo'&&$('pipelinePath').value==='regenerated';
   return config;
 }
-const builtins=new Map([['Empty pipeline',recordingPreset()],['Range history',recordingPreset(true)],['ToF-corrected depth pixels',tofPixelPreset()]]);
+const builtins=new Map([['Empty pipeline',recordingPreset()],['Replay · photo and depth comparison',replayComparePreset()],['Range history',recordingPreset(true)],['ToF-corrected depth pixels',tofPixelPreset()]]);
 const defaults={...readPipeline(),depthSurfaceMethod:'planes',useDepthPath:false,depthOutput:'points'};
 for(const option of $('surfaceMethod').options){
   builtins.set(option.text,{...defaults,geometrySource:'photo',surfaceMethod:option.value});
@@ -2030,6 +2052,7 @@ $('pipeline').addEventListener('change',e=>{
     syncPipelineLabels();
   }
 });
+const runContexts=new WeakMap();
 let pipelineRunning=false,pipelineRebuildingRun=null;
 function executionOrder(target){
   const ordered=[],done=new Set(),visiting=new Set();
@@ -2049,7 +2072,73 @@ function executionOrder(target){
   visit(target);return ordered;
 }
 
-async function runPipeline(){
+function viewerProgram(node){
+  const lines=[];
+  (node.settings.inputs||[]).forEach((p,i)=>{
+    const port='input.find(p => p.source === '+JSON.stringify(p.source)+' && p.type === '+JSON.stringify(p.type)+')';
+    const data='inputs['+JSON.stringify(p.source)+']?.['+JSON.stringify(p.type)+']';
+    const name='port'+(i+1);
+    lines.push('const '+name+' = '+port+';');
+    const add=expr=>lines.push('if ('+name+') layers.push('+expr+');');
+    if(p.type==='Camera map'){add('plot.points('+data+'.points)');add('plot.path('+name+')');}
+    else if(['Registered depth points','Colored points'].includes(p.type))add('plot.points('+data+')');
+    else if(['Point-fitted splats','Trained Gaussian map'].includes(p.type))add('plot.splats('+data+')');
+    else if(p.type==='Polygon mesh')add('plot.polygons('+data+')');
+    else add('plot.layer('+name+')');
+  });
+  return ['const layers = [];',...lines,'return layers;'].join('\n');
+}
+function editorProgram(node){
+  if(node.type==='viewer'&&(!node.settings.program||node.settings.program===viewPass))return viewerProgram(node);
+  return node.settings.program??(node.type==='splats'?defaultFitSource():node.type==='walk'?sourcePass:nativePass);
+}
+function viewerScene(value,scope,node){
+  const bindings=scope.input;
+  if(!Array.isArray(value))throw Error('Return an array of plot layers.');
+  const geometry=[],live=[],replayViews=[];
+  for(const p of value){
+    if(p?.draw==='replayFrames'){
+      if(node.settings.useReplay===false)throw Error('Enable the replay cursor on this viewer.');
+      if(!Array.isArray(p.ports)||p.ports.length<1||p.ports.length>2)throw Error('Choose one or two connected image ports.');
+      replayViews.push({split:50,streams:p.ports.map(port=>{
+        const binding=bindings.find(b=>b.source===port?.source&&b.type===port.type&&isImageType(b.type));
+        if(!binding)throw Error('Choose a connected image port.');
+        const frames=scope.inputs[binding.source][binding.type];
+        return {binding,byFrame:new Map(frames.map(f=>[f.frame,f]))};
+      })});
+    }else if(p?.draw==='points'){
+      validateTransform('Colored points',p.rows);geometry.push({points:p.rows});
+    }else if(p?.draw==='line'){
+      if(!Array.isArray(p.vertices)||!p.vertices.every(v=>Array.isArray(v)&&v.length===3&&v.every(Number.isFinite)))throw Error('plot.line expects [x,y,z] vertices.');
+      geometry.push({line:p.vertices});
+    }else if(p?.draw==='splats'){
+      validateTransform('Point-fitted splats',p.values);geometry.push(transformLayer('Point-fitted splats',p.values));
+    }else if(p?.draw==='polygons')geometry.push(nativeLayer('Polygon mesh',p.faces));
+    else if(bindings.some(b=>b.source===p?.source&&b.type===p.type)&&(!p.draw||p.draw==='path'&&p.type==='Camera map'))live.push(p);
+    else throw Error('Expected a plot command or a connected layer.');
+  }
+  return {bindings:live,geometry,replayViews};
+}
+async function editorScope(node,results){
+  const bindings=ports(node).filter(p=>node.type!=='viewer'||nodeById(p.source)?.enabled!==false);
+  const inputs=Object.create(null),refs=[];
+  let input;
+  for(const [i,p] of bindings.entries()){
+    const src=nodeById(p.source);
+    if(!src)throw Error('Connect '+p.type+' first.');
+    const value=await transformInput(p.type,src,results.get(src.id));
+    if(i===0)input=value;
+    if(node.type==='viewer')(inputs[src.id]??=Object.create(null))[p.type]=value;
+    else if(node.type==='code'){if(i)inputs[p.name]=value;}
+    else if(node.type!=='splats')inputs[p.type]=value;
+    if(isImageType(p.type))for(const ref of value)refs.push(ref);
+  }
+  if(node.type==='viewer')input=bindings;
+  if(node.type==='walk')input={'Recorded photos':frameRefs('Recorded photos',node),'Telemetry':timeline,'Recording tables':await readTables(state.run)};
+  return {input,inputs,refs};
+}
+
+async function runPipeline(draft=null,inspectOnly=false){
   if(pipelineRunning||!state?.run||state.busy||state.recording)return;
   const target=currentNode(),run=state.run,key={run,index:model?.feature_index};
   const signature=JSON.stringify(nodeGraph),results=new Map(),progress=$('pipelineProgress'),steps=[];
@@ -2077,10 +2166,18 @@ async function runPipeline(){
     if(res.status===404)await job(action);
     else if(!res.ok)throw Error('Could not read '+file);
   }
-  const operations=operationRegistry({target,run,key,guard,request,job,ensureArtifact});
+  const snapshot=replaySnapshot();
+  function executeCode(node,program,input,inputs,reader,native){
+    return runProgram(program,input,inputs,reader,native,node.settings.useReplay!==false?snapshot:null);
+  }
+  const operations=operationRegistry({target,run,key,guard,request,job,ensureArtifact,executeCode});
   pipelineRunning=true;$('runPipeline').disabled=true;
   try{
-    const ordered=executionOrder(target);
+    if(draft!==null)for(const n of nodeGraph.nodes){
+      const previous=runContexts.get(n);
+      if(previous?.key===outputKey(n))results.set(n.id,previous.result);
+    }
+    const ordered=draft===null?executionOrder(target):[target];
     for(const [i,node] of ordered.entries()){
       guard();progress.textContent=(i+1)+' / '+ordered.length+' · '+nodeLabel(node);
       const started=performance.now();
@@ -2095,15 +2192,31 @@ async function runPipeline(){
         return operations[node.type](node,upstream,results,settings);
       };
       let result;
+      if(draft!==null){
+        const scope=await editorScope(node,results);
+        const {program,connections,useReplay,...settings}=node.settings;
+        const nativeCall=native?{settings,execute:async options=>{
+          if(['mesh','points'].includes(node.type)&&!upstream)throw Error('Run to node first to prepare the upstream processing context.');
+          const result=await invoke(options);return transformInput(produced(node)[0],node,result);
+        }}:null;
+        const value=await runProgram(draft,scope.input,scope.inputs,pixelReader(scope.refs,run,key.index),nativeCall,
+          node.settings.useReplay!==false?snapshot:null,entry=>consoleLine(entry));
+        guard();consoleLine(['return',value]);
+        if(!inspectOnly&&node.type==='viewer'&&Array.isArray(value)){
+          const scene=viewerScene(value,scope,node);
+          publishOutput(node,scene);nodeGraph.viewer=node.id;refreshDisplayedPath();fitMapView();draw();
+        }
+        progress.textContent='Code finished';return;
+      }
       if(native&&node.settings.program&&node.settings.program!==nativePass){
         const type=produced(node)[0],inputs=Object.create(null),refs=[];
         for(const p of ports(node)){
           const data=await transformInput(p.type,nodeById(p.source),results.get(p.source));
           inputs[p.type]=data;if(isImageType(p.type))refs.push(...data);
         }
-        const {program,connections,...settings}=node.settings;
+        const {program,connections,useReplay,...settings}=node.settings;
         let called=false,original;
-        const value=await runProgram(program,inputs[ports(node)[0]?.type],inputs,pixelReader(refs,run,key.index),{
+        const value=await executeCode(node,program,inputs[ports(node)[0]?.type],inputs,pixelReader(refs,run,key.index),{
           settings,execute:async options=>{
             if(called)throw Error('The native operator can run once per execution.');
             called=true;outputs.delete(outputKey(node));
@@ -2114,18 +2227,18 @@ async function runPipeline(){
         const changed=called&&sameData(value,original)?[]:[type];
         publishOutput(node,{...layer,artifacts});result={...result,artifacts,changed};
       }else result=native?await invoke(node.settings):await operations[node.type](node,upstream,results);
-      results.set(node.id,result);
+      results.set(node.id,result);runContexts.set(node,{key:outputKey(node),result});
       steps.push({node:nodeLabel(node),inputs:ports(node).map(p=>p.type+' from '+nodeLabel(nodeById(p.source))),
-        outputs:produced(node),seconds:Number(((performance.now()-started)/1000).toFixed(3))});
+        outputs:produced(node),replay:node.settings.useReplay!==false?snapshot:null,seconds:Number(((performance.now()-started)/1000).toFixed(3))});
     }
     guard();refreshDisplayedPath();draw();progress.textContent='Output ready';
     $('runTrace').hidden=false;$('runTraceData').textContent=JSON.stringify(steps,null,2);
     for(const opened of document.querySelectorAll('.port-data[open]'))opened.ontoggle();
-  }catch(e){progress.textContent=e.message;}
+  }catch(e){progress.textContent=e.message;if(draft!==null)consoleLine(['error',e.message]);}
   finally{pipelineRunning=false;updateStreamControls();}
 }
 
-function operationRegistry({target,run,key,guard,request,job,ensureArtifact}){
+function operationRegistry({target,run,key,guard,request,job,ensureArtifact,executeCode}){
   return {
     code:async(node,upstream,results)=>{
       const {inputType,outputType,program}=node.settings;
@@ -2135,21 +2248,19 @@ function operationRegistry({target,run,key,guard,request,job,ensureArtifact}){
         inputs[p.name]=await transformInput(p.type,nodeById(p.source),results.get(p.source));
         if(isImageType(p.type))refs.push(...inputs[p.name]);
       }
-      const value=await runProgram(program,input,inputs,pixelReader(refs,run,key.index));
+      const value=await executeCode(node,program,input,inputs,pixelReader(refs,run,key.index));
       guard();validateTransform(outputType,value);
       const layer=transformLayer(outputType,value);publishOutput(node,layer);
       return {value,...layer};
     },
-    viewer:async node=>{
-      const bindings=(node.settings.inputs||[]).filter(p=>nodeById(p.source)?.enabled!==false);
-      const value=node.settings.program&&node.settings.program!==viewPass?await runProgram(node.settings.program,bindings):bindings;
-      guard();
-      if(!Array.isArray(value)||!value.every(p=>bindings.some(b=>b.source===p?.source&&b.type===p?.type)))throw Error('Viewer code must return connected layer descriptors.');
-      publishOutput(node,{bindings:value});nodeGraph.viewer=node.id;viewerFrames();fitMapView();draw();
+    viewer:async(node,upstream,results)=>{
+      const scope=await editorScope(node,results);
+      const value=await executeCode(node,editorProgram(node),scope.input,scope.inputs,pixelReader(scope.refs,run,key.index));
+      guard();publishOutput(node,viewerScene(value,scope,node));nodeGraph.viewer=node.id;viewerFrames();fitMapView();draw();
     },
     walk:async node=>{
       const raw={'Recorded photos':frameRefs('Recorded photos',node),'Telemetry':timeline,'Recording tables':await readTables(run)};
-      const artifacts=node.settings.program&&node.settings.program!==sourcePass?await runProgram(node.settings.program,raw):raw;
+      const artifacts=node.settings.program&&node.settings.program!==sourcePass?await executeCode(node,node.settings.program,raw):raw;
       guard();
       for(const t of produced(node)){
         if(t==='Recording tables'){
@@ -2190,7 +2301,7 @@ function operationRegistry({target,run,key,guard,request,job,ensureArtifact}){
     },
     splats:async(node,input)=>{
       const points=await transformInput(ports(node)[0].type,nodeById(node.input),input);
-      const values=node.settings.program===undefined?fitGaussianAttributes(points):await runProgram(node.settings.program,points);
+      const values=node.settings.program===undefined?fitGaussianAttributes(points):await executeCode(node,node.settings.program,points);
       guard();validateTransform('Point-fitted splats',values);
       const layer=transformLayer('Point-fitted splats',values);publishOutput(node,layer);
       return layer;
@@ -2294,16 +2405,22 @@ function validateTransform(type,value){
 function transformInput(type,source,result){
   const artifacts=result?.artifacts||outputs.get(outputKey(source))?.artifacts;
   if(artifacts&&Object.hasOwn(artifacts,type))return artifacts[type];
-  if(source.type==='code')return result.value;
+  const cached=outputs.get(outputKey(source));
+  if(source.type==='code'){
+    const data=result?.value??cached?.value??cached?.points??cached?.frames??cached?.records;
+    if(data!==undefined)return data;
+    if(type==='Triangle list'&&cached?.mesh)return cached.mesh.patches.map(p=>p.vertices);
+    if(!cached)throw Error('Run '+nodeLabel(source)+' to produce '+type+'.');
+  }
   if(isImageType(type))return frameRefs(type,type==='Depth frames'&&result?.method?{settings:{geometrySource:result.method}}:source);
   if(type==='Recording tables')return readTables(state.run);
   if(type==='Camera map'&&model)return {poses:model.poses,points:model.points,units:model.units};
   if(type==='Telemetry')return timeline;
-  if(type==='Registered depth points')return result.cloud.points;
+  if(type==='Registered depth points'&&(result?.cloud||cached?.points))return result?.cloud?.points??cached.points;
   const layer=outputs.get(outputKey(source));
   if(type==='LingBot trajectory and points')return fetch('/lingbot-artifact?'+new URLSearchParams({run:state.run,index:model.feature_index,file:'trajectory.json'})).then(r=>{if(!r.ok)throw Error('Missing trajectory');return r.json();});
   if(type==='Polygon mesh'){
-    const mesh=layer?.mesh||(model.surfaces?.method===source.settings.surfaceMethod&&model.surfaces);
+    const mesh=layer?.mesh||(model?.surfaces?.method===source.settings.surfaceMethod&&model.surfaces);
     if(mesh?.patches)return mesh.patches;
     if(layer?.solid){
       const {vertices,indices}=layer.solid;
@@ -2313,7 +2430,13 @@ function transformInput(type,source,result){
   if(result?.records instanceof Float32Array)return result.records;
   const splats=result?.splats||layer?.splats;
   if(splats)return splats.attributes.subarray(0,splats.order.length*16);
-  throw Error('No '+type+' data from '+nodeLabel(source));
+  if(type==='Trained Gaussian map'&&(!source.settings.program||source.settings.program===nativePass)){
+    return fetch(gaussianUrl('gaussians.ply')).then(async response=>{
+      if(!response.ok)throw Error('Run '+nodeLabel(source)+' to generate Gaussian splats.');
+      const g=new GaussianView();g.load(await response.arrayBuffer(),false);return g.attributes.subarray(0,g.order.length*16);
+    });
+  }
+  throw Error('Run '+nodeLabel(source)+' to produce '+type+'.');
 }
 function transformLayer(type,value){
   if(type==='Pixel frames')return {frames:value};
@@ -2344,7 +2467,8 @@ function codePanel(node){
   $('codeControls').hidden=!custom;
   $('codeMessage').textContent='';
 
-  $('nodeProgram').value=node.settings.program??(fit?defaultFitSource():node.type==='viewer'?viewPass:node.type==='walk'?sourcePass:nativePass);
+  $('nodeProgram').value=editorProgram(node);
+  if($('codeConsole').dataset.node!==node.id){$('codeConsole').hidden=true;$('codeConsole').dataset.node=node.id;}
   $('codeSummary').textContent='Edit node code';
   if(custom){
     $('codeTitle').value=node.settings.name;
@@ -2353,12 +2477,38 @@ function codePanel(node){
     $('codeOut').replaceChildren(...writableTypes.map(t=>new Option(t,t)));
     $('codeOut').value=node.settings.outputType;
   }
+  $('bindReplay').checked=node.settings.useReplay!==false;
+  $('bindReplay').onchange=()=>{
+    node.settings.useReplay=$('bindReplay').checked;
+    markGraphEdited();rememberGraph();describe();
+  };
   function describe(){
-    $('codeSchema').textContent=custom?'input · '+codeTypes[$('codeIn').value]+'\ninputs · additional connected ports, keyed by their names\nreturn · '+codeTypes[$('codeOut').value]+(ports(node).some(p=>isImageType(p.type))?'\nawait readFrame(ref) → {width, height, pixels, format}':''):
-      fit?codeTypes['Registered depth points']+' → '+codeTypes['Point-fitted splats']:
-      node.type==='walk'?'input contains Recorded photos, Recording tables and frame-paired Telemetry. Return an object with these ports.':
-      node.type==='viewer'?'input contains connected layer descriptors {source, type, presentation}. Return the layers to display, in order.':
-      'input is the primary port. inputs is keyed by port type. runNative(settings) runs '+nodeName(node)+' with these parameters: '+JSON.stringify(Object.fromEntries(Object.entries(node.settings).filter(([k])=>!['program','connections'].includes(k))))+'. Return '+produced(node)[0]+'. '+(codeTypes[produced(node)[0]]||'');
+    showReplayBinding();
+    const native=!['viewer','walk','code','splats'].includes(node.type);
+    const incoming=ports(node), outgoing=custom?[$('codeOut').value]:produced(node);
+    const producer=id=>nodeById(id)?nodeLabel(nodeById(id)):'disconnected';
+    const primary=custom?$('codeIn').value:incoming[0]?.type;
+    const lines=['Available in this node'];
+    lines.push('input = '+(node.type==='walk'?'recording object keyed by output port':node.type==='viewer'?'connected layer descriptors {source, type, presentation}':(primary||'none')+(incoming[0]?' from '+producer(incoming[0].source):'')));
+    const named=custom?(node.settings.extra||[]):native?incoming:[];
+    if(node.type==='viewer'){
+      for(const p of incoming)lines.push('inputs['+JSON.stringify(p.source)+']['+JSON.stringify(p.type)+'] ← '+producer(p.source));
+      lines.push('plot.replayFrame(port) · plot.compareFrames(leftPort, rightPort) follow the walk cursor by frame ID.','plot.points(rows) · [x,y,z,r,g,b] rows. plot.line(vertices) · [x,y,z] vertices.','plot.splats(values) · plot.polygons(faces) · plot.path(cameraMapPort) · plot.layer(port)');
+    }else if(!named.length)lines.push('inputs = {}');
+    for(const p of named)lines.push('inputs['+JSON.stringify(custom?p.name:p.type)+'] ← '+producer(p.source)+' · '+p.type);
+    if(native){
+      const {program,connections,useReplay,...settings}=node.settings;
+      lines.push('settings = '+JSON.stringify(settings),'await runNative(settings) → '+outgoing[0]+' from '+nodeLabel(node));
+    }
+    if((custom||native)&&incoming.some(p=>isImageType(p.type)))lines.push('await readFrame(ref) → {width, height, pixels, format}');
+    lines.push('replay = '+(node.settings.useReplay!==false?'snapshot {frameId, index, timeMs} or null if no frame. Scrub, then Run to node.':'null (cursor disabled)'));
+    if(node.settings.useReplay!==false&&incoming.some(p=>isImageType(p.type)))lines.push('Frame references match ref.frame === replay?.frameId');
+    for(const type of outgoing){
+      const users=nodeGraph.nodes.filter(n=>ports(n).some(p=>p.source===node.id&&p.type===type));
+      lines.push('return'+(node.type==='walk'?'['+JSON.stringify(type)+']':'')+' → '+type+' → '+(users.map(nodeLabel).join(', ')||'no downstream connection'));
+      if(codeTypes[type])lines.push(codeTypes[type]);
+    }
+    $('codeSchema').textContent=lines.join('\n');
   }
   $('codeIn').onchange=$('codeOut').onchange=describe;describe();
 }
@@ -2450,7 +2600,7 @@ function outputKey(node){
     for(const p of ports(n))add(nodeById(p.source));
   }
   add(node);
-  return JSON.stringify([state?.run,model?.feature_index,node.id,node.input,config,transforms]);
+  return JSON.stringify([state?.run,model?.feature_index,node.id,node.input,config,transforms,node.type==='viewer'?ports(node).map(p=>nodeById(p.source)?.enabled!==false):null]);
 }
 let outputRevision=0;
 function publishOutput(node,value){
@@ -2465,7 +2615,7 @@ function addBinding(view,source,type){
 }
 function inspectPort(source,type){
   const box=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('div');
-  title.textContent='Inspect '+type.toLowerCase();box.className='port-data';if(['Recorded photos','Depth frames','Telemetry'].includes(type))box.dataset.frame='';box.append(title,body);
+  title.textContent='Inspect '+type.toLowerCase();box.className='port-data';if(['Recorded photos','Depth frames','Telemetry','Viewer output'].includes(type))box.dataset.frame='';box.append(title,body);
   box.ontoggle=()=>{if(box.open)showData(body,source,type);};return box;
 }
 function showData(body,node,type){
@@ -2479,6 +2629,15 @@ function showData(body,node,type){
     const out=text('');const refresh=()=>{const i=input.valueAsNumber-1;if(Number.isInteger(i)&&i>=0&&i<count)out.textContent=JSON.stringify(get(i),null,2);};
     input.oninput=refresh;refresh();
   };
+  function pointPlot(points){
+    const box=document.createElement('details'),title=document.createElement('summary'),plot=document.createElement('div');
+    title.textContent='Plot point coordinates';box.append(title,plot);body.append(box);
+    box.ontoggle=()=>{
+      if(!box.open||plot.childElementCount)return;
+      const records=Array.from(points,([x,y,z,red,green,blue])=>({x,y,z,red,green,blue}));
+      recordDisplay(plot,records,{mode:'scatter',x:'x',y:'y'});
+    };
+  }
   const value=outputs.get(outputKey(node));
   if(type==='Pixel frames'){displayPixels(body,value?.frames);return;}
   if(isTableType(type)){
@@ -2493,12 +2652,16 @@ function showData(body,node,type){
     text('Run this node to inspect its records.');return;
   }
   if(type==='Viewer output'){
+    for(const v of value?.replayViews||[])mountReplayFrames(body,v)();
+    if(value?.replayViews?.length&&!value.geometry.length&&!value.bindings.length)return;
     const mixed=viewBindings(node).filter(p=>isTableType(p.type)||isImageType(p.type));
     for(const p of mixed){const feed=document.createElement('div');body.append(feed);showData(feed,nodeById(p.source),p.type);}
-    if(mixed.length&&mixed.length===node.settings.inputs.length)return;
+    if(!value?.geometry?.length&&mixed.length&&mixed.length===node.settings.inputs.length)return;
     if(viewerNode()?.id!==node.id){text('Select this viewer to inspect its rendered output.');return;}
     const pic=document.createElement('img');pic.alt='Current rendered geometry';pic.src=canvas.toDataURL();body.append(pic);
-    text(node.settings.inputs.map(p=>p.type+' ← '+nodeLabel(nodeById(p.source))).join('\n')||'No inputs connected');
+    const shown=viewBindings(node).map(p=>(p.draw||p.type)+' ← '+nodeLabel(nodeById(p.source)));
+    for(const layer of value?.geometry||[])shown.push(layer.points?layer.points.length+' plotted points':layer.line?layer.line.length+' line vertices':layer.mesh?layer.mesh.patches.length+' polygons':(layer.splats?.order.length||0)+' splats');
+    text(shown.join('\n')||'No layers');
     return;
   }
   if(['Recorded photos','Depth frames','Telemetry'].includes(type)){
@@ -2533,10 +2696,10 @@ function showData(body,node,type){
   if(type==='Camera map'&&model){
     const map=value?.artifacts?.[type]||(!node.settings.program||node.settings.program===nativePass?model:null);
     if(!map){text('Run to node to inspect the edited map.');return;}
-    rows('Pose',map.poses.length,i=>map.poses[i]);rows('Landmark',map.points.length,i=>({xyz:map.points[i].slice(0,3),rgb:map.points[i].slice(3)}));return;
+    rows('Pose',map.poses.length,i=>map.poses[i]);rows('Landmark',map.points.length,i=>({xyz:map.points[i].slice(0,3),rgb:map.points[i].slice(3)}));pointPlot(map.points);return;
   }
   if(value?.records){rows('Record',value.records.length,i=>value.records[i]);return;}
-  if(value?.points){rows('Point',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));return;}
+  if(value?.points){rows('Point',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));pointPlot(value.points);return;}
   const mesh=value?.mesh||(model?.surfaces?.method===node.settings.surfaceMethod?model?.surfaces:null);
   if(mesh?.patches){rows('Face',mesh.patches.length,i=>mesh.patches[i]);return;}
   if(value?.solid){const m=value.solid;rows('Triangle',m.indices.length/3,i=>Array.from(m.indices.slice(i*3,i*3+3),j=>m.vertices[j]));return;}
@@ -2563,17 +2726,60 @@ function viewBindings(view=viewerNode()){
   const inputs=saved||(!view.settings.program||view.settings.program===viewPass?view.settings.inputs:[]);
   return (inputs||[]).filter(p=>nodeById(p.source)?.enabled!==false);
 }
+function mountReplayFrames(host,view){
+  const title=document.createElement('strong'),stage=document.createElement('div');
+  stage.className='replay-compare';
+  const panes=view.streams.map(({binding})=>{
+    const pane=document.createElement('div');
+    pane.className='replay-pane';stage.append(pane);
+    return {pane,label:nodeLabel(nodeById(binding.source))+' · '+binding.type};
+  });
+  host.append(title,stage);
+  if(panes.length===2){
+    const slider=document.createElement('input');
+    slider.type='range';slider.min=0;slider.max=100;slider.value=view.split;
+    slider.setAttribute('aria-label','Comparison divider');
+    slider.oninput=()=>{
+      view.split=slider.valueAsNumber;
+      stage.style.setProperty('--split',view.split+'%');
+    };
+    slider.oninput();stage.append(slider);
+  }
+  let previous;
+  return ()=>{
+    const frameId=replaySnapshot()?.frameId;
+    if(frameId===previous&&title.textContent)return;
+    previous=frameId;
+    title.textContent=panes.map(p=>p.label).join('  |  ')+' · '+(frameId||'No replay frame');
+    const refs=view.streams.map(s=>s.byFrame.get(frameId));
+    for(const [i,{pane,label}] of panes.entries()){
+      const ref=refs[i];pane.replaceChildren();
+      if(!ref){pane.textContent='No matching frame';continue;}
+      if(ref.pixels){
+        const canvas=document.createElement('canvas');paintFramePixels(canvas,ref);pane.append(canvas);continue;
+      }
+      const image=document.createElement('img');image.alt=label+' · '+frameId;
+      const rectified=refs.some(f=>f?.method);
+      const endpoint=ref.method?'/frame-depth.png':rectified?'/depth-input.jpg':'/recorded.jpg';
+      image.onerror=()=>image.replaceWith(document.createTextNode('Frame unavailable · '+frameId));
+      image.src=endpoint+'?'+new URLSearchParams({run:timelineRun,index:model?.feature_index||'',frame:ref.frame,method:ref.method||'photo'});
+      pane.append(image);
+    }
+  };
+}
 function viewerFrames(){
   const view=viewerNode(),panel=$('viewerFrames'),bindings=viewBindings(view);
+  const replayViews=(view&&outputs.get(outputKey(view))?.replayViews)||[];
   const feeds=bindings.filter(p=>(isTableType(p.type)||isImageType(p.type))&&(!p.presentation?.enlargedOnly||$('views').classList.contains('enlarged')));
-  const spatial=bindings.some(p=>!isTableType(p.type)&&!isImageType(p.type));
+  const spatial=!!(view&&outputs.get(outputKey(view))?.geometry?.length)||bindings.some(p=>!isTableType(p.type)&&!isImageType(p.type));
   $('mapPanel').classList.toggle('frames-only',!spatial);
   $('mapPanel').classList.toggle('has-path',bindings.some(p=>p.type==='Camera map'));
-  $('mapPanel').classList.toggle('has-points',bindings.some(p=>['Camera map','Registered depth points','Colored points'].includes(p.type)));
+  $('mapPanel').classList.toggle('has-points',!!(view&&outputs.get(outputKey(view))?.geometry?.some(g=>g.points))||bindings.some(p=>['Camera map','Registered depth points','Colored points'].includes(p.type)));
   const key=JSON.stringify([view?.id,timelineRun,spatial,feeds.some(p=>isImageType(p.type))?cursor:null,outputRevision,feeds]);
-  if(panel.dataset.key===key)return;
-  panel.dataset.key=key;panel.replaceChildren();panel.hidden=!feeds.length&&spatial;
-  if(!bindings.length){panel.textContent='Connect an output to this viewer.';return;}
+  if(panel.dataset.key===key){for(const update of panel.replayUpdates||[])update();return;}
+  panel.dataset.key=key;panel.replaceChildren();panel.hidden=!feeds.length&&!replayViews.length&&spatial;
+  panel.replayUpdates=replayViews.map(v=>{const group=document.createElement('section');panel.append(group);const update=mountReplayFrames(group,v);update();return update;});
+  if(!bindings.length&&!spatial&&!replayViews.length){panel.textContent=view?.settings.inputs?.length?'Run to node to display the connected outputs.':'Connect an output to this viewer.';return;}
   for(const p of feeds){
     const group=document.createElement('section'),heading=document.createElement('strong'),el=document.createElement('div');
     const src=nodeById(p.source);heading.textContent=nodeLabel(src)+' · '+p.type;
@@ -2593,8 +2799,10 @@ function viewerFrames(){
 }
 function graphLayers(){
   if(!nodeGraph)return [];
-  const layers=[];
+  const view=viewerNode();
+  const layers=(view&&outputs.get(outputKey(view))?.geometry||[]).map(layer=>({...layer,node:view}));
   for(const p of viewBindings()){
+    if(p.draw==='path')continue;
     if(isTableType(p.type)||isImageType(p.type))continue;
     const node=nodeById(p.source);
     let data=outputs.get(outputKey(node));
@@ -2724,6 +2932,64 @@ function showPorts(node){
   }
 }
 
+function inspectConsoleValue(label,value,depth=0,parents=new Set()){
+  const simple=text=>{
+    const row=document.createElement('div');
+    row.textContent=label+'  '+text;
+    return row;
+  };
+  if(value===null||typeof value!=='object')return simple(typeof value==='string'?JSON.stringify(value):String(value));
+  if(parents.has(value))return simple('[Circular reference]');
+  if(value instanceof Date||value instanceof RegExp||value instanceof Error)return simple(String(value));
+  const identity=value;
+  if(value instanceof Map||value instanceof Set)value=Array.from(value);
+  if(value instanceof ArrayBuffer)value=new Uint8Array(value);
+  if(value instanceof DataView)value=new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+
+  const indexed=Array.isArray(value)||ArrayBuffer.isView(value);
+  const keys=indexed?null:Object.keys(value),length=indexed?value.length:keys.length;
+  const box=document.createElement('details'),header=document.createElement('summary'),children=document.createElement('div');
+  header.textContent=label+'  '+(indexed?(Array.isArray(value)?'Array':value.constructor.name)+'('+length+')':'{'+length+' fields}');
+  children.style.paddingLeft='1.2em';
+  box.append(header,children);
+  const pageSize=50;
+  function populate(){
+    if(children.childElementCount)return;
+    const body=document.createElement('div'),ancestors=new Set(parents).add(identity);
+    function page(n){
+      body.replaceChildren();
+      for(let i=n*pageSize;i<Math.min(length,(n+1)*pageSize);i++){
+        const key=indexed?i:keys[i];
+        body.append(inspectConsoleValue(String(key),value[key],depth+1,ancestors));
+      }
+    }
+    if(length>pageSize){
+      const control=document.createElement('label'),field=document.createElement('input');
+      field.type='number';field.min=1;field.max=Math.ceil(length/pageSize);field.value=1;
+      control.append('Page ',field,' of '+field.max+' · '+pageSize+' entries per page');
+      field.oninput=()=>{if(field.value&&field.validity.valid)page(field.valueAsNumber-1);};
+      children.append(control);
+    }
+    children.append(body);page(0);
+  }
+  box.ontoggle=()=>{if(box.open)populate();};
+  if(depth===0){box.open=true;populate();}
+  return box;
+}
+function consoleLine([label,...values]){
+  const box=$('codeConsole');
+  box.hidden=false;
+  for(const value of values)box.append(inspectConsoleValue(label,value));
+}
+$('codeRun').onclick=async()=>{
+  const editor=$('nodeProgram'),selected=editor.value.slice(editor.selectionStart,editor.selectionEnd);
+  $('codeConsole').textContent='';
+  if(!state?.run||pipelineRunning||state.busy||state.recording){consoleLine(['status','Open an idle walk to run code.']);return;}
+  const draft=selected?'return (\n'+selected+'\n);':editor.value;
+  $('codeRun').disabled=true;
+  try{await runPipeline(draft,!!selected);}finally{$('codeRun').disabled=false;}
+};
+$('codeRun').title='Run the draft, or select a JavaScript expression to inspect its value. Use console.log() to inspect local variables.';
 $('codeApply').onclick=()=>{
   const node=currentNode();
   if(node.type==='code'){
@@ -2821,6 +3087,7 @@ function openNodeGraph(config){
   $('runTrace').hidden=true;
   outputs.clear();undoStack.length=0;lastGraph=null;
   nodeGraph=config.graph?structuredClone(config.graph):graphFromRecipe({...defaults,...config});
+  for(const n of nodeGraph.nodes)if(!['walk','viewer','code','splats'].includes(n.type)&&n.settings.program==='return await runNative(settings);')n.settings.program=nativePass;
   for(const n of nodeGraph.nodes.filter(n=>n.type==='depth'))connectFrameSource(n);
   if(!nodeGraph.nodes.some(n=>n.type==='viewer')){
     const inputs=nodeGraph.nodes.filter(n=>!['walk','depth'].includes(n.type)).map(n=>({source:n.id,type:produced(n)[0]}));
@@ -2928,7 +3195,7 @@ $('pipeline').addEventListener('change',e=>{
   }
   markGraphEdited();renderGraph();draw();
 });
-$('runPipeline').onclick=runPipeline;
+$('runPipeline').onclick=()=>runPipeline();
 $('nodeDepthMethod').replaceChildren(...Array.from(frameSelect.options).filter(o=>o.value!=='photo').map(o=>new Option(o.text,o.value)));
 $('depthOutput').parentElement.id='depthOutputLabel';
 $('geometryReport').before($('pipelinePathLabel'));
