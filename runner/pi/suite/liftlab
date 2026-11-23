@@ -26,6 +26,11 @@ boot = yes, started again if it stops (restart). Over SSH:
   liftlab watch [--every 10]                   the health monitor: prints each change (the monitor service runs this)
   liftlab send NAME TEXT...                    a text command to a dfb_pi program (status, health, autotune ..., and in
                                                angle mode sticks ARM THROTTLE [ROLL PITCH YAW], motor N THROTTLE); its answer
+  liftlab power [NAME] [--every 0.2] [--csv FILE] [--seconds S]
+                                               the ESP32's power monitor (pmon=: INA219/INA226/INA3221) through dfb_pi:
+                                               each pack's volts, amps and mAh used, with the motors' throttles, a line
+                                               per sample; --csv also writes them to FILE (for a bench run: thrust and
+                                               current against throttle)
 
 In the panel, c on a dfb_pi program is its control screen: the sticks from the keyboard, as a radio would send them
 (arm, throttle, roll, pitch, yaw; one motor at a time for a test), with the ESP32's state, attitude, height and motors.
@@ -308,9 +313,22 @@ def probe(s, timeout=0.4):
             return {'ok': False, 'text': f'port {port} does not answer'}
     return {'ok': False, 'text': f'probe "{s.probe}": dfb_pi PORT or tcp PORT'}
 
+POWER_RE = re.compile(r"channel (\d) ([\w' ]+?) ([-\d.]+) V ([-\d.]+) A ([-\d.]+) mAh")
+
+def parse_power(txt):
+    """dfb_pi's power text ("power: channel 1 motors' pack 3.95 V 2.10 A 120 mAh, channel 2 ..."): a dict a channel."""
+    m = re.search(r'power: (.*?)(?:; |$)', txt or '')
+    if not m: return []
+    return [{'ch': int(c), 'what': w, 'v': float(v), 'a': float(a), 'mah': float(mah)} for c, w, v, a, mah in POWER_RE.findall(m.group(1))]
+
+def power_text(chs):
+    return ' · '.join(f"{c['what']} {c['v']:.2f} V {c['a']:.2f} A {c['mah']:.0f} mAh" for c in chs)
+
 def dfb_status(txt):
-    """dfb_pi's status line, the parts that matter: the ESP32's state, the pilot's link, the sticks (angle mode)."""
+    """dfb_pi's status line, the parts that matter: the ESP32's state, the pilot's link, the sticks (angle mode), the power monitor."""
     d = {'ok': True, 'raw': txt}
+    pw = parse_power(txt)
+    if pw: d['power'] = pw
     m = re.search(r'the ESP32 ([\w ]+?)(?:;|$)', txt)
     if m: d['esp32'] = m.group(1).strip()
     m = re.search(r'wifi with (\S+): packets sent.*?got (\d+) \(LQ (\d+)%\)', txt)
@@ -326,6 +344,7 @@ def dfb_status(txt):
     if d.get('peer'): bits.append(f"pilot {d['peer']} LQ {d.get('lq', '?')}%")
     elif 'peer' in d: bits.append('no pilot connected')
     if 'arm' in d: bits.append(f"{'panel ' if d.get('panel') else ''}sticks: arm {'on' if d['arm'] else 'off'}, throttle {d['throttle']:.2f}")
+    if pw: bits.append(power_text(pw))
     d['text'] = ' · '.join(bits) or txt[:80]
     if d.get('esp32') == 'not heard yet': d['ok'] = False
     return d
@@ -698,6 +717,42 @@ def cmd_watch(every):
         seen = now
         time.sleep(every)
 
+def dfb_service(name=None):
+    """The dfb_pi program to talk to: NAME, or the only (first) one with a 'dfb_pi PORT' probe. (service, port)"""
+    svcs = services()
+    for sv in (pick(name, svcs) if name else svcs):
+        port = dfb_port(sv)
+        if port is not None: return sv, port
+    raise RuntimeError(f"{name}: not dfb_pi (its probe isn't 'dfb_pi PORT')" if name else 'no dfb_pi program in liftlab.conf')
+
+def cmd_power(name=None, every=0.2, csv_path=None, seconds=None, send=dfb_send, now=time.monotonic, sleep=time.sleep, out=print):
+    """The power monitor, a line per sample (and a CSV row): each channel's volts, amps, mAh, and the motors' throttles."""
+    sv, port = dfb_service(name)
+    f = open(csv_path, 'a', newline='') if csv_path else None
+    import csv as _csv
+    w = _csv.writer(f) if f else None
+    t0 = now(); header = None; n = 0
+    try:
+        while seconds is None or now() - t0 < seconds:
+            r = send(port, 'power'); st = ctl_status(send(port, 'status') or '')
+            chs = parse_power(r or '')
+            if r is None: out(f'{sv.name}: no answer on UDP port {port} (is it running?)')
+            elif not chs: out(r)
+            else:
+                mot = st.get('motors') or []
+                out(f"{now() - t0:7.2f} s  {power_text(chs)}" + (f"  motors {' '.join(f'{m:.2f}' for m in mot)}" if mot else ''))
+                if w:
+                    cols = ['t_s'] + [f"ch{c['ch']}_{k}" for c in chs for k in ('volts', 'amps', 'mah')] + [f'motor{i + 1}' for i in range(len(mot))]
+                    if cols != header: w.writerow(cols); header = cols
+                    w.writerow([f'{now() - t0:.3f}'] + [f"{c[k]:.4g}" for c in chs for k in ('v', 'a', 'mah')] + [f'{m:.3f}' for m in mot]); f.flush()
+                n += 1
+            sleep(every)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if f: f.close()
+    return n
+
 # ───────────────────────── the panel ─────────────────────────
 
 def panel():
@@ -800,6 +855,7 @@ def panel():
             put(y, 12, f'the ESP32 says {es}, not testing: is its firmware new enough for motors at once? (dfb_pi below)', Y); y += 1
         if ctl.note: put(y, 12, ctl.note[:max(0, w - 13)], 0); y += 1
         y += 1
+        if fresh and st.get('power'): put(y, 0, 'power', curses.A_BOLD); put(y, 12, power_text(st['power'])[:max(0, w - 13)], 0); y += 1
         if fresh and st.get('esp32_said'): put(y, 0, 'ESP32 said', curses.A_BOLD); put(y, 12, f"{st['esp32_said']}  ({st['esp32_said_s']} s ago)"[:max(0, w - 13)], R if 'won\'t' in st['esp32_said'] or 'refused' in st['esp32_said'] else 0); y += 1
         if ctl.said: put(y, 0, 'dfb_pi', curses.A_BOLD); put(y, 12, ctl.said[:max(0, w - 13)], Y); y += 1
         keys = Control.KEYS; lines_ = []
@@ -934,6 +990,7 @@ def main(argv=None):
     sub.add_parser('apply'); sub.add_parser('build'); sub.add_parser('migrate'); sub.add_parser('panel')
     p = sub.add_parser('watch'); p.add_argument('--every', type=float, default=10)
     p = sub.add_parser('send'); p.add_argument('name'); p.add_argument('text', nargs='+')
+    p = sub.add_parser('power'); p.add_argument('name', nargs='?'); p.add_argument('--every', type=float, default=0.2); p.add_argument('--csv'); p.add_argument('--seconds', type=float)
     a = ap.parse_args(argv)
     try:
         if a.cmd in (None, 'panel'):
@@ -956,6 +1013,7 @@ def main(argv=None):
         elif a.cmd == 'build': cmd_build()
         elif a.cmd == 'migrate': cmd_migrate(); apply()
         elif a.cmd == 'watch': cmd_watch(a.every)
+        elif a.cmd == 'power': cmd_power(a.name, a.every, a.csv, a.seconds)
         elif a.cmd == 'send':
             sv = pick(a.name, services())[0]; port = dfb_port(sv)
             if port is None: raise RuntimeError(f"{sv.name}: not dfb_pi (its probe isn't 'dfb_pi PORT')")

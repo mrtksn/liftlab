@@ -7,7 +7,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const ctx=vm.createContext({console,atob,window:{addEventListener(){}},LAWS:{},RN_TASK_FORMULAS:{},Map,Set});
 for(const file of ['board-hardware','hardware','driver-presets','boards','part-geometry','designs','board-pinouts']) vm.runInContext(fs.readFileSync('js/'+file+'.js','utf8'),ctx);
 // the Battery settings: the main pack is 1S 1.8 Ah
-vm.runInContext('var battCfg=()=>({cells:1,capacity:1.8,rInt:0.05,maxA:36});this.api={hardwarePlan,hardwareSettings,sensedPack2,powerIssues,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,boardSupply,boardSupplyOf,boardWatts,hardwareOverview,powerDiagramSvg,powerSources,powerConsumers,consumerSource,sourceSpec,POWER_PRESETS,lipoMass}',ctx);
+vm.runInContext('var battCfg=()=>({cells:1,capacity:1.8,rInt:0.05,maxA:36});this.api={PMON_CHIPS,powerMonitor,pmonIssues,pmonSetting,pmonChannelOf,hardwarePlan,hardwareSettings,sensedPack2,powerIssues,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,boardSupply,boardSupplyOf,boardWatts,hardwareOverview,powerDiagramSvg,powerSources,powerConsumers,consumerSource,sourceSpec,POWER_PRESETS,lipoMass}',ctx);
 const A=ctx.api,src=(C,comps,key)=>(A.consumerSource(C,comps,key)||{}).id??null;
 const C={ground:{kind:'mac',name:'Laptop'},boards:[{id:1,kind:'esp32',name:'Flight controller',tasks:['core','tlm']},{id:2,kind:'pizero',name:'Pi Zero',tasks:['nav']}],wiring:{parts:{},boards:{}}};
 const motors=Array.from({length:4},(_,i)=>({id:i+1,type:'motor',name:'M'+i,pos:[0,0,0]}));
@@ -80,6 +80,27 @@ assert.ok(A.powerDiagramSvg(C,comps).includes('Voltage divider · Board pack')&&
 C.wiring.boards[1].batteryPin2=34;assert.ok(A.hardwarePlan(C,motors,C.boards[0]).errors.some(e=>/Second pack ADC|more than once|Battery ADC/.test(e)),'one pin for both packs');
 C.wiring.boards[1].batteryPin2=35;C.wiring.boards[1].batteryDivider2=1;assert.ok(A.powerIssues(C,comps).errors.some(e=>/Board pack voltage: .*4\.20 V, more than the chip takes/.test(e)),'1S straight on the pin: 4.2 V, over the chip\'s 3.3 V');
 C.wiring.boards[1].batteryPin2=-1;assert.ok(A.hardwareSettings(A.hardwarePlan(C,motors,C.boards[0])).includes('battery2=-1'),'unset again: turned off on the board');
+// a power monitor (INA3221): a channel per pack, the motors' pack (the main one) and the boards' (the second);
+// its pmon= line only once set; its address, ranges and the pack's voltage checked; the wiring list
+{ const C2={...C,wiring:{parts:{},boards:{},power:{'board:1':11,'board:2':11,'motor:1':10,'motor:2':10,'motor:3':10,'motor:4':10}}},cs=[...motors,main,small];
+  const plan=()=>A.hardwarePlan(C2,cs,C2.boards[0]),line=()=>A.hardwareSettings(plan()).find(l=>l.startsWith('pmon'));
+  assert.equal(line(),undefined,'no pmon= until set (older firmware still installs)');
+  C2.wiring.boards[1]={pmonChip:'ina3221',pmonAddress:0x40,pmonCh:[{source:11,shunt:0.01},{source:10,shunt:0.005},{}]};
+  const M=A.powerMonitor(C2,cs);assert.deepEqual([...M.channels.map(ch=>ch.use)],[2,1,0]);assert.ok(Math.abs(M.channels[1].maxA-32.75)<0.01);
+  assert.equal(line(),'pmon=3221,64,2,0.01,1,0.005,0,0.1');assert.deepEqual([...plan().errors],[],plan().errors.join());
+  assert.equal(A.pmonChannelOf(C2,cs,10).k,1);
+  const rows=A.hardwareOverview(C2,cs).groups.find(g=>g.id===1).rows;
+  assert.ok(rows.some(r=>/Power monitor \(INA3221\)/.test(r.device)&&/0x40 \(A0 → GND\)/.test(r.note)));assert.ok(rows.some(r=>/channel 2 · Battery/.test(r.device)&&/Battery \+ → IN\+; IN− → 4 consumers \+/.test(r.connection)&&/5 mΩ · reads up to 32\.8 A/.test(r.note)),JSON.stringify(rows.filter(r=>/channel/.test(r.device))));
+  motors.forEach(m=>m.motorPhysics={currentLimit:10});C2.wiring.boards[1].pmonCh[1].shunt=0.1;
+  assert.ok(A.pmonIssues(C2,cs).warnings.some(w=>/channel 2 \(Battery\): its 100 mΩ shunt reads up to 1\.6 A, but Battery can carry about 40\.\d A at full throttle/.test(w)),A.pmonIssues(C2,cs).warnings.join());
+  C2.wiring.boards[1].pmonCh[1].shunt=0.001;assert.ok(!A.pmonIssues(C2,cs).warnings.length,A.pmonIssues(C2,cs).warnings.join());motors.forEach(m=>delete m.motorPhysics);
+  C2.wiring.boards[1].pmonCh[2]={source:10,shunt:0.01};assert.ok(A.pmonIssues(C2,cs).errors.some(e=>/channel 3 and channel 2 both watch Battery/.test(e)));
+  C2.wiring.boards[1].pmonCh[2]={source:99};assert.ok(A.pmonIssues(C2,cs).errors.some(e=>/channel 3: its source was removed/.test(e)));C2.wiring.boards[1].pmonCh[2]={};
+  C2.wiring.boards[1].pmonAddress=0x45;assert.ok(plan().errors.some(e=>/answers at 0x40–0x43/.test(e)));C2.wiring.boards[1].pmonAddress=0x41;
+  small.pack.cells=7;assert.ok(A.pmonIssues(C2,cs).errors.some(e=>/channel 1: Board pack reaches 29\.4 V; the INA3221 takes at most 26 V/.test(e)));small.pack.cells=1;
+  C2.wiring.boards[1]={pmonChip:'',pmonCh:[]};assert.equal(line(),'pmon=-1','set before, now none: turned off on the board');
+  C2.wiring.boards[1]={pmonChip:'ina219',pmonAddress:0x45,pmonCh:[{source:10,shunt:0.01}]};assert.equal(line(),'pmon=219,69,1,0.01');
+}
 // one pack: the drawing as before
 const one=A.powerDiagramSvg({...C,wiring:{parts:{},boards:{}}},[...motors,main]);assert.ok(one.includes('+ red · − black')&&one.includes('battery −, every ESC'));
-console.log('Power source checks passed: one pack as before, board draws, old designs\' packs, the power list (a battery per motor, the boards on their own), a USB port (straight in, off the drone, its limit, motors on it), parts with a draw, presets, the wiring list, the drawing and the second pack\'s sense input.');
+console.log('Power source checks passed: one pack as before, board draws, old designs\' packs, the power list (a battery per motor, the boards on their own), a USB port (straight in, off the drone, its limit, motors on it), parts with a draw, presets, the wiring list, the drawing, the second pack\'s sense input and the power monitor.');

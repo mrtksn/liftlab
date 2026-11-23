@@ -50,6 +50,8 @@
  *   pickup X Y Z [N]: fly the hook onto a thing whose top is at X Y Z [m] from home, close latch N (1) and climb
  *     (fc/pickup_core.h; --hook DX,DY,DZ: where the hook is from the hub, body axes, 0,0,-0.06 by default)
  *   fleet on | fleet off | fleet: let the fleet program fly it, or not, and what it is doing (fc/fleet.h)
+ *   power: what the ESP32's power monitor reads (pmon=: an INA219, INA226 or INA3221), each pack's volts, amps and
+ *     the charge used since the ESP32 started (RN_LINK_POWER); in angle mode "status" says it too
  *
  * The fleet program (fc/fleet.h, in the built-in program beside the navigation): it runs here 10 times a second on
  * the peer table the ESP32 sends (RN_LINK_PEER: the other drones it hears over ESP-NOW, peers= on the ESP32; this
@@ -398,6 +400,15 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
  *                                          idle), as RN_LINK_BENCH_TEST; motors join and leave as the line changes
  *   motor off, sticks 0 0                  disarmed, nothing spinning (a test needs this between two motors)
  *   sticks off                             stop sending */
+/* The ESP32's power monitor (RN_LINK_POWER: per channel what it watches, volts, amps, mAh) as text: "power: motors'
+ * pack 3.95 V 2.10 A 120 mAh, second pack 3.88 V 0.62 A 40 mAh" (the channels in use). */
+static void power_said(const float *pw, char *out, size_t n) {
+  static const char *const what[] = { "", "motors' pack", "second pack", "other" };
+  size_t k = (size_t)snprintf(out, n, "power:"); int any = 0;
+  for (int c = 0; c < 3 && k < n; c++) { const int u = (int)pw[4 * c]; if (u < 1 || u > 3) continue;
+    k += (size_t)snprintf(out + k, n - k, "%s channel %d %s %.2f V %.2f A %.0f mAh", any++ ? "," : "", c + 1, what[u], (double)pw[4 * c + 1], (double)pw[4 * c + 2], (double)pw[4 * c + 3]); }
+  if (!any) snprintf(out, n, "power: no channel in use");
+}
 static const char *stick_test_said(const float *c) { static char b[32]; if (c[5] < 0) return ""; snprintf(b, sizeof b, ", motor %d test at %.2f", (int)c[5] + 1, (double)c[6]); return b; }
 static const char *bench_said(const float *b, int n) {
   static char o[200]; size_t k = 0; o[0] = 0;
@@ -608,6 +619,7 @@ int main(int argc, char **argv) {
   static float txt_stick[7]; double txt_stick_t = -1e9; const double TXT_STICK_S = 0.5;
   static float txt_bench[FC_MAX_MOTORS]; int txt_bench_n = 0;   /* `motors`: several at once, sent instead of the sticks */
   static float tl[36]; double tl_t = -1e9;          /* the ESP32's last telemetry (RN_LINK_TELEM, flight.c) */
+  static float pw[12]; double pw_t = -1e9;          /* its power monitor's (RN_LINK_POWER) */
   static char esp_said[160]; double esp_said_t = -1e9;   /* what the ESP32 said last (an event or a report): status shows it */
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
@@ -667,7 +679,7 @@ int main(int argc, char **argv) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
           if (!design && strncmp(s, "autotune", 8) && strcmp(s, "status") && strcmp(s, "learning") &&
-              strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet"))
+              strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet") && strcmp(s, "power"))
             autotune_stop(&AT, "stopped: another pilot/learning command; "
                                "previous gains restored");
           if (design) {
@@ -686,6 +698,9 @@ int main(int argc, char **argv) {
                        tuning_file(tuning_path, AT.current, tune_airframe, tune_nav, 1)
                            ? "could not save tuning; previous file retained"
                            : "verified tuning saved for this design");
+          } else if (!strcmp(s, "power")) {               /* the ESP32's power monitor: each pack's volts, amps, mAh */
+            if (t - pw_t < 2) power_said(pw, reply, sizeof reply);
+            else snprintf(reply, sizeof reply, "power: nothing from the ESP32's power monitor (pmon= set? flight firmware with wiring version 18?)");
           } else if (autotune_command(&AT, s, reply, sizeof reply)) {
           } else if (!strncmp(s, "fleet", 5) && (!s[5] || s[5] == ' ')) { /* the fleet program: on, off, or
                                                                              what it does */
@@ -734,6 +749,7 @@ int main(int argc, char **argv) {
                                     (int)tl[13] & 32 ? ", SAFETY OFF" : "", (int)tl[13] & 64 ? ", levelled" : "");
               for (int i = 0; i < m && k2 < sizeof reply; i++) k2 += (size_t)snprintf(reply + k2, sizeof reply - k2, " %.2f", (double)tl[16 + i]);
             }
+            if (t - pw_t < 2) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); power_said(pw, reply + k2 + 2, sizeof reply - k2 - 2); } }
             if (t - esp_said_t < 60) { size_t k2 = strlen(reply); snprintf(reply + k2, sizeof reply > k2 ? sizeof reply - k2 : 0, "; the ESP32 said %.0f s ago: %s", t - esp_said_t, esp_said); }
           }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
@@ -769,6 +785,7 @@ int main(int argc, char **argv) {
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
       if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */
       if (type == RN_LINK_TLM && radio_here) { tlm_unpack(&TS, (const float *)L.buf, (int)(L.len / 4), t); continue; }   /* the ESP32's telemetry, for our radio */
+      if (type == RN_LINK_POWER && L.len == sizeof pw) { memcpy(pw, L.buf, sizeof pw); pw_t = t; continue; }   /* the ESP32's power monitor */
       if (type == RN_LINK_WANT && L.len == 4) { float w; memcpy(&w, L.buf, 4); if ((int)w & 2) tlm_want = t; continue; }
       if ((type == RN_LINK_TELEM && L.len == 144) ||
           ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len >= 8)) {

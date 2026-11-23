@@ -54,8 +54,9 @@ int hw_airframe_save(const uint8_t *buf, uint32_t len) {
 
 /* ───────── sensors ───────── */
 #include "tof250.h"
+#include "ina.h"
 static i2c_master_bus_handle_t imu_i2c_bus;
-static i2c_master_dev_handle_t imu_dev, baro_dev, mag_dev, tof_dev;
+static i2c_master_dev_handle_t imu_dev, baro_dev, mag_dev, tof_dev, pmon_dev;
 static hw_config sensor_config;
 static int custom_imu,custom_baro,custom_mag;
 static int imu_kind, baro_kind;
@@ -109,6 +110,7 @@ int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
                                    .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
   if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
   if (c->tof_addr) tof_dev = add(c->tof_addr);
+  if (c->pmon_chip) pmon_dev = add(c->pmon_addr);
   if(c->imu_driver==3 && !custom_imu_init(c->imu_addr)) { custom_imu=1;imu_kind=3;s->imu=3;snprintf(s->imu_name,sizeof s->imu_name,"custom C at 0x%02x",c->imu_addr); }
   if(c->baro_driver==3 && !custom_baro_init(c->baro_addr)) { custom_baro=1;baro_kind=3;s->baro=3;snprintf(s->baro_name,sizeof s->baro_name,"custom C"); }
   if(c->mag_driver==3 && !custom_mag_init(c->mag_addr)) { custom_mag=1;s->mag=3;snprintf(s->mag_name,sizeof s->mag_name,"custom C"); }
@@ -205,6 +207,31 @@ int hw_tof_poll(int64_t now, float *range) {
   if (i2c_master_transmit(tof_dev, &reg, 1, 2) != ESP_OK) { present = 0; *range = 0; return 1; }
   read_after = esp_timer_get_time() + 1000;   /* the datasheet's recommended preparation time */
   return 0;
+}
+
+/* The power monitor (ina.h): configured when it first answers, then read one register a call (each ~0.1 ms at
+ * 400 kHz), the channels in use in turn, a full set every 50 ms. */
+int hw_pmon_poll(int64_t now, float volts[3], float amps[3]) {
+  static int64_t next; static int present, step; static float v[3], a[3];
+  if (!pmon_dev || now < next) return 0;
+  const hw_config *c = &sensor_config; const int chip = c->pmon_chip;
+  if (!present) {
+    int mask = 0; for (int k = 0; k < 3; k++) if (c->pmon_use[k]) mask |= 1 << k;
+    const uint16_t cf = lb_ina_config(chip, mask); const uint8_t w[3] = { 0x00, (uint8_t)(cf >> 8), (uint8_t)cf };
+    if (i2c_master_probe(imu_i2c_bus, c->pmon_addr, 2) != ESP_OK || i2c_master_transmit(pmon_dev, w, 3, 2) != ESP_OK) { next = now + 1000000; return -1; }
+    present = 1; step = 0; next = now + 20000; return 0;     /* (its first conversions) */
+  }
+  /* step 2k: channel k's shunt, 2k + 1: its bus; channels not in use are passed over */
+  while (step < 6 && !c->pmon_use[step / 2]) step += 2;
+  if (step >= 6) {
+    for (int k = 0; k < 3; k++) { volts[k] = c->pmon_use[k] ? v[k] : 0; amps[k] = c->pmon_use[k] ? a[k] : 0; }
+    step = 0; next = now + 50000 - 6 * 3000; if (next < now + 3000) next = now + 3000; return 1;
+  }
+  const int k = step / 2, bus = step % 2; const uint8_t reg = lb_ina_reg(chip, k, bus); uint8_t b[2];
+  if (i2c_master_transmit_receive(pmon_dev, &reg, 1, b, 2, 2) != ESP_OK) { present = 0; next = now + 1000000; return -1; }
+  const float x = lb_ina_volts(chip, bus, b);
+  if (bus) v[k] = x; else a[k] = x / c->pmon_shunt[k];
+  step++; next = now + 3000; return 0;
 }
 
 int hw_imu_read(fc_imu *m) {

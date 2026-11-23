@@ -447,8 +447,8 @@ function renderPowerSource(box,C,id){
   const I=powerIssues(C,comps);for(const m of I.errors)box.append(el('p',{class:'bad',text:m}));for(const m of I.warnings)box.append(el('p',{class:'hint',text:m}));
   if(bat){
     const many=batteryParts(comps).length>1,mp=mainPack(C,comps);
-    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the main pack\'s voltage'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' A second input reads another pack (the boards\'): the flight controller reports its voltage to the ground station (battery2=, flight firmware with wiring version 15).':'')}));
-    mountHardware(box,'[data-hw-role="battery"]');computerWiringIssues(box,boardOf('core'));
+    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the main pack\'s voltage'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' A second input reads another pack (the boards\'): the flight controller reports its voltage to the ground station (battery2=, flight firmware with wiring version 15).':'')+' A power monitor (INA219, INA226 or INA3221) measures voltage and current instead, a channel per pack, and counts the charge used.'}));
+    mountHardware(box,'[data-hw-role="battery"],[data-hw-role="pmon"]');computerWiringIssues(box,boardOf('core'));
   }
 }
 // A link between two boards: which ends, how it's wired.

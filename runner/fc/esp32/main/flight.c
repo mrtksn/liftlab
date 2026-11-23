@@ -25,7 +25,8 @@
  * telemetry task (it sends RN_LINK_WANT bit 2), the flight core's items go to the Pi instead (RN_LINK_TLM).
  * A fresh board drives no pin: no motors or servos until the wiring (motors=, servos=) is set, saved and rebooted.
  * "version" says the build (firmware COMMIT CHIP flight, as firmware/manifest.json records it); "scan" lists every
- * address that answers on the sensors' I2C bus (disarmed); "accel" reports a fresh acceleration sample in sensor axes.
+ * address that answers on the sensors' I2C bus (disarmed); "accel" reports a fresh acceleration sample in sensor axes;
+ * "power" what the power monitor (pmon=) reads on each channel: volts, amps, the charge used since power-up.
  * Which radio (settings, as all the others: over the link, save, reboot; "show" lists them, the secrets masked):
  *   radio=elrs,250,4      an ExpressLRS (or Crossfire) receiver on a second UART, crsf=RX,TX (CRSF at 420000 baud);
  *                         the packet rate and telemetry ratio as set on the radio (the default)
@@ -156,7 +157,28 @@ static void level_ask(int kind, const float *v) { portENTER_CRITICAL(&lvl_mux); 
 static fc_imu imu_now; static int64_t imu_us; static uint32_t imu_seq; static int imu_ok; static float baro_alt; static int baro_new;   /* under imu_mux */
 static float tof_range;
 static int64_t tof_us;   /* last completed poll; under imu_mux */
+/* the power monitor (pmon=): each channel's volts, amps and the charge used since power-up [mAh]; when last read */
+static float pm_v[3], pm_a[3], pm_mah[3]; static int64_t pm_us;   /* under imu_mux */
 static portMUX_TYPE imu_mux = portMUX_INITIALIZER_UNLOCKED;
+/* The power monitor's latest, if it's fresh (read in the last half second): 1, else 0 (zeros). */
+static int pmon_get(float v[3], float a[3], float mah[3]) {
+  int64_t at; portENTER_CRITICAL(&imu_mux); at = pm_us; for (int k = 0; k < 3; k++) { v[k] = pm_v[k]; a[k] = pm_a[k]; mah[k] = pm_mah[k]; } portEXIT_CRITICAL(&imu_mux);
+  if (at && esp_timer_get_time() - at < 500000) return 1;
+  for (int k = 0; k < 3; k++) { v[k] = 0; a[k] = 0; }
+  return 0;
+}
+/* The voltage of the channel that watches a pack (pmon_use 1 the motors', 2 a second), 0 if none or not read. */
+static float pmon_volts(int use) {
+  if (!HW.pmon_chip) return 0; float v[3], a[3], m[3]; pmon_get(v, a, m);
+  for (int k = 0; k < 3; k++) if (HW.pmon_use[k] == use) return v[k];
+  return 0;
+}
+static int pmon_watches(int use) { if (!HW.pmon_chip) return 0; for (int k = 0; k < 3; k++) if (HW.pmon_use[k] == use) return 1; return 0; }
+/* The item and the link frame: for each of the three channels what it watches (0 nothing), volts, amps, mAh. */
+static void pmon_pack(float out[12]) {
+  float v[3], a[3], m[3]; pmon_get(v, a, m);
+  for (int k = 0; k < 3; k++) { out[4 * k] = HW.pmon_use[k]; out[4 * k + 1] = v[k]; out[4 * k + 2] = a[k]; out[4 * k + 3] = m[k]; }
+}
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1; int level_done = 0;
   /* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). */
@@ -198,6 +220,16 @@ static void sensor_task(void *arg) {
         portENTER_CRITICAL(&imu_mux); tof_range = range; tof_us = t; portEXIT_CRITICAL(&imu_mux);
       }
     }
+    if (HW.pmon_chip) {                                /* the power monitor: a register a call, a full set every 50 ms */
+      float pv[3], pa[3]; const int64_t t = esp_timer_get_time(); const int r = hw_pmon_poll(t, pv, pa);
+      if (r == 1) {
+        portENTER_CRITICAL(&imu_mux);
+        const int64_t dt = pm_us ? t - pm_us : 0;      /* the charge: amps over the time since the last set (not over a gap) */
+        for (int k = 0; k < 3; k++) { if (dt > 0 && dt < 1000000) pm_mah[k] += pa[k] * (float)dt / 3.6e6f; pm_v[k] = pv[k]; pm_a[k] = pa[k]; }
+        pm_us = t;
+        portEXIT_CRITICAL(&imu_mux);
+      } else if (r < 0) { portENTER_CRITICAL(&imu_mux); pm_us = 0; portEXIT_CRITICAL(&imu_mux); }
+    }
   }
 }
 
@@ -207,7 +239,7 @@ static volatile int64_t guided_us = -10000000;   /* when the last guided command
 /* what the navigation flies on (RN_LINK_NAV), from the control loop at 100 Hz */
 static float nav_box[16]; static volatile int nav_new;
 static uint8_t af_box[AIRFRAME_CAP]; static volatile uint32_t af_len; static volatile int af_new, af_result;
-static volatile float vbatt, vbatt2;   /* the motors' pack (battery=), a second pack (battery2=): 0 not wired */
+static volatile float vbatt, vbatt2;   /* the motors' pack (battery=, else the power monitor's channel for it), a second pack (battery2=, else its channel): 0 not wired */
 
 /* the learning's and the supervisor's frames (link task → control loop), and LTEL (control loop → link task) */
 static float exc_box[8 + FC_MAX_MOTORS + FC_MAX_JOINTS], set_box[6 + 3 * FC_MAX_MOTORS + 2 * FC_MAX_JOINTS], model_box[FC_MODEL_MAX];
@@ -383,6 +415,7 @@ static void telemetry(void) {
     if (!sampled || esp_timer_get_time() - sampled > 300000) range = 0;
     link_send(RN_LINK_RANGE, &range, sizeof range);
   }
+  if (HW.pmon_chip) { float pw[12]; pmon_pack(pw); link_send(RN_LINK_POWER, pw, sizeof pw); }
   link_send(RN_LINK_TELEM, t, sizeof t);
 }
 /* The build as the installer compares it with firmware/manifest.json: "firmware COMMIT CHIP flight". */
@@ -399,6 +432,13 @@ static void setting(const char *line) {
     strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
     snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
              (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", F.safety_off ? "OFF" : "on");
+    report(s); return;
+  }
+  if (!strcmp(line, "power")) {                       /* the power monitor, a channel each */
+    if (!HW.pmon_chip) { report("power: no power monitor (pmon=CHIP,ADDRESS,USE,SHUNT...)"); return; }
+    float v[3], a[3], m[3]; int fresh = pmon_get(v, a, m); int k2 = snprintf(s, sizeof s, "power: INA%d at 0x%02x%s", HW.pmon_chip, HW.pmon_addr, fresh ? "" : " not answering (wired? pmon address?)");
+    static const char *const what[] = { "", "motors' pack", "second pack", "other" };
+    for (int k = 0; k < 3 && k2 < (int)sizeof s; k++) if (HW.pmon_use[k]) k2 += snprintf(s + k2, sizeof s - k2, "; channel %d (%s) %.2f V %.3f A %.0f mAh", k + 1, what[HW.pmon_use[k]], (double)v[k], (double)a[k], (double)m[k]);
     report(s); return;
   }
   if (!strcmp(line, "peers")) {                       /* the other drones: a line each */
@@ -571,7 +611,7 @@ static void link_task(void *arg) {
         say("dropped a damaged or oversized frame");
     }
     now = esp_timer_get_time();
-    if (now >= next_b) { next_b = now + 50000; vbatt = hw_battery_read(); vbatt2 = hw_battery2_read(); }
+    if (now >= next_b) { next_b = now + 50000; vbatt = HW.batt_pin >= 0 ? hw_battery_read() : pmon_volts(1); vbatt2 = HW.batt2_pin >= 0 ? hw_battery2_read() : pmon_volts(2); }
     int guided = now - guided_us < 1000000;
     if (guided && nav_new) { float nb[16]; portENTER_CRITICAL(&mux); memcpy(nb, nav_box, sizeof nb); nav_new = 0; portEXIT_CRITICAL(&mux); link_send(RN_LINK_NAV, nb, sizeof nb); }
     if (ltel_n) {
@@ -620,7 +660,7 @@ static void radio_task(void *arg) {
     }
     if (radio && guided && now >= next_rc) { next_rc = now + 20000; float r[RC_PACK_N]; rc_pack(&RCI, t, r); link_send2(RN_LINK_RC, r, sizeof r); }
     if (tlm_in_n) { int k; portENTER_CRITICAL(&tlm_mux); k = tlm_in_n; memcpy(pk, tlm_in, (size_t)k * 4); tlm_in_n = 0; portEXIT_CRITICAL(&tlm_mux); tlm_unpack(&TS, pk, k, t); }
-    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (HW.batt2_pin >= 0) { float pv2[1] = { vbatt2 }; tlm_put(&TS, TLM_PACKS, pv2, 1, t); } if (radio) tlm_from_link(&TS, &RCI, t); }
+    if (now >= next_pub) { next_pub = now + 10000; if (F_tlm_new) { portENTER_CRITICAL(&snap_mux); snap_fields(Fs, &F_tlm); F_tlm_new = 0; portEXIT_CRITICAL(&snap_mux); } tlm_from_core(&TS, &TW, Fs, t); if (HW.batt2_pin >= 0 || pmon_watches(2)) { float pv2[1] = { vbatt2 }; tlm_put(&TS, TLM_PACKS, pv2, 1, t); } if (HW.pmon_chip) { float pw[12]; pmon_pack(pw); tlm_put(&TS, TLM_POWER, pw, 12, t); } if (radio) tlm_from_link(&TS, &RCI, t); }
     if (now >= next_peer) {                                  /* the other drones: what we publish, 10 times a second */
       float pv[3] = { (float)Fs->state, batt_pct(Fs->vbatt), Fs->have_alt ? Fs->alt_e : 0 };
       next_peer = now + 100000; radio_peer_poll(pv, 3);

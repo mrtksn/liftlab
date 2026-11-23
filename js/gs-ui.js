@@ -156,6 +156,15 @@ function buildGsContent() {
     const C = computers(), P2 = typeof sensedPack2 === 'function' ? sensedPack2(C, cfg.comps) : null;
     if (P2) { const n = packSpec(C, P2, cfg.comps).cells; W.volts2 = GSW.value(P2.name + ' voltage', { unit: 'V', dp: 2, tone: v => v < 3.3 * n ? 'bad' : v < 3.6 * n ? 'warn' : '' }); b.append(grid(W.volts2.el)); }
   }
+  {   // the power monitor (pmon=): each watched source's voltage, current and charge used, measured
+    const C = computers(), M = typeof powerMonitor === 'function' ? powerMonitor(C, cfg.comps) : null; GS_UI.pmon = [];   // (each channel's three widgets, also in W as pmonV/A/M + channel)
+    if (M) for (const ch of M.channels) if (ch.src) {
+      const n = ch.src.kind === 'battery' ? packSpec(C, ch.src.part, cfg.comps).cells : 0;
+      const w = { k: ch.k, v: GSW.value(ch.src.name, { unit: 'V', dp: 2, tone: v => n && (v < 3.3 * n ? 'bad' : v < 3.6 * n ? 'warn' : '') }), a: GSW.value('Current', { unit: 'A', dp: 2 }), m: GSW.value('Used', { unit: 'mAh', dp: 0 }) };
+      W['pmonV' + ch.k] = w.v; W['pmonA' + ch.k] = w.a; W['pmonM' + ch.k] = w.m; GS_UI.pmon.push(w); b.append(grid(w.v.el, w.a.el, w.m.el));
+    }
+    if (GS_UI.pmon.length) b.append(el('p', { class: 'hint', text: 'Measured by the power monitor (' + M.def.label.replace(/ \(.*/, '') + '): each source\'s voltage on its load side, its current, and the charge used since the flight controller started.' }));
+  }
 
   // map
   const m = sec('Map', 'from home, north up');
@@ -327,6 +336,7 @@ function renderGs(force) {
   if ($('#paneGs').hidden) return;
   const now = performance.now(); if (!force && now < GS_UI.next) return; GS_UI.next = now + 200;
   { const P2 = typeof sensedPack2 === 'function' ? sensedPack2(computers(), cfg.comps) : null, k = P2 ? P2.id + P2.name : ''; if (GS_UI.pack2 !== k) { GS_UI.pack2 = k; GS_UI.built = false; } }   // (a second pack added or gone: its readout)
+  { const M = typeof powerMonitor === 'function' ? powerMonitor(computers(), cfg.comps) : null, k = M ? M.channels.map(ch => ch.src ? ch.src.id + ch.src.name : '').join('|') : ''; if (GS_UI.pmonKey !== k) { GS_UI.pmonKey = k; GS_UI.built = false; } }   // (the power monitor's channels changed: their readouts)
   if (!GS_UI.built) buildGs();
   const W = GS_UI.w, t = brt.t, has = hasTask('tlm');
   const gk = computers().ground, gname = `${gk.name === 'Command module' ? '' : gk.name + ', '}${BOARD_KINDS[gk.kind].label}`;
@@ -372,6 +382,7 @@ function renderGs(force) {
     if (gs.vN !== GS_UI.vN) { GS_UI.vN = gs.vN; W.vSpark.set(gs.vHist, at.battery); }   // (one point per battery frame, kept by gsRead)
   }
   if (v.packs && W.volts2) W.volts2.set(v.packs.volts2, at.packs);
+  if (v.power && GS_UI.pmon) for (const w of GS_UI.pmon) { const i = w.k + 1; if (v.power['use' + i] > 0) { w.v.set(v.power['v' + i], at.power); w.a.set(v.power['a' + i], at.power); w.m.set(v.power['mah' + i], at.power); } }
   if (v.pos || v.nav) W.map.set({ track: gs.trackXY || [], pos: v.pos ? [v.pos.x, v.pos.y] : null, target: v.nav ? [v.nav.tx, v.nav.ty] : null, heading: v.attitude ? v.attitude.yaw : 0 }, at.pos ?? at.nav);
   if (v.motors) W.motors.set(v.motors.values, at.motors, actuators().map(c => c.name), v.parts ? v.parts.values : null);
   if (v.super) { W.sup.set((SUP_MODE[v.super.mode] || `mode ${v.super.mode}`) + (v.super.why ? ': ' + (SUP_WHY[v.super.why] || `reason ${v.super.why}`) : ''), at.super); W.margin.set(v.super.margin, at.super); }

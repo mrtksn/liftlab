@@ -54,6 +54,8 @@ int main(void){
   old.version=15;old.batt2_pin=34;restored=config();restored.level_yaw=0;assert(lb_hw_restore(&restored,&old,offsetof(hw_config,level_yaw))&&restored.batt2_pin==34&&restored.level_yaw==0&&restored.version==HW_VERSION);old.batt2_pin=0;
   old.version=16;old.level_yaw=90;hw_defaults(&restored);
   assert(lb_hw_restore(&restored,&old,offsetof(hw_config,tof_addr)) && restored.level_yaw==90 && restored.tof_addr==0);
+  old.version=17;old.tof_addr=0x52;old.pmon_addr=0x77;old.pmon_chip=3221;hw_defaults(&restored);   /* (v17: the pad after tof_addr isn't taken) */
+  assert(lb_hw_restore(&restored,&old,(offsetof(hw_config,tof_addr)+1+3)&~3u) && restored.tof_addr==0x52 && restored.pmon_chip==0 && restored.pmon_addr==0x40 && restored.pmon_shunt[1]==0.1f);old.tof_addr=0;old.pmon_addr=0;old.pmon_chip=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -63,6 +65,17 @@ int main(void){
     assert(hw_set(&c,"tof=82.5",log,sizeof log) && c.tof_addr==0x52);
     assert(hw_set(&c,"imu=3,82",log,sizeof log) && c.imu_driver==0);
     assert(!hw_set(&c,"tof=-1",log,sizeof log) && c.tof_addr==0);
+  }
+  { hw_config c = settings; char e[300], d[1200];   /* a power monitor: pmon=CHIP,ADDRESS,USE,SHUNT... */
+    assert(c.pmon_chip==0);hw_describe(&c,d,sizeof d);assert(strstr(d," pmon=-1"));
+    assert(!hw_set(&c,"pmon=3221,64,2,0.01,1,0.005,0,0.1",e,sizeof e) && c.pmon_chip==3221 && c.pmon_addr==0x40 && c.pmon_use[0]==2 && c.pmon_use[1]==1 && c.pmon_use[2]==0 && c.pmon_shunt[1]==0.005f);
+    hw_describe(&c,d,sizeof d);assert(strstr(d," pmon=3221,64,2,0.01,1,0.005,0,0.1"));
+    assert(!hw_set(&c,"pmon=219,69,1,0.1",e,sizeof e) && c.pmon_chip==219 && c.pmon_addr==69 && c.pmon_use[0]==1 && c.pmon_use[1]==0);
+    const char *badp[]={"pmon=3221,68,1,0.01","pmon=3221,64,1,0.01,1,0.01","pmon=219,64,1,0.1,2,0.1","pmon=3221,64,0,0.1","pmon=3221,64,1,0","pmon=3221,64,4,0.1","pmon=228,64,1,0.1","pmon=3221,64,1","pmon=3221,64,1.5,0.1","pmon=3221,30,1,0.1","pmon=226,82,1,0.1"};
+    {hw_config b=c;assert(!hw_set(&b,"tof=82",e,sizeof e));for(unsigned i=0;i<sizeof badp/sizeof *badp;i++){hw_config b2=b;assert(hw_set(&b,badp[i],e,sizeof e));assert(!memcmp(&b,&b2,sizeof b));}}
+    assert(hw_set(&c,"imu=1,69",e,sizeof e)&&strstr(e,"twice"));   /* the INA219 at 0x45 and an IMU there */
+    assert(!hw_set(&c,"pmon=-1",e,sizeof e) && c.pmon_chip==0 && c.pmon_use[0]==0);
+    assert(strstr(hw_i2c_name(0x40),"INA3221")&&strstr(hw_i2c_name(0x41),"INA"));
   }
   /* A fresh board drives nothing: no motor or servo pin until the wiring is sent. */
   assert(!hw_outputs_wired(&settings));for(int i=0;i<FC_MAX_MOTORS;i++)assert(settings.motor_pin[i]==-1);for(int j=0;j<FC_MAX_JOINTS;j++)assert(settings.servo_pin[j]==-1);
@@ -142,5 +155,5 @@ int main(void){
 #endif
    assert(!hw_set(&u,"link_uart=-1",log,sizeof log)&&u.link_tx==-1&&!hw_check(&u,log,sizeof log));
    hw_config v12=u;v12.version=12;v12.link_mqtt=1;hw_config r;hw_defaults(&r);assert(lb_hw_restore(&r,&v12,offsetof(hw_config,link_tx))&&r.link_mqtt==1&&r.link_tx==-1&&r.version==HW_VERSION);}
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v16 migration, the TOF250 address, the level setting, a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v17 migration, the TOF250 address, the power monitor (pmon=), the level setting, a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
 }

@@ -253,6 +253,78 @@ function powerIssues(C, comps) {
   }
   return { errors, warnings };
 }
+// What each source carries [A]: { other (boards, parts, servos), motors (their current limits; 0 if unknown), nMotors }.
+function sourceLoads(C, comps) {
+  const load = new Map();
+  for (const k of powerConsumers(C, comps)) {
+    if (k.kind === 'board' && hardwareBus(C, k.board).supply === 'board') continue;
+    const s = consumerSource(C, comps, k.key); if (!s) continue;
+    const L = load.get(s.id) || { other: 0, motors: 0, nMotors: 0, motorsKnown: true }; load.set(s.id, L);
+    const a = consumerAmps(C, comps, k, sourceSpec(C, s, comps));
+    if (k.kind === 'motor') { L.nMotors++; if (a == null) L.motorsKnown = false; else L.motors += a; } else L.other += a;
+  }
+  return load;
+}
+// A power monitor on the flight controller's I²C bus (firmware pmon=, runner/fc/esp32/main/ina.h): an INA219 or INA226
+// (one channel) or an INA3221 (three). Each channel watches one power source through a shunt resistor in its + lead:
+// the source's voltage (on the shunt's load side), its current, and the charge used since power-up. The flight
+// controller uses the channel on the motors' pack as its battery voltage when battery= has no pin, and the one on a
+// second pack as battery2='s; every channel goes into the telemetry ("power") and to the Pi (dfb_pi's "power").
+// wiring.boards[flight controller]: pmonChip ('' none), pmonAddress, pmonCh [{ source: a power source's id, shunt [Ω] }].
+const PMON_RANGE = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const PMON_CHIPS = {
+  ina3221: { label: 'INA3221 (3 channels)', id: 3221, channels: 3, addresses: PMON_RANGE(0x40, 0x43), shuntV: 0.16376, maxV: 26, a0: ['GND', 'VS', 'SDA', 'SCL'] },
+  ina219: { label: 'INA219 (1 channel)', id: 219, channels: 1, addresses: PMON_RANGE(0x40, 0x4F), shuntV: 0.32, maxV: 26 },
+  ina226: { label: 'INA226 (1 channel)', id: 226, channels: 1, addresses: PMON_RANGE(0x40, 0x4F), shuntV: 0.08192, maxV: 36 },
+};
+// The power monitor as set: { core, chip, def, address, channels: [{ k, src (a power source, null: nothing), shunt,
+// use (firmware: 0 nothing, 1 the motors' pack, 2 a second pack, 3 another), maxA (its range), gone (its source was
+// removed) }] }, or null (none, or no flight controller).
+function powerMonitor(C, comps) {
+  const core = C.boards.find(b => b.tasks.includes('core')); if (!core) return null;
+  const bus = hardwareBus(C, core), def = PMON_CHIPS[bus.pmonChip]; if (!def) return null;
+  const srcs = powerSources(C, comps), main = mainPack(C, comps), p2 = sensedPack2(C, comps);
+  const channels = Array.from({ length: def.channels }, (_, k) => {
+    const c = (bus.pmonCh || [])[k] || {}, set = c.source != null && c.source !== '';
+    const src = set ? srcs.find(s => String(s.id) === String(c.source)) || null : null, shunt = c.shunt > 0 ? +c.shunt : 0.1;
+    const use = !src ? 0 : src.part && src.part === main ? 1 : src.part && src.part === p2 ? 2 : 3;
+    return { k, src, shunt, use, maxA: def.shuntV / shunt, gone: set && !src };
+  });
+  return { core, chip: bus.pmonChip, def, address: bus.pmonAddress ?? def.addresses[0], channels };
+}
+// The power monitor's channel on a source (null: none watches it).
+const pmonChannelOf = (C, comps, id) => { const M = powerMonitor(C, comps); return M && M.channels.find(ch => ch.src && String(ch.src.id) === String(id)) || null; };
+// What's wrong with the power monitor's setup: its address, its channels, a source over the chip's voltage, a shunt
+// whose range is smaller than what its source carries or that loses much voltage. sensors: the plan's I²C sensors.
+function pmonIssues(C, comps, sensors = {}) {
+  const errors = [], warnings = [], M = powerMonitor(C, comps); if (!M) return { errors, warnings };
+  const nm = 'Power monitor (' + M.def.label.replace(/ \(.*/, '') + ')', hex = a => '0x' + a.toString(16);
+  if (!M.def.addresses.includes(M.address)) errors.push(nm + ': it answers at ' + hex(M.def.addresses[0]) + '–' + hex(M.def.addresses.at(-1)) + ' (its address pins), not ' + hex(M.address));
+  for (const s of Object.values(sensors)) if (s && s.address === M.address) errors.push(nm + ' and ' + s.name + ' use the same I²C address (' + hex(M.address) + ')');
+  if (!M.channels.some(ch => ch.src)) errors.push(nm + ': pick the source each channel watches (a channel per pack)');
+  const seen = new Map(), loads = sourceLoads(C, comps);
+  for (const ch of M.channels) {
+    const cn = nm + ' channel ' + (ch.k + 1);
+    if (ch.gone) { errors.push(cn + ': its source was removed. Pick another, or Nothing.'); continue; }
+    if (!ch.src) continue;
+    if (!(ch.shunt >= 0.0001 && ch.shunt <= 10)) { errors.push(cn + ': a shunt of 0.0001–10 Ω'); continue; }
+    if (seen.has(ch.src.id)) errors.push(cn + ' and channel ' + (seen.get(ch.src.id) + 1) + ' both watch ' + ch.src.name + ': one channel a source');
+    seen.set(ch.src.id, ch.k);
+    const P = sourceSpec(C, ch.src, comps);
+    if (P.vmax > M.def.maxV) errors.push(cn + ': ' + ch.src.name + ' reaches ' + P.vmax.toFixed(1) + ' V; the ' + M.def.label.replace(/ \(.*/, '') + ' takes at most ' + M.def.maxV + ' V on its inputs');
+    const L = loads.get(ch.src.id), peak = L ? L.other + (L.motorsKnown ? L.motors : 0) : 0, mohm = +(ch.shunt * 1000).toPrecision(3);
+    if (peak > ch.maxA) warnings.push(cn + ' (' + ch.src.name + '): its ' + mohm + ' mΩ shunt reads up to ' + ch.maxA.toFixed(1) + ' A, but ' + ch.src.name + ' can carry about ' + peak.toFixed(1) + ' A' + (L.nMotors ? ' at full throttle' : '') + '. Readings above clip: use a smaller shunt (' + Math.max(0.5, Math.floor(M.def.shuntV / peak / 1.3 * 2000) / 2) + ' mΩ or less).');
+    else if (peak * ch.shunt > 0.1) warnings.push(cn + ' (' + ch.src.name + '): the ' + mohm + ' mΩ shunt loses about ' + (peak * ch.shunt).toFixed(2) + ' V at ' + peak.toFixed(1) + ' A, taken from what it powers. A smaller one loses less.');
+  }
+  return { errors, warnings };
+}
+// The firmware's pmon= line, once the design has ever set a monitor (older firmware doesn't know the key): the chip's
+// number, its address, then per channel what it watches and its shunt; pmon=-1 for none.
+function pmonSetting(C, comps) {
+  const core = C.boards.find(b => b.tasks.includes('core')); if (!core || hardwareBus(C, core).pmonChip === undefined) return null;
+  const M = powerMonitor(C, comps); if (!M || !M.channels.some(ch => ch.src)) return 'pmon=-1';
+  return 'pmon=' + [M.def.id, M.address, ...M.channels.flatMap(ch => [ch.use, Number(ch.shunt.toFixed(6))])].join(',');
+}
 // Resistors for a divider ratio: R1 (battery + to the midpoint) 100 kΩ, R2 (midpoint to GND) to suit, both in kΩ.
 const dividerResistors = r => ({ r1: 100, r2: r > 1 ? Math.round(100 / (r - 1) * 10) / 10 : Infinity });
 // The links between onboard boards: every other board with duties talks to the flight core's board over a serial
@@ -396,6 +468,7 @@ function hardwarePlan(C, comps, b) {
     if(bus.batteryPin2>=0 && (!Number.isFinite(bus.batteryDivider2)||bus.batteryDivider2<1||bus.batteryDivider2>30))errors.push('Second pack voltage: divider ratio must be 1–30');
     if((bus.crsfRx>=0)!==(bus.crsfTx>=0))errors.push('Receiver: assign both RX and TX, or disconnect both');
     if(bus.crsfRx>=0 && (!hardwareInputPins(b.kind).includes(bus.crsfRx)||!profile.pins.includes(bus.crsfTx)))errors.push('Receiver: unavailable RX/TX GPIO');
+    { const I = pmonIssues(C, comps, sensors); errors.push(...I.errors); warnings.push(...I.warnings); }
     if (sensors.tof) for (const kind of ['imu', 'baro', 'mag']) {
       const s = sensors[kind];
       if (s && s.address === 0 && DEVICE_PROFILES[kind][s.driver].id >= 0 && DEVICE_PROFILES[kind][s.driver].addresses.includes(sensors.tof.address)) {
@@ -444,7 +517,8 @@ function hardwarePlan(C, comps, b) {
   if(bus.receiverPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.receiverPort))errors.push('Receiver: use a serial device path such as /dev/ttyUSB1');
   if(bus.linkPort && !/^\/[A-Za-z0-9_./-]+$/.test(bus.linkPort))errors.push('Flight-controller link: use a serial device path such as /dev/serial0');
   const mqttCompanion=profile && b.tasks.includes('core') ? C.boards.find(x=>x!==b && linkMqtt(C,x) && x.tasks.some(t=>['nav','learn','super','cargo','tlm'].includes(t))) : null;
-  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,errors:[...new Set(errors)],warnings:[...new Set(warnings)],radioBoard:b.tasks.includes('tlm'),mqtt:mqttCompanion?hardwareBus(C,mqttCompanion):null};
+  const pmonLine = profile && b.tasks.includes('core') ? pmonSetting(C, comps) : null;
+  return {bus,motors,motorConfigs,servos,servoConfigs,sensors,pmonLine,errors:[...new Set(errors)],warnings:[...new Set(warnings)],radioBoard:b.tasks.includes('tlm'),mqtt:mqttCompanion?hardwareBus(C,mqttCompanion):null};
 }
 // The pilot's radio link as settings lines (runner/fc/radio_link.h rlink_parse; the packet links' binding phrase):
 // radio=elrs,RATE,RATIO | espnow,CHANNEL[,lr] | wifi,ap,CHANNEL | wifi,sta | serial,BAUD[,half] | nrf24,KBPS, then bind=PHRASE
@@ -499,6 +573,8 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   if(bus.batteryPin>=0)lines.push('battery='+bus.batteryPin+','+bus.batteryDivider);
   // a second pack's voltage (flight firmware with wiring version 15): only once set, so a design without one still installs on older firmware
   if(bus.batteryPin2>=0)lines.push('battery2='+bus.batteryPin2+','+bus.batteryDivider2);else if(bus.batteryPin2===-1)lines.push('battery2=-1');
+  // the power monitor (flight firmware with wiring version 18): only once set, as battery2=
+  if(plan.pmonLine)lines.push(plan.pmonLine);
   if(bus.crsfRx>=0 && bus.crsfTx>=0)lines.push('crsf='+bus.crsfRx+','+bus.crsfTx);
   if(bus.fcLinkTx>=0 && bus.fcLinkRx>=0)lines.push('link_uart='+bus.fcLinkTx+','+bus.fcLinkRx);
   if(plan.radioBoard && radio && radio.kind==='nrf24' && bus.nrfPins && bus.nrfPins.every(p=>p>=0))lines.push('nrf24='+bus.nrfPins.join(','));
@@ -535,7 +611,7 @@ function use10Dof(b) {
   }
   cfg.computers=fixComputers(C); undoKey='wiring:10dof'; brt.sig=null; structural(); doReset(); renderComputers(true);
 }
-if(typeof module!=='undefined') module.exports={DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors,PACK_FEEDS,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,sensedPack2,POWER_KINDS,POWER_PRESETS,powerSources,sourceSpec,powerConsumers,consumerSource,boardSupplyOf,boardWatts,lipoMass};
+if(typeof module!=='undefined') module.exports={PMON_CHIPS,powerMonitor,pmonChannelOf,pmonIssues,pmonSetting,sourceLoads,DEVICE_PROFILES,hardwareOwner,hardwarePart,hardwareBus,hardwarePlan,hardwareSettings,radioSettingLines,batteryParts,batteryWired,boardSupply,powerIssues,dividerResistors,PACK_FEEDS,packFeeds,motorPack,mainPack,packSpec,boardPack,boardCells,sensedPack2,POWER_KINDS,POWER_PRESETS,powerSources,sourceSpec,powerConsumers,consumerSource,boardSupplyOf,boardWatts,lipoMass};
 
 // Read-only connection list derived from the same saved assignments as Install.
 function hardwareOverview(C, comps) {
@@ -577,6 +653,12 @@ function hardwareOverview(C, comps) {
   for(const b of C.boards){
     const g=groups.find(g=>g.id===b.id),bus=hardwareBus(C,b),esp=ESP_PROFILES[b.kind];
     if(esp&&b.id===core?.id&&(bus.batteryPin2>=0||batteryParts(comps).length>1)){const P2=sensedPack2(C,comps);g.rows.push({device:(P2?P2.name:'Second pack')+' voltage',connection:pin(bus.batteryPin2??-1)+(bus.batteryPin2>=0?' ← resistor divider midpoint':''),note:bus.batteryPin2>=0?'Divider ratio '+bus.batteryDivider2+' · divider GND → board GND · reported only':'Optional ADC input for the second pack'});}
+    if(esp&&b.id===core?.id){const M=powerMonitor(C,comps);if(M){   // the power monitor: on the sensors' bus, a channel per source
+      const chip=M.def.label.replace(/ \(.*/,''),hex='0x'+M.address.toString(16);
+      g.rows.push({device:'Power monitor ('+chip+')',connection:pin(bus.sda)+' → SDA; '+pin(bus.scl)+' → SCL; 3.3 V → VS; GND → GND',note:'I²C address '+hex+(M.def.a0?' (A0 → '+M.def.a0[M.address-0x40]+')':'')+' · shared with the sensors'});
+      for(const ch of M.channels)if(ch.src){const what=powerConsumers(C,comps).filter(k=>{const s=consumerSource(C,comps,k.key);return s&&s.id===ch.src.id;}).map(k=>k.name);
+        g.rows.push({device:chip+' channel '+(ch.k+1)+' · '+ch.src.name,connection:ch.src.name+' + → IN+; IN− → '+(what.length?what.length>3?what.length+' consumers':what.join(', '):'what it powers')+' +',note:'Shunt '+(+(ch.shunt*1000).toPrecision(3))+' mΩ · reads up to '+ch.maxA.toFixed(1)+' A · its − stays on the common ground'});}
+    }}
     if(esp&&b.id===core?.id)g.rows.push({device:'Battery voltage',connection:pin(bus.batteryPin)+(bus.batteryPin>=0?' ← resistor divider midpoint':''),note:bus.batteryPin>=0?'Divider ratio '+bus.batteryDivider+' · divider GND → board GND':'Optional ADC input'});
     if(b.kind.startsWith('pi')){
       const port=bus.linkPort||'/dev/serial0',fl=fcLinkPins(C,core),link=fl&&[fl.tx,fl.rx];

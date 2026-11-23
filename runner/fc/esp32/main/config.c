@@ -2,6 +2,7 @@
 #include "hw.h"
 #include "esp_board.h"
 #include "radio_link.h"
+#include "ina.h"
 #include "../../../esp_radio/radio_cfg.h"   /* (by its path: the wiring tests build this file on a PC) */
 #include <math.h>
 #include <stdio.h>
@@ -20,6 +21,7 @@ void hw_defaults(hw_config *c) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
   c->sda = LB_SDA; c->scl = LB_SCL;
   c->batt_pin = -1; c->batt_divider = 11.0f; c->batt2_pin = -1; c->batt2_divider = 11.0f;
+  c->pmon_chip = 0; c->pmon_addr = 0x40; for (int i = 0; i < 3; i++) c->pmon_shunt[i] = 0.1f;
   c->rate_hz = LB_RATE; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
   c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
   c->crsf_rx = c->crsf_tx = -1; c->elrs_rate = 250; c->elrs_ratio = 4;
@@ -57,7 +59,8 @@ const char *hw_i2c_name(int a) {
     case 0x29: return "VL53L0X rangefinder: no driver";
     case 0x52: return "possible TOF250 rangefinder";
     case 0x3C: case 0x3D: return "OLED display";
-    case 0x40: return "INA219 or PCA9685";
+    case 0x40: return "INA219, INA226 or INA3221 power monitor, or a PCA9685";
+    case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: return "INA219, INA226 or INA3221 power monitor";
     case 0x48: case 0x49: case 0x4A: case 0x4B: return "ADS1115 or a temperature sensor";
     case 0x53: return "ADXL345 accelerometer: no driver";
     case 0x68: case 0x69: return "MPU-6050 family IMU (or a clock chip)";
@@ -119,6 +122,22 @@ int hw_check(const hw_config *c, char *err, int errn) {
     const int auto_baro = !c->baro_addr && (((c->baro_driver == 0 || c->baro_driver == 1) && a == 0x76) || (c->baro_driver >= 0 && a == 0x77));
     const int auto_mag = !c->mag_addr && c->mag_driver >= 0 && a == 0x1e;
     if (auto_imu || auto_baro || auto_mag) { snprintf(err, errn, "I2C address reserved by an automatic sensor address"); return -1; }
+  }
+  if (c->pmon_chip) {   /* the power monitor (pmon=, ina.h) */
+    const int pa = c->pmon_addr, nch = lb_ina_channels(c->pmon_chip);
+    if (!nch) { snprintf(err, errn, "pmon: the chip is 219, 226 or 3221"); return -1; }
+    if (pa < 0x40 || pa > (c->pmon_chip == LB_INA3221 ? 0x43 : 0x4F)) { snprintf(err, errn, "pmon: an INA%d answers at 0x40-0x%X", c->pmon_chip, c->pmon_chip == LB_INA3221 ? 0x43 : 0x4F); return -1; }
+    if (pa == c->tof_addr) { snprintf(err, errn, "I2C address used twice"); return -1; }
+    for (int i = 0; i < 3; i++) if (ds[i] >= 0 && as[i] == pa) { snprintf(err, errn, "I2C address used twice"); return -1; }
+    int used = 0, roles = 0;
+    for (int k = 0; k < 3; k++) {
+      const int u = c->pmon_use[k];
+      if (u < 0 || u > 3 || (u && k >= nch)) { snprintf(err, errn, "pmon: channel %d can't be used on an INA%d", k + 1, c->pmon_chip); return -1; }
+      if (u && (!isfinite(c->pmon_shunt[k]) || c->pmon_shunt[k] < 0.0001f || c->pmon_shunt[k] > 10)) { snprintf(err, errn, "pmon: a shunt of 0.0001-10 ohms"); return -1; }
+      if (u == 1 || u == 2) { if (roles & u) { snprintf(err, errn, "pmon: one channel each for the motors' pack and the second pack"); return -1; } roles |= u; }
+      used += u > 0;
+    }
+    if (!used) { snprintf(err, errn, "pmon: no channel in use"); return -1; }
   }
   for(int i=0;i<3;i++) if(!isfinite(c->mag_bias[i]) || !isfinite(c->mag_scale[i]) || c->mag_scale[i]<0.01f || c->mag_scale[i]>100) { snprintf(err,errn,"invalid compass calibration"); return -1; }
   for(int i=0;i<9;i++) if(!isfinite(c->mag_matrix[i]) || fabsf(c->mag_matrix[i])>1.001f) { snprintf(err,errn,"invalid compass rotation");return -1; }
@@ -238,7 +257,19 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
   n = parse_list(eq + 1, v, FC_MAX_MOTORS);
   for(int i=0;i<n;i++)if(!isfinite(v[i]))n=-1;
   if (n < 0) { snprintf(err, errn, "%s: not a list of numbers", key); return -1; }
-  if (!strcmp(key, "tof")) {
+  if (!strcmp(key, "pmon")) {   /* pmon=CHIP,ADDR,USE1,SHUNT1[,USE2,SHUNT2,USE3,SHUNT3] or pmon=-1 */
+    if (n == 1 && v[0] == -1) { c->pmon_chip = 0; for (int k = 0; k < 3; k++) c->pmon_use[k] = 0; }
+    else if (n < 4 || n > 8 || n % 2 || (v[0] != LB_INA219 && v[0] != LB_INA226 && v[0] != LB_INA3221) || v[1] != (int)v[1] || v[1] < 0 || v[1] > 127) {
+      snprintf(err, errn, "pmon=CHIP,ADDRESS,USE,SHUNT[,USE,SHUNT,USE,SHUNT]: chip 219, 226 or 3221; per channel what it watches (0 nothing, 1 the motors' pack, 2 a second pack, 3 another) and its shunt in ohms; or pmon=-1"); return -1;
+    } else {
+      c->pmon_chip = (int16_t)v[0]; c->pmon_addr = (uint8_t)v[1];
+      for (int k = 0; k < 3; k++) {
+        const int i = 2 + 2 * k; if (i + 1 >= n) { c->pmon_use[k] = 0; continue; }
+        if (v[i] != (int)v[i]) { snprintf(err, errn, "pmon: what a channel watches is 0, 1, 2 or 3"); return -1; }
+        c->pmon_use[k] = (int8_t)v[i]; c->pmon_shunt[k] = v[i + 1];
+      }
+    }
+  } else if (!strcmp(key, "tof")) {
     if (n != 1 || (v[0] != -1 && (v[0] < 8 || v[0] > 0x77 || v[0] != (int)v[0]))) {
       snprintf(err, errn, "tof=ADDRESS: TOF250 7-bit I2C address (8 to 119), or -1 to disable"); return -1;
     }
@@ -336,6 +367,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   APP(" tof=%d", c->tof_addr ? c->tof_addr : -1);
+  if (c->pmon_chip) { APP(" pmon=%d,%d", c->pmon_chip, c->pmon_addr); for (int ch = 0; ch < lb_ina_channels(c->pmon_chip); ch++) APP(",%d,%.4g", c->pmon_use[ch], (double)c->pmon_shunt[ch]); }
+  else APP(" pmon=-1");
   if (c->batt2_pin >= 0) APP(" battery2=%d,%.1f", c->batt2_pin, (double)c->batt2_divider); else APP(" battery2=-1");
   { rlink_cfg L2; if (!hw_radio2(c,&L2)) { rlink_describe(&L2,rl,sizeof rl); APP(" radio2=%s",rl); } else APP(" radio2=none"); }
   if (c->nrf_pin[0] >= 0) APP(" nrf24=%d,%d,%d,%d,%d",c->nrf_pin[0],c->nrf_pin[1],c->nrf_pin[2],c->nrf_pin[3],c->nrf_pin[4]); else APP(" nrf24=-1");

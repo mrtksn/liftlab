@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 17
+#define HW_VERSION 18
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -85,6 +85,17 @@ typedef struct {
    * counter-clockwise seen from above), on top of level= (fc_core.h fc_level_yaw): gravity can't tell it, so it's set. */
   float level_yaw;
   uint8_t tof_addr;             /* TOF250 7-bit I2C address, 0 disabled */
+  /* Appended in v18 (v17 blobs migrate with none): a power monitor on the sensors' I2C bus (pmon=CHIP,ADDR,USE,SHUNT…;
+   * ina.h): an INA219 or INA226 (one channel) or INA3221 (three). Each channel measures one pack's voltage and current
+   * through a shunt resistor in its + lead (pmon_shunt, ohms). What a channel watches (pmon_use): 0 nothing, 1 the
+   * motors' pack (its voltage stands in for battery= when that has no pin), 2 a second pack (for battery2=), 3
+   * another source (reported only). Every channel in use is reported (telemetry item "power", link frame
+   * RN_LINK_POWER): volts, amps and the charge used since power-up. */
+  uint8_t pmon_addr;
+  int16_t pmon_chip;            /* 0 none, 219, 226, 3221 */
+  int8_t pmon_use[3];
+  int8_t pmon_pad;
+  float pmon_shunt[3];
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -127,6 +138,10 @@ int hw_baro_read(float *alt);
 /* Poll the TOF250 without waiting for its register to settle. Returns 1 for a completed attempt.
  * Metres on success, -1 for out of range, 0 for a bus error. */
 int hw_tof_poll(int64_t now, float *range);
+/* Poll the power monitor (pmon=): one register per call, spread over its 50 ms period, so the sensor loop never waits
+ * long. Returns 1 when a full set has been read: each channel's volts and amps (0 where unused); −1 when the chip
+ * doesn't answer (it's looked for again once a second). 0: nothing new yet. */
+int hw_pmon_poll(int64_t now, float volts[3], float amps[3]);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
 /* Every address that answers on the sensors' I2C bus, with what usually sits there, as one line. Returns how many. */

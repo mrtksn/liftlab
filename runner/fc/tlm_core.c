@@ -16,6 +16,7 @@ const tlm_def tlm_defs[TLM_ITEMS] = {
   [TLM_LINK] = { TLM_LINK, 4, 1.0f, 3, 0, "link" },
   [TLM_CARGO] = { TLM_CARGO, 9, 2.0f, 1, 1, "cargo" },
   [TLM_PACKS] = { TLM_PACKS, 1, 1.0f, 2, 0, "packs" },
+  [TLM_POWER] = { TLM_POWER, 12, 1.0f, 2, 0, "power" },
 };
 float tlm_scale(int id, int k) {
   switch (id) {
@@ -25,6 +26,7 @@ float tlm_scale(int id, int k) {
     case TLM_LEARN: return k == 1 || k >= 5 ? 1000 : 1;
     case TLM_SUPER: return k == 2 ? 100 : k == 3 ? 1000 : k == 5 ? 10 : 1;
     case TLM_LINK: case TLM_CARGO: return 1;
+    case TLM_POWER: return k % 4 == 0 || k % 4 == 3 ? 1 : 100;   /* what it watches, mAh; V and A in hundredths (±327 A) */
     default: return 100;
   }
 }

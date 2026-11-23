@@ -3,7 +3,8 @@
  * receiver sends the drone (channels, link statistics, ground-station commands) read into an rc_input.
  *
  * Items with a standard CRSF frame go as that frame, so any radio shows them: attitude, battery (voltage from the
- * flight core, current, used capacity and charge from the supervisor when there is one), barometric height and
+ * flight core, current and used capacity measured by a power monitor on the motors' pack, else the supervisor's
+ * estimate, and the charge from the supervisor when there is one), barometric height and
  * vertical speed, GPS. The flight mode goes as the flight-mode frame, messages as ArduPilot status text. The rest go
  * as 0x80 frames, subtype 0xD0: item id, value count, then each value × its scale (tlm_scale) as a signed 16-bit
  * big-endian integer.
@@ -21,6 +22,8 @@ static int item(const tlm_store *T, int id, uint8_t *out) {
     case TLM_BATT: {
       const tlm_slot *sp = tlm_get(T, TLM_SUPER);
       float amps = sp && sp->n > 5 && sp->v[5] >= 0 ? sp->v[5] : 0, mah = sp && sp->n > 6 ? sp->v[6] : 0;
+      const tlm_slot *pw = tlm_get(T, TLM_POWER);                 /* measured beats estimated: the power monitor's channel on the motors' pack */
+      if (pw) for (int k = 0; k + 3 < pw->n; k += 4) if ((int)pw->v[k] == 1) { amps = pw->v[k + 2] > 0 ? pw->v[k + 2] : 0; mah = pw->v[k + 3]; }
       int pct = sp && sp->n > 3 && sp->v[3] >= 0 ? (int)(sp->v[3] * 100 + 0.5f) : 0;
       return crsf_battery(out, v[0], amps, mah, pct);
     }

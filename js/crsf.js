@@ -22,6 +22,7 @@ const TLM_ITEMS = {
   12: { key: 'link', fields: ['rssi', 'lq', 'snr', 'lost'] },
   13: { key: 'cargo', list: true },   // each latch: 1 closed, 2 loaded, 4 moving, 8 has a load switch
   14: { key: 'packs', fields: ['volts2'] },   // a second pack's voltage (battery2=: a pack of its own for the boards)
+  15: { key: 'power', fields: [1, 2, 3].flatMap(i => ['use' + i, 'v' + i, 'a' + i, 'mah' + i]) },   // the power monitor (pmon=): per channel what it watches (0 nothing), volts, amps, mAh
 };
 
 function crsfCrc8(b, from, to) {

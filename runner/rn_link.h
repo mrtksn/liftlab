@@ -63,6 +63,10 @@ enum { RN_LINK_BENCH_TEST = 15 };
 /* Flight board → host: TOF250 beam distance as one little-endian float in metres.
  * -1 means out of range, 0 means unavailable. Sent before regular telemetry when configured. */
 enum { RN_LINK_RANGE = 0x89 };
+/* Flight board → host: the power monitor (pmon=), sent with the telemetry when one is set: for each of its three
+ * channels, four little-endian floats: what it watches (0 nothing, 1 the motors' pack, 2 a second pack, 3 another
+ * source), volts, amps, the charge used since power-up [mAh]. Volts and amps are 0 while the chip doesn't answer. */
+enum { RN_LINK_POWER = 0x8A };
 
 typedef struct {
   uint8_t *buf; uint32_t cap;       /* where payloads are collected */

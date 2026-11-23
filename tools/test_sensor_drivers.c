@@ -7,6 +7,7 @@
 #include "../runner/fc/esp32/main/bmp180.h"
 #include "../runner/fc/esp32/main/hw.h"
 #include "../runner/fc/esp32/main/tof250.h"
+#include "../runner/fc/esp32/main/ina.h"
 static uint8_t regs[128][256];static int fail;static int64_t now;
 static int custom_read(int a,int r,uint8_t *b,int n) { if(fail)return -1;memcpy(b,regs[a]+r,(size_t)n);return 0; }
 static int custom_write(int a,int r,int v) { if(fail)return -1;regs[a][r]=(uint8_t)v;return 0; }
@@ -52,5 +53,20 @@ int main(void) {
   assert(lb_tof250_metres((uint8_t[]){0x22, 0xb8}) < 0);  /* 8888, no return */
   assert(lb_tof250_metres((uint8_t[]){1, 0}) < 0);        /* 256 cm, outside the supported range */
   assert(lb_tof250_metres((uint8_t[]){0, 0}) < 0);
+  /* power monitors (ina.h): the INA3221's shunt in 40 µV and bus in 8 mV steps (bits 15..3), the INA226's 2.5 µV and
+   * 1.25 mV, the INA219's 10 µV and 4 mV (bus bits 15..3); each channel's registers; the configurations */
+  assert(lb_ina_channels(LB_INA3221)==3 && lb_ina_channels(LB_INA219)==1 && lb_ina_channels(LB_INA226)==1 && !lb_ina_channels(220));
+  assert(lb_ina_reg(LB_INA3221,0,0)==1 && lb_ina_reg(LB_INA3221,0,1)==2 && lb_ina_reg(LB_INA3221,2,0)==5 && lb_ina_reg(LB_INA3221,2,1)==6 && lb_ina_reg(LB_INA219,0,1)==2);
+  { uint8_t sh[2]={0x03,0xE8};   /* 1000 → 125 steps of 40 µV = 5 mV: 1 A through 5 mΩ */
+    assert(fabsf(lb_ina_volts(LB_INA3221,0,sh)-0.005f)<1e-7f);
+    uint8_t neg[2]={0xFC,0x18};    /* −1000 → −5 mV (current the other way) */
+    assert(fabsf(lb_ina_volts(LB_INA3221,0,neg)+0.005f)<1e-7f);
+    uint8_t bus[2]={0x1F,0x40};    /* 8000 → 1000 × 8 mV = 8.0 V */
+    assert(fabsf(lb_ina_volts(LB_INA3221,1,bus)-8.0f)<1e-5f);
+    uint8_t b226[2]={0x0C,0x80};   /* 3200 × 1.25 mV = 4.0 V */
+    assert(fabsf(lb_ina_volts(LB_INA226,1,b226)-4.0f)<1e-5f && fabsf(lb_ina_volts(LB_INA226,0,sh)-0.0025f)<1e-7f);
+    uint8_t b219[2]={0x1F,0x40};   /* 8000 >> 3 = 1000 × 4 mV = 4.0 V */
+    assert(fabsf(lb_ina_volts(LB_INA219,1,b219)-4.0f)<1e-5f && fabsf(lb_ina_volts(LB_INA219,0,sh)-0.01f)<1e-7f); }
+  assert(lb_ina_config(LB_INA3221,3)==0x6327 && lb_ina_config(LB_INA3221,7)==0x7327 && lb_ina_config(LB_INA219,1)==0x39DF && lb_ina_config(LB_INA226,1)==0x4327);
   puts("Sensor driver tests passed: BMP180 datasheet vector, nonblocking conversion, MPU units/bypass, HMC axes/status/overflow, I2C failures and TOF250 register decoding.");
 }

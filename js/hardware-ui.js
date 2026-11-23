@@ -142,6 +142,26 @@ function renderHardware() {
         hardwareDetails('battery2'+core.id,'Voltage divider',hardwareNumber('Second pack divider ratio',bus.batteryDivider2,v=>editBoard(core,{batteryDivider2:v},'divider2'),1,30),el('p',{class:'hint',text:'Ratio = pack voltage / voltage at the ADC pin: 2 (two equal resistors) suits a 1S pack. The flight controller reports this pack\'s voltage in the telemetry (battery2=, flight firmware with wiring version 15); its sag correction and arming check stay on the motors\' pack.'}))));
       auxiliary.lastChild.dataset.hwRole='battery';
     }
+    {   // a power monitor (INA219 / INA226 / INA3221) on the sensors' I²C bus: each channel a source's voltage and current
+      const M=powerMonitor(C,cfg.comps),chip=bus.pmonChip||'',def=PMON_CHIPS[chip],srcs=powerSources(C,cfg.comps);
+      const chs=()=>Array.from({length:3},(_,k)=>({...((hardwareBus(computers(),core).pmonCh||[])[k]||{})}));   // (as saved now: another field may have changed since this card was drawn)
+      const setCh=(k,patch)=>{const a=chs();a[k]={...a[k],...patch};editBoard(core,{pmonCh:a},'pmonCh'+k);};
+      const kids=[el('p',{class:'hw-owner',text:'Board: '+core.name}),
+        hardwareField('Chip',hardwareSelect('Power monitor chip','hw-pmon-chip-'+core.id,[['','None'],...Object.entries(PMON_CHIPS).map(([k,d])=>[k,d.label])],chip,v=>editBoard(core,{pmonChip:v,...(PMON_CHIPS[v]&&!PMON_CHIPS[v].addresses.includes(bus.pmonAddress)?{pmonAddress:PMON_CHIPS[v].addresses[0]}:{})},'pmonChip')))];
+      if(def&&M){
+        kids.push(hardwareField('I²C address',hardwareSelect('Power monitor I2C address','hw-pmon-addr-'+core.id,def.addresses.map(a=>[a,'0x'+a.toString(16)+(def.a0?' (A0 → '+def.a0[a-0x40]+')':'')]),M.address,v=>editBoard(core,{pmonAddress:Number(v)},'pmonAddress'))));
+        for(const ch of M.channels){
+          const box=el('div',{class:'hw-fields'});
+          box.append(hardwareField('Channel '+(ch.k+1)+' watches',hardwareSelect('Power monitor channel '+(ch.k+1)+' source','hw-pmon-src-'+core.id+'-'+ch.k,[['','Nothing'],...srcs.map(s2=>[String(s2.id),s2.name])],ch.src?String(ch.src.id):'',v=>setCh(ch.k,{source:v===''?'':(srcs.find(s2=>String(s2.id)===v)||{}).id??v}))));
+          if(ch.src)box.append(hardwareNumber('Channel '+(ch.k+1)+' shunt (Ω)',ch.shunt,v=>setCh(ch.k,{shunt:v}),0.0001,10));
+          kids.push(box);
+          if(ch.src)kids.push(el('p',{class:'hint',text:'Reads up to '+ch.maxA.toFixed(1)+' A ('+def.shuntV*1000+' mV across '+(+(ch.shunt*1000).toPrecision(3))+' mΩ). '+(ch.use===1?'The flight controller\'s battery voltage when the battery ADC has no pin, and the current in its battery telemetry.':ch.use===2?'The second pack\'s voltage when its ADC has no pin.':'Reported only.')}));
+        }
+        kids.push(el('p',{class:'hint',text:'VS → 3.3 V, GND → GND, SDA → GPIO '+bus.sda+', SCL → GPIO '+bus.scl+' (shared with the sensors). Each channel sits in its source\'s + lead: the source + → IN+, IN− → what it powers; the source\'s − stays on the common ground. Flight firmware with wiring version 18; the readings come down in the telemetry, on the Pi ("power"), and on the board\'s console ("power").'}));
+      } else kids.push(el('p',{class:'hint',text:'An INA219, INA226 or INA3221 on the I²C bus measures each pack\'s voltage and current through a shunt resistor in its + lead, and counts the charge used.'}));
+      auxiliary.append(hardwareBoardCard(core,'Power monitor','Current and voltage','I²C · SDA + SCL',...kids));
+      auxiliary.lastChild.dataset.hwRole='pmon';
+    }
   }
   for(const b of C.boards.filter(b=>b.kind.startsWith('pi'))){
     const bus=hardwareBus(C,b),mqtt=bus.linkTransport==='mqtt',coreB=C.boards.find(x=>x.tasks.includes('core')),coreBus=coreB&&hardwareBus(C,coreB);

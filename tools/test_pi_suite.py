@@ -116,6 +116,26 @@ def main():
     assert d['ok'] and 'esp32' not in d
     print("dfb_pi's status: the ESP32, the pilot's link, the sticks; not heard is a problem")
 
+    # the power monitor: in the status, and liftlab power's lines and CSV
+    pw = "power: channel 1 second pack 3.91 V 0.62 A 40 mAh, channel 2 motors' pack 3.72 V 8.25 A 512 mAh"
+    st = m.ctl_status('angle mode: text sticks arm on, throttle 0.30, roll +0.00, pitch +0.00, yaw +0.00; the ESP32 armed; attitude roll +0.0 pitch +0.0 yaw 0 deg, height 0.00 m, vz +0.00 m/s, flags 31; motors 0.30 0.31 0.30 0.29; ' + pw + '; wifi with nobody yet: packets sent 0 (0 failed), got 0 (LQ 0%)')
+    assert [c['what'] for c in st['power']] == ['second pack', "motors' pack"] and st['power'][1]['a'] == 8.25 and st['power'][1]['mah'] == 512 and st['motors'] == [0.3, 0.31, 0.3, 0.29], st
+    assert "motors' pack 3.72 V 8.25 A 512 mAh" in st['text']
+    with tempfile.TemporaryDirectory() as td:
+        m.dfb_service = lambda name=None: (types.SimpleNamespace(name='flight'), 14560)
+        clock = [0.0]; lines = []
+        def send(port, text):
+            assert port == 14560
+            return pw if text == 'power' else st['raw']
+        def sleep(s): clock[0] += s
+        n = m.cmd_power(None, 0.25, td + '/run.csv', 1.0, send=send, now=lambda: clock[0], sleep=sleep, out=lines.append)
+        rows = Path(td + '/run.csv').read_text().splitlines()
+        assert n == 4 and len(lines) == 4 and "8.25 A" in lines[0] and 'motors 0.30 0.31 0.30 0.29' in lines[0], lines
+        assert rows[0] == 't_s,ch1_volts,ch1_amps,ch1_mah,ch2_volts,ch2_amps,ch2_mah,motor1,motor2,motor3,motor4' and rows[1].split(',')[5] == '8.25' and len(rows) == 5, rows
+        lines.clear(); m.cmd_power(None, 0.25, None, 0.5, send=lambda p, t: 'power: nothing from the ESP32\'s power monitor (pmon= set?)' if t == 'power' else '', now=lambda: clock[0], sleep=sleep, out=lines.append)
+        assert lines and 'nothing from' in lines[0], lines
+    print("the power monitor: in dfb_pi's status and the control screen; liftlab power's lines and CSV (volts, amps, mAh, the throttles)")
+
     # the control screen: what it sends, its keys, dfb_pi's answers
     st = m.ctl_status('angle mode: text sticks arm on, throttle 0.00, roll +0.00, pitch +0.00, yaw +0.00; the ESP32 armed; attitude roll +1.5 pitch -2.5 yaw 90 deg, height 0.12 m, vz +0.00 m/s, flags 31; motors 0.06 0.06 0.06 0.06; wifi with nobody yet: packets sent 0 (0 failed), got 0 (LQ 0%)')
     assert st['esp32'] == 'armed' and st['source'] == 'this panel' and st['roll'] == 1.5 and st['pitch'] == -2.5 and st['height'] == 0.12 and st['motors'] == [0.06] * 4 and st['angle_mode'], st

@@ -11,7 +11,7 @@ static int fails = 0;
 #define CHECK(c, ...) do { if (c) printf("  ok   "); else { printf("  FAIL "); fails++; } printf(__VA_ARGS__); printf("\n"); } while (0)
 
 /* read back what tlm_service produced, as the ground would */
-typedef struct { int frames, att, batt, gps, mode, text, item, bad; float roll, volts, amps; int pct; double lat, lon; char mode_s[20], text_s[64]; int item_id; float item_v[16]; } ground;
+typedef struct { int frames, att, batt, gps, mode, text, item, bad; float roll, volts, amps, mah; int pct, item_n; double lat, lon; char mode_s[20], text_s[64]; int item_id; float item_v[16]; } ground;
 static void ground_read(ground *G, const uint8_t *p, int n) {
   crsf_parser P; memset(&P, 0, sizeof P);
   for (int i = 0; i < n; i++) {
@@ -19,12 +19,12 @@ static void ground_read(ground *G, const uint8_t *p, int n) {
     G->frames++; const uint8_t *q = crsf_payload(&P); int m = crsf_payload_len(&P);
     switch (crsf_type(&P)) {
       case CRSF_ATTITUDE: G->att++; G->roll = (int16_t)((q[2] << 8) | q[3]) / 10000.0f; break;
-      case CRSF_BATTERY: G->batt++; G->volts = ((q[0] << 8) | q[1]) / 10.0f; G->amps = ((q[2] << 8) | q[3]) / 10.0f; G->pct = q[7]; break;
+      case CRSF_BATTERY: G->batt++; G->volts = ((q[0] << 8) | q[1]) / 10.0f; G->amps = ((q[2] << 8) | q[3]) / 10.0f; G->mah = (float)((q[4] << 16) | (q[5] << 8) | q[6]); G->pct = q[7]; break;
       case CRSF_GPS: G->gps++; G->lat = (int32_t)((uint32_t)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3]) * 1e-7; G->lon = (int32_t)((uint32_t)q[4] << 24 | q[5] << 16 | q[6] << 8 | q[7]) * 1e-7; break;
       case CRSF_FLIGHT_MODE: G->mode++; snprintf(G->mode_s, sizeof G->mode_s, "%s", (const char *)q); break;
       case CRSF_EXT:
         if (q[0] == CRSF_EXT_TEXT) { G->text++; snprintf(G->text_s, sizeof G->text_s, "%s", (const char *)q + 2); }
-        else if (q[0] == CRSF_EXT_ITEM) { G->item++; G->item_id = q[1]; for (int k = 0; k < q[2] && k < 16; k++) G->item_v[k] = (int16_t)((q[3 + 2 * k] << 8) | q[4 + 2 * k]) / tlm_scale(q[1], k); }
+        else if (q[0] == CRSF_EXT_ITEM) { G->item++; G->item_id = q[1]; G->item_n = q[2]; for (int k = 0; k < q[2] && k < 16; k++) G->item_v[k] = (int16_t)((q[3 + 2 * k] << 8) | q[4 + 2 * k]) / tlm_scale(q[1], k); }
         break;
     }
     (void)m;
@@ -113,6 +113,19 @@ int main(void) {
     uint8_t out[64]; int k = tlm_crsf.item(&A, TLM_PACKS, out); ground G; memset(&G, 0, sizeof G); ground_read(&G, out, k);
     CHECK(s && s->n == 1 && fabsf(s->v[0] - 3.87f) < 1e-6f && a && a->n == 3 && G.item_id == TLM_PACKS && fabsf(G.item_v[0] - 3.87f) < 0.006f,
           "a second pack's voltage over the link and the radio (%.2f V); an unknown item skipped, the next still read", G.item_v[0]);
+  }
+
+  {   /* the power monitor: each channel over the link and the radio; the battery frame takes the measured current */
+    static tlm_store A, B; tlm_init(&A); tlm_init(&B);
+    float pw[12] = { 2, 3.91f, 0.62f, 40, 1, 3.72f, 8.25f, 512, 0, 0, 0, 0 }, sup[7] = { 0, 0, 2, 0.8f, 1, 3.0f, 100 }, b[1] = { 3.72f };
+    tlm_put(&A, TLM_POWER, pw, 12, 1); tlm_put(&A, TLM_SUPER, sup, 7, 1); tlm_put(&A, TLM_BATT, b, 1, 1);
+    float buf[64]; int n = tlm_pack(&A, buf, 64); tlm_unpack(&B, buf, n, 1.0);
+    const tlm_slot *s = tlm_get(&B, TLM_POWER);
+    uint8_t out[64]; int k = tlm_crsf.item(&A, TLM_POWER, out); ground G; memset(&G, 0, sizeof G); ground_read(&G, out, k);
+    uint8_t bo[64]; int kb = tlm_crsf.item(&A, TLM_BATT, bo); ground H; memset(&H, 0, sizeof H); ground_read(&H, bo, kb);
+    CHECK(s && s->n == 12 && s->v[6] == 8.25f && G.item_id == TLM_POWER && G.item_n == 12 && fabsf(G.item_v[5] - 3.72f) < 0.006f && fabsf(G.item_v[6] - 8.25f) < 0.006f && G.item_v[7] == 512 && G.item_v[4] == 1
+          && kb > 0 && fabsf(H.amps - 8.25f) < 0.06f && fabsf(H.mah - 512) < 1,
+          "the power monitor's channels over the link and the radio (%.2f A on the motors' pack); the battery frame says the measured %.1f A, %.0f mAh, not the estimate", G.item_v[6], H.amps, H.mah);
   }
 
   printf("messages through an ExpressLRS receiver's queue\n");
