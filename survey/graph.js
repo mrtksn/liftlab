@@ -340,6 +340,7 @@ function renderWiring(node){
         edited();refreshViewer();
       };
       grid.append(label);
+      if(box.checked)grid.append(inputData(node,p.name,{node:src.id,port:p.name},p.types[0]));
     }
   }else for(const p of inputPorts(node)){
     const select=document.createElement('select'),label=document.createElement('label'),name=document.createElement('span');
@@ -350,6 +351,7 @@ function renderWiring(node){
     const current=node.inputs?.[p.name];select.value=current?JSON.stringify(current):'';
     select.onchange=()=>{remember();node.inputs??={};if(select.value)node.inputs[p.name]=JSON.parse(select.value);else delete node.inputs[p.name];edited();};
     label.append(name,select);grid.append(label);
+    if(current)grid.append(inputData(node,p.name,current,outputType(current)||p.types[0]));
   }
   host.hidden=!grid.childElementCount;
   if(node.op==='code'){
@@ -365,21 +367,41 @@ function renderWiring(node){
   }
   host.append(heading,grid);
 }
+// What goes in and what comes out: each port's data, read from the last run. An open view stays open when the
+// inspector is drawn again (after a run, a setting change), so you can watch it change.
+const openData=new Set();
+function dataView(key,label,type,source,missing){
+  const box=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('div');
+  title.textContent=label;box.className='port-data';box.append(title,body);
+  box.ontoggle=async()=>{
+    if(!box.open){openData.delete(key);return;}
+    openData.add(key);
+    const output=source();
+    if(!output){body.textContent=missing();return;}
+    body.textContent='Reading…';
+    try{showValue(body,await materialize(output,type),type,output);}catch(e){body.textContent=e.message;}
+  };
+  if(openData.has(key))queueMicrotask(()=>{box.open=true;});
+  return box;
+}
+function inputData(node,port,link,type){
+  const from=nodeById(link.node);
+  return dataView('in:'+node.id+':'+port,'Data in · '+type,type,()=>results.get(link.node)?.outputs?.[link.port],
+    ()=>results.get(link.node)?.error||'Run '+nodeLabel(from)+' to see what comes in.');
+}
 function renderOutputs(node){
   const host=$('nodeOutputs');host.replaceChildren();
-  for(const p of outputPorts(node)){
-    const box=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('div');
+  const ports=outputPorts(node);
+  if(node.op==='viewer'||!ports.length){host.hidden=true;return;}
+  host.hidden=false;
+  const heading=document.createElement('strong');heading.textContent='Outputs';host.append(heading);
+  for(const p of ports){
     const users=graph.nodes.filter(n=>connections(n).some(c=>c.link.node===node.id&&c.link.port===p.name)).map(nodeLabel);
-    title.textContent='Output '+p.name+' · '+p.types[0]+(users.length?' → '+users.join(', '):'');
-    box.className='port-data';box.append(title,body);
-    box.ontoggle=async()=>{
-      if(!box.open)return;
-      const output=results.get(node.id)?.outputs?.[p.name];
-      if(!output){body.textContent=results.get(node.id)?.error||'Run to node to produce this output.';return;}
-      body.textContent='Reading…';
-      try{showValue(body,await materialize(output,p.types[0]),p.types[0],output);}catch(e){body.textContent=e.message;}
-    };
-    host.append(box);
+    const row=document.createElement('div');row.className='port-row';
+    row.textContent=p.name+' · '+p.types[0]+(users.length?' → '+users.join(', '):'');
+    row.append(dataView('out:'+node.id+':'+p.name,'Data out',p.types[0],()=>results.get(node.id)?.outputs?.[p.name],
+      ()=>results.get(node.id)?.error||'Run to node to produce this output.'));
+    host.append(row);
   }
   const result=results.get(node.id);
   if(result?.error){const p=document.createElement('p');p.className='muted';p.textContent=result.error;host.append(p);}

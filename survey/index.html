@@ -28,7 +28,7 @@
 <div class="node-scroll" tabindex="0" aria-label="Processing graph"><div id="nodeBoard"><svg id="nodeWires" aria-hidden="true"></svg><div id="nodeCards"></div></div></div>
 <div id="nodeInspector" class="controls"><strong id="nodeTitle"></strong><small id="nodeOp" class="muted"></small><label id="appendLabel">Add after this <select id="nodeType"></select></label><button id="addNode">Add node</button><button id="undoGraph" disabled>Undo</button><button id="removeNode">Remove node</button></div>
 <p id="nodeDescription" class="muted"></p>
-<div id="nodeWiring" class="node-settings"></div>
+<div class="node-ports"><div id="nodeWiring"></div><div id="nodeOutputs"></div></div>
 <div id="nodeSettings" class="node-settings" hidden></div>
 <details id="codePanel"><summary>Node code</summary>
 <div class="controls" id="codeControls"><label>Name <input id="codeTitle" maxlength="64"></label><label>Output type <select id="codeOut"></select></label></div>
@@ -37,7 +37,6 @@
 <details id="controlsPanel"><summary>Controls as JSON</summary><p class="muted">This node's controls override the operator's by key (label, default, min, max, options, help, hidden); code and viewer nodes can add their own. Preset controls are shared variables: bind a node setting to one with {"var": "key"}, or use a control of kind "button" with "run": node id.</p>
 <label>This node <textarea id="controlsJson" rows="6" spellcheck="false"></textarea></label><label>Preset <textarea id="presetControlsJson" rows="6" spellcheck="false"></textarea></label>
 <div class="controls"><button id="applyControls" type="button">Apply controls</button><small id="controlsMessage" role="status"></small></div></details>
-<div id="nodeOutputs"></div>
 <details id="runTrace" hidden><summary>Last run</summary><pre id="runTraceData"></pre></details>
 <div id="typePanels" class="map-controls" hidden><div id="gaussianPanel" class="map-controls" hidden>
   <div class="controls">
