@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=7e145a7646">
+<link rel="stylesheet" href="css/style.css?v=58a0b35eda">
 </head>
 <body>
 <div class="app">
@@ -184,6 +184,13 @@
             </div>
             <p class="hint">Map files include available 3D models and textures. Drone designs stay in the simulation.</p>
             <p class="map-say" id="mapSay" role="status"></p>
+          </section>
+          <section class="sec"><h2>Room survey</h2>
+            <div class="hrow"><button class="btn btn-sm primary" id="surveyWorkspace" type="button">Room Survey…</button>
+              <button class="btn btn-sm" id="surveyOpen" type="button">Open camera survey…</button>
+              <button class="btn btn-sm" id="surveyClear" type="button" hidden>Clear overlay</button>
+              <input type="file" id="surveyFile" accept=".json" hidden></div>
+            <p class="hint" id="surveyStatus" role="status">Record walks and process them with the survey companion on this computer, or display a saved survey's camera path and landmarks here.</p>
           </section>
           <section class="sec world-objs" id="worldObjSec"><h2>Objects <small id="worldObjCount"></small></h2><div class="world-obj-body" id="worldObjBody"></div></section>
           <section class="sec"><h2>Environment</h2><div class="sp" id="spFields"></div></section>
@@ -423,6 +430,22 @@
         <p class="hint" id="liveNoBt" hidden>This browser has no Web Bluetooth here. Use Chrome or Edge on a computer or Android (not Safari, Firefox or iOS), with the page served over https or from localhost.</p>
         <p class="hint" id="liveDlgMsg" role="status"></p>
         <div class="ask-btns"><button class="btn" type="button" id="liveClose">Cancel</button><button class="btn primary" type="button" id="liveFind">Find the drone</button></div>
+      </dialog>
+      <dialog class="ask survey-dlg" id="surveyDlg" aria-labelledby="surveyTitle">
+        <div class="survey-head">
+          <h2 id="surveyTitle">Room Survey</h2>
+          <label class="survey-addr">Companion <input type="text" id="surveyAddr" spellcheck="false" autocomplete="off" aria-describedby="surveyLink"></label>
+          <span class="hint" id="surveyLink" role="status"></span>
+          <a class="btn btn-sm" id="surveyTab" target="_blank" rel="noopener" hidden>Open in a tab ↗</a>
+          <button class="btn btn-sm" type="button" id="surveyClose">Close</button>
+        </div>
+        <div class="survey-help" id="surveyHelp" hidden>
+          <p>The survey's camera capture and processing run in the companion, a Python server on this computer. In this repository's folder, open <code>survey/Room Survey.command</code>, or in a terminal:</p>
+          <pre class="live-cmd"><code>cd survey &amp;&amp; ../.venv/bin/python server.py</code></pre>
+          <p class="hint" id="surveyWhy"></p>
+          <div class="ask-btns"><button class="btn primary" type="button" id="surveyRetry">Try again</button></div>
+        </div>
+        <iframe class="survey-frame" id="surveyFrame" title="Room Survey workspace" hidden></iframe>
       </dialog>
       <div class="crash" id="crash" role="alert" hidden>
         <b>Crashed</b>
@@ -697,6 +720,7 @@
 <script src="js/drone-context.js?v=b7075d943b"></script>
 <script src="js/fleet.js?v=2d436df689"></script>
 <script src="js/fleet-collisions.js?v=0f07b736ea"></script>
+<script src="js/room-survey.js?v=cb7c37f691"></script>
 <script src="js/world-objects.js?v=536f416b65"></script>
 <script src="js/world-animation.js?v=fd5b55b7bc"></script>
 <script src="js/world-animation-audio.js?v=6f68161671"></script>

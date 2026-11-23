@@ -24,6 +24,7 @@ from fusion import STREAMS, load_observations
 from seed_surfaces import MAX_EDGE, build_surfaces
 import gaussian_map
 import ai_surfaces
+import companion
 import depth_assets
 from cloud_planes import METHOD as PLANE_METHOD, build_planes
 from cloth_surfaces import METHOD as CLOTH_METHOD, build_cloth
@@ -705,13 +706,33 @@ class Survey:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def send(self, data, mime, code=200):
+    @property
+    def origins(self):
+        """Page origins added with --origin."""
+        return getattr(self.server, "origins", ())
+
+    def own_origin(self):
+        return "http://" + self.headers.get("Host", "")
+
+    def origin_allowed(self):
+        """No Origin header (the page's own requests), or a page allowed to use this server (companion.py)."""
+        origin = self.headers.get("Origin")
+        return origin is None or companion.origin_ok(origin, self.own_origin(), self.origins)
+
+    def send(self, data, mime, code=200, filename=None):
         self.send_response(code)
         self.send_header("Content-Type",mime)
         self.send_header("Content-Length",str(len(data)))
         self.send_header("Cache-Control","no-store")
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        self.send_header("X-Frame-Options", "SAMEORIGIN" if urlsplit(self.path).path == "/lingbot-artifact" else "DENY")
+        for header in companion.cors_headers(self.headers.get("Origin"), self.own_origin(), self.origins):
+            self.send_header(*header)
+        if urlsplit(self.path).path == "/lingbot-artifact":
+            self.send_header("Content-Security-Policy", "frame-ancestors " + companion.frame_ancestors(self.origins))
+        else:
+            self.send_header("X-Frame-Options", "DENY")
+        if filename:
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(filename, safe=""))
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -742,18 +763,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(size))
             self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(name + ".zip", safe=""))
             self.send_header("Cache-Control", "no-store")
+            for header in companion.cors_headers(self.headers.get("Origin"), self.own_origin(), self.origins):
+                self.send_header(*header)
             self.end_headers()
             try:
                 shutil.copyfileobj(output, self.wfile)
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def do_OPTIONS(self):
+        headers = companion.preflight_headers(self.headers.get("Origin"), self.own_origin(), self.origins,
+                                              self.headers.get("Access-Control-Request-Private-Network") == "true")
+        if not self.local_host() or headers is None:
+            return self.send(b"Not allowed", "text/plain", 403)
+        self.send_response(204)
+        for header in headers:
+            self.send_header(*header)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
-        if not self.local_host():
+        if not self.local_host() or not self.origin_allowed():
             return self.send(b"Local dashboard required", "text/plain", 403)
         url = urlsplit(self.path)
         path = url.path
-        files = {"/":"index.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
+        files = {"/":"index.html","/index.html":"index.html","/api.js":"api.js","/target.html":"target.html","/ui.js":"ui.js","/pipeline-data.js":"pipeline-data.js","/graph.js":"graph.js","/gaussian-mesh-view.js":"gaussian-mesh-view.js","/gaussian-view.js":"gaussian-view.js","/depth-worker.js":"depth-worker.js","/ui.css":"ui.css","/target":"target.html"}
         if path in files:
             p = HERE / files[path]
             return self.send(p.read_bytes(), {".html":"text/html; charset=utf-8",".css":"text/css",".js":"text/javascript"}[p.suffix])
@@ -775,7 +809,8 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         index = ai_surfaces.index_path(run,query.get("index",[""])[0]).stem
                         file = run/("lingbot-v1-"+index+(f"-{suffix}" if suffix else ""))/name
-                        return self.send(file.read_bytes(),{".html":"text/html",".json":"application/json"}.get(file.suffix,"application/octet-stream"))
+                        mime = {".html":"text/html",".json":"application/json"}.get(file.suffix,"application/octet-stream")
+                        return self.send(file.read_bytes(), mime, filename=name if mime == "application/octet-stream" else None)
                     except (ValueError,OSError):
                         pass
                 return self.send(b"LingBot-Map result unavailable","text/plain",404)
@@ -804,7 +839,8 @@ class Handler(BaseHTTPRequestHandler):
                         file = folder/file.name
                     mime = {".ply":"application/octet-stream",".json":"application/json",
                             ".jpg":"image/jpeg",".png":"image/png",".npz":"application/octet-stream"}[file.suffix]
-                    return self.send(file.read_bytes(),mime)
+                    return self.send(file.read_bytes(), mime,
+                                     filename=file.name if mime == "application/octet-stream" else None)
                 except (ValueError,OSError):
                     pass
             return self.send(b"Gaussian map unavailable","text/plain",404)
@@ -909,7 +945,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return self.send(b"Recording data unavailable", "text/plain", 404)
-        data, mime, code = b"Unavailable", "text/plain", 404
+        data, mime, code, filename = b"Unavailable", "text/plain", 404, None
         with survey.lock:
             if path == "/state":
                 data, mime, code = json.dumps(survey.state()).encode(), "application/json", 200
@@ -922,7 +958,9 @@ class Handler(BaseHTTPRequestHandler):
                 model.pop("submaps", None)
                 model.pop("components", None)
                 data, mime, code = json.dumps(model).encode(), "application/json", 200
-        self.send(data, mime, code)
+                if "download" in parse_qs(url.query):
+                    filename = "room-survey.json"
+        self.send(data, mime, code, filename)
 
     def do_POST(self):
         try:
@@ -930,8 +968,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Local dashboard required")
             if self.headers.get("Content-Type") != "application/json":
                 raise ValueError("Expected JSON")
-            origin = self.headers.get("Origin")
-            if origin and origin != "http://" + self.headers["Host"]:
+            if not self.origin_allowed():
                 raise ValueError("Local dashboard required")
             size = int(self.headers.get("Content-Length","0"))
             limit = {"/operator":64_000_000,
@@ -958,12 +995,15 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--pi", default=None, help="Override the Pi SSH destination from the device settings")
     ap.add_argument("--port", type=int, default=8779)
+    ap.add_argument("--origin", action="append", default=[], metavar="URL",
+                    help="Another web page origin allowed to use this server, besides LiftLab's site and localhost pages")
     ap.add_argument("--output", type=Path, default=HERE.parent/"captures"/"room-surveys",
                     help="Walks and settings; LiftLab's captures/room-surveys by default")
     config = ap.parse_args()
     sfm.logging.minloglevel = 2
     survey = Survey(config.output,config.pi)
     server = ThreadingHTTPServer(("127.0.0.1",config.port),Handler)
+    server.origins = tuple(o.rstrip("/") for o in config.origin)
     print(f"Room survey at http://127.0.0.1:{config.port}", flush=True)
     try:
         server.serve_forever()

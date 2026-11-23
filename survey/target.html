@@ -1,9 +1,9 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fisheye calibration target</title>
 <style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:white}svg{width:min(96vw,145vh);height:auto;display:block}@media print{svg{width:100%}@page{size:landscape;margin:8mm}}</style></head>
 <body><svg id="board" xmlns="http://www.w3.org/2000/svg"></svg>
-<script>
+<script src="api.js"></script><script>
 // The board size comes from the dashboard's device settings (inner corners across and down).
-fetch('/device-settings').then(r=>r.json()).then(({values})=>{
+fetch(API+'/device-settings').then(r=>r.json()).then(({values})=>{
   const cols=values.board_columns+1,rows=values.board_rows+1,svg=document.getElementById('board');
   svg.setAttribute('viewBox',`0 0 ${cols+2} ${rows+2}`);
   svg.setAttribute('aria-label',`Checkerboard with ${values.board_columns} by ${values.board_rows} internal corners`);

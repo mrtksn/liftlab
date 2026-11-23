@@ -84,6 +84,10 @@ The HCJ six-pin TOF250 probe uses the Pi Zero header I²C bus 1, with SDA on phy
 
 ## LiftLab integration
 
+In LiftLab, **World → Room survey → Room Survey…** opens this page in a full-size dialog. LiftLab serves the page itself (`survey/index.html`, from its site or a local server) and names the companion, this server, with `?companion=http://127.0.0.1:8779`; the dialog's address field changes it, and **Open in a tab** opens the same page on its own. Every request the page makes goes to that address (`api.js`). Opened from the server itself, the page uses its own address.
+
+The server listens on 127.0.0.1 only and answers pages it serves, LiftLab's site (`https://mrtksn.github.io`) and pages from a local web server (`http://localhost` or `127.0.0.1`, any port). For another page, start it with `--origin URL` (repeatable). Other sites get no CORS headers and their POSTs are refused; requests naming another host are refused, against DNS rebinding. A LiftLab opened as a file can't use it: browsers send the origin `null`, which sandboxed frames on any site also send. Chrome may ask once whether LiftLab's site may reach devices on your local network: allow it.
+
 The standalone dashboard and camera stream use SSH. The optional Pi flight telemetry tap is `liftlab/telemetry-tap.patch`, a change to LiftLab's `runner/pi/dfb_pi.c`; `liftlab/room-survey.js` is the World view's survey overlay. Both move into LiftLab proper as the survey joins the page.
 
 Pass `--output /path/to/room-surveys` to open another capture directory. Captures are local and excluded from Git.

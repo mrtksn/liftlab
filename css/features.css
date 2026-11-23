@@ -1038,6 +1038,16 @@ html.phone .install-dlg{width:100vw;max-width:100vw;max-height:100dvh;height:100
 .live-dlg .live-wifi label{display:flex;flex-direction:column;gap:var(--space-2);font-size:var(--text-sm)}
 .live-dlg .live-wifi input{font-family:var(--f-mono)}
 .live-dlg .live-cmd{margin:0;padding:var(--space-4) var(--space-6);overflow-x:auto;white-space:pre;font-size:var(--text-xs)}
+.survey-dlg{width:calc(100vw - 32px);max-width:none;height:calc(100vh - 32px);max-height:none;padding:var(--space-10) var(--space-12);display:none;flex-direction:column;gap:var(--space-8)}
+.survey-dlg[open]{display:flex}
+.survey-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-8)}
+.survey-head h2{margin:0 var(--space-8) 0 0}
+.survey-addr{display:flex;align-items:center;gap:var(--space-6);font-size:var(--text-sm);color:var(--ink-2)}
+.survey-addr input{font-family:var(--f-mono);width:24ch}
+.survey-head .hint{flex:1;margin:0}
+.survey-help{max-width:640px}
+.survey-frame{flex:1;width:100%;min-height:0;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--panel-2)}
+html.phone .survey-dlg{width:100vw;height:100dvh;margin:0;border-radius:0}
 #liveDlgMsg[data-tone="bad"]{color:var(--bad)}
 .live-paused{margin:0 0 var(--space-6);padding:var(--space-5) var(--space-8);border:1px solid var(--good);border-radius:var(--radius-control);background:var(--good-soft);font-size:var(--text-sm);color:var(--ink)}
 .live-on #telemetry>:not(.live-paused){opacity:.45}

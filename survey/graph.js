@@ -14,7 +14,7 @@
 
 let catalog={operators:[],types:{},compatible:{},depth_methods:[]};
 const operatorsById=new Map();
-const catalogReady=fetch('/operators').then(r=>r.json()).then(c=>{
+const catalogReady=fetch(API+'/operators').then(r=>r.json()).then(c=>{
   catalog=c;
   for(const op of c.operators)operatorsById.set(op.id,op);
   const frames=[['photo','Recorded photo'],...c.depth_methods.map(m=>[m.id,m.label])];
@@ -177,7 +177,7 @@ function renderNodeSettings(node){
 async function renderWalkSettings(node,host){
   const run=state?.run,schema=opOf(node).walk_params;
   if(!run||state.recording){host.hidden=true;return;}
-  const response=await fetch('/sensor-settings?'+new URLSearchParams({run}));
+  const response=await fetch(API+'/sensor-settings?'+new URLSearchParams({run}));
   if(!response.ok||currentNode()!==node)return;
   const values=await response.json(),grid=document.createElement('div'),heading=document.createElement('strong'),bar=document.createElement('div');
   heading.textContent='Sensor settings saved with this walk';grid.className='settings-grid';bar.className='controls';
@@ -187,10 +187,10 @@ async function renderWalkSettings(node,host){
   save.onclick=async()=>{
     status.textContent='Saving…';
     try{
-      const r=await fetch('/sensor-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run,values,default:toggle.checked})});
+      const r=await fetch(API+'/sensor-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run,values,default:toggle.checked})});
       const v=await r.json();if(!r.ok)throw Error(v.error);
       recordedTablesRequest=null;results.clear();
-      const t=await fetch('/timeline?'+new URLSearchParams({run}));
+      const t=await fetch(API+'/timeline?'+new URLSearchParams({run}));
       if(t.ok&&timelineRun===run){timeline=await t.json();refreshReplay();}
       renderGraph();status.textContent='Saved. Rerun nodes that read ToF or IMU pairing.';
     }catch(e){status.textContent=e.message;}
@@ -473,7 +473,7 @@ async function postJson(url,body){
 }
 async function waitIdle(progress){
   for(;;){
-    const s=await (await fetch('/state')).json();
+    const s=await (await fetch(API+'/state')).json();
     if(!s.busy&&!s.buildingWalks?.length)return s;
     progress(s.message);
     await new Promise(r=>setTimeout(r,700));
@@ -494,7 +494,7 @@ async function callOperator(node,params,progress){
   for(const c of connections(node))inputs[c.name]=await refOf(nodeById(c.link.node));
   let extra={};
   for(;;){
-    const reply=await postJson('/operator',{run,op:node.op,params,inputs,...extra});
+    const reply=await postJson(API+'/operator',{run,op:node.op,params,inputs,...extra});
     if(reply.outputs)return reply.outputs;
     if(reply.request){extra=await browserRequests[reply.request.kind](reply.request,progress);continue;}
     progress(reply.pending);
@@ -505,7 +505,7 @@ async function callOperator(node,params,progress){
 const browserRequests={
   'depth-predictions':(request,progress)=>new Promise((resolve,reject)=>{
     progress('Preparing the local depth model · first use downloads about 38 MB');
-    const worker=new Worker('/depth-worker.js',{type:'module'});
+    const worker=new Worker('depth-worker.js?'+new URLSearchParams({companion:API||location.origin}),{type:'module'});
     activeWorker=worker;
     worker.onerror=e=>{worker.terminate();reject(Error(e.message||'The local depth runtime could not load.'));};
     worker.onmessage=({data})=>{
@@ -596,8 +596,8 @@ $('runPipeline').onclick=()=>runPipeline();
 function updatePipelineButton(){$('runPipeline').disabled=pipelineRunning||!state?.run||!!state?.busy||!!state?.recording||!graph;}
 
 // Data ------------------------------------------------------------------------------------------
-async function fetchBuffer(url){const r=await fetch(url);if(!r.ok)throw Error('Could not read '+url.split('?')[0]+'.');return r.arrayBuffer();}
-async function fetchJson(url){const r=await fetch(url);if(!r.ok)throw Error(r.status===404?'Output not found. Rerun the node.':'Could not read the output.');return r.json();}
+async function fetchBuffer(url){const r=await fetch(api(url));if(!r.ok)throw Error('Could not read '+url.split('?')[0]+'.');return r.arrayBuffer();}
+async function fetchJson(url){const r=await fetch(api(url));if(!r.ok)throw Error(r.status===404?'Output not found. Rerun the node.':'Could not read the output.');return r.json();}
 function materialize(output,type){
   if(!output)return Promise.reject(Error('Run the source node first.'));
   if(!materialized.has(output))materialized.set(output,load(output,type).catch(e=>{materialized.delete(output);throw e;}));
@@ -733,8 +733,8 @@ function showLingbot(output){
   if(!output){viewer.hidden=true;viewer.removeAttribute('src');$('viewNav').hidden=!model;return;}
   fetchJson(output.url).then(report=>{
     $('lingbotStatus').textContent=report.views+' predicted poses · '+report.points.toLocaleString()+' depth samples · relative scale';
-    viewer.src=output.view;viewer.hidden=false;$('viewNav').hidden=true;
-    $('lingbotCloud').href=output.cloud;$('lingbotCloud').hidden=false;
+    viewer.src=api(output.view);viewer.hidden=false;$('viewNav').hidden=true;
+    $('lingbotCloud').href=api(output.cloud);$('lingbotCloud').hidden=false;
   }).catch(e=>{$('lingbotStatus').textContent=e.message;});
 }
 
@@ -776,8 +776,8 @@ function mountReplayFrames(host,view){
       const ref=refs[i];pane.replaceChildren();
       if(!ref){pane.textContent='No matching frame';continue;}
       if(ref.pixels){const c=document.createElement('canvas');paintFramePixels(c,ref);pane.append(c);continue;}
-      const image=document.createElement('img');image.alt=label+' · '+frameId;
-      const endpoint=ref.method?'/frame-depth.png':refs.some(f=>f?.method)?'/depth-input.jpg':'/recorded.jpg';
+      const image=document.createElement('img');image.crossOrigin='anonymous';image.alt=label+' · '+frameId;
+      const endpoint=ref.method?API+'/frame-depth.png':refs.some(f=>f?.method)?API+'/depth-input.jpg':API+'/recorded.jpg';
       image.onerror=()=>image.replaceWith(document.createTextNode('Frame unavailable · '+frameId));
       image.src=endpoint+'?'+new URLSearchParams({run:timelineRun,index:model?.feature_index||'',frame:ref.frame,method:ref.method||'photo'});
       pane.append(image);
@@ -808,14 +808,14 @@ function showValue(body,value,type,output={}){
     const ref=value.find(r=>r.frame===timeline[cursor]?.id)||value[0];
     if(!ref){text('No frames.');return;}
     const query=new URLSearchParams({run:timelineRun,index:model?.feature_index||'',method:ref.method||'photo',frame:ref.frame});
-    const image=document.createElement('img');image.alt=type+' · '+ref.frame;image.src=(ref.method?'/frame-depth.png?':'/recorded.jpg?')+query;
+    const image=document.createElement('img');image.crossOrigin='anonymous';image.alt=type+' · '+ref.frame;image.src=(ref.method?API+'/frame-depth.png?':API+'/recorded.jpg?')+query;
     body.append(image);text(ref.frame+' · '+(ref.ms/1000).toFixed(2)+' s · '+value.length+' frames · scrub the replay to change frame');
     if(ref.method){
       const out=text('Reading depth sample…');
       const sample=async(x,y)=>{
         const q=new URLSearchParams(query);if(x!==undefined){q.set('x',x);q.set('y',y);}
         try{
-          const s=await fetchJson('/frame-depth-sample?'+q);
+          const s=await fetchJson(API+'/frame-depth-sample?'+q);
           out.textContent='Pixel ('+s.x+', '+s.y+') · '+(s.value??'missing')+' '+(output.units||'')+' · '+s.width+' × '+s.height;
           image.title='Click a pixel to inspect depth';
           image.onclick=e=>{const b=image.getBoundingClientRect();sample(Math.min(s.width-1,Math.floor((e.clientX-b.left)*s.width/b.width)),Math.min(s.height-1,Math.floor((e.clientY-b.top)*s.height/b.height)));};
@@ -827,7 +827,7 @@ function showValue(body,value,type,output={}){
   if(kind==='map'){rows('Pose',value.poses.length,i=>value.poses[i]);rows('Landmark',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));plot(value.points);return;}
   if(value instanceof Float32Array){
     rows('Splat',value.length/16,i=>{const f=(o,n)=>Array.from(value.subarray(16*i+o,16*i+o+n));return {center:f(0,3),opacity:f(3,1)[0],rgb:f(4,3),radii:f(8,3),rotation_wxyz:f(12,4)};});
-    if(output.url){const a=document.createElement('a');a.href=output.url;a.textContent='Download PLY';a.download='';body.append(a);}
+    if(output.url){const a=document.createElement('a');a.href=api(output.url);a.textContent='Download PLY';a.download='';body.append(a);}
     return;
   }
   if(Array.isArray(value)){
@@ -846,7 +846,7 @@ function consoleLine([label,...values]){
 // Presets ---------------------------------------------------------------------------------------
 let presetList=[];
 async function loadPresets(){
-  presetList=await fetchJson('/presets');
+  presetList=await fetchJson(API+'/presets');
   const select=$('pipelinePreset'),current=select.value;
   select.replaceChildren(new Option('Current graph',''),...presetList.map(p=>new Option(p.name+(p.editable?' · yours':''),p.name)));
   select.value=presetList.some(p=>p.name===current)?current:'';
@@ -882,7 +882,7 @@ async function runQuiet(target){
       if(op.runner==='code'||op.runner==='browser'||node.program)break;
       const settings=resolveSettings(node),inputs={};
       for(const c of connections(node))inputs[c.name]=await refOf(nodeById(c.link.node));
-      const reply=await postJson('/operator',{run:state.run,op:node.op,params:Object.fromEntries(op.params.map(p=>[p.key,settings[p.key]])),inputs,peek:true});
+      const reply=await postJson(API+'/operator',{run:state.run,op:node.op,params:Object.fromEntries(op.params.map(p=>[p.key,settings[p.key]])),inputs,peek:true});
       if(!reply.outputs)break;
       results.set(node.id,{key:nodeKey(node),outputs:reply.outputs});
     }
@@ -900,7 +900,7 @@ $('savePreset').onclick=async()=>{
   if(!name){$('presetStatus').textContent='Enter a preset name.';$('presetName').focus();return;}
   try{
     const {name:_,file,editable,...data}=preset;
-    presetList=await postJson('/save-preset',{name,preset:data});
+    presetList=await postJson(API+'/save-preset',{name,preset:data});
     await loadPresets();$('pipelinePreset').value=name;$('deletePreset').hidden=false;
     if(state?.run)localStorage.setItem('room-survey-active-preset-'+state.run,name);
     $('presetStatus').textContent='Saved to presets/user';
@@ -909,7 +909,7 @@ $('savePreset').onclick=async()=>{
 $('deletePreset').onclick=async()=>{
   const name=$('pipelinePreset').value||$('presetName').value.trim();
   if(!name||!confirm('Delete the preset “'+name+'”?'))return;
-  try{await postJson('/delete-preset',{name});await loadPresets();$('presetStatus').textContent='Deleted';$('deletePreset').hidden=true;}
+  try{await postJson(API+'/delete-preset',{name});await loadPresets();$('presetStatus').textContent='Deleted';$('deletePreset').hidden=true;}
   catch(e){$('presetStatus').textContent=e.message;}
 };
 
@@ -917,7 +917,7 @@ $('deletePreset').onclick=async()=>{
 async function renderDeviceSettings(){
   const host=$('deviceForm');
   try{
-    const {params,values}=await fetchJson('/device-settings'),groups=new Map();
+    const {params,values}=await fetchJson(API+'/device-settings'),groups=new Map();
     for(const c of params){if(!groups.has(c.group))groups.set(c.group,[]);groups.get(c.group).push(c);}
     const parts=[];
     for(const [title,controls] of groups){
@@ -934,7 +934,7 @@ async function renderDeviceSettings(){
 }
 $('deviceSetup').ontoggle=()=>{if($('deviceSetup').open)renderDeviceSettings();};
 // The range probe offers the addresses the device settings allow, starting at the configured one.
-fetchJson('/device-settings').then(({params,values})=>{
+fetchJson(API+'/device-settings').then(({params,values})=>{
   const spec=params.find(p=>p.key==='tof_address');
   $('address').replaceChildren(...spec.options.map(([v,t])=>new Option(t,v)));$('address').value=values.tof_address;
 }).catch(()=>{});

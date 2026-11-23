@@ -24,3 +24,4 @@ runner/ground/test_ground_e2e
 runner/ground/esp32/build/
 runner/ground/esp32/sdkconfig
 runner/ground/esp32/sdkconfig.old
+captures/room-surveys/

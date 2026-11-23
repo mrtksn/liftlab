@@ -5,7 +5,7 @@ let recordedTablesRun, recordedTablesRequest;
 function readTables(run){
   if(run!==recordedTablesRun||!recordedTablesRequest){
     recordedTablesRun=run;
-    recordedTablesRequest=fetch('/recording-tables?'+new URLSearchParams({run})).then(async response=>{
+    recordedTablesRequest=fetch(API+'/recording-tables?'+new URLSearchParams({run})).then(async response=>{
       if(!response.ok)throw Error('Could not read the recording tables.');
       return response.json();
     }).catch(error=>{if(run===recordedTablesRun)recordedTablesRequest=null;throw error;});
@@ -17,7 +17,7 @@ function pixelReader(refs,run,index){
   return async ref=>{
     if(!ref||!permitted.has(JSON.stringify([ref.frame,ref.method||''])))throw Error('Choose a frame from a connected image port.');
     const query=new URLSearchParams({run,index,frame:ref.frame,method:ref.method||''});
-    const response=await fetch((ref.method?'/frame-depth.bin?':'/recorded.jpg?')+query);
+    const response=await fetch((ref.method?API+'/frame-depth.bin?':API+'/recorded.jpg?')+query);
     if(!response.ok)throw Error('Frame unavailable: '+ref.frame);
     if(ref.method){
       const buffer=await response.arrayBuffer(),header=new DataView(buffer);

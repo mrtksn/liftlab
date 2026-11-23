@@ -1,8 +1,10 @@
 // All inference runs in this worker on rectified images served by the Mac.
-import * as ort from '/depth-assets/ort.wasm.min.mjs';
+// The companion that serves the model and the recorded images (graph.js passes it).
+const API=new URL(self.location.href).searchParams.get('companion')||self.location.origin;
+const ort=await import(API+'/depth-assets/ort.wasm.min.mjs');
 
 ort.env.wasm.numThreads=1;
-ort.env.wasm.wasmPaths=new URL('/depth-assets/',self.location.origin).href;
+ort.env.wasm.wasmPaths=API+'/depth-assets/';
 const width=392, height=294;
 const input=new OffscreenCanvas(width,height).getContext('2d',{willReadFrequently:true});
 const mean=[.485,.456,.406], std=[.229,.224,.225];
@@ -38,14 +40,14 @@ self.onmessage=async({data})=>{
     const predictions={};
     const cache=await caches.open('room-survey-depth-anything-v2-v1');
     for(const [i,frame] of data.frames.entries()){
-      const url='/depth-input.jpg?'+new URLSearchParams({run:data.run,index:data.index,frame});
+      const url=API+'/depth-input.jpg?'+new URLSearchParams({run:data.run,index:data.index,frame});
       const entry=await cache.match(url);
       let raw;
       if(entry)raw=new Uint8Array(await entry.arrayBuffer());
       if(raw?.length!==96*72){
         if(!session){
           self.postMessage({status:'Loading Depth Anything V2 on this Mac…'});
-          session=await ort.InferenceSession.create('/depth-assets/depth.onnx',{executionProviders:['wasm']});
+          session=await ort.InferenceSession.create(API+'/depth-assets/depth.onnx',{executionProviders:['wasm']});
         }
         self.postMessage({status:'Predicting depth · view '+(i+1)+' of '+data.frames.length});
         raw=await predict(session,url);

@@ -1,5 +1,8 @@
 'use strict';
 const $ = id => document.getElementById(id);
+// Links the browser follows itself: the map download on the companion, and the checkerboard page beside this one.
+$('download').href=API+'/survey.json?download=1';
+$('targetLink').href='target.html'+location.search;
 let state, version = -1, model, active = false, yaw = -.38, pitch = .42, zoom = 1;
 let replayMark=null, orbitPerspective=false;
 let droneView=false, droneZoom=1, droneYaw=0, dronePitch=0;
@@ -700,7 +703,7 @@ canvas.onwheel=e=>{
 };
 new ResizeObserver(draw).observe(canvas);
 async function update() {
-  const s=await (await fetch('/state')).json(); state=s;
+  const s=await (await fetch(API+'/state')).json(); state=s;
   $('connection').textContent=s.connection; $('connection').classList.toggle('live',s.fresh);
   const connected=['Live','Connecting'].includes(s.connection);
   $('connect').textContent=connected?'Disconnect':'Connect camera'; $('connect').disabled=s.recording;
@@ -734,7 +737,7 @@ async function update() {
   if(run!==timelineRun){
     pauseReplay();
     clearGapEvidence();
-    const response=run&&await fetch('/timeline?'+new URLSearchParams({run}));
+    const response=run&&await fetch(API+'/timeline?'+new URLSearchParams({run}));
     timeline=response?.ok?await response.json():[];
     timelineRun=run; displayedFrame=null; cursor=0;
     updateGaps();
@@ -748,12 +751,12 @@ async function update() {
   if(s.fresh&&!replay&&!$('framesStep').dataset.live){$('framesStep').open=true;$('framesStep').dataset.live='1';}
   if(!s.fresh||replay)delete $('framesStep').dataset.live;
   if(s.version!==version) {
-    const m=s.hasMap?await(await fetch('/survey.json')).json():null;
+    const m=s.hasMap?await(await fetch(API+'/survey.json')).json():null;
     resetTracking(); showMap(m); version=s.version;
     if(!m&&run&&lastSourceWalk!==run)restorePipeline(run);
     lastSourceWalk=run;
     refreshReplay();
-    const list=await(await fetch('/runs')).json(), old=$('runs').value;
+    const list=await(await fetch(API+'/runs')).json(), old=$('runs').value;
     $('runs').replaceChildren(...list.map(n=>new Option(n,n)));
     $('runs').value=list.includes(old)?old:(s.run||list[0]||'');
   }
@@ -762,7 +765,7 @@ async function update() {
 async function act(key,body={}) {
   if(active)return; active=true;
   try{
-    const r=await fetch('/'+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r=await fetch(API+'/'+key,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const v=await r.json(); if(!r.ok)throw Error(v.error);
     $('error').textContent=''; await update();
   }catch(e){$('error').textContent=e.message;}finally{active=false;}
@@ -802,7 +805,7 @@ function updateWalkActions(){
 $('runs').onchange=updateWalkActions;
 $('archive').onclick=()=>{
   const link=document.createElement('a');
-  link.href='/walk.zip?'+new URLSearchParams({run:$('runs').value});
+  link.href=API+'/walk.zip?'+new URLSearchParams({run:$('runs').value});
   link.download=$('runs').value+'.zip';
   link.click();
 };
@@ -819,7 +822,7 @@ let previewPending=false;
 preview.onload=preview.onerror=()=>{previewPending=false;};
 setInterval(()=>{
   if(!replay && state?.fresh && !document.hidden && !previewPending) {
-    previewPending=true; preview.src='/preview.jpg?t='+Date.now();
+    previewPending=true; preview.src=API+'/preview.jpg?t='+Date.now();
   }
 },125);
 async function poll(){try{if(!active)await update();}catch(e){$('connection').textContent='Dashboard offline';$('record').disabled=true;$('recordStatus').textContent='Dashboard offline';}finally{setTimeout(poll,450);}}
@@ -831,7 +834,7 @@ async function locate(){
   if(estimating||!state||!model)return;
   estimating=true;const token=generation,source=$('source').value;
   try{
-    const r=await fetch('/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    const r=await fetch(API+'/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       run:state.run,source,frame:parseInt(timeline[cursor]?.id),minimum:+$('minimum').value})});
     const q=await r.json();if(token!==generation)return;
     if(!r.ok||q.version!==version)throw Error(q.error||'Map changed');
@@ -848,7 +851,7 @@ setInterval(()=>{if(tracking&&!document.hidden)locate();},750);
 $('source').onchange=resetTracking;
 // Files of the Gaussian map the viewer shows, including non-default training variants.
 function gaussianUrl(file){
-  return '/gaussian-artifact?'+new URLSearchParams({run:model.run,index:activeGaussian?.index||model.feature_index,variant:activeGaussian?.variant||'',file});
+  return API+'/gaussian-artifact?'+new URLSearchParams({run:model.run,index:activeGaussian?.index||model.feature_index,variant:activeGaussian?.variant||'',file});
 }
 let clearanceReport=null, clearanceKey='';
 const clearanceStates={
@@ -1150,7 +1153,7 @@ function updateAxisGizmo(axes){
     if(svg.children[index]!==group)svg.insertBefore(group,svg.children[index]);
   });
 }
-$('range').onclick=async()=>{try{const r=await fetch('/range',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:Number($('address').value)})});
+$('range').onclick=async()=>{try{const r=await fetch(API+'/range',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:Number($('address').value)})});
 const q=await r.json();$('reading').textContent=r.ok?'Raw reading '+q.raw:q.error;}catch(e){$('reading').textContent=e.message;}};
 $('balloonCut').oninput=()=>{
   const percent=$('balloonCut').value;
@@ -1171,7 +1174,7 @@ function refreshDisplayedPath(){
 }
 function comparisonUrl(method,frame){
   const query=depthQuery();
-  const endpoint=method==='photo'?'/depth-input.jpg?':'/frame-depth.png?';
+  const endpoint=method==='photo'?API+'/depth-input.jpg?':API+'/frame-depth.png?';
   return endpoint+new URLSearchParams({...query,method,frame});
 }
 function refreshComparison(frame){
@@ -1202,7 +1205,7 @@ async function refreshProfile(){
   profileKey=key;profileTick=Date.now();
   const rows=await Promise.all(Array.from($('frameMethod').options).slice(1).map(async opt=>{
     try{
-      const res=await fetch('/frame-depth-status?'+new URLSearchParams({...query,method:opt.value}));
+      const res=await fetch(API+'/frame-depth-status?'+new URLSearchParams({...query,method:opt.value}));
       const data=await res.json(), t=data.timing||data.benchmark;
       return {name:opt.text,t,kind:data.timing?'Build':'Benchmark'};
     }catch{return {name:opt.text};}
@@ -1272,7 +1275,7 @@ async function pollFrameDepth(){
   if(!query.index||(frameDepthStatus.total===timeline.length&&frameDepthStatus.saved===timeline.length)||Date.now()-depthPollTime<2500)return;
   depthPollTime=Date.now();
   try{
-    const res=await fetch('/frame-depth-status?'+new URLSearchParams({...query,method:query.method==='photo'?'all':query.method}));
+    const res=await fetch(API+'/frame-depth-status?'+new URLSearchParams({...query,method:query.method==='photo'?'all':query.method}));
     if(!res.ok)return;
     const next=await res.json();
     if(key!==depthStatusKey)return;
@@ -1342,7 +1345,7 @@ function refreshReplay(){
     $('replayImage').style.visibility='hidden';
     $('depthMissing').hidden=true;
     if((query.method==='photo'&&!compare)||query.index){
-      $('replayImage').src=compare?comparisonUrl(query.method,frame.id):(query.method==='photo'?'/recorded.jpg?':'/frame-depth.png?')+new URLSearchParams({...query,frame:frame.id});
+      $('replayImage').src=compare?comparisonUrl(query.method,frame.id):(query.method==='photo'?API+'/recorded.jpg?':API+'/frame-depth.png?')+new URLSearchParams({...query,frame:frame.id});
     }else{
       $('replayImage').removeAttribute('src');
       $('depthMissing').hidden=false;
@@ -1434,7 +1437,7 @@ $('inspectGap').onclick=async()=>{
   const token=++gapRequest, frame=parseInt(timeline[cursor].id);
   const output=$('gapEvidence');output.hidden=false;output.textContent='Checking this frame against the saved map…';
   try{
-    const response=await fetch('/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    const response=await fetch(API+'/locate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       run:state.run,source:'replay',frame,minimum:12})});
     const data=await response.json();
     if(!response.ok)throw Error(data.error);
