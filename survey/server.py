@@ -958,7 +958,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--pi", default=None, help="Override the Pi SSH destination from the device settings")
     ap.add_argument("--port", type=int, default=8779)
-    ap.add_argument("--output", type=Path, default=HERE/"captures"/"room-surveys")
+    ap.add_argument("--output", type=Path, default=HERE.parent/"captures"/"room-surveys",
+                    help="Walks and settings; LiftLab's captures/room-surveys by default")
     config = ap.parse_args()
     sfm.logging.minloglevel = 2
     survey = Survey(config.output,config.pi)

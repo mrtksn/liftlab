@@ -1,9 +1,9 @@
 #!/bin/zsh
 set -eu
 cd "${0:A:h}"
-python_bin=.venv/bin/python
+python_bin=../.venv/bin/python   # LiftLab's environment at the repository root
 if [[ ! -x "$python_bin" ]]; then
-  python3 -m venv .venv
+  python3 -m venv ../.venv
 fi
 if ! "$python_bin" -c 'import cv2, pycolmap, numba, skimage, fast_simplification' >/dev/null 2>&1; then
   "$python_bin" -m pip install -r requirements.txt

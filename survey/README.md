@@ -1,6 +1,6 @@
 # Handheld room survey
 
-Open **Room Survey.command** on the Mac, then **Connect camera**. The local dashboard uses SSH to run the camera sender on the Pi. The default host is `pi@192.168.2.127`; the Pi needs Picamera2 and its hardware MJPEG encoder. A cold start on the original Zero can take a minute. The Pi stamps and compresses 640 × 480 frames at a target of 8 fps. The Mac saves the received JPEGs and camera-relative microsecond timestamps under `captures/room-surveys/<walk>/`. A network interruption ends the recording and schedules a final reconstruction of the received frames.
+Open **Room Survey.command** on the Mac, then **Connect camera**. The local dashboard uses SSH to run the camera sender on the Pi. The default host is `pi@192.168.2.127`; the Pi needs Picamera2 and its hardware MJPEG encoder. A cold start on the original Zero can take a minute. The Pi stamps and compresses 640 × 480 frames at a target of 8 fps. The Mac saves the received JPEGs and camera-relative microsecond timestamps under LiftLab's `captures/room-surveys/<walk>/` (the repository root's `captures/`, not inside `survey/`). A network interruption ends the recording and schedules a final reconstruction of the received frames.
 
 The Pi rotates the image 180° before JPEG encoding to compensate for the inverted camera mount. Preview, calibration and new recordings share that orientation.
 
@@ -62,18 +62,19 @@ With the survey-enabled Linux companion running, the Mac saves the ESP32 attitud
 
 ## Terminal launch and regression
 
-From the repository root:
+From LiftLab's repository root, which holds the Python environment and `captures/`:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python server.py --pi pi@192.168.2.127
-.venv/bin/python -m unittest discover
+.venv/bin/python -m pip install -r survey/requirements.txt
+cd survey
+../.venv/bin/python server.py --pi pi@192.168.2.127
+../.venv/bin/python -m unittest discover
 ```
 
-The dashboard binds to loopback on port 8779. SSH authentication must already work without an interactive password prompt. Camera diagnostics are in `captures/room-surveys/camera.log`. **Disconnect** releases the camera.
+The dashboard binds to loopback on port 8779. SSH authentication must already work without an interactive password prompt. Camera diagnostics are in `../captures/room-surveys/camera.log`. **Disconnect** releases the camera.
 
-To compare the same recorded frames on the two computers, run `.venv/bin/python track_bench.py captures/room-surveys/<walk>`. This streams the first 48 downsampled grayscale frames to a temporary NumPy process over SSH. It measures the compute time of spatially distributed 7 × 7 patch matches at 160 × 120. Capture, decoding, transport, pose estimation and reconstruction are outside this timing measurement. Compare the patch counts and the 95th-percentile time with the camera interval.
+To compare the same recorded frames on the two computers, run `../.venv/bin/python track_bench.py ../captures/room-surveys/<walk>` from `survey/`. This streams the first 48 downsampled grayscale frames to a temporary NumPy process over SSH. It measures the compute time of spatially distributed 7 × 7 patch matches at 160 × 120. Capture, decoding, transport, pose estimation and reconstruction are outside this timing measurement. Compare the patch counts and the 95th-percentile time with the camera interval.
 
 ## Second handheld pass
 
@@ -83,9 +84,9 @@ The HCJ six-pin TOF250 probe uses the Pi Zero header I²C bus 1, with SDA on phy
 
 ## LiftLab integration
 
-The standalone dashboard and camera stream use SSH. The optional Pi flight telemetry tap is provided as `liftlab/telemetry-tap.patch`, extracted from drone-force-bench at commit `c57ff1ff0043d39b8ffc9d9facace10dd548561a`. Apply it to a compatible LiftLab checkout to build the companion with the survey telemetry output. The existing LiftLab room survey viewer is included in `liftlab/room-survey.js` as an integration reference.
+The standalone dashboard and camera stream use SSH. The optional Pi flight telemetry tap is `liftlab/telemetry-tap.patch`, a change to LiftLab's `runner/pi/dfb_pi.c`; `liftlab/room-survey.js` is the World view's survey overlay. Both move into LiftLab proper as the survey joins the page.
 
-Pass `--output /path/to/captures/room-surveys` to open an existing capture directory. Captures are local and excluded from Git.
+Pass `--output /path/to/room-surveys` to open another capture directory. Captures are local and excluded from Git.
 
 ## Surface growth
 
