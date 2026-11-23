@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 import tempfile
 
-from fusion import STREAMS, gravity_alignment, estimate_scale, range_ratio, load_observations, sensor_pairs
+from fusion import (STREAMS, gravity_alignment, estimate_scale, levelling_rotation, range_ratio,
+                    load_observations, sensor_pairs, up_alignment)
 from localize import save_index
 from recover import align_gap, recover_poses
 import cv2
@@ -138,10 +139,19 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
                                   [observations[im.name]["q"] for im in paired],
                                   [int(im.name[:-4]) for im in paired] if paired and all(im.name[:-4].isdigit() for im in paired) else None)
     level_rotation,level_status = startup_rotation(run,images)
+    up_fit = None
     if level_rotation is not None:
         rotation = level_rotation
     elif alignment is not None:
         rotation = alignment
+    else:
+        # Handheld walks rarely turn about two axes. Level the first-camera
+        # frame from IMU up vectors instead, keeping its heading along +Y.
+        levelled = [im for im in images if "up" in observations.get(im.name,{})]
+        up_fit = up_alignment([im.cam_from_world().rotation.matrix().T for im in levelled],
+                              [observations[im.name]["up"] for im in levelled])
+        if up_fit is not None:
+            rotation = levelling_rotation(rotation @ up_fit.pop("up")) @ rotation
     origin = first.projection_center()
     def xyz(p):
         return (rotation @ (p - origin)).round(6).tolist()
@@ -175,7 +185,7 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
             point[:3] = (np.asarray(point[:3])*factor).round(7).tolist()
         for pose in poses:
             pose["xyz"] = (np.asarray(pose["xyz"])*factor).round(7).tolist()
-    return dict(landmark_views=views, format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=alignment is not None and level_rotation is None, level_status=level_status, feature_index=index, poses=poses, registered_views=len(images),
+    return dict(landmark_views=views, format="liftlab-room-survey-v1", units="m" if scale else "relative", tof_scale=scale, gravity_aligned=(alignment is not None or up_fit is not None) and level_rotation is None, up_fit=up_fit, level_status=level_status, feature_index=index, poses=poses, registered_views=len(images),
         path_frames=recovery_frames or names,
         points=points, views=len(names), sampled_frames=names,
         mean_error_px=round(model.compute_mean_reprojection_error(), 3),

@@ -123,7 +123,7 @@ def build_planes(model, span, observations=None, *, relative_fit=False):
 
 def indoor_constraints(model, mesh, observations):
     """Use room directions and synchronized measurements only where they agree with the cloud."""
-    from fusion import gravity_alignment
+    from fusion import gravity_alignment, up_alignment
 
     faces = mesh["patches"]
     if not faces:
@@ -141,6 +141,12 @@ def indoor_constraints(model, mesh, observations):
                                   [int(p['frame'].split('.')[0]) for p in motion])
         if align is not None:
             up, source = align[2], "inertial gravity"
+    if up is None:
+        levelled = [p for p in poses if 'rotation' in p and 'up' in observations.get(p['frame'],{})]
+        fit = up_alignment([np.asarray(p['rotation']) for p in levelled],
+                           [observations[p['frame']]['up'] for p in levelled])
+        if fit is not None:
+            up, source = fit["up"], "inertial up fit"
 
     normals = np.asarray([f["normal"] for f in faces])
     weights = np.array([len(f["landmarks"]) for f in faces])

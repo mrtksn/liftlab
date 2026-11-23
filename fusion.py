@@ -64,13 +64,16 @@ def load_observations(run, streams=STREAMS):
             q = np.array([float(r[v]) for v in ("qw","qx","qy","qz")])
             if abs(np.linalg.norm(q)-1) < .02:
                 obs.update(q=q / np.linalg.norm(q), q_segment=0)
+                obs["up"] = body_up(obs["q"])
         elif gyro is not None and gyro[k] is not None:
+            # Gyro-only attitude is relative to its segment start: no up direction.
             obs["q"], obs["q_segment"] = gyro[k]
         elif "accel" in streams:
             a = np.array([float(r[v]) for v in ("ax_m_s2","ay_m_s2","az_m_s2")])
             norm = np.linalg.norm(a)
             if abs(norm-9.81) < .5:
-                obs["accel_direction"] = a / norm
+                # Near 1 g the specific force points away from the ground.
+                obs["accel_direction"] = obs["up"] = a / norm
         if "barometer" in streams and float(r["height_valid"]) and np.isfinite(float(r["height_m"])):
             obs["height"] = float(r["height_m"])
     return data
@@ -192,3 +195,110 @@ def gravity_alignment(rotations, quaternions, frames=None):
     if np.percentile(errors,80) > .08:
         return None
     return alignment
+
+
+def body_up(q):
+    """Up in the IMU body frame from a body-to-world quaternion (w, x, y, z) with world Z up."""
+    w, x, y, z = q
+    return np.array([2*(x*z-w*y), 2*(y*z+w*x), w*w-x*x-y*y+z*z])
+
+
+def _sphere(n):
+    i = np.arange(n)+.5
+    polar, azimuth = np.arccos(1-2*i/n), np.pi*(1+5**.5)*i
+    return np.c_[np.cos(azimuth)*np.sin(polar), np.sin(azimuth)*np.sin(polar), np.cos(polar)]
+
+
+def _rings(up, step=.5, widest=30, around=24):
+    """Directions on rings at step-degree intervals around up."""
+    a = np.cross(up, [1, 0, 0] if abs(up[0]) < .9 else [0, 1, 0])
+    a /= np.linalg.norm(a)
+    b = np.cross(up, a)
+    tilt = np.radians(np.arange(step, widest+step, step))[:, None]
+    turn = np.linspace(0, 2*np.pi, around, endpoint=False)[None, :]
+    side = np.cos(turn)[..., None]*a + np.sin(turn)[..., None]*b
+    return (np.cos(tilt)[..., None]*up + np.sin(tilt)[..., None]*side).reshape(-1, 3)
+
+
+def _kabsch(h):
+    u, _, vt = np.linalg.svd(h)
+    return u @ np.diag([1, 1, np.sign(np.linalg.det(u @ vt))]) @ vt
+
+
+def _scores(rotations, ups, directions):
+    h = np.einsum("abc,nc->nab", np.einsum("ia,icb->abc", ups, rotations), directions)
+    u, s, vt = np.linalg.svd(h)
+    return s[:, 0]+s[:, 1]+np.sign(np.linalg.det(u @ vt))*s[:, 2], h
+
+
+def _fit_up(rotations, ups, grid):
+    """Visual up u and camera-to-body mount M maximising sum(ups_i . M R_i^T u).
+
+    For each candidate u the best mount is a Kabsch fit, so its score is
+    linear algebra on H(u) = sum ups_i (R_i^T u)^T. A sphere search avoids
+    local optima; alternating updates refine the best candidate.
+    """
+    scores, h = _scores(rotations, ups, grid)
+    up = grid[scores.argmax()]
+    mount = _kabsch(h[scores.argmax()])
+    for _ in range(50):
+        up = np.einsum("icb,ab,ia->c", rotations, mount, ups)
+        up /= np.linalg.norm(up)
+        mount = _kabsch(np.einsum("ia,icb,c->ab", ups, rotations, up))
+    return up, mount, scores
+
+
+def _errors_deg(rotations, ups, up, mount):
+    predicted = np.einsum("ab,icb,c->ia", mount, rotations, up)
+    return np.degrees(np.arccos(np.clip(np.sum(predicted*ups, axis=1), -1, 1)))
+
+
+def up_alignment(rotations, ups):
+    """Up direction of the visual world from IMU up vectors.
+
+    rotations are world_from_camera for views with an up vector measured in
+    the IMU body frame (attitude tilt or near-1 g specific force). The
+    camera-to-IMU mount is unknown and fitted per walk, so a remounted board
+    needs no setting. Unlike gravity_alignment this needs no turns about a
+    second axis: handheld walks turn mostly about the vertical and tilt a
+    little, and both constrain up. Reject fits that withheld views
+    contradict, or whose up direction the data does not pin down.
+    """
+    rotations, ups = np.asarray(rotations, float), np.asarray(ups, float)
+    if len(rotations) < 12:
+        return None
+    grid = _sphere(6000)
+    up, mount, scores = _fit_up(rotations, ups, grid)
+    errors = _errors_deg(rotations, ups, up, mount)
+    best = float(np.sum(np.einsum("ab,icb,c->ia", mount, rotations, up)*ups))
+    # Chi-square style: how far up can move before the fit is clearly worse.
+    # The coarse sphere catches a distant second solution, the rings the local spread.
+    noise = max(np.radians(1), np.sqrt(np.mean(np.radians(errors)**2)))**2
+    directions = np.r_[grid, _rings(up)]
+    scores = np.r_[scores, _scores(rotations, ups, directions[len(grid):])[0]]
+    plausible = 2*(best-scores)/noise < 9
+    angles = np.degrees(np.arccos(np.clip(directions @ up, -1, 1)))
+    uncertainty = float(max(.5, angles[plausible].max() if plausible.any() else 0))
+    test = np.arange(len(rotations)) % 3 == 0
+    train_up, train_mount, _ = _fit_up(rotations[~test], ups[~test], grid)
+    holdout = float(np.percentile(_errors_deg(rotations[test], ups[test], train_up, train_mount), 80))
+    if uncertainty > 10 or holdout > 6:
+        return None
+    camera_up = mount.T @ ups.mean(axis=0)
+    camera_up /= np.linalg.norm(camera_up)
+    return dict(up=up, views=len(rotations), uncertainty_deg=round(uncertainty, 1),
+                holdout_p80_deg=round(holdout, 2), fit_median_deg=round(float(np.median(errors)), 2),
+                # Camera axes: x right, y down, z forward. Positive pitch looks down.
+                camera_pitch_down_deg=round(float(np.degrees(np.arcsin(-camera_up[2]))), 1))
+
+
+def levelling_rotation(up):
+    """Smallest rotation taking the unit vector up onto +Z, so the heading barely changes."""
+    import cv2
+
+    up = np.asarray(up, float)/np.linalg.norm(up)
+    axis = np.cross(up, [0, 0, 1])
+    sine = np.linalg.norm(axis)
+    if sine < 1e-9:
+        return np.eye(3) if up[2] > 0 else np.diag([1., -1., -1.])
+    return cv2.Rodrigues(axis/sine*np.arctan2(sine, up[2]))[0]

@@ -781,7 +781,7 @@ function showMap(m) {
   $('residual').textContent=m ? m.mean_error_px+' px' : '—';
   $('units').textContent=m?.units==='m'?(m.reference?'Measured baseline · m':m.tof_scale?'ToF scale estimate · m':'Measured scale · m'):'Relative scale';
   if(m?.level_status)$('units').textContent+=' · '+m.level_status;
-  if(m?.gravity_aligned) $('units').textContent+=' · IMU aligned';
+  if(m?.gravity_aligned) $('units').textContent+=m.up_fit?' · IMU levelled ±'+m.up_fit.uncertainty_deg+'°':' · IMU aligned';
   if(!sameMap)fitMapView();
   if(m && !sameMap && m.run!==pipelineRebuildingRun)restorePipeline(m.run);
   else if(pipelineSettings){
