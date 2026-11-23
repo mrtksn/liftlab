@@ -223,7 +223,14 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('walk',type=Path)
     parser.add_argument('--output',type=Path)
+    parser.add_argument('--min-gap-s',type=float,default=MIN_GAP_S,help='shortest unregistered stretch to check')
+    parser.add_argument('--max-anchors',type=int,default=MAX_ANCHORS,help='registered poses used on each side of a gap')
+    parser.add_argument('--min-anchors',type=int,default=MIN_ANCHORS,help='fewest registered poses to fit an alignment')
+    parser.add_argument('--max-position-m',type=float,default=MAX_POSITION_M,help='median position error that passes')
+    parser.add_argument('--max-angle-deg',type=float,default=MAX_ANGLE_DEG,help='median attitude error that passes')
     args=parser.parse_args()
+    MIN_GAP_S,MAX_ANCHORS,MIN_ANCHORS=args.min_gap_s,args.max_anchors,args.min_anchors
+    MAX_POSITION_M,MAX_ANGLE_DEG=args.max_position_m,args.max_angle_deg
     data=json.dumps(experiment(args.walk),indent=2,allow_nan=False)
     if args.output:
         args.output.write_text(data+'\n')

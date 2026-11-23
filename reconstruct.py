@@ -92,7 +92,7 @@ def build(run, names, report, *, recover=False, index=True, streams=STREAMS, par
             report("Recovering skipped camera poses against mapped landmarks")
         result = export_model(run, model, names, calibrated, observations, recovery_frames, indexed=index,
                               gravity="gyro" in streams and "accel" in streams,
-                              up_limit=params["up_max_uncertainty_deg"])
+                              params=params)
         result["streams"] = list(streams)
         result["params"] = params
         return result
@@ -133,7 +133,8 @@ def startup_rotation(run, images):
     return camera_level @ first, 'Level start'
 
 
-def export_model(run, model, names, calibrated, observations, recovery_frames=(), *, indexed=True, gravity=True, up_limit=10):
+def export_model(run, model, names, calibrated, observations, recovery_frames=(), *, indexed=True, gravity=True, params=None):
+    params = validate(CAMERA_MAP_PARAMS, params)
     images = sorted((model.image(i) for i in model.reg_image_ids()), key=lambda im: im.name)
     if len(images) < 3 or not model.num_points3D():
         raise ValueError("Too few registered views for a room survey.")
@@ -156,7 +157,8 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
         # frame from IMU up vectors instead, keeping its heading along +Y.
         levelled = [im for im in images if "up" in observations.get(im.name,{})]
         up_fit = up_alignment([im.cam_from_world().rotation.matrix().T for im in levelled],
-                              [observations[im.name]["up"] for im in levelled], max_uncertainty=up_limit)
+                              [observations[im.name]["up"] for im in levelled],
+                              max_uncertainty=params["up_max_uncertainty_deg"], max_holdout=params["up_max_holdout_deg"])
         if up_fit is not None:
             rotation = levelling_rotation(rotation @ up_fit.pop("up")) @ rotation
     origin = first.projection_center()
@@ -183,9 +185,14 @@ def export_model(run, model, names, calibrated, observations, recovery_frames=()
                           rotation=camera_rotation.round(7).tolist(),
                           forward=camera_rotation[:, 2].round(7).tolist()))
     if recovery_frames:
-        poses.extend(recover_poses(run, model, images, recovery_frames, xyz, rotation, observed))
+        poses.extend(recover_poses(run, model, images, recovery_frames, xyz, rotation, observed, limits=dict(
+            max_frames=params["recover_max_frames"], min_inliers=params["recover_min_inliers"],
+            min_ratio=params["recover_min_inlier_ratio"], min_spread=params["recover_min_spread_px"],
+            max_error=params["recover_max_error_px"], max_jump=params["recover_max_jump"])))
         poses.sort(key=lambda pose: pose["frame"])
-    scale = estimate_scale(model, images, observations, extra_ratios)
+    scale = estimate_scale(model, images, observations, extra_ratios, checks=dict(
+        min_views=params["scale_min_views"], min_spread=params["scale_min_spread_m"],
+        max_error=params["scale_max_error_pct"]/100))
     if scale:
         factor = scale["metres_per_unit"]
         for point in points:
@@ -202,9 +209,10 @@ def recover_gaps(run, model, report):
     frames = model["path_frames"]
     order = {name: i for i, name in enumerate(frames)}
     poses = [order[p["frame"]] for p in model["poses"]]
-    gaps = [(a,b) for a,b in zip(poses, poses[1:]) if 20 <= b-a <= 200]
+    settings = validate(CAMERA_MAP_PARAMS, model.get("params"))
+    gaps = [(a,b) for a,b in zip(poses, poses[1:]) if settings["gap_min_frames"] <= b-a <= settings["gap_max_frames"]]
     # Keep the final solve bounded and require context on both sides.
-    for left, right in sorted(gaps, key=lambda gap: gap[1]-gap[0], reverse=True)[:3]:
+    for left, right in sorted(gaps, key=lambda gap: gap[1]-gap[0], reverse=True)[:settings["gap_max_repairs"]]:
         first, last = max(0,left-40), min(len(frames),right+26)
         names = sorted(set(frames[first:last:2] +
                            frames[max(first,left-20):left+8] +

@@ -14,18 +14,9 @@
 
 let catalog={operators:[],types:{},compatible:{},depth_methods:[]};
 const operatorsById=new Map();
-const clientOperators=[
-  {id:'code',label:'Code transform',group:'Code',runner:'code',inputs:[],outputs:[],params:[],
-    description:'JavaScript over typed inputs. Its ports, output type and controls are part of the node.'},
-  {id:'splat-fit',label:'Fit splats to points',group:'Gaussians',runner:'browser',params:[],
-    inputs:[{name:'points',types:['Colored points','Registered depth points']}],outputs:[{name:'splats',types:['Point-fitted splats']}],
-    description:'Gaussian splats sized from the local point spacing, in this browser.'},
-  {id:'viewer',label:'Viewer',group:'Display',runner:'viewer',inputs:[],outputs:[],params:[],
-    description:'Draws its connected outputs. Edit its code to compose plot layers.'}
-];
 const catalogReady=fetch('/operators').then(r=>r.json()).then(c=>{
   catalog=c;
-  for(const op of [...c.operators,...clientOperators])operatorsById.set(op.id,op);
+  for(const op of c.operators)operatorsById.set(op.id,op);
   const frames=[['photo','Recorded photo'],...c.depth_methods.map(m=>[m.id,m.label])];
   for(const id of ['frameMethod','rightSource'])
     $(id).replaceChildren(...frames.filter(([v])=>id!=='rightSource'||v!=='photo').map(([v,t])=>new Option(t,v)));
@@ -104,6 +95,10 @@ function controlInput(c,value,onChange){
     input.value=value;input.onchange=()=>onChange(input.value);
   }else if(c.kind==='bool'){
     input=document.createElement('input');input.type='checkbox';input.checked=!!value;input.onchange=()=>onChange(input.checked);
+  }else if(c.kind==='text'){
+    input=document.createElement('input');input.type='text';input.value=value??'';input.required=true;input.style.width='14em';
+    if(c.pattern)input.pattern=c.pattern;
+    input.onchange=()=>{if(input.reportValidity())onChange(input.value);};
   }else if(c.kind==='button'){
     input=document.createElement('button');input.type='button';input.textContent=c.button||'Run';input.onclick=()=>onChange();
   }else{
@@ -246,7 +241,7 @@ function addNode(opId){
   if(op.id==='viewer'){node.inputs=outputPorts(parent).map(p=>({node:parent.id,port:p.name}));}
   else if(op.id==='code'){
     const first=outputPorts(parent)[0];
-    node.ports=first?[{name:'input',type:first.types[0]}]:[];node.output=first?.types[0]||'JSON records';
+    node.ports=first?[{name:'input',type:first.types[0]}]:[];node.output=first?.types[0]||op.default_type;
     if(first)node.inputs.input={node:parent.id,port:first.name};
     node.program='return input;';
   }else for(const p of op.inputs){const link=nearestOutput(p.types,parent);if(link)node.inputs[p.name]=link;}
@@ -362,7 +357,7 @@ function renderWiring(node){
     add.onclick=()=>{
       const name=prompt('Input name (letters, digits, underscore)');
       if(!name||!/^[a-zA-Z_]\w*$/.test(name)||node.ports.some(p=>p.name===name))return;
-      const type=prompt('Type, one of:\n'+Object.keys(catalog.types).join('\n'),'JSON records');
+      const type=prompt('Type, one of:\n'+Object.keys(catalog.types).join('\n'),opOf(node).default_type);
       if(!type||!catalog.types[type])return;
       remember();node.ports.push({name,type});edited();inspectNode(node);
     };
@@ -409,7 +404,7 @@ function renderCode(node){
   if(!code&&!viewer)lines.push('await runNative(settings) → the operator\'s '+(outputPorts(node)[0]?.types[0]||'output'));
   if(inputPorts(node).some(p=>p.types.some(isImageType)))lines.push('await readFrame(ref) → {width, height, pixels, format}');
   if(viewer)lines.push('plot.points(rows) · plot.line(vertices) · plot.splats(values) · plot.polygons(faces) · plot.replayFrame(port) · plot.compareFrames(a, b) · plot.layer(port)');
-  for(const p of outputPorts(node))lines.push('return → '+p.types[0]+': '+(catalog.types[p.types[0]]||''));
+  for(const p of outputPorts(node))lines.push('return → '+p.types[0]+': '+(catalog.types[p.types[0]]?.description||''));
   $('codeSchema').textContent=lines.join('\n');
 }
 const nativeProgram=`const output = await runNative(settings);
@@ -610,12 +605,10 @@ function materialize(output,type){
 }
 async function load(output,type){
   if('data' in output)return output.data;
-  if(type==='Camera map'){
-    const m=model?.feature_index===output.index?model:await fetchJson(output.url);
+  if(displayOf(type)==='map'){
+    const m=output.index&&model?.feature_index===output.index?model:await fetchJson(output.url);
     return {poses:m.poses,points:m.points,units:m.units};
   }
-  if(type==='Recording tables')return readTables(state.run);
-  if(type==='Telemetry')return timelineRun===state.run?timeline:fetchJson(output.url);
   if(output.format==='splat-ply'){const g=new GaussianView();g.load(await fetchBuffer(output.url),false);return g.attributes.subarray(0,g.order.length*16);}
   if(output.format==='mesh-ply'){
     const m=new GaussianMeshView();m.load(await fetchBuffer(output.url));
@@ -627,24 +620,24 @@ async function load(output,type){
 async function layerFor(output,type){
   if(output.format==='splat-ply'){const splats=new GaussianView();splats.load(await fetchBuffer(output.url),false);return {splats};}
   if(output.format==='mesh-ply'){const solid=new GaussianMeshView();solid.load(await fetchBuffer(output.url));return {solid};}
-  const value=await materialize(output,type);
-  if(type==='Camera map')return {points:value.points,poses:value.poses};
-  if(type==='Camera path')return {line:value.map(p=>p.xyz),poses:value};
-  if(accepts(['Colored points'],type))return {points:value};
-  if(type==='Triangle list')return {mesh:{patches:value.map(vertices=>({vertices,landmarks:[]})),retired:[]}};
-  if(type==='Polygon mesh'){
+  const value=await materialize(output,type),kind=displayOf(type);
+  if(kind==='map')return {points:value.points,poses:value.poses};
+  if(kind==='path')return {line:value.map(p=>p.xyz),poses:value};
+  if(kind==='points')return {points:value};
+  if(kind==='triangles')return {mesh:{patches:value.map(vertices=>({vertices,landmarks:[]})),retired:[]}};
+  if(kind==='polygons'){
     const summary=output.summary||{};
     return {mesh:{...summary,patches:value.map(p=>({...p,landmarks:p.landmarks||[]})),retired:summary.retired||[]},
       cut:summary.heightRange?Number($('balloonCut').value):null};
   }
-  if(accepts(['Point-fitted splats'],type)&&value.length){const splats=new GaussianView();splats.loadAttributes(value);return {splats};}
+  if(kind==='splats'&&value.length){const splats=new GaussianView();splats.loadAttributes(value);return {splats};}
   return null;
 }
 function viewerProgram(node){
   return ['const layers = [];',...node.inputs.map((l,i)=>'layers.push(plot.layer(input['+i+'])); // '+nodeLabel(nodeById(l.node))+' · '+outputType(l)),'return layers;'].join('\n');
 }
 async function viewerScene(node,program,onLog){
-  const bindings=node.inputs.filter(l=>nodeById(l.node)&&nodeById(l.node).enabled!==false).map(l=>({...l,type:outputType(l)}));
+  const bindings=node.inputs.filter(l=>nodeById(l.node)&&nodeById(l.node).enabled!==false).map(l=>({...l,type:outputType(l),isFrame:isImageType(outputType(l))}));
   if(!program)return {bindings,geometry:[],replayViews:[]};
   const inputs=Object.create(null),refs=[];
   for(const b of bindings){
@@ -680,7 +673,7 @@ async function showScene(node,built){
     const type=b.type||outputType(b),output=results.get(b.node)?.outputs?.[b.port];
     if(!output)continue;
     if(isTableType(type)||isImageType(type)){feeds.push({...b,type,output});continue;}
-    panels.push({type,output,node:nodeById(b.node)});
+    panels.push({type,panel:catalog.types[type]?.panel,output,node:nodeById(b.node)});
     try{const layer=await layerFor(output,type);if(layer)layers.push({...layer,type,source:b.node});}
     catch(e){feeds.push({...b,type,error:e.message});}
   }
@@ -708,18 +701,19 @@ function viewBindings(){return [...scene.layers.filter(l=>l.type!=='Plot').map(l
 
 // Output panels by data type ---------------------------------------------------------------------
 let activeGaussian=null;
+// Tools shown beside an output, named by its type's `panel` in the catalogue.
 const typePanels={
-  'Trained Gaussian map':{element:'gaussianPanel',show:({output})=>{activeGaussian=output;loadGaussianReport();}},
-  'Clearance map':{element:'clearancePanel',show:({output})=>{activeGaussian=output;refreshClearance();}},
-  'LingBot trajectory and points':{element:'lingbotPanel',show:({output})=>showLingbot(output)},
-  'Polygon mesh':{element:'balloonCutControl',show:({output})=>{$('balloonCutControl').hidden=!output.summary?.heightRange;}},
+  gaussian:{element:'gaussianPanel',show:({output})=>{activeGaussian=output;loadGaussianReport();}},
+  clearance:{element:'clearancePanel',show:({output})=>{activeGaussian=output;refreshClearance();}},
+  lingbot:{element:'lingbotPanel',show:({output})=>showLingbot(output)},
+  mesh:{element:'balloonCutControl',show:({output})=>{$('balloonCutControl').hidden=!output.summary?.heightRange;}},
 };
 function showTypePanels(panels){
   activeGaussian=null;
-  for(const [type,p] of Object.entries(typePanels))$(p.element).hidden=!panels.some(x=>x.type===type);
-  $('typePanels').hidden=!panels.some(x=>typePanels[x.type]);
-  for(const panel of panels)typePanels[panel.type]?.show(panel);
-  if(!panels.some(p=>p.type==='LingBot trajectory and points'))showLingbot(null);
+  for(const [name,p] of Object.entries(typePanels))$(p.element).hidden=!panels.some(x=>x.panel===name);
+  $('typePanels').hidden=!panels.some(x=>typePanels[x.panel]);
+  for(const panel of panels)typePanels[panel.panel]?.show(panel);
+  if(!panels.some(p=>p.panel==='lingbot'))showLingbot(null);
   refreshTofEvidence();
 }
 async function loadGaussianReport(){
@@ -807,7 +801,8 @@ function showValue(body,value,type,output={}){
     title.textContent='Plot point coordinates';box.append(title,host);body.append(box);
     box.ontoggle=()=>{if(box.open&&!host.childElementCount)recordDisplay(host,Array.from(points,([x,y,z,red,green,blue])=>({x,y,z,red,green,blue})),{mode:'scatter',x:'x',y:'y'});};
   };
-  if(type==='Pixel frames'){displayPixels(body,value);return;}
+  const kind=displayOf(type);
+  if(kind==='pixels'){displayPixels(body,value);return;}
   if(isTableType(type)){recordDisplay(body,value);return;}
   if(isImageType(type)){
     const ref=value.find(r=>r.frame===timeline[cursor]?.id)||value[0];
@@ -829,15 +824,15 @@ function showValue(body,value,type,output={}){
     }
     return;
   }
-  if(type==='Camera map'){rows('Pose',value.poses.length,i=>value.poses[i]);rows('Landmark',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));plot(value.points);return;}
+  if(kind==='map'){rows('Pose',value.poses.length,i=>value.poses[i]);rows('Landmark',value.points.length,i=>({xyz:value.points[i].slice(0,3),rgb:value.points[i].slice(3)}));plot(value.points);return;}
   if(value instanceof Float32Array){
     rows('Splat',value.length/16,i=>{const f=(o,n)=>Array.from(value.subarray(16*i+o,16*i+o+n));return {center:f(0,3),opacity:f(3,1)[0],rgb:f(4,3),radii:f(8,3),rotation_wxyz:f(12,4)};});
     if(output.url){const a=document.createElement('a');a.href=output.url;a.textContent='Download PLY';a.download='';body.append(a);}
     return;
   }
   if(Array.isArray(value)){
-    rows(accepts(['Colored points'],type)?'Point':type==='Polygon mesh'?'Face':'Record',value.length,i=>value[i]);
-    if(accepts(['Colored points'],type))plot(value);
+    rows({points:'Point',polygons:'Face',triangles:'Triangle',path:'Pose'}[kind]||'Record',value.length,i=>value[i]);
+    if(kind==='points')plot(value);
     if(output.summary)text(JSON.stringify(output.summary,null,2));
     return;
   }
@@ -917,5 +912,31 @@ $('deletePreset').onclick=async()=>{
   try{await postJson('/delete-preset',{name});await loadPresets();$('presetStatus').textContent='Deleted';$('deletePreset').hidden=true;}
   catch(e){$('presetStatus').textContent=e.message;}
 };
+
+// Device and recording settings: how this Mac drives the camera, sensors and live map.
+async function renderDeviceSettings(){
+  const host=$('deviceForm');
+  try{
+    const {params,values}=await fetchJson('/device-settings'),groups=new Map();
+    for(const c of params){if(!groups.has(c.group))groups.set(c.group,[]);groups.get(c.group).push(c);}
+    const parts=[];
+    for(const [title,controls] of groups){
+      const heading=document.createElement('strong'),grid=document.createElement('div');
+      heading.textContent=title;grid.className='settings-grid';
+      for(const c of controls)grid.append(settingRow(c,values,controlInput(c,values[c.key],v=>{values[c.key]=c.kind==='choice'&&typeof c.default==='number'?Number(v):v;}),c.help?'':''));
+      parts.push(heading,grid);
+    }
+    const bar=document.createElement('div'),save=document.createElement('button');
+    bar.className='controls';save.type='button';save.textContent='Save device settings';
+    save.onclick=async()=>{await act('device-settings',{values});if(!$('error').textContent)renderDeviceSettings();};
+    bar.append(save);host.replaceChildren(...parts,bar);host.className='node-settings';
+  }catch(e){host.textContent=e.message;}
+}
+$('deviceSetup').ontoggle=()=>{if($('deviceSetup').open)renderDeviceSettings();};
+// The range probe offers the addresses the device settings allow, starting at the configured one.
+fetchJson('/device-settings').then(({params,values})=>{
+  const spec=params.find(p=>p.key==='tof_address');
+  $('address').replaceChildren(...spec.options.map(([v,t])=>new Option(t,v)));$('address').value=values.tof_address;
+}).catch(()=>{});
 
 poll();

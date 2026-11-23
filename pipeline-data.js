@@ -1,5 +1,5 @@
-function isTableType(type){return ['Recording tables','Telemetry','JSON records'].includes(type);}
-function isImageType(type){return type==='Recorded photos'||type==='Depth frames'||type==='Pixel frames';}
+function isTableType(type){return ['table','tables'].includes(catalog.types[type]?.display);}
+function isImageType(type){return ['frames','pixels'].includes(catalog.types[type]?.display);}
 
 let recordedTablesRun, recordedTablesRequest;
 function readTables(run){
@@ -34,7 +34,7 @@ function pixelReader(refs,run,index){
 
 function viewerPlotTools(){
   return {
-    isFramePort:port=>['Recorded photos','Depth frames','Pixel frames'].includes(port.type),
+    isFramePort:port=>port.isFrame,
     replayFrame:port=>({draw:"replayFrames",ports:[port]}),
     compareFrames:(left,right)=>({draw:"replayFrames",ports:[left,right]}),
     points:rows=>({draw:'points',rows}),
@@ -237,35 +237,49 @@ function paintFramePixels(canvas,{pixels,width,height,format}){
 }
 
 // Outputs of code nodes must match their declared type.
+// How a type is drawn or listed comes from the server's type catalogue.
+function displayOf(type){return catalog.types[type]?.display;}
+// Outputs of code nodes must match the shape their declared type displays as.
 function validateTransform(type,value){
-  const invalid=()=>{throw Error('Invalid '+type+' output. '+codeTypes[type]);};
+  const invalid=()=>{throw Error('Invalid '+type+' output. '+(catalog.types[type]?.description||''));};
   const vector=(v,n)=>Array.isArray(v)&&v.length===n&&v.every(Number.isFinite);
-  if(type==='Point-fitted splats'){
-    if(!(value instanceof Float32Array)||value.length%16!==0||!value.every(Number.isFinite))invalid();
-    for(let i=0;i<value.length;i+=16){
-      if(value[i+3]<0||value[i+3]>1||value.subarray(i+4,i+7).some(v=>v<0||v>1)||value.subarray(i+8,i+11).some(v=>v<0))invalid();
-    }
-    return;
-  }
-  if(!Array.isArray(value))invalid();
-  if(type==='Pixel frames'&&!value.every(f=>f&&typeof f.frame==='string'&&Number.isSafeInteger(f.width)&&f.width>0&&Number.isSafeInteger(f.height)&&f.height>0&&
-      (f.format==='depth'&&f.pixels instanceof Float32Array&&f.pixels.length===f.width*f.height||
-       f.format==='rgba'&&f.pixels instanceof Uint8ClampedArray&&f.pixels.length===4*f.width*f.height)))invalid();
-  if(type==='Colored points'&&!value.every(p=>vector(p,6)&&p.slice(3).every(v=>v>=0&&v<=255)))invalid();
-  if(type==='Triangle list'&&!value.every(t=>Array.isArray(t)&&t.length===3&&t.every(v=>vector(v,3))))invalid();
-  if(type==='JSON records'){
-    const isRecord=v=>v!==null&&typeof v==='object'&&Object.getPrototypeOf(v)===Object.prototype;
+  const isRecord=v=>v!==null&&typeof v==='object'&&Object.getPrototypeOf(v)===Object.prototype;
+  const json=v=>{
     const ancestors=new Set();
-    function check(v){
+    (function check(v){
       if(v===null||typeof v==='string'||typeof v==='boolean'||Number.isFinite(v))return;
       if((!Array.isArray(v)&&!isRecord(v))||ancestors.has(v))invalid();
-      ancestors.add(v);
-      for(const child of Object.values(v))check(child);
-      ancestors.delete(v);
-    }
-    if(!value.every(isRecord))invalid();
-    check(value);
+      ancestors.add(v);for(const child of Object.values(v))check(child);ancestors.delete(v);
+    })(v);
+  };
+  const kind=displayOf(type);
+  if(kind==='splats'){
+    if(!(value instanceof Float32Array)||value.length%16!==0||!value.every(Number.isFinite))invalid();
+    for(let i=0;i<value.length;i+=16)
+      if(value[i+3]<0||value[i+3]>1||value.subarray(i+4,i+7).some(v=>v<0||v>1)||value.subarray(i+8,i+11).some(v=>v<0))invalid();
+    return;
   }
+  if(kind==='map'){
+    if(!isRecord(value)||!Array.isArray(value.points)||!Array.isArray(value.poses))invalid();
+    validateTransform('Colored points',value.points);
+    if(!value.poses.every(p=>vector(p.xyz,3)&&typeof p.frame==='string'))invalid();
+    return;
+  }
+  if(kind==='tables'){
+    if(!isRecord(value)||!Object.values(value).every(rows=>Array.isArray(rows)&&rows.every(isRecord)))invalid();
+    json(value);return;
+  }
+  if(kind==='report'){json(value);return;}
+  if(!Array.isArray(value))invalid();
+  if(kind==='pixels'&&!value.every(f=>f&&typeof f.frame==='string'&&Number.isSafeInteger(f.width)&&f.width>0&&Number.isSafeInteger(f.height)&&f.height>0&&
+      (f.format==='depth'&&f.pixels instanceof Float32Array&&f.pixels.length===f.width*f.height||
+       f.format==='rgba'&&f.pixels instanceof Uint8ClampedArray&&f.pixels.length===4*f.width*f.height)))invalid();
+  if(kind==='points'&&!value.every(p=>vector(p,6)&&p.slice(3).every(v=>v>=0&&v<=255)))invalid();
+  if(kind==='triangles'&&!value.every(t=>Array.isArray(t)&&t.length===3&&t.every(v=>vector(v,3))))invalid();
+  if(kind==='polygons'&&!value.every(f=>f&&Array.isArray(f.vertices)&&f.vertices.length>=3&&f.vertices.every(v=>vector(v,3))))invalid();
+  if(kind==='path'&&!value.every(p=>p&&vector(p.xyz,3)))invalid();
+  if(kind==='frames'&&!value.every(f=>f&&typeof f.frame==='string'))invalid();
+  if(kind==='table'){if(!value.every(isRecord))invalid();json(value);}
 }
 
 function inspectConsoleValue(label,value,depth=0,parents=new Set()){

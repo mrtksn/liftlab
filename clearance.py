@@ -16,6 +16,15 @@ from node_params import pairing_ns, sensor_settings, tof_metres
 
 UNKNOWN, FREE, OCCUPIED = 0, 1, 2
 MAX_POSE_GAP_S = .55
+# Settings of the Walk clearance operator; defaults are the values this module used to fix.
+PARAMS = (
+    dict(key="max_pose_gap_s", label="Longest pose gap to interpolate", kind="number", unit="s", default=MAX_POSE_GAP_S,
+         min=.05, max=10.0),
+    dict(key="views", label="Views rendered for splat depth", kind="int", default=120, min=3, max=2000),
+    dict(key="min_cell_cm", label="Smallest grid cell", kind="number", unit="cm", default=4.0, min=.5, max=100.0),
+    dict(key="cells_across", label="Grid cells across the walk", kind="int", default=220, min=20, max=2000),
+    dict(key="margin_m", label="Margin around the walk", kind="number", unit="m", default=1.25, min=0.0, max=20.0),
+)
 
 
 def range_samples(run, frames):
@@ -48,7 +57,7 @@ def range_samples(run, frames):
     return sorted(samples), 'independent ToF' if independent else 'camera-paired ToF'
 
 
-def sample_poses(times, positions, rotations, query, scale):
+def sample_poses(times, positions, rotations, query, scale, max_gap=MAX_POSE_GAP_S):
     """Bracket only short intervals with bounded translation and rotation."""
     query = np.asarray(query)
     right = np.clip(np.searchsorted(times,query),0,len(times)-1)
@@ -57,7 +66,7 @@ def sample_poses(times, positions, rotations, query, scale):
     dt = times[right]-times[left]
     frac = np.divide(query-times[left],dt,out=np.zeros(len(query)),where=dt>0)
     relative = rotations[left].inv()*rotations[right]
-    valid = ((dt<=MAX_POSE_GAP_S) & (frac>=0) & (frac<=1) & (query>=times[0]) & (query<=times[-1]) &
+    valid = ((dt<=max_gap) & (frac>=0) & (frac<=1) & (query>=times[0]) & (query<=times[-1]) &
              (relative.magnitude()<np.deg2rad(45)) & (scale*np.linalg.norm(positions[right]-positions[left],axis=1)<.6)) | exact
     interp = np.clip(query,times[0],times[-1])
     xyz = positions[left]+np.clip(frac,0,1)[:,None]*(positions[right]-positions[left])
@@ -170,9 +179,13 @@ def replay_distances(grid, origin, voxel, points, valid):
     return result
 
 
-def artifact_dir(run, root):
-    # A mount correction or replaced range log invalidates the derived grid.
+def artifact_dir(run, root, params=None):
+    # A mount correction, replaced range log or other settings invalidate the derived grid.
+    from node_params import defaults, validate
     digest = hashlib.sha256()
+    params = validate(PARAMS, params)
+    if params != defaults(PARAMS):
+        digest.update(json.dumps(params, sort_keys=True).encode())
     for path in (run/'range.csv', run/'timestamps.csv', run/'tof-extrinsics.json', run/'sensors.json',
                  root/'gaussians.ply'):
         if path.exists():
@@ -181,8 +194,10 @@ def artifact_dir(run, root):
     return root/('clearance-v1-' + digest.hexdigest()[:16])
 
 
-def build(run, model, root, progress=lambda msg: None):
-    dest = artifact_dir(run, root)
+def build(run, model, root, progress=lambda msg: None, params=None):
+    from node_params import validate
+    params = validate(PARAMS, params)
+    dest = artifact_dir(run, root, params)
     if dest.exists():
         return json.loads((dest/'report.json').read_text())
     with (run/'timestamps.csv').open() as f:
@@ -199,7 +214,7 @@ def build(run, model, root, progress=lambda msg: None):
     times = seconds(clocks)
     xyz = np.array([p['xyz'] for p in poses])
     rot = Rotation.from_matrix(np.array([p['rotation'] for p in poses]))
-    indices = np.linspace(0,len(poses)-1,min(120,len(poses))).round().astype(int)
+    indices = np.linspace(0,len(poses)-1,min(params['views'],len(poses))).round().astype(int)
     eyes,mats = xyz[indices].astype('f'),rot.as_matrix()[indices].astype('f')
     splats = read_splats(root/'gaussians.ply')
     size = np.linalg.norm(np.ptp(np.percentile(splats[0],[10,90],axis=0),axis=0))
@@ -230,8 +245,8 @@ def build(run, model, root, progress=lambda msg: None):
     progress('Clearance · integrating splat and ToF sightlines')
     # Restrict this replay grid to the neighborhood of the recorded walk.
     centers = xyz*scale
-    origin,upper = centers.min(0)-1.25,centers.max(0)+1.25
-    voxel = max(.04,float(np.max(upper-origin))/220)
+    origin,upper = centers.min(0)-params['margin_m'],centers.max(0)+params['margin_m']
+    voxel = max(params['min_cell_cm']/100,float(np.max(upper-origin))/params['cells_across'])
     shape = np.ceil((upper-origin)/voxel).astype(int)
     occupied = np.zeros(shape,bool)
     votes = np.zeros(shape,'u1')
@@ -252,7 +267,7 @@ def build(run, model, root, progress=lambda msg: None):
     used = 0
     if samples:
         query = seconds([s[0] for s in samples])
-        pos,rotations,keep,_ = sample_poses(times,xyz,rot,query,scale)
+        pos,rotations,keep,_ = sample_poses(times,xyz,rot,query,scale,params['max_pose_gap_s'])
         starts = pos[keep]*scale + rotations[keep] @ offset
         directions = rotations[keep] @ axis
         ends = starts+directions*np.array([s[1] for s in samples])[keep,None]
@@ -268,7 +283,7 @@ def build(run, model, root, progress=lambda msg: None):
     grid = np.where(occupied,OCCUPIED,np.where(votes>=2,FREE,UNKNOWN)).astype('u1')
     progress('Clearance · measuring distance along the recorded walk')
     stamps = [int(row['pi_encoder_callback_ns']) if row.get('pi_encoder_callback_ns') else clocks[0]-10**9 for row in frames]
-    path,_,valid,exact = sample_poses(times,xyz,rot,seconds(stamps),scale)
+    path,_,valid,exact = sample_poses(times,xyz,rot,seconds(stamps),scale,params['max_pose_gap_s'])
     records = {}
     for i,dist in enumerate(replay_distances(grid,origin,voxel,path*scale,valid)):
         if dist is not None:

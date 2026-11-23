@@ -7,7 +7,8 @@ import numpy as np
 import pycolmap as sfm
 
 
-def recover_poses(run, model, images, names, xyz, world_rotation, on_observation=None):
+def recover_poses(run, model, images, names, xyz, world_rotation, on_observation=None, limits=None):
+    limits = dict(dict(max_frames=4, min_inliers=20, min_ratio=.65, min_spread=65, max_error=2.5, max_jump=.20), **(limits or {}))
     @lru_cache(maxsize=12)
     def gray(name):
         return cv2.imread(str(run / "frames" / name), cv2.IMREAD_GRAYSCALE)
@@ -20,7 +21,7 @@ def recover_poses(run, model, images, names, xyz, world_rotation, on_observation
         return pixels, world, np.array([p.point3D_id for p in points])
 
     options = sfm.AbsolutePoseEstimationOptions()
-    options.ransac.max_error = 2.5
+    options.ransac.max_error = limits["max_error"]
     anchors = [im.name for im in images]
     recovered = []
     for name in names:
@@ -32,10 +33,10 @@ def recover_poses(run, model, images, names, xyz, world_rotation, on_observation
             continue
         for j in sorted((k for k in (i-1,i) if 0 <= k < len(anchors)),
                         key=lambda k: abs(int(anchors[k][:7])-int(name[:7]))):
-            if abs(int(anchors[j][:7])-int(name[:7])) > 4:
+            if abs(int(anchors[j][:7])-int(name[:7])) > limits["max_frames"]:
                 break
             pixels, world, ids = landmarks(j)
-            if len(pixels) < 20:
+            if len(pixels) < limits["min_inliers"]:
                 continue
             source = gray(anchors[j])
             flowed, forward, _ = cv2.calcOpticalFlowPyrLK(source, target, pixels, None)
@@ -46,20 +47,21 @@ def recover_poses(run, model, images, names, xyz, world_rotation, on_observation
                 continue
             mask = ((forward.ravel() != 0) & (backward.ravel() != 0)
                     & (np.linalg.norm(back-pixels, axis=1) < .75))
-            if mask.sum() < 20:
+            if mask.sum() < limits["min_inliers"]:
                 continue
             fit = sfm.estimate_and_refine_absolute_pose(flowed[mask]+.5, world[mask],
                                                         images[j].camera, options)
             if fit is None:
                 continue
             inliers = np.asarray(fit["inlier_mask"], dtype=bool)
-            if inliers.sum() < 20 or inliers.mean() < .65 or np.any(np.ptp(flowed[mask][inliers],axis=0) < 65):
+            if (inliers.sum() < limits["min_inliers"] or inliers.mean() < limits["min_ratio"]
+                    or np.any(np.ptp(flowed[mask][inliers],axis=0) < limits["min_spread"])):
                 continue
             pose = fit["cam_from_world"].inverse()
             # Reject pose flips and jumps large relative to the observed depth.
             relative = pose.rotation.matrix().T @ images[j].cam_from_world().rotation.matrix().T
             depth = np.median(np.linalg.norm(world[mask][inliers] - images[j].projection_center(),axis=1))
-            if np.trace(relative)<2.6 or np.linalg.norm(pose.translation-images[j].projection_center()) > .20*depth:
+            if np.trace(relative)<2.6 or np.linalg.norm(pose.translation-images[j].projection_center()) > limits["max_jump"]*depth:
                 continue
             if on_observation:
                 observed = world[mask][inliers]

@@ -123,7 +123,7 @@ def range_ratio(observation, camera, pixels, depths):
     return None
 
 
-def estimate_scale(model, images, observations, extra=None):
+def estimate_scale(model, images, observations, extra=None, checks=None):
     ratios = {}
     for im in images:
         if not observations.get(im.name, {}).get("range"):
@@ -134,22 +134,22 @@ def estimate_scale(model, images, observations, extra=None):
                             [(transform * model.point3D(p.point3D_id).xyz)[2] for p in points])
         if ratio:
             ratios[im.name] = ratio
-    primary = checked_scale([ratios[f] for f in sorted(ratios)])
+    primary = checked_scale([ratios[f] for f in sorted(ratios)], **(checks or {}))
     if primary or not extra:
         return primary
     ratios.update(extra)
-    return checked_scale([ratios[f] for f in sorted(ratios)])
+    return checked_scale([ratios[f] for f in sorted(ratios)], **(checks or {}))
 
 
-def checked_scale(ratios):
-    if len(ratios) < 12:
+def checked_scale(ratios, min_views=12, min_spread=.30, max_error=.15):
+    if len(ratios) < min_views:
         return None
     # Check on withheld views and require a change in target distance.
     train, test = ratios[::2], ratios[1::2]
     scale = float(np.median([x[0] for x in train]))
     distances = [x[1] for x in ratios]
     err = [abs(z*scale-r)/r for _,r,z in test]
-    if np.ptp(np.percentile(distances,[10,90])) < .30 or np.percentile(err,80) > .15:
+    if np.ptp(np.percentile(distances,[10,90])) < min_spread or np.percentile(err,80) > max_error:
         return None
     return dict(metres_per_unit=scale, views=len(ratios), validation_median_relative_error=float(np.median(err)))
 
@@ -259,7 +259,7 @@ def _errors_deg(rotations, ups, up, mount):
     return np.degrees(np.arccos(np.clip(np.sum(predicted*ups, axis=1), -1, 1)))
 
 
-def up_alignment(rotations, ups, max_uncertainty=10):
+def up_alignment(rotations, ups, max_uncertainty=10, max_holdout=6):
     """Up direction of the visual world from IMU up vectors.
 
     rotations are world_from_camera for views with an up vector measured in
@@ -288,7 +288,7 @@ def up_alignment(rotations, ups, max_uncertainty=10):
     test = np.arange(len(rotations)) % 3 == 0
     train_up, train_mount, _ = _fit_up(rotations[~test], ups[~test], grid)
     holdout = float(np.percentile(_errors_deg(rotations[test], ups[test], train_up, train_mount), 80))
-    if uncertainty > max_uncertainty or holdout > 6:
+    if uncertainty > max_uncertainty or holdout > max_holdout:
         return None
     camera_up = mount.T @ ups.mean(axis=0)
     camera_up /= np.linalg.norm(camera_up)

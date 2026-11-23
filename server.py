@@ -36,7 +36,8 @@ from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
 import node_params
 import operators
-from node_params import CAMERA_MAP_PARAMS, SENSOR_PARAMS, default_sensor_settings, pairing_ns, sensor_settings, tof_metres
+from node_params import (CAMERA_MAP_PARAMS, DEVICE_PARAMS, SENSOR_PARAMS, default_sensor_settings, device_settings,
+                         pairing_ns, sensor_settings, tof_metres)
 
 SURFACE_BUILDERS = {"camera-ray-seeds-v1": build_surfaces, CLOTH_METHOD: build_cloth, PLANE_METHOD: build_planes, ai_surfaces.METHOD: ai_surfaces.build_ai}
 HERE = Path(__file__).resolve().parent
@@ -48,13 +49,19 @@ RANGE = struct.Struct(">QQi")
 SENSOR_BATCH = struct.Struct(">QHH")
 
 
-def surface_mesh(run, model, method, distance):
+def surface_mesh(run, model, method, distance, settings=None):
+    """Build surfaces; the mesh records the extra settings it was built with."""
+    settings = settings or {}
     if method == ai_surfaces.METHOD:
-        return ai_surfaces.build_ai(run, model, distance)
-    if method == PLANE_METHOD:
+        mesh = ai_surfaces.build_ai(run, model, distance)
+    elif method == PLANE_METHOD:
         observations = load_observations(run, model.get("streams", STREAMS))
-        return build_planes(model, distance, observations)
-    return SURFACE_BUILDERS.get(method, build_surfaces)(model, distance)
+        mesh = build_planes(model, distance, observations, **settings)
+    else:
+        mesh = SURFACE_BUILDERS.get(method, build_surfaces)(model, distance)
+    if settings:
+        mesh["settings"] = settings
+    return mesh
 
 
 def preset_files(root):
@@ -97,7 +104,8 @@ def change_preset(root, body, delete):
 
 class Survey:
     def __init__(self, root, pi):
-        self.root, self.pi = root, pi
+        self.root, self.pi_override = root, pi
+        self.device = device_settings(root)
         root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.process = self.latest = self.run = self.log = None
@@ -117,11 +125,22 @@ class Survey:
         self.stamp = self.arrival = self.rate = 0
         self.refs = {}
         self.version = 0
-        self.next_build = 12
-        self.calib = root / "ov5647-640x480.json"
+        self.next_build = self.device["live_first_build"]
         self.live_sensors = default_sensor_settings(root)
         self.operator_jobs = {}
         self.presets = HERE / "presets"
+
+    @property
+    def pi(self):
+        return self.pi_override or self.device["pi_host"]
+
+    @property
+    def calib(self):
+        return self.root / self.device["calibration_file"]
+
+    @property
+    def view_interval_us(self):
+        return int(self.device["live_view_interval_s"] * 1e6)
 
     @property
     def busy(self):
@@ -137,13 +156,22 @@ class Survey:
         try:
             p = subprocess.Popen(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
                                   "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
-                                  self.pi, "python3 -u -"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
+                                  self.pi, "python3 -u - " + " ".join(self.sender_args())], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
         finally:
             err.close()
         self.process = p
         p.stdin.write((HERE / "pi_camera.py").read_bytes())
         p.stdin.close()
         threading.Thread(target=self.capture, args=(p,), daemon=True).start()
+
+    def sender_args(self):
+        d = self.device
+        return [f"--width={d['camera_width']}", f"--height={d['camera_height']}", f"--fps={d['camera_fps']}",
+                f"--bitrate={d['jpeg_bitrate']}", f"--rotate={int(d['rotate_180'])}", f"--tof-address={d['tof_address']}",
+                f"--tof-hz={d['tof_poll_hz']}", f"--telemetry-port={d['telemetry_port']}"]
+
+    def board(self):
+        return (self.device["board_columns"], self.device["board_rows"])
 
     def capture(self, p):
         reason = "Camera connection ended"
@@ -225,7 +253,7 @@ class Survey:
         self.log.write(",".join(map(str,[name,stamp,*fields]))+"\n")
         self.log.flush()
         self.count += 1
-        if not self.keys or stamp - self.last_key >= 500000:
+        if not self.keys or stamp - self.last_key >= self.view_interval_us:
             self.keys.append(name)
             self.last_key = stamp
             if len(self.keys) >= self.next_build and not self.busy:
@@ -256,7 +284,7 @@ class Survey:
         self.motion_log.write("pi_uart_monotonic_s,fc_time_mod_s,fc_state,flags,qw,qx,qy,qz,ax_m_s2,ay_m_s2,az_m_s2,gx_rad_s,gy_rad_s,gz_rad_s,battery_v,height_m,vz_m_s,height_valid\n")
         self.range_log = (self.run / "range.csv").open("w")
         self.range_log.write("pi_read_start_ns,pi_read_end_ns,tof_raw\n")
-        self.keys, self.refs, self.count, self.next_build = [], {}, 0, 12
+        self.keys, self.refs, self.count, self.next_build = [], {}, 0, self.device["live_first_build"]
         self.message = "Collecting overlapping views"
         self.version += 1
 
@@ -292,7 +320,7 @@ class Survey:
             self.message = "Need at least four overlapping views from different positions."
             return
         if self.log:
-            candidates, limit = self.keys, 160
+            candidates, limit = self.keys, self.device["live_max_views"]
         else:
             # Denser overlap for turns and doorways on the final reconstruction.
             frames = sorted(p.name for p in (self.run/"frames").glob("*.jpg"))
@@ -366,9 +394,9 @@ class Survey:
             if self.build_queue:
                 self.start_next_build()
 
-    def rebuild_surfaces(self, run, model, distance, method):
+    def rebuild_surfaces(self, run, model, distance, method, settings=None):
         try:
-            mesh = surface_mesh(run, model, method, distance)
+            mesh = surface_mesh(run, model, method, distance, settings)
             model["surfaces"] = mesh
             atomic_json(run / "survey.json", model)
             with self.lock:
@@ -417,7 +445,7 @@ class Survey:
                     self.version += 1
                 self.finish_build()
 
-    def build_gaussian_geometry(self, run, model, root, clearance_map):
+    def build_gaussian_geometry(self, run, model, root, clearance_map, params=None):
         def progress(message):
             with self.lock:
                 if self.run == run:
@@ -426,7 +454,7 @@ class Survey:
         try:
             if clearance_map:
                 import clearance
-                result = clearance.build(run, model, root, progress)
+                result = clearance.build(run, model, root, progress, params)
                 message = f"Walk clearance ready · {len(result['frames'])} located frames"
             else:
                 import gaussian_mesh
@@ -504,7 +532,7 @@ class Survey:
             if not (self.run/"frames"/filename).is_file():
                 continue
             self.count += 1
-            if int(stamp)-last >= 500000:
+            if int(stamp)-last >= self.view_interval_us:
                 self.keys.append(filename)
                 last = int(stamp)
         ref = self.run/"reference.json"
@@ -526,6 +554,7 @@ class Survey:
                     hasPreviousMap=bool(self.run and (self.run/"previous-photo-map.json").is_file()),
                     buildingWalks=([self.building.name] if self.building else []) +
                                   [job[0].name for job in self.build_queue],
+                    camera=[self.device["camera_width"], self.device["camera_height"]],
                     version=self.version, refs=self.refs, samples=len(self.samples), calibrated=self.calib.exists(),
                     hasMap=bool(self.run and (self.run/"survey.json").exists()))
 
@@ -568,11 +597,11 @@ class Survey:
         if action == "range":
             address = int(body["address"])
             with self.lock:
-                if address == 0x52 and self.state()["fresh"] and self.tof:
+                if address == self.device["tof_address"] and self.state()["fresh"] and self.tof:
                     if self.tof[-1] < 0:
                         raise ValueError("TOF250 unavailable on the live stream")
                     return dict(raw=self.tof[-1], pi_read_ns=self.tof[1])
-            if address not in (0x29,0x52,0x64):
+            if address not in [o[0] for o in next(p for p in DEVICE_PARAMS if p["key"] == "tof_address")["options"]]:
                 raise ValueError("Unsupported TOF250 address")
             try:
                 proc = subprocess.run(["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=4",
@@ -649,16 +678,25 @@ class Survey:
             elif action == "sample":
                 if self.log or not self.state()["fresh"]:
                     raise ValueError("Use the live preview before starting a walk.")
-                pixels = corners(self.latest)
+                pixels = corners(self.latest, self.board())
                 if any(np.mean(np.linalg.norm(pixels-s,axis=2)) < 12 for s in self.samples):
                     raise ValueError("Change the board position or tilt before adding another view.")
                 self.samples.append(pixels)
+            elif action == "device-settings":
+                if self.log:
+                    raise ValueError("Finish the recording before changing device settings.")
+                values = node_params.validate(DEVICE_PARAMS, body.get("values"))
+                if (values["board_columns"], values["board_rows"]) != self.board():
+                    self.samples.clear()
+                atomic_json(self.root / "device.json", values)
+                self.device = values
+                self.message = "Device settings saved" + (" · reconnect the camera to apply" if self.process else "")
             elif action == "reset-samples":
                 self.samples.clear()
             elif action == "calibrate":
                 if self.log:
                     raise ValueError("Finish the recording before changing calibration.")
-                calibration = solve(self.samples)
+                calibration = solve(self.samples, self.board(), (self.device["camera_width"], self.device["camera_height"]))
                 atomic_json(self.calib,calibration)
                 self.message = f"Calibration saved · {calibration['rms_px']:.2f} px RMS"
             else:
@@ -761,7 +799,9 @@ class Handler(BaseHTTPRequestHandler):
                     file = root/name
                     if name.startswith("clearance-v1/"):
                         import clearance
-                        file = clearance.artifact_dir(run, root)/file.name
+                        chosen = query.get("clearance", [""])[0]
+                        folder = root/chosen if re.fullmatch(r"clearance-v1-[0-9a-f]{16}", chosen) else clearance.artifact_dir(run, root)
+                        file = folder/file.name
                     mime = {".ply":"application/octet-stream",".json":"application/json",
                             ".jpg":"image/jpeg",".png":"image/png",".npz":"application/octet-stream"}[file.suffix]
                     return self.send(file.read_bytes(),mime)
@@ -778,6 +818,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(asset.read_bytes(), mime[asset.suffix])
             except (OSError,ValueError,subprocess.SubprocessError) as exc:
                 return self.send(str(exc).encode(),"text/plain",503)
+        if path == "/device-settings":
+            return self.send(json.dumps(dict(params=DEVICE_PARAMS, values=survey.device)).encode(), "application/json")
         if path == "/operators":
             return self.send(json.dumps(operators.catalog()).encode(), "application/json")
         if path == "/presets":
@@ -914,7 +956,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pi", default="pi@192.168.2.127")
+    ap.add_argument("--pi", default=None, help="Override the Pi SSH destination from the device settings")
     ap.add_argument("--port", type=int, default=8779)
     ap.add_argument("--output", type=Path, default=HERE/"captures"/"room-surveys")
     config = ap.parse_args()

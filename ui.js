@@ -715,7 +715,8 @@ async function update() {
   if($('recordStatus').textContent!==recordStatus) $('recordStatus').textContent=recordStatus;
   updateCamera();
 
-  if(!replay) $('rate').textContent=s.fresh?s.fps+' fps · 640 × 480 · '+(s.tofRaw==null?'ToF unavailable':'ToF '+s.tofRaw+' raw (~cm)')+(s.tofHz==null?'':' · '+s.tofHz+' ToF reads/s ('+s.tofValidPercent+'% valid)')+' · IMU '+(s.motionFresh?'live':'unavailable'):'OV5647 · 640 × 480';
+  const size=s.camera?s.camera.join(' × '):'';
+  if(!replay) $('rate').textContent=s.fresh?s.fps+' fps · '+size+' · '+(s.tofRaw==null?'ToF unavailable':'ToF '+s.tofRaw+' raw (~cm)')+(s.tofHz==null?'':' · '+s.tofHz+' ToF reads/s ('+s.tofValidPercent+'% valid)')+' · IMU '+(s.motionFresh?'live':'unavailable'):'OV5647 · 640 × 480';
   $('frames').textContent=s.frames.toLocaleString(); $('walk').textContent=s.run||'No walk selected';
   $('captureWarning').hidden=!s.fresh||s.motionFresh;
   $('message').textContent=s.message; $('samples').textContent=s.samples+' views'; $('lens').textContent=s.calibrated?'Calibrated':'Self-estimate available';
@@ -835,7 +836,8 @@ async function locate(){
     const q=await r.json();if(token!==generation)return;
     if(!r.ok||q.version!==version)throw Error(q.error||'Map changed');
     const img=new Image();img.src='data:image/jpeg;base64,'+q.image;await img.decode();if(token!==generation)return;
-    estimate=q;draw();const el=$('matches'),c=el.getContext('2d');el.hidden=false;c.drawImage(img,0,0);
+    estimate=q;draw();const el=$('matches');el.width=img.naturalWidth;el.height=img.naturalHeight;
+    const c=el.getContext('2d');el.hidden=false;c.drawImage(img,0,0);
     c.fillStyle='#38ff9e';for(const [x,y] of q.pixels||[])c.fillRect(x-2,y-2,4,4);
     $('tracking').textContent=q.status+' · '+q.inliers+' inliers / '+q.matches+' matches · '+(source==='live'?'camera '+(q.stamp/1e6).toFixed(2)+' s':'frame '+q.stamp);
   }catch(e){if(token===generation){resetTracking();$('tracking').textContent=e.message;}}

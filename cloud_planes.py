@@ -8,7 +8,7 @@ DISTANCE_LABEL = "Maximum landmark gap"
 MIN_SUPPORT = 16
 
 
-def footprints(uv, radius):
+def footprints(uv, radius, min_support=MIN_SUPPORT):
     """Trace connected support in plane coordinates, retaining interior boundaries."""
     origin = uv.min(axis=0)
     # Limit raster size on very thin regions and degenerate input.
@@ -26,7 +26,7 @@ def footprints(uv, radius):
     membership = labels[pixels[:,1],pixels[:,0]]
     for label in range(1,count):
         ids = np.flatnonzero(membership == label)
-        if len(ids) < MIN_SUPPORT:
+        if len(ids) < min_support:
             continue
         x,y,w,h,_ = stats[label]
         contours, tree = cv2.findContours((labels[y:y+h,x:x+w] == label).astype(np.uint8),
@@ -43,7 +43,7 @@ def footprints(uv, radius):
             yield ids, rings
 
 
-def build_planes(model, span, observations=None, *, relative_fit=False):
+def build_planes(model, span, observations=None, *, relative_fit=False, min_support=MIN_SUPPORT):
     if not np.isfinite(span) or span <= 0:
         raise ValueError("Enter a positive maximum landmark gap.")
     tolerance = span*.12 if relative_fit and model["units"]!="m" else min(.04, span*.12)
@@ -61,7 +61,7 @@ def build_planes(model, span, observations=None, *, relative_fit=False):
     finish = max(model.get("path_frames") or [p["frame"] for p in model.get("poses", [])] or list(first) or [""])
     original = np.flatnonzero(np.isfinite(xyz).all(axis=1))
     xyz = xyz[original]
-    if len(xyz) < MIN_SUPPORT:
+    if len(xyz) < min_support:
         return mesh
 
     # Normals and flatness from a local least-squares fit. Line-shaped or
@@ -93,7 +93,7 @@ def build_planes(model, span, observations=None, *, relative_fit=False):
                 if abs((xyz[j]-xyz[seed]) @ normal) <= tolerance:
                     region.add(j)
                     frontier.append(j)
-        if len(region) < MIN_SUPPORT:
+        if len(region) < min_support:
             continue
         members = np.asarray(sorted(region))
         points = xyz[members]
@@ -101,7 +101,7 @@ def build_planes(model, span, observations=None, *, relative_fit=False):
         _, _, axes = np.linalg.svd(points-center, full_matrices=False)
         inliers = np.abs((points-center) @ axes[2]) <= tolerance
         members, points = members[inliers], points[inliers]
-        if len(points) < MIN_SUPPORT:
+        if len(points) < min_support:
             continue
         center = points.mean(axis=0)
         _, sizes, axes = np.linalg.svd(points-center, full_matrices=False)
@@ -111,7 +111,7 @@ def build_planes(model, span, observations=None, *, relative_fit=False):
         radius = min(span/2, float(np.median(distances[members,4]))*1.35)
         if radius <= 1e-7:
             continue
-        for group, rings in footprints(uv, radius):
+        for group, rings in footprints(uv, radius, min_support):
             ids = original[members[group]].tolist()
             loops = [(center + ring @ axes[:2]).tolist() for ring in rings]
             residual = (points[group]-center) @ axes[2]

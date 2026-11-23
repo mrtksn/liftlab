@@ -184,7 +184,8 @@
 .setting select.binding{grid-column:1/-1;justify-self:start;font-size:11px;padding:2px 5px;color:#a2b3b6;background:transparent;border-color:#3b494c}
 .setting input:disabled{opacity:.6}
 #nodeWiring .setting select{max-width:260px}
-#controlsPanel label{display:block;margin-top:8px;font-size:13px}
+#controlsPanel label{display:block;margin-top:10px;font-size:13px;white-space:normal}
+#controlsPanel textarea{display:block;box-sizing:border-box;margin-top:4px;min-height:7em;resize:vertical}
 #controlsPanel textarea,#nodeProgram{width:100%;font:12px ui-monospace,monospace;background:#13191b;color:#e5ebea;border:1px solid #465457;border-radius:6px;padding:8px}
 #nodeOutputs .port-data{border-top:1px solid #354145;padding:8px 0}
 #nodeOutputs .port-data summary{font-weight:500;font-size:13px}

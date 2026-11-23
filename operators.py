@@ -26,32 +26,51 @@ from fusion import STREAMS, STREAM_LABELS
 from node_params import CAMERA_MAP_PARAMS, SENSOR_PARAMS, defaults, validate
 from replay import read_timeline
 
+# Data types passed between nodes. `display` says how the dashboard draws or lists
+# values of the type; `panel` names extra tools shown beside it.
 TYPES = {
-    "Recording tables": "Object keyed by CSV filename. Each value is the complete array of rows in recording order. "
-                        "sensors.json holds one row: the walk's sensor settings.",
-    "Recorded photos": "Array of {frame, ms}. await readFrame(ref) returns width, height and RGBA pixels.",
-    "Telemetry": "Array of frame-paired sensor records, in recording order.",
-    "Camera map": "{ poses, points, units }. Each point is [x, y, z, red, green, blue].",
-    "Camera path": "Array of poses {frame, xyz, rotation?} in map coordinates.",
-    "Depth frames": "Array of {frame, ms, method}. await readFrame(ref) returns width, height and float depth pixels "
-                    "in native model units.",
-    "Registered depth points": "Array of [x, y, z, red, green, blue] rows in the map frame.",
-    "Colored points": "Array of [x, y, z, red, green, blue] rows. RGB channels range from 0 to 255.",
-    "Polygon mesh": "Array of polygon records. Each has vertices [[x, y, z], …] and may have holes containing inner rings.",
-    "Triangle list": "Array of triangles, each containing three [x, y, z] vertices in map coordinates.",
-    "Point-fitted splats": "Float32Array of 16 values per splat: xyz, opacity, RGB (0–1), padding, radii XYZ, padding, "
-                           "quaternion WXYZ.",
-    "Trained Gaussian map": "Float32Array of 16 values per trained splat, in the same layout as point-fitted splats.",
-    "LingBot trajectory and points": "Saved trajectory descriptors in LingBot coordinates.",
-    "Clearance map": "Clearance report: per-frame distance from the walked path to the nearest occupied cell.",
-    "Pixel frames": "Array of {frame, width, height, format, pixels}. Use Float32Array for depth, Uint8ClampedArray "
-                    "for rgba.",
-    "JSON records": "Array of JSON objects.",
+    "Recording tables": dict(display="tables",
+        description="Object keyed by CSV filename. Each value is the complete array of rows in recording order. "
+                        "sensors.json holds one row: the walk's sensor settings."),
+    "Recorded photos": dict(display="frames",
+        description="Array of {frame, ms}. await readFrame(ref) returns width, height and RGBA pixels."),
+    "Telemetry": dict(display="table",
+        description="Array of frame-paired sensor records, in recording order."),
+    "Camera map": dict(display="map",
+        description="{ poses, points, units }. Each point is [x, y, z, red, green, blue]."),
+    "Camera path": dict(display="path",
+        description="Array of poses {frame, xyz, rotation?} in map coordinates."),
+    "Depth frames": dict(display="frames",
+        description="Array of {frame, ms, method}. await readFrame(ref) returns width, height and float depth pixels "
+                    "in native model units."),
+    "Registered depth points": dict(display="points",
+        description="Array of [x, y, z, red, green, blue] rows in the map frame."),
+    "Colored points": dict(display="points",
+        description="Array of [x, y, z, red, green, blue] rows. RGB channels range from 0 to 255."),
+    "Polygon mesh": dict(display="polygons", panel="mesh",
+        description="Array of polygon records. Each has vertices [[x, y, z], …] and may have holes containing inner rings."),
+    "Triangle list": dict(display="triangles",
+        description="Array of triangles, each containing three [x, y, z] vertices in map coordinates."),
+    "Point-fitted splats": dict(display="splats",
+        description="Float32Array of 16 values per splat: xyz, opacity, RGB (0–1), padding, radii XYZ, padding, "
+                           "quaternion WXYZ."),
+    "Trained Gaussian map": dict(display="splats", panel="gaussian",
+        description="Float32Array of 16 values per trained splat, in the same layout as point-fitted splats."),
+    "LingBot trajectory and points": dict(display="report", panel="lingbot",
+        description="Saved trajectory descriptors in LingBot coordinates."),
+    "Clearance map": dict(display="report", panel="clearance",
+        description="Clearance report: per-frame distance from the walked path to the nearest occupied cell."),
+    "Pixel frames": dict(display="pixels",
+        description="Array of {frame, width, height, format, pixels}. Use Float32Array for depth, Uint8ClampedArray "
+                    "for rgba."),
+    "JSON records": dict(display="table",
+        description="Array of JSON objects."),
 }
 # Interchangeable shapes: a port that accepts the key also accepts these.
 COMPATIBLE = {"Colored points": ["Registered depth points"], "Point-fitted splats": ["Trained Gaussian map"]}
 
 SURFACE_MODULES = (seed_surfaces, cloth_surfaces, cloud_planes)
+SURFACE_DEFAULTS = {cloud_planes.METHOD: {"min_support": cloud_planes.MIN_SUPPORT}}
 SURFACE_BUILDERS = {seed_surfaces.METHOD: lambda model, distance, observations: seed_surfaces.build_surfaces(model, distance),
                     cloth_surfaces.METHOD: lambda model, distance, observations: cloth_surfaces.build_cloth(model, distance),
                     cloud_planes.METHOD: lambda model, distance, observations: cloud_planes.build_planes(model, distance, observations)}
@@ -244,22 +263,27 @@ def run_backproject(ctx):
     return outputs
 
 
-def surface_mesh_output(model, method, distance):
+def surface_mesh_output(model, method, distance, extra=None):
     mesh = model.get("surfaces") or {}
     built = mesh.get("growth_distance_m", mesh.get("max_edge_m"))
     if mesh.get("method") == method and built is not None and abs(built - distance) < 1e-9:
-        return dict(mesh=dict(data=mesh["patches"], summary={k: v for k, v in mesh.items() if k != "patches"}))
+        # Meshes from before settings were recorded used the defaults.
+        settings = {**SURFACE_DEFAULTS.get(method, {}), **(mesh.get("settings") or {})}
+        if all(settings.get(k) == v for k, v in (extra or {}).items()):
+            return dict(mesh=dict(data=mesh["patches"], summary={k: v for k, v in mesh.items() if k != "patches"}))
     return None
 
 
 def run_landmark_surfaces(ctx):
     model, method, distance = ctx.map(), ctx.params["method"], ctx.params["distance_cm"]/100
-    done = surface_mesh_output(model, method, distance)
+    extra = {"min_support": ctx.params["min_support"]} if method == cloud_planes.METHOD else {}
+    done = surface_mesh_output(model, method, distance, extra)
     if done:
         return done
     if model["units"] != "m" or (method != cloud_planes.METHOD and not model.get("landmark_views")):
         raise ValueError("Surface growth needs metric scale, and seed methods need landmark tracks.")
-    ctx.start("Rebuilding surfaces from saved landmarks", ctx.survey.rebuild_surfaces, ctx.run, model, distance, method)
+    ctx.start("Rebuilding surfaces from saved landmarks", ctx.survey.rebuild_surfaces, ctx.run, model, distance, method,
+              {"min_support": ctx.params["min_support"]} if method == cloud_planes.METHOD else {})
 
 
 def run_ai_planes(ctx):
@@ -321,12 +345,18 @@ def run_clearance(ctx):
     root, suffix = splat_root(ctx, ctx.ref("splats"))
     if not (root/"gaussians.ply").is_file():
         raise ValueError("Run the Gaussian map first.")
-    if (clearance.artifact_dir(ctx.run, root)/"report.json").is_file():
+    folder = clearance.artifact_dir(ctx.run, root, ctx.params)
+    if (folder/"report.json").is_file():
         index = ctx.model["feature_index"]
         return dict(clearance=dict(url=artifact("/gaussian-artifact", ctx.run, index, "clearance-v1/report.json",
-                                                variant=suffix), index=index, variant=suffix))
-    ctx.start("Opening trained Gaussian splats", ctx.survey.build_gaussian_geometry, ctx.run, ctx.model, root, True)
+                                                variant=suffix, clearance=folder.name),
+                                   index=index, variant=suffix, clearance=folder.name))
+    ctx.start("Opening trained Gaussian splats", ctx.survey.build_gaussian_geometry, ctx.run, ctx.model, root, True,
+              ctx.params)
 
+
+import clearance as _clearance
+CLEARANCE_PARAMS = _clearance.PARAMS
 
 LINGBOT_PARAMS = (number("stride", "Use every Nth rectified frame", 8, 1, 100, kind="int"),)
 
@@ -372,7 +402,7 @@ OPERATORS = [
          description="The open walk's photos and sensor logs. Sensor settings are saved with the walk."),
     dict(id="camera-map", label="Camera map", group="Mapping",
          inputs=[port("photos", "Recorded photos"), port("telemetry", "Telemetry", optional=True)],
-         outputs=[port("map", "Camera map")], params=[*STREAM_PARAMS, *[dict(p, group="Solver") for p in CAMERA_MAP_PARAMS]],
+         outputs=[port("map", "Camera map")], params=[*STREAM_PARAMS, *CAMERA_MAP_PARAMS],
          run=run_camera_map, description="Structure from motion with COLMAP, levelled and scaled from the sensors."),
     dict(id="depth", label="Estimate depth", group="Depth",
          inputs=[port("photos", "Recorded photos"), port("map", "Camera map")], outputs=[port("depth", "Depth frames")],
@@ -392,7 +422,9 @@ OPERATORS = [
          outputs=[port("mesh", "Polygon mesh")],
          params=[choice("method", "Method", [(m.METHOD, m.LABEL) for m in SURFACE_MODULES]),
                  number("distance_cm", "Distance", 20, .1, 1000, "cm",
-                        label_by=dict(param="method", labels={m.METHOD: m.DISTANCE_LABEL for m in SURFACE_MODULES}))],
+                        label_by=dict(param="method", labels={m.METHOD: m.DISTANCE_LABEL for m in SURFACE_MODULES})),
+                 number("min_support", "Fewest landmarks per plane", cloud_planes.MIN_SUPPORT, 3, 10000, kind="int",
+                        when=dict(param="method", values=[cloud_planes.METHOD]))],
          run=run_landmark_surfaces, description="Surfaces grown from the camera map's landmarks. Needs metric scale."),
     dict(id="ai-depth-planes", label=ai_surfaces.LABEL, group="Surfaces",
          inputs=[port("map", "Camera map"), port("photos", "Recorded photos")], outputs=[port("mesh", "Polygon mesh")],
@@ -419,11 +451,23 @@ OPERATORS = [
          run=run_gaussian_mesh, description="Depth rendered from several views, fused, meshed and simplified."),
     dict(id="clearance", label="Walk clearance", group="Gaussians",
          inputs=[port("splats", "Trained Gaussian map"), port("map", "Camera map")],
-         outputs=[port("clearance", "Clearance map")], params=[], run=run_clearance),
+         outputs=[port("clearance", "Clearance map")], params=[*CLEARANCE_PARAMS], run=run_clearance,
+         description="Free and occupied space around the walked path, from the splats and ToF sightlines."),
     dict(id="lingbot-map", label="LingBot-Map", group="Mapping",
          inputs=[port("photos", "Recorded photos"), port("map", "Camera map")],
          outputs=[port("result", "LingBot trajectory and points")], params=list(LINGBOT_PARAMS), run=run_lingbot,
          description="Learned reconstruction from the image sequence, on Apple Metal."),
+]
+# Operators the browser runs: declared here so the catalogue is complete.
+OPERATORS += [
+    dict(id="code", label="Code transform", group="Code", runner="code", inputs=[], outputs=[], params=[],
+         default_type="JSON records",
+         description="JavaScript over typed inputs. Its ports, output type and controls are part of the node."),
+    dict(id="splat-fit", label="Fit splats to points", group="Gaussians", runner="browser", params=[],
+         inputs=[port("points", "Colored points", "Registered depth points")], outputs=[port("splats", "Point-fitted splats")],
+         description="Gaussian splats sized from the local point spacing, in this browser."),
+    dict(id="viewer", label="Viewer", group="Display", runner="viewer", inputs=[], outputs=[], params=[],
+         description="Draws its connected outputs. Edit its code to compose plot layers."),
 ]
 OPERATORS_BY_ID = {o["id"]: o for o in OPERATORS}
 
@@ -436,8 +480,8 @@ def catalog():
 
 def execute(survey, body):
     operator = OPERATORS_BY_ID.get(body.get("op"))
-    if not operator:
-        raise ValueError("Unknown operator.")
+    if not operator or "run" not in operator:
+        raise ValueError("Unknown server operator.")
     ctx = Context(survey, operator, body)
     try:
         result = operator["run"](ctx)

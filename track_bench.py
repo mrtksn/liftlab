@@ -60,21 +60,28 @@ def measure(stream):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--worker"]:
+    if sys.argv[1:2] == ["--worker"]:
+        WIDTH, HEIGHT = (int(v) for v in sys.argv[2:4]) if len(sys.argv) > 3 else (WIDTH, HEIGHT)
         print(json.dumps(measure(sys.stdin.buffer)))
     else:
         import cv2
+        from node_params import device_settings
         ap = argparse.ArgumentParser(description=__doc__)
         ap.add_argument("walk", type=Path, help="survey directory containing frames/")
-        ap.add_argument("--pi",default="pi@192.168.2.127")
+        ap.add_argument("--pi", help="SSH destination; defaults to the survey folder's device settings")
+        ap.add_argument("--frames", type=int, default=48, help="frames streamed to both computers")
+        ap.add_argument("--width", type=int, default=WIDTH, help="downsampled width")
+        ap.add_argument("--height", type=int, default=HEIGHT, help="downsampled height")
         args = ap.parse_args()
+        WIDTH, HEIGHT = args.width, args.height
+        args.pi = args.pi or device_settings(args.walk.parent)["pi_host"]
         data = bytearray()
-        for path in sorted((args.walk/"frames").glob("*.jpg"))[:48]:
+        for path in sorted((args.walk/"frames").glob("*.jpg"))[:args.frames]:
             gray = cv2.imread(str(path),cv2.IMREAD_GRAYSCALE)
             data.extend(cv2.resize(gray,(WIDTH,HEIGHT),interpolation=cv2.INTER_AREA).tobytes())
         mac = measure(io.BytesIO(data))
         code = Path(__file__).read_text()
-        command = "python3 -c " + shlex.quote(code) + " --worker"
+        command = "python3 -c " + shlex.quote(code) + f" --worker {WIDTH} {HEIGHT}"
         result = subprocess.run(["ssh","-T","-o","BatchMode=yes","-o","ConnectTimeout=6",args.pi,command],
                                 input=data,capture_output=True,timeout=120)
         if result.returncode:

@@ -37,8 +37,11 @@ def save_index(run, images, camera, ids):
 
 class Locator:
     def __init__(self, run, model):
+        # The camera matches the walk's recorded images.
+        first = next(iter(sorted((run/'frames').glob('*.jpg'))), None)
+        height, width = cv2.imread(str(first), cv2.IMREAD_GRAYSCALE).shape if first else (480, 640)
         with np.load(run / Path(model['feature_index']).name) as data:
-            self.camera = sfm.Camera(model=str(data['camera_model']), width=640, height=480,
+            self.camera = sfm.Camera(model=str(data['camera_model']), width=width, height=height,
                                      params=data['params'])
             self.labels = data['labels']
             self.matcher = cv2.FlannBasedMatcher(dict(algorithm=1,trees=4),dict(checks=64))

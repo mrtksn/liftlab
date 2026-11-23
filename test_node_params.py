@@ -4,7 +4,8 @@ import tempfile
 import unittest
 
 from fusion import load_observations
-from node_params import CAMERA_MAP_PARAMS, SENSOR_PARAMS, defaults, pairing_ns, sensor_settings, tof_metres, validate
+from node_params import (CAMERA_MAP_PARAMS, DEVICE_PARAMS, SENSOR_PARAMS, defaults, device_settings, pairing_ns,
+                         sensor_settings, tof_metres, validate)
 
 
 class NodeParamTests(unittest.TestCase):
@@ -39,6 +40,23 @@ class NodeParamTests(unittest.TestCase):
             self.assertEqual(load_observations(run)["a"]["range"], 2)
             (run/"sensors.json").write_text("not json")
             self.assertEqual(sensor_settings(run)["tof_counts_per_metre"], 50)
+
+
+    def test_device_settings(self):
+        device = defaults(DEVICE_PARAMS)
+        self.assertEqual((device["camera_width"], device["camera_height"], device["tof_address"]), (640, 480, 0x52))
+        self.assertEqual(validate(DEVICE_PARAMS, {"pi_host": "pi@10.0.0.2"})["pi_host"], "pi@10.0.0.2")
+        for bad in ({"pi_host": "pi@host; rm -rf ~"}, {"calibration_file": "../escape.json"}, {"tof_address": 0x30},
+                    {"camera_fps": 0}):
+            with self.assertRaises(ValueError):
+                validate(DEVICE_PARAMS, bad)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(device_settings(root), device)
+            (root/"device.json").write_text(json.dumps({"camera_fps": 15}))
+            self.assertEqual(device_settings(root)["camera_fps"], 15)
+            (root/"device.json").write_text(json.dumps({"camera_fps": -1}))
+            self.assertEqual(device_settings(root), device)
 
 
 if __name__ == "__main__":

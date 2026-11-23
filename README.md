@@ -25,6 +25,10 @@ The pipeline panel draws and runs a graph described entirely as data. Nothing in
 
 Opening a preset collects outputs that already exist and stops at the first node that would start new work. Run to node builds the selected node and everything it needs.
 
+Data types (`TYPES` in `operators.py`) declare how they are displayed (map, points, polygons, splats, frames, table, …) and which tool panel goes with them, so a new operator that produces an existing kind of data needs no dashboard change. Thresholds the processing used to fix — ToF scale checks, up-axis limits, frame recovery and gap repair, cloud-plane support, clearance grid and pose gaps — are operator settings with the previous values as defaults.
+
+**Device and recording** (beside Survey leveling) holds how this Mac drives the hardware, saved as `device.json` in the survey folder: Pi SSH destination, image size, frame rate, JPEG bitrate, 180° rotation, lens calibration file, ToF I²C address and poll rate, telemetry UDP port, live-map view spacing and limits, and the calibration checkerboard size (the printable target follows it). `--pi` on the command line still overrides the destination. Camera and sensor changes apply on the next Connect camera.
+
 ## Frame depth replay
 
 Open a saved walk and use **Frame view** above the recorded image to switch between the original photo and four depth sources. The shared timeline selects the same frame in both views. The original photo includes the full fisheye field of view. All four depth previews use the central rectified camera view. In **Reconstruction**, select a method to see its build and display controls.

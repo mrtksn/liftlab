@@ -7,7 +7,6 @@ from node_params import validate
 import operators
 
 HERE = Path(__file__).resolve().parent
-CLIENT = {"code", "viewer", "splat-fit"}
 
 
 class OperatorTests(unittest.TestCase):
@@ -37,6 +36,20 @@ class OperatorTests(unittest.TestCase):
         changed = operators.variant(dict(defaults, steps=3000), operators.GAUSSIAN_PARAMS)
         self.assertRegex(changed, r"^[0-9a-f]{8}$")
 
+    def test_clearance_settings_get_their_own_folder(self):
+        import tempfile
+        import clearance
+        with tempfile.TemporaryDirectory() as directory:
+            run = root = Path(directory)
+            default = clearance.artifact_dir(run, root)
+            self.assertEqual(clearance.artifact_dir(run, root, {"views": 120}), default)
+            self.assertNotEqual(clearance.artifact_dir(run, root, {"views": 60}), default)
+
+    def test_every_type_declares_a_display(self):
+        kinds = {"tables", "table", "frames", "pixels", "map", "path", "points", "polygons", "triangles", "splats", "report"}
+        for name, spec in operators.TYPES.items():
+            self.assertIn(spec["display"], kinds, name)
+
     def test_presets_reference_real_operators_ports_and_controls(self):
         catalog = operators.catalog()
         ops = {o["id"]: o for o in catalog["operators"]}
@@ -53,10 +66,10 @@ class OperatorTests(unittest.TestCase):
                        [] if node["op"] == "viewer" else ops[node["op"]]["outputs"]
             for node in nodes.values():
                 where = f"{path.name}:{node['id']}"
-                self.assertTrue(node["op"] in ops or node["op"] in CLIENT, where)
+                self.assertIn(node["op"], ops, where)
                 links = node.get("inputs") or ({} if node["op"] != "viewer" else [])
                 ports = {p["name"]: [p["type"]] for p in node.get("ports", [])} if node["op"] == "code" else \
-                        {p["name"]: p["types"] for p in ops[node["op"]]["inputs"]} if node["op"] in ops else {}
+                        {p["name"]: p["types"] for p in ops[node["op"]]["inputs"]}
                 for name, link in (enumerate(links) if isinstance(links, list) else links.items()):
                     self.assertIn(link["node"], nodes, where)
                     out = next((p for p in outputs(nodes[link["node"]]) if p["name"] == link["port"]), None)
@@ -64,7 +77,7 @@ class OperatorTests(unittest.TestCase):
                     if name in ports:
                         types = ports[name] if isinstance(ports[name], list) else [ports[name]]
                         self.assertTrue(accepts(types, out["types"][0]), where)
-                if node["op"] in ops:
+                if node["op"] not in ("code", "viewer"):
                     for p in ops[node["op"]]["inputs"]:
                         self.assertTrue(p.get("optional") or p["name"] in links, f"{where} needs {p['name']}")
                     keys = {p["key"] for p in ops[node["op"]]["params"]}
