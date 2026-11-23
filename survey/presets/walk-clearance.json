@@ -1,0 +1,85 @@
+{
+ "name": "Walk clearance",
+ "description": "Distance from the walked path to the nearest occupied space in the Gaussian map.",
+ "controls": [
+  {
+   "key": "steps",
+   "label": "Training steps",
+   "kind": "int",
+   "default": 1500,
+   "min": 50,
+   "max": 100000
+  }
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "splats",
+    "op": "gaussian-map",
+    "inputs": {
+     "map": {
+      "node": "map",
+      "port": "map"
+     },
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     }
+    },
+    "settings": {
+     "steps": {
+      "var": "steps"
+     }
+    }
+   },
+   {
+    "id": "clearance",
+    "op": "clearance",
+    "inputs": {
+     "splats": {
+      "node": "splats",
+      "port": "splats"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    }
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "splats",
+      "port": "splats"
+     },
+     {
+      "node": "clearance",
+      "port": "clearance"
+     }
+    ]
+   }
+  ],
+  "selected": "clearance",
+  "viewer": "view"
+ }
+}

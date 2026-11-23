@@ -1,0 +1,114 @@
+{
+ "name": "Depth surfaces",
+ "description": "Surfaces fitted to backprojected depth points.",
+ "controls": [
+  {
+   "key": "model",
+   "label": "Depth model",
+   "kind": "choice",
+   "options_from": {
+    "op": "depth",
+    "param": "model"
+   }
+  },
+  {
+   "key": "surface",
+   "label": "Surface method",
+   "kind": "choice",
+   "options_from": {
+    "op": "depth-surfaces",
+    "param": "method"
+   }
+  }
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "depth",
+    "op": "depth",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    },
+    "settings": {
+     "model": {
+      "var": "model"
+     }
+    }
+   },
+   {
+    "id": "points",
+    "op": "backproject",
+    "inputs": {
+     "depth": {
+      "node": "depth",
+      "port": "depth"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    }
+   },
+   {
+    "id": "mesh",
+    "op": "depth-surfaces",
+    "inputs": {
+     "points": {
+      "node": "points",
+      "port": "points"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    },
+    "settings": {
+     "method": {
+      "var": "surface"
+     }
+    }
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "map",
+      "port": "map"
+     },
+     {
+      "node": "mesh",
+      "port": "mesh"
+     }
+    ]
+   }
+  ],
+  "selected": "mesh",
+  "viewer": "view"
+ }
+}

@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>LingBot-Map walk</title><style>*{box-sizing:border-box}body{margin:0;background:#10191b;color:#d7e9e7;font:14px system-ui}canvas{width:100%;height:calc(100vh - 76px);display:block;touch-action:none}footer{padding:4px 12px}input{width:min(40vw,500px);vertical-align:middle}small{color:#a7bebd}</style>
+<canvas aria-label="Reconstructed room and camera path"></canvas><footer><label>Walk replay <input type="range" min="0" step="1"></label> <output></output><br><small>Drag to orbit · Scroll to zoom · Relative scale · Blue line connects predicted camera positions</small></footer>
+<script>
+const scene=SCENE_DATA, canvas=document.querySelector('canvas'), slider=document.querySelector('input');
+const bytes=s=>Uint8Array.from(atob(s),v=>v.charCodeAt(0));
+const gl=canvas.getContext('webgl'); if(!gl)throw Error('WebGL unavailable');
+const program=gl.createProgram();
+for(const [kind,source] of [[gl.VERTEX_SHADER,`attribute vec3 point,color; uniform mat3 camera; uniform vec3 center; uniform vec2 scale; varying vec3 rgb; void main(){vec3 p=camera*(point-center);gl_Position=vec4(p.xy*scale,p.z*0.0001,1.);gl_PointSize=2.;rgb=color;}`],[gl.FRAGMENT_SHADER,`precision mediump float;varying vec3 rgb;void main(){gl_FragColor=vec4(rgb,1.);}`]]){
+ const shader=gl.createShader(kind);gl.shaderSource(shader,source);gl.compileShader(shader);gl.attachShader(program,shader);
+}
+gl.linkProgram(program);gl.useProgram(program);
+const pt=gl.getAttribLocation(program,'point'), col=gl.getAttribLocation(program,'color');
+function buffer(data){const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);return b}
+function attribute(loc,b,type,norm){gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.vertexAttribPointer(loc,3,type,norm,0,0);gl.enableVertexAttribArray(loc)}
+const xyz=buffer(new Float32Array(bytes(scene.xyz).buffer)), rgb=buffer(bytes(scene.rgb)),path=buffer(new Float32Array(scene.centers.flat()));
+let yaw=-0.3,pitch=0.5,zoom=1,drag=null;
+function draw(){
+ const w=canvas.clientWidth||1,h=canvas.clientHeight||1;canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);gl.clearColor(.04,.07,.08,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+ const a=Math.cos(yaw),b=Math.sin(yaw),c=Math.cos(pitch),d=Math.sin(pitch),s=zoom/scene.extent;
+ gl.uniform3fv(gl.getUniformLocation(program,'center'),scene.center);
+ gl.uniform2f(gl.getUniformLocation(program,'scale'),s*Math.min(w,h)/w,s*Math.min(w,h)/h);
+ gl.uniformMatrix3fv(gl.getUniformLocation(program,'camera'),false,[a,b*d,b*c,0,-c,d,-b,a*d,a*c]);
+ const i=Number(slider.value);gl.enable(gl.DEPTH_TEST);attribute(pt,xyz,gl.FLOAT,false);attribute(col,rgb,gl.UNSIGNED_BYTE,true);gl.drawArrays(gl.POINTS,0,scene.ends[i]);
+ gl.disable(gl.DEPTH_TEST);attribute(pt,path,gl.FLOAT,false);gl.disableVertexAttribArray(col);gl.vertexAttrib3f(col,.25,.88,1);gl.drawArrays(gl.LINE_STRIP,0,i+1);
+ document.querySelector('output').textContent='Frame '+parseInt(scene.frames[i].slice(5))+' · '+(i+1)+' / '+scene.frames.length+' views';
+}
+slider.max=scene.frames.length-1;slider.value=slider.max;slider.oninput=draw;
+canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)};
+canvas.onpointermove=e=>{if(drag){yaw+=(e.clientX-drag[0])*.008;pitch+=(e.clientY-drag[1])*.008;drag=[e.clientX,e.clientY];draw()}};
+canvas.onpointerup=canvas.onpointercancel=()=>drag=null;
+canvas.onwheel=e=>{e.preventDefault();zoom=Math.min(100,Math.max(.05,zoom*Math.exp(-e.deltaY*.002)));draw()};
+new ResizeObserver(draw).observe(canvas);draw();
+</script>

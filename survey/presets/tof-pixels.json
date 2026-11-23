@@ -1,0 +1,114 @@
+{
+ "name": "ToF-corrected depth pixels",
+ "description": "Depth pixels around the ToF beam, corrected to the measured range.",
+ "controls": [],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "depth",
+    "op": "depth",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    },
+    "settings": {
+     "model": "apple"
+    }
+   },
+   {
+    "id": "correct",
+    "op": "code",
+    "label": "Correct beam pixels",
+    "ports": [
+     {
+      "name": "input",
+      "type": "Depth frames"
+     },
+     {
+      "name": "map",
+      "type": "Camera map"
+     },
+     {
+      "name": "tables",
+      "type": "Recording tables"
+     }
+    ],
+    "output": "JSON records",
+    "inputs": {
+     "input": {
+      "node": "depth",
+      "port": "depth"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     },
+     "tables": {
+      "node": "walk",
+      "port": "tables"
+     }
+    },
+    "program": "const {map,tables}=inputs;\nif(map.units!=='m')throw Error('This preset needs camera positions in metres.');\n// Approximate a centred, forward-facing beam. Correct only its local patch.\nconst maxTimeMs=40, maxResidualM=0.20, pixelRadius=2;\nconst sensors=tables['sensors.json'][0];   // the walk's ToF calibration\nconst poses=new Map(map.poses.map(p=>[p.frame,p]));\nconst stamps=new Map((tables['timestamps.csv']||[]).map(r=>[r.frame,r]));\nconst ranges=(tables['range.csv']||[]).filter(r=>Number.isFinite(r.pi_read_end_ns)).sort((a,b)=>a.pi_read_end_ns-b.pi_read_end_ns);\nconst rows=[];\nlet k=0;\nfor(const ref of input){\n  const pose=poses.get(ref.frame),stamp=stamps.get(ref.frame);\n  if(!pose?.rotation||!stamp)continue;\n  const t=stamp.pi_encoder_callback_ns;\n  if(!Number.isFinite(t))continue;\n  while(k+1<ranges.length&&Math.abs(ranges[k+1].pi_read_end_ns-t)<Math.abs(ranges[k].pi_read_end_ns-t))k++;\n  const sample=ranges[k]||{pi_read_end_ns:stamp.pi_tof_read_end_ns,tof_raw:stamp.tof_raw};\n  if(!Number.isFinite(sample.pi_read_end_ns)||Math.abs(sample.pi_read_end_ns-t)>maxTimeMs*1e6||!(sample.tof_raw>=sensors.tof_min_raw&&sample.tof_raw<=sensors.tof_max_raw))continue;\n  const {width,height,pixels}=await readFrame(ref);\n  const cx=Math.floor(width/2),cy=Math.floor(height/2),f=width*64/96;\n  const centre=pixels[cy*width+cx],rangeM=sample.tof_raw/sensors.tof_counts_per_metre;\n  if(!(centre>0)||Math.abs(rangeM-centre)>maxResidualM)continue;\n  for(let y=cy-pixelRadius;y<=cy+pixelRadius;y++)for(let x=cx-pixelRadius;x<=cx+pixelRadius;x++){\n    const raw=pixels[y*width+x];\n    if(!(raw>0)||Math.abs(raw-centre)>0.05)continue;\n    const z=raw+rangeM-centre;\n    if(z<=0)continue;\n    const ray=[(x+.5-width/2)*z/f,(y+.5-height/2)*z/f,z];\n    const xyz=pose.rotation.map((axis,i)=>pose.xyz[i]+axis.reduce((sum,v,j)=>sum+v*ray[j],0));\n    rows.push({frame:ref.frame,x,y,depth_m:raw,range_m:rangeM,corrected_m:z,xyz});\n  }\n}\nreturn rows;"
+   },
+   {
+    "id": "dots",
+    "op": "code",
+    "label": "Corrected dots",
+    "ports": [
+     {
+      "name": "input",
+      "type": "JSON records"
+     }
+    ],
+    "output": "Colored points",
+    "inputs": {
+     "input": {
+      "node": "correct",
+      "port": "value"
+     }
+    },
+    "program": "return input.map(row => [...row.xyz, 110, 226, 192]);"
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "map",
+      "port": "map"
+     },
+     {
+      "node": "dots",
+      "port": "value"
+     }
+    ]
+   }
+  ],
+  "selected": "correct",
+  "viewer": "view"
+ }
+}

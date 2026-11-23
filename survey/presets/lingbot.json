@@ -1,0 +1,53 @@
+{
+ "name": "LingBot-Map",
+ "description": "Learned reconstruction from the image sequence on Apple Metal.",
+ "controls": [],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "map",
+    "op": "camera-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "telemetry": {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    }
+   },
+   {
+    "id": "lingbot",
+    "op": "lingbot-map",
+    "inputs": {
+     "photos": {
+      "node": "walk",
+      "port": "photos"
+     },
+     "map": {
+      "node": "map",
+      "port": "map"
+     }
+    }
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "lingbot",
+      "port": "result"
+     }
+    ]
+   }
+  ],
+  "selected": "lingbot",
+  "viewer": "view"
+ }
+}

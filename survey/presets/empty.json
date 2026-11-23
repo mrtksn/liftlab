@@ -1,0 +1,25 @@
+{
+ "name": "Empty pipeline",
+ "description": "Only the recorded walk.",
+ "controls": [],
+ "graph": {
+  "nodes": [
+   {
+    "id": "walk",
+    "op": "walk"
+   },
+   {
+    "id": "view",
+    "op": "viewer",
+    "inputs": [
+     {
+      "node": "walk",
+      "port": "telemetry"
+     }
+    ]
+   }
+  ],
+  "selected": "walk",
+  "viewer": "view"
+ }
+}
