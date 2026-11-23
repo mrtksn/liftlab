@@ -169,11 +169,16 @@ static int pmon_get(float v[3], float a[3], float mah[3]) {
 }
 /* The voltage of the channel that watches a pack (pmon_use 1 the motors', 2 a second), 0 if none or not read. */
 static float pmon_volts(int use) {
-  if (!HW.pmon_chip) return 0; float v[3], a[3], m[3]; pmon_get(v, a, m);
+  if (!HW.pmon_chip) return 0;
+  float v[3], a[3], m[3]; pmon_get(v, a, m);
   for (int k = 0; k < 3; k++) if (HW.pmon_use[k] == use) return v[k];
   return 0;
 }
-static int pmon_watches(int use) { if (!HW.pmon_chip) return 0; for (int k = 0; k < 3; k++) if (HW.pmon_use[k] == use) return 1; return 0; }
+static int pmon_watches(int use) {
+  if (!HW.pmon_chip) return 0;
+  for (int k = 0; k < 3; k++) if (HW.pmon_use[k] == use) return 1;
+  return 0;
+}
 /* The item and the link frame: for each of the three channels what it watches (0 nothing), volts, amps, mAh. */
 static void pmon_pack(float out[12]) {
   float v[3], a[3], m[3]; pmon_get(v, a, m);
@@ -225,7 +230,10 @@ static void sensor_task(void *arg) {
       if (r == 1) {
         portENTER_CRITICAL(&imu_mux);
         const int64_t dt = pm_us ? t - pm_us : 0;      /* the charge: amps over the time since the last set (not over a gap) */
-        for (int k = 0; k < 3; k++) { if (dt > 0 && dt < 1000000) pm_mah[k] += pa[k] * (float)dt / 3.6e6f; pm_v[k] = pv[k]; pm_a[k] = pa[k]; }
+        for (int k = 0; k < 3; k++) {
+          if (dt > 0 && dt < 1000000) pm_mah[k] += pa[k] * (float)dt / 3.6e6f;
+          pm_v[k] = pv[k]; pm_a[k] = pa[k];
+        }
         pm_us = t;
         portEXIT_CRITICAL(&imu_mux);
       } else if (r < 0) { portENTER_CRITICAL(&imu_mux); pm_us = 0; portEXIT_CRITICAL(&imu_mux); }

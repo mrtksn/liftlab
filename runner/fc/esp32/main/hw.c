@@ -225,7 +225,9 @@ int hw_pmon_poll(int64_t now, float volts[3], float amps[3]) {
   while (step < 6 && !c->pmon_use[step / 2]) step += 2;
   if (step >= 6) {
     for (int k = 0; k < 3; k++) { volts[k] = c->pmon_use[k] ? v[k] : 0; amps[k] = c->pmon_use[k] ? a[k] : 0; }
-    step = 0; next = now + 50000 - 6 * 3000; if (next < now + 3000) next = now + 3000; return 1;
+    step = 0; next = now + 50000 - 6 * 3000;
+    if (next < now + 3000) next = now + 3000;
+    return 1;
   }
   const int k = step / 2, bus = step % 2; const uint8_t reg = lb_ina_reg(chip, k, bus); uint8_t b[2];
   if (i2c_master_transmit_receive(pmon_dev, &reg, 1, b, 2, 2) != ESP_OK) { present = 0; next = now + 1000000; return -1; }

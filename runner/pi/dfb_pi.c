@@ -405,8 +405,11 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
 static void power_said(const float *pw, char *out, size_t n) {
   static const char *const what[] = { "", "motors' pack", "second pack", "other" };
   size_t k = (size_t)snprintf(out, n, "power:"); int any = 0;
-  for (int c = 0; c < 3 && k < n; c++) { const int u = (int)pw[4 * c]; if (u < 1 || u > 3) continue;
-    k += (size_t)snprintf(out + k, n - k, "%s channel %d %s %.2f V %.2f A %.0f mAh", any++ ? "," : "", c + 1, what[u], (double)pw[4 * c + 1], (double)pw[4 * c + 2], (double)pw[4 * c + 3]); }
+  for (int c = 0; c < 3 && k < n; c++) {
+    const int u = (int)pw[4 * c];
+    if (u < 1 || u > 3) continue;
+    k += (size_t)snprintf(out + k, n - k, "%s channel %d %s %.2f V %.2f A %.0f mAh", any++ ? "," : "", c + 1, what[u], (double)pw[4 * c + 1], (double)pw[4 * c + 2], (double)pw[4 * c + 3]);
+  }
   if (!any) snprintf(out, n, "power: no channel in use");
 }
 static const char *stick_test_said(const float *c) { static char b[32]; if (c[5] < 0) return ""; snprintf(b, sizeof b, ", motor %d test at %.2f", (int)c[5] + 1, (double)c[6]); return b; }
