@@ -14,6 +14,8 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_rom_sys.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -63,9 +65,24 @@ static int imu_kind, baro_kind;
 static float gyro_bias[3];
 static int wr(i2c_master_dev_handle_t d, uint8_t reg, uint8_t v) { uint8_t b[2] = { reg, v }; return i2c_master_transmit(d, b, 2, 5) == ESP_OK ? 0 : -1; }
 static int rd(i2c_master_dev_handle_t d, uint8_t reg, uint8_t *buf, int n) { return i2c_master_transmit_receive(d, &reg, 1, buf, (size_t)n, 5) == ESP_OK ? 0 : -1; }
+static i2c_master_dev_handle_t dev_at[128];   /* one handle an address: looking for the IMU again doesn't add more */
 static i2c_master_dev_handle_t add(uint8_t addr) {
+  if (addr > 127) return NULL;
+  if (dev_at[addr]) return dev_at[addr];
   i2c_device_config_t dc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = addr, .scl_speed_hz = 400000 };
-  i2c_master_dev_handle_t d = NULL; if (i2c_master_bus_add_device(imu_i2c_bus, &dc, &d) != ESP_OK) return NULL; return d;
+  i2c_master_dev_handle_t d = NULL; if (i2c_master_bus_add_device(imu_i2c_bus, &dc, &d) != ESP_OK) return NULL;
+  return dev_at[addr] = d;
+}
+/* A chip cut off mid-byte (the ESP32 reset, or a voltage dip) can hold SDA low for good: nothing on the bus answers
+ * until it's clocked out, and resetting the ESP32 doesn't power the chip off. Up to 9 clocks on SCL, then a stop. */
+static void i2c_unstick(int sda, int scl) {
+  if (sda < 0 || scl < 0) return;
+  gpio_config_t g = { .pin_bit_mask = (1ULL << sda) | (1ULL << scl), .mode = GPIO_MODE_INPUT_OUTPUT_OD, .pull_up_en = GPIO_PULLUP_ENABLE };
+  if (gpio_config(&g) != ESP_OK) return;
+  gpio_set_level(sda, 1); gpio_set_level(scl, 1); esp_rom_delay_us(10);
+  for (int i = 0; i < 9 && !gpio_get_level(sda); i++) { gpio_set_level(scl, 0); esp_rom_delay_us(5); gpio_set_level(scl, 1); esp_rom_delay_us(5); }
+  gpio_set_level(scl, 0); esp_rom_delay_us(5); gpio_set_level(sda, 0); esp_rom_delay_us(5);
+  gpio_set_level(scl, 1); esp_rom_delay_us(5); gpio_set_level(sda, 1); esp_rom_delay_us(10);
 }
 
 /* BMP280 calibration and state */
@@ -104,51 +121,75 @@ int hw_i2c_scan(char *out, int n) {
   return found;
 }
 
-int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
-  memset(s, 0, sizeof *s); int k = 0; sensor_config=*c;
-  i2c_master_bus_config_t bcfg = { .i2c_port = I2C_NUM_0, .sda_io_num = c->sda, .scl_io_num = c->scl, .clk_source = I2C_CLK_SRC_DEFAULT,
-                                   .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
-  if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
-  if (c->tof_addr) tof_dev = add(c->tof_addr);
-  if (c->pmon_chip) pmon_dev = add(c->pmon_addr);
+/* An MPU-6050 family chip's settings: clock from the gyro's PLL (this also wakes it: after a reset it sleeps, reading
+ * zeros); low-pass ~98 Hz (gyro; the MPU-6050's accelerometer too); 1 kHz; ±2000 °/s; ±8 g; the MPU-6500/9250's
+ * accelerometer low-pass (its own register) ~99 Hz. Each is read back: a setting that didn't take would scale every
+ * reading wrong. full: a chip reset first (100 ms). Then the GY-87's compass, behind the MPU, gets its bypass. */
+static uint8_t imu_at, imu_who;
+static int mpu_setup(i2c_master_dev_handle_t d, uint8_t who, int full) {
+  if (full) { wr(d, 0x6B, 0x80); vTaskDelay(pdMS_TO_TICKS(100)); }
+  static const uint8_t set[][2] = { { 0x6B, 0x01 }, { 0x1A, 0x02 }, { 0x19, 0x00 }, { 0x1B, 0x18 }, { 0x1C, 0x10 }, { 0x1D, 0x02 } };
+  int bad = 0;
+  for (unsigned q = 0; q < sizeof set / sizeof set[0]; q++) {
+    if (set[q][0] == 0x1D && who == 0x68) continue;
+    uint8_t back = 0xFF; wr(d, set[q][0], set[q][1]);
+    if (rd(d, set[q][0], &back, 1) || (back & (set[q][0] == 0x1B || set[q][0] == 0x1C ? 0x18 : 0xFF)) != set[q][1]) bad = 1;
+  }
+  if (bad) return -1;
+  return wr(d, 0x6A, 0x00) || wr(d, 0x37, 0x02) ? 1 : 0;   /* 1: set up, but the compass bypass failed */
+}
+static int lis_setup(i2c_master_dev_handle_t d) {
+  wr(d, 0x20, 0x97);                                        /* 1.344 kHz, x y z on */
+  wr(d, 0x23, 0x28);                                        /* ±8 g, high resolution */
+  uint8_t r1 = 0, r4 = 0; return rd(d, 0x20, &r1, 1) || rd(d, 0x23, &r4, 1) || r1 != 0x97 || (r4 & 0x38) != 0x28 ? -1 : 0;
+}
+/* Looks for the IMU the wiring names (imu=), sets it up; what went wrong goes in log. Returns the log's length. */
+static int imu_detect(const hw_config *c, hw_sensors *s, char *log, int logn) {
+  int k = 0;
+  #define LOG(...) do { if (log && k < logn) { int w_ = snprintf(log + k, (size_t)(logn - k), __VA_ARGS__); if (w_ > 0) k += w_ < logn - k ? w_ : logn - k; } } while (0)
   if(c->imu_driver==3 && !custom_imu_init(c->imu_addr)) { custom_imu=1;imu_kind=3;s->imu=3;snprintf(s->imu_name,sizeof s->imu_name,"custom C at 0x%02x",c->imu_addr); }
-  if(c->baro_driver==3 && !custom_baro_init(c->baro_addr)) { custom_baro=1;baro_kind=3;s->baro=3;snprintf(s->baro_name,sizeof s->baro_name,"custom C"); }
-  if(c->mag_driver==3 && !custom_mag_init(c->mag_addr)) { custom_mag=1;s->mag=3;snprintf(s->mag_name,sizeof s->mag_name,"custom C"); }
   /* The IMU: an MPU-6050 family chip at 0x68/0x69 (MPU-6050, MPU-6500, MPU-9250), else a LIS3DH at 0x18/0x19. */
   for (uint8_t a = 0x68; a <= 0x69 && !imu_kind && (c->imu_driver==0 || c->imu_driver==1); a++) {
     if(c->imu_addr && c->imu_addr!=a) continue;
     if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
     i2c_master_dev_handle_t d = add(a); uint8_t who = 0;
-    if (!d || rd(d, 0x75, &who, 1)) continue;
+    if (!d || rd(d, 0x75, &who, 1)) { LOG("0x%02x answers, but not its id; ", a); continue; }
     const char *nm = who == 0x68 ? "MPU-6050" : who == 0x70 ? "MPU-6500" : who == 0x71 ? "MPU-9250" : who == 0x73 ? "MPU-9255" : who == 0x72 ? "MPU-6052" : NULL;
-    if (!nm) { k += snprintf(log + k, logn - k, "0x%02x answers with id 0x%02x, not a known IMU; ", a, who); continue; }
-    wr(d, 0x6B, 0x80); vTaskDelay(pdMS_TO_TICKS(100));       /* reset */
-    /* clock from the gyro's PLL; low-pass ~98 Hz (gyro; the MPU-6050's accelerometer too); 1 kHz; ±2000 °/s; ±8 g;
-     * the MPU-6500/9250's accelerometer low-pass (its own register) ~99 Hz. Each is read back: a setting that didn't
-     * take would scale every reading wrong. */
-    static const uint8_t set[][2] = { { 0x6B, 0x01 }, { 0x1A, 0x02 }, { 0x19, 0x00 }, { 0x1B, 0x18 }, { 0x1C, 0x10 }, { 0x1D, 0x02 } };
-    int bad = 0;
-    for (unsigned q = 0; q < sizeof set / sizeof set[0]; q++) {
-      if (set[q][0] == 0x1D && who == 0x68) continue;
-      uint8_t back = 0xFF; wr(d, set[q][0], set[q][1]);
-      if (rd(d, set[q][0], &back, 1) || (back & (set[q][0] == 0x1B || set[q][0] == 0x1C ? 0x18 : 0xFF)) != set[q][1]) bad = 1;
-    }
-    if (bad) { k += snprintf(log + k, logn - k, "%s at 0x%02x didn't take its settings; ", nm, a); continue; }
-    /* GY-87-style modules put the compass on the MPU's auxiliary bus. */
-    if(wr(d,0x6A,0x00) || wr(d,0x37,0x02)) { k+=snprintf(log+k,logn-k,"MPU bypass failed; "); }
-    imu_dev = d; imu_kind = 1; s->imu = 1; snprintf(s->imu_name, sizeof s->imu_name, "%s at 0x%02x", nm, a);
+    if (!nm) { LOG("0x%02x answers with id 0x%02x, not a known IMU; ", a, who); continue; }
+    const int e = mpu_setup(d, who, 1);
+    if (e < 0) { LOG("%s at 0x%02x didn't take its settings; ", nm, a); continue; }
+    if (e > 0) LOG("MPU bypass failed; ");
+    imu_dev = d; imu_kind = 1; imu_at = a; imu_who = who; s->imu = 1; snprintf(s->imu_name, sizeof s->imu_name, "%s at 0x%02x", nm, a);
   }
   for (uint8_t a = 0x18; a <= 0x19 && !imu_kind && (c->imu_driver==0 || c->imu_driver==2); a++) {
     if(c->imu_addr && c->imu_addr!=a) continue;
     if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
     i2c_master_dev_handle_t d = add(a); uint8_t who = 0;
     if (!d || rd(d, 0x0F, &who, 1) || who != 0x33) continue;
-    wr(d, 0x20, 0x97);                                        /* 1.344 kHz, x y z on */
-    wr(d, 0x23, 0x28);                                        /* ±8 g, high resolution */
-    uint8_t r1 = 0, r4 = 0; if (rd(d, 0x20, &r1, 1) || rd(d, 0x23, &r4, 1) || r1 != 0x97 || (r4 & 0x38) != 0x28) { k += snprintf(log + k, logn - k, "LIS3DH didn't take its settings; "); continue; }
-    imu_dev = d; imu_kind = 2; s->imu = 2; snprintf(s->imu_name, sizeof s->imu_name, "LIS3DH at 0x%02x (no gyro)", a);
+    if (lis_setup(d)) { LOG("LIS3DH didn't take its settings; "); continue; }
+    imu_dev = d; imu_kind = 2; imu_at = a; s->imu = 2; snprintf(s->imu_name, sizeof s->imu_name, "LIS3DH at 0x%02x (no gyro)", a);
   }
-  if (!imu_kind) k += snprintf(log + k, logn - k, "no IMU found on I2C (SDA %d, SCL %d); ", c->sda, c->scl);
+  if (!imu_kind && c->imu_driver >= 0) LOG("no IMU found on I2C (SDA %d, SCL %d); ", c->sda, c->scl);
+  #undef LOG
+  return k;
+}
+
+int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
+  memset(s, 0, sizeof *s); int k = 0; sensor_config=*c;
+  i2c_unstick(c->sda, c->scl);
+  i2c_master_bus_config_t bcfg = { .i2c_port = I2C_NUM_0, .sda_io_num = c->sda, .scl_io_num = c->scl, .clk_source = I2C_CLK_SRC_DEFAULT,
+                                   .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
+  if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
+  if (c->tof_addr) tof_dev = add(c->tof_addr);
+  if (c->pmon_chip) pmon_dev = add(c->pmon_addr);
+  /* the IMU, three tries: a chip that came up with the ESP32 (one supply) can need a moment, or a bus reset */
+  for (int tries = 0; tries < 3 && c->imu_driver >= 0; tries++) {
+    if (tries) { i2c_master_bus_reset(imu_i2c_bus); vTaskDelay(pdMS_TO_TICKS(50)); }
+    k = imu_detect(c, s, log, logn);
+    if (imu_kind) break;
+  }
+  if(c->baro_driver==3 && !custom_baro_init(c->baro_addr)) { custom_baro=1;baro_kind=3;s->baro=3;snprintf(s->baro_name,sizeof s->baro_name,"custom C"); }
+  if(c->mag_driver==3 && !custom_mag_init(c->mag_addr)) { custom_mag=1;s->mag=3;snprintf(s->mag_name,sizeof s->mag_name,"custom C"); }
   /* The barometer: BMP280 or BME280 at 0x76/0x77. */
   for (uint8_t a = 0x76; a <= 0x77 && !baro_kind && (c->baro_driver==0 || c->baro_driver==1); a++) {
     if (i2c_master_probe(imu_i2c_bus, a, 20) != ESP_OK) continue;
@@ -242,6 +283,13 @@ int hw_imu_read(fc_imu *m) {
   if(custom_imu) { int e=custom_imu_read(m);if(!e && m->have_gyro) for(int i=0;i<3;i++) m->gyro[i]-=gyro_bias[i];return e; }
   if (imu_kind == 1) {
     if (rd(imu_dev, 0x3B, b, 14)) return -1;
+    /* A reading that can't be one: all zeros (the chip reset itself after a dip and sleeps: the accelerometer reads
+     * no gravity) or all ones (nothing drives the bus). And one that doesn't change: a live chip's noise and
+     * temperature change every sample, so 25 the same in a row is a chip that stopped. */
+    static uint8_t last[14]; static int same;
+    int z = 1, f = 1; for (int i = 0; i < 6; i++) { z &= b[i] == 0; } for (int i = 0; i < 14; i++) f &= b[i] == 0xFF;
+    if (z || f) return -1;
+    if (!memcmp(b, last, sizeof last)) { if (++same >= 25) return -1; } else { same = 0; memcpy(last, b, sizeof last); }
     const float ka = 8 * G / 32768.0f, kg = 2000.0f * (float)M_PI / 180.0f / 32768.0f;
     for (int i = 0; i < 3; i++) {
       m->acc[i] = (float)(int16_t)(b[2 * i] << 8 | b[2 * i + 1]) * ka;
@@ -257,6 +305,31 @@ int hw_imu_read(fc_imu *m) {
   return -1;
 }
 void hw_gyro_calibrate(const float bias[3]) { for (int i = 0; i < 3; i++) gyro_bias[i] += bias[i]; }
+
+int hw_imu_recover(hw_sensors *s, char *msg, int n) {
+  if (!imu_i2c_bus || sensor_config.imu_driver < 0) { snprintf(msg, n, "no IMU wired (imu=-1) or no I2C bus"); return -1; }
+  i2c_master_bus_reset(imu_i2c_bus);   /* clocks out a chip holding SDA, and the ESP32's I2C unit starts again */
+  if (imu_kind == 1) {
+    uint8_t who = 0;
+    if (rd(imu_dev, 0x75, &who, 1)) { snprintf(msg, n, "IMU at 0x%02x doesn't answer (bus reset): check SDA/SCL, 3.3 V, ground", imu_at); return -1; }
+    if (who != imu_who) { snprintf(msg, n, "IMU at 0x%02x answers with id 0x%02x, not 0x%02x: a bad bus?", imu_at, who, imu_who); return -1; }
+    if (mpu_setup(imu_dev, imu_who, 0) >= 0) { snprintf(msg, n, "IMU answers again (bus reset, settings written again)"); return 0; }
+    if (mpu_setup(imu_dev, imu_who, 1) >= 0) { snprintf(msg, n, "IMU answers again (chip reset and set up again)"); return 0; }
+    snprintf(msg, n, "IMU at 0x%02x answers but won't keep its settings", imu_at); return -1;
+  }
+  if (imu_kind == 3) {
+    if (!custom_imu_init(sensor_config.imu_addr)) { snprintf(msg, n, "IMU answers again (custom driver set up again)"); return 0; }
+    snprintf(msg, n, "custom IMU doesn't answer (bus reset)"); return -1;
+  }
+  if (imu_kind == 2) {
+    if (!lis_setup(imu_dev)) { snprintf(msg, n, "accelerometer answers again"); return 0; }
+    snprintf(msg, n, "LIS3DH doesn't answer (bus reset)"); return -1;
+  }
+  /* none found at the start: look again (an IMU powered after the ESP32, or a bus that was stuck then) */
+  char log[96] = ""; imu_detect(&sensor_config, s, log, sizeof log);
+  if (imu_kind) { snprintf(msg, n, "IMU found: %s", s->imu_name); return 0; }
+  snprintf(msg, n, "still no IMU: %s", log[0] ? log : "nothing answers"); return -1;
+}
 
 int hw_baro_read(float *alt) {
   if(custom_baro) return custom_baro_read(alt);

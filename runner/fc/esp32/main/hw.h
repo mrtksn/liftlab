@@ -144,6 +144,10 @@ int hw_tof_poll(int64_t now, float *range);
 int hw_pmon_poll(int64_t now, float volts[3], float amps[3]);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
+/* The IMU stopped answering (or none was found at the start): resets the I2C bus (clocking out a chip that holds
+ * SDA) and sets the IMU up again, its registers rewritten, else the chip reset (100 ms), else looked for again.
+ * 0 when it answers again; msg says what was done or what's wrong. From the sensor task only. */
+int hw_imu_recover(hw_sensors *s, char *msg, int n);
 /* Every address that answers on the sensors' I2C bus, with what usually sits there, as one line. Returns how many. */
 int hw_i2c_scan(char *out, int n);
 

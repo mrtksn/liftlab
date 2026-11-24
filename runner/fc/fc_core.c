@@ -343,7 +343,7 @@ void fc_command(fc_state *F, const fc_cmd *in) {
   if (c->arm && F->state == FC_DISARMED) {   /* arming takes the switch going on: after any disarm it must be seen off first */
     float tilt = axis_tilt(F);
     const char *no = !F->arm_released ? "turn the arm switch off, then on" : !F->have_airframe ? "no airframe loaded" : !F->sizes_ok ? "the formulas don't match this firmware" :
-      !F->att_ok ? "no gyro, or the attitude isn't settled yet" : tilt > 15 && !F->safety_off ? "not level (or: safety off)" : c->throttle >= 0.05f ? "throttle stick not at the bottom" :
+      !F->att_ok ? (F->imu_gap > 0.05f ? "no gyro readings: IMU not answering (or no gyro)" : "attitude still settling: keep it still") : tilt > 15 && !F->safety_off ? "not level (or: safety off)" : c->throttle >= 0.05f ? "throttle stick not at the bottom" :
       F->batt_wired && !batt_ok(F) ? "the battery reading doesn't fit the pack (check the sense wire and vref)" : 0;
     if (no) fc_say(F, "won't arm: %s", no);
     else {

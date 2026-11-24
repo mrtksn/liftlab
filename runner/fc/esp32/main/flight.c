@@ -184,25 +184,37 @@ static void pmon_pack(float out[12]) {
   float v[3], a[3], m[3]; pmon_get(v, a, m);
   for (int k = 0; k < 3; k++) { out[4 * k] = HW.pmon_use[k]; out[4 * k + 1] = v[k]; out[4 * k + 2] = a[k]; out[4 * k + 3] = m[k]; }
 }
+/* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). 1 if measured,
+ * with the accelerometer's average in acc. */
+static int gyro_offset(float acc[3]) {
+  for (int tries = 0; tries < 5; tries++) {
+    double s[3] = { 0 }, s2[3] = { 0 }, sa[3] = { 0 }; int n = 0; fc_imu m;
+    for (int k = 0; k < 500; k++) { if (!hw_imu_read(&m)) { for (int i = 0; i < 3; i++) { s[i] += m.gyro[i]; s2[i] += m.gyro[i] * m.gyro[i]; sa[i] += m.acc[i]; } n++; } vTaskDelay(pdMS_TO_TICKS(2)); }
+    if (n < 400) { post("gyro offset not measured: the IMU missed readings (the estimator learns it)"); return 0; }
+    double var = 0; float b[3]; for (int i = 0; i < 3; i++) { b[i] = (float)(s[i] / n); var += s2[i] / n - (double)b[i] * b[i]; }
+    if (var < 3e-4) {
+      char t[80]; hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
+      for (int i = 0; i < 3; i++) acc[i] = (float)(sa[i] / n);
+      return 1;
+    }
+    post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
+  }
+  return 0;
+}
+static volatile int imu_recoveries;   /* times the IMU came back (the status line says) */
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1; int level_done = 0;
-  /* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). */
   if (SENS.imu == 1 || SENS.imu == 3) {
-    for (int tries = 0; tries < 5; tries++) {
-      double s[3] = { 0 }, s2[3] = { 0 }, sa[3] = { 0 }; int n = 0; fc_imu m;
-      for (int k = 0; k < 500; k++) { if (!hw_imu_read(&m)) { for (int i = 0; i < 3; i++) { s[i] += m.gyro[i]; s2[i] += m.gyro[i] * m.gyro[i]; sa[i] += m.acc[i]; } n++; } vTaskDelay(pdMS_TO_TICKS(2)); }
-      if (n < 400) break;
-      double var = 0; float b[3]; for (int i = 0; i < 3; i++) { b[i] = (float)(s[i] / n); var += s2[i] / n - (double)b[i] * b[i]; }
-      char t[80];
-      if (var < 3e-4) { hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
-        if (HW.level_mode == 0) { float g[4] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n), HW.level_yaw }; level_ask(1, g); level_done = 1; }   /* (level=boot: as it sits now is level) */
-        break; }
-      post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
-    }
+    float acc[3];
+    if (gyro_offset(acc) && HW.level_mode == 0) { float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1; }   /* (level=boot: as it sits now is level) */
   }
   if (HW.level_mode == 2) level_ask(2, (float[4]){ HW.level_deg[0], HW.level_deg[1], HW.level_yaw, 0 });
   else if (!level_done && HW.level_yaw != 0) level_ask(4, (float[4]){ HW.level_yaw, 0, 0, 0 });
   if (HW.level_mode == 0 && !level_done) post("level: not measured (it was moving, or no IMU): the IMU mount as the airframe says; `level` measures it when it's still");
+  /* An IMU that stops answering (a voltage dip resets it, motor noise wedges the bus) is set up again: first after
+   * 10 ms without a reading (in time, if that works at once, for the attitude to hold through it: 50 ms), then
+   * less and less often, to every 2 s. What it found is said the first time and every 30 s while it lasts. */
+  int fail_ms = 0, next_try_ms = 10, tries = 0; int64_t said_us = -60000000;
   TickType_t last = xTaskGetTickCount(); int tb = 0,tm=0; float mag[3]={0};int64_t mag_us=-1000000;
   for (;;) {
     vTaskDelayUntil(&last, period);
@@ -210,6 +222,23 @@ static void sensor_task(void *arg) {
     int64_t us = esp_timer_get_time();
     int ok = hw_imu_read(&m) == 0;
     if (!ok) memset(&m, 0, sizeof m);          /* a failed read: no gyro this sample */
+    if (ok) { fail_ms = 0; next_try_ms = 10; tries = 0; }
+    else if (HW.imu_driver >= 0 && (fail_ms += period) >= next_try_ms) {
+      const int was = SENS.imu; char t[80];
+      const int back = hw_imu_recover(&SENS, t, sizeof t) == 0;
+      if (back) {
+        imu_recoveries++; post(t); fail_ms = 0; next_try_ms = 10; tries = 0;
+        float acc[3];   /* found only now: its offset, if it's on the ground */
+        if (!was && (SENS.imu == 1 || SENS.imu == 3) && F.state == FC_DISARMED && gyro_offset(acc) && HW.level_mode == 0 && !level_done) {
+          float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1;
+        }
+        last = xTaskGetTickCount();
+      } else {
+        static const int wait_ms[] = { 40, 100, 250, 500, 1000, 2000 };
+        next_try_ms = fail_ms + wait_ms[tries < 5 ? tries : 5]; tries++;
+        if (us - said_us > 30000000) { said_us = us; post(t); }
+      }
+    }
     float a; int nb = 0;
     if(SENS.baro==2 || SENS.baro==3) nb=hw_baro_read(&a); else if ((tb += period) >= 40) { tb = 0; nb = hw_baro_read(&a); }
     if((tm+=period)>=10) { tm=0;if(hw_mag_read(mag)) mag_us=us; }
@@ -440,7 +469,9 @@ static void setting(const char *line) {
     strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
     snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
              (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", F.safety_off ? "OFF" : "on");
-    report(s); return;
+    report(s);
+    if (imu_recoveries) { snprintf(s, sizeof s, "IMU set up again %d times since start (it stopped answering: check its wiring and supply)", imu_recoveries); report(s); }
+    return;
   }
   if (!strcmp(line, "power")) {                       /* the power monitor, a channel each */
     if (!HW.pmon_chip) { report("power: no power monitor (pmon=CHIP,ADDRESS,USE,SHUNT...)"); return; }
