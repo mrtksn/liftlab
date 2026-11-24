@@ -8,6 +8,7 @@ static inline int lb_hw_restore(hw_config *c, const void *blob, size_t n) {
   uint32_t version; if(n<sizeof version)return 0;memcpy(&version,blob,sizeof version);
   size_t prefix=0;
   if(version==HW_VERSION && n==sizeof *c)prefix=n;
+  else if(version==18 && n==offsetof(hw_config,imu_pwr_pin))prefix=n;
   else if(version==17 && n==((offsetof(hw_config,tof_addr)+1+3)&~3u))prefix=offsetof(hw_config,tof_addr)+1;
   else if(version==16 && n==offsetof(hw_config,tof_addr))prefix=n;
   else if(version==15 && n==offsetof(hw_config,level_yaw))prefix=n;

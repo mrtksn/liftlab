@@ -399,6 +399,7 @@ function hardwarePinClaims(C,comps,b) {
   }
   if(ESP_PROFILES[b.kind] && b.tasks.includes('tlm') && radioHas('nrf24') && Array.isArray(bus.nrfPins)) ['SCK','MOSI','MISO','CSN','CE'].forEach((n,i)=>claims.push({pin:bus.nrfPins[i],name:'nRF24L01 '+n,key:'nrf'+i}));
   for(const c of comps) if(['motor','joint','latch'].includes(c.type)) { const p=hardwarePart(C,c,comps);if(p.board===b.id)claims.push({pin:p.pin,name:c.name,key:'part'+c.id}); }
+  if(ESP_PROFILES[b.kind]) for(const c of comps.filter(c=>c.type==='sensor'&&c.kind==='imu')) { const p=hardwarePart(C,c,comps);if(p.board===b.id&&Number.isInteger(p.powerPin)&&p.powerPin>=0)claims.push({pin:p.powerPin,name:c.name+' power',key:'imupow'+c.id}); }
   return claims.filter(x=>x.pin>=0);
 }
 function piLatchSettings(C,comps,b) {
@@ -447,6 +448,8 @@ function hardwarePlan(C, comps, b) {
       if(c.kind==='mag' && p.driver!=='none') { for(const [key,dflt] of [['bias','0,0,0'],['scale','1,1,1']]) { const v=String(p[key]||dflt).split(',').map(Number);if(v.length!==3 || v.some(n=>!Number.isFinite(n) || (key==='scale' && (n<0.01 || n>100)))) errors.push(c.name+': invalid compass '+key); } }
       if (c.kind === 'imu' && p.driver === 'lis') warnings.push(c.name + ': LIS3DH has no gyro and cannot arm for flight');
       if (c.kind === 'imu' && p.level != null && p.level !== 'boot' && p.level !== 'off') { const v=String(p.level).split(',').map(Number), D=Math.PI/180; if (v.length!==2 || v.some(n=>!Number.isFinite(n)) || Math.abs(v[0])>180 || Math.abs(v[1])>90 || Math.acos(Math.cos(v[0]*D)*Math.cos(v[1]*D))/D>170) errors.push(c.name+': level trim: roll,pitch in degrees (roll −180…180, pitch −90…90, at most 170° from straight up)'); }
+      if (c.kind === 'imu' && Number.isInteger(p.powerPin) && p.powerPin >= 0 && (!profile || !profile.pins.includes(p.powerPin))) errors.push(c.name+': power switch: choose an available output GPIO');
+      if (c.kind === 'imu' && p.powerLevel != null && p.powerLevel !== 0 && p.powerLevel !== 1) errors.push(c.name+': power switch: the level that powers it is 1 or 0');
       if (c.kind === 'imu' && p.levelYaw != null && !(Number.isFinite(Number(p.levelYaw)) && Math.abs(Number(p.levelYaw)) <= 180)) errors.push(c.name+': level yaw: degrees, −180…180');
     }
   }
@@ -584,6 +587,8 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   // which way is level (runner/fc/esp32/main/hw.h level_mode): as it sits at power-up (the default), the mount as set, or a trim
   if(sensors.imu) lines.push('level='+(sensors.imu.level==null||sensors.imu.level==='boot'?'boot':sensors.imu.level==='off'?'off':String(sensors.imu.level).split(',').map(n=>Number(Number(n).toFixed(2))).join(',')));
   // the IMU board turned about straight up (wiring version 16): only once set, so a design without one still installs on older firmware
+  // the IMU's supply on a GPIO (wiring version 19): only once set, so a design without one still installs on older firmware
+  if(sensors.imu && Number.isInteger(sensors.imu.powerPin)) lines.push(sensors.imu.powerPin>=0?'imu_power='+sensors.imu.powerPin+(sensors.imu.powerLevel===0?',0':''):'imu_power=-1');
   if(sensors.imu && Number(sensors.imu.levelYaw)) lines.push('level_yaw='+Number(Number(sensors.imu.levelYaw).toFixed(1)));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));
   if(plan.radioBoard) { const P=peerSettingLines(radio); lines.push(...P.before, ...radioSettingLines(radio), ...P.after); }

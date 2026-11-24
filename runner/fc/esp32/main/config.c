@@ -21,6 +21,7 @@ void hw_defaults(hw_config *c) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) { c->servo_center_us[j] = 1500; c->servo_us_per_rad[j] = 500.0f / (float)(M_PI / 4); }   /* ±500 µs = ±45° */
   c->sda = LB_SDA; c->scl = LB_SCL;
   c->batt_pin = -1; c->batt_divider = 11.0f; c->batt2_pin = -1; c->batt2_divider = 11.0f;
+  c->imu_pwr_pin = -1; c->imu_pwr_on = 1;
   c->pmon_chip = 0; c->pmon_addr = 0x40; for (int i = 0; i < 3; i++) c->pmon_shunt[i] = 0.1f;
   c->rate_hz = LB_RATE; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
   c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
@@ -101,6 +102,7 @@ static int pin_ok(int p) { return p == -1 || lb_output_pin(p); }
 int hw_check(const hw_config *c, char *err, int errn) {
   for (int i = 0; i < FC_MAX_MOTORS; i++) if (!pin_ok(c->motor_pin[i])) { snprintf(err, errn, "reserved motor pin"); return -1; }
   for (int i = 0; i < FC_MAX_JOINTS; i++) if (!pin_ok(c->servo_pin[i])) { snprintf(err, errn, "reserved servo pin"); return -1; }
+  if (!pin_ok(c->imu_pwr_pin) || (c->imu_pwr_on != 0 && c->imu_pwr_on != 1)) { snprintf(err, errn, "imu_power: an output GPIO and the level that powers it (1 or 0)"); return -1; }
   if (!lb_output_pin(c->sda) || !lb_output_pin(c->scl) || (c->batt_pin >= 0 && !lb_adc_pin(c->batt_pin)) || (c->batt2_pin >= 0 && !lb_adc_pin(c->batt2_pin)) ||
       (c->crsf_rx >= 0 && !lb_input_pin(c->crsf_rx)) || (c->crsf_tx >= 0 && !lb_output_pin(c->crsf_tx))) {
     snprintf(err, errn, "reserved sensor or radio pin"); return -1;
@@ -184,7 +186,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   for (int j = 0; j < FC_MAX_JOINTS; j++) USE(c->servo_pin[j], "servo");
   USE(c->sda, "I2C"); USE(c->scl, "I2C"); USE(c->batt_pin, "battery"); USE(c->batt2_pin, "battery 2"); USE(c->crsf_rx, "radio receiver"); USE(c->crsf_tx, "radio receiver");
   for (int i = 0; i < 5; i++) USE(c->nrf_pin[i], "nRF24L01");
-  USE(c->link_tx, "companion link"); USE(c->link_rx, "companion link");
+  USE(c->link_tx, "companion link"); USE(c->link_rx, "companion link"); USE(c->imu_pwr_pin, "IMU power");
   #undef USE
   int nm = 0, ns = 0; for (int i = 0; i < FC_MAX_MOTORS; i++) nm += c->motor_pin[i] >= 0; for (int j = 0; j < FC_MAX_JOINTS; j++) ns += c->servo_pin[j] >= 0;
   if (nm + ns > LB_PWM_OUTPUTS) { snprintf(err, errn, "%d motors and %d servos: this chip has %d PWM outputs", nm, ns, LB_PWM_OUTPUTS); return -1; }
@@ -269,6 +271,11 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
         c->pmon_use[k] = (int8_t)v[i]; c->pmon_shunt[k] = v[i + 1];
       }
     }
+  } else if (!strcmp(key, "imu_power")) {   /* imu_power=PIN[,LEVEL]: the IMU's supply on a GPIO (hw.h); −1: not switched */
+    if (n == 1 && v[0] == -1) c->imu_pwr_pin = -1;
+    else if (n < 1 || n > 2 || v[0] < 0 || v[0] != (int)v[0] || !pin_ok((int)v[0]) || (n == 2 && v[1] != 0 && v[1] != 1)) {
+      snprintf(err, errn, "imu_power=PIN[,LEVEL]: an output GPIO and the level that powers the IMU, 1 (the pin feeds it) or 0 (a P-MOSFET), or -1"); return -1;
+    } else { c->imu_pwr_pin = (int8_t)v[0]; c->imu_pwr_on = n == 2 ? (int8_t)v[1] : 1; }
   } else if (!strcmp(key, "tof")) {
     if (n != 1 || (v[0] != -1 && (v[0] < 8 || v[0] > 0x77 || v[0] != (int)v[0]))) {
       snprintf(err, errn, "tof=ADDRESS: TOF250 7-bit I2C address (8 to 119), or -1 to disable"); return -1;
@@ -367,6 +374,7 @@ void hw_describe(const hw_config *c, char *out, int n) {
   APP(" i2c=%d,%d battery=%d,%.1f vref=%.1f rate=%d telemetry=%d baud=%ld crsf=%d,%d radio=%s",
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   APP(" tof=%d", c->tof_addr ? c->tof_addr : -1);
+  if (c->imu_pwr_pin >= 0) APP(" imu_power=%d,%d", c->imu_pwr_pin, c->imu_pwr_on); else APP(" imu_power=-1");
   if (c->pmon_chip) { APP(" pmon=%d,%d", c->pmon_chip, c->pmon_addr); for (int ch = 0; ch < lb_ina_channels(c->pmon_chip); ch++) APP(",%d,%.4g", c->pmon_use[ch], (double)c->pmon_shunt[ch]); }
   else APP(" pmon=-1");
   if (c->batt2_pin >= 0) APP(" battery2=%d,%.1f", c->batt2_pin, (double)c->batt2_divider); else APP(" battery2=-1");

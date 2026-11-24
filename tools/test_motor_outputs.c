@@ -56,6 +56,8 @@ int main(void){
   assert(lb_hw_restore(&restored,&old,offsetof(hw_config,tof_addr)) && restored.level_yaw==90 && restored.tof_addr==0);
   old.version=17;old.tof_addr=0x52;old.pmon_addr=0x77;old.pmon_chip=3221;hw_defaults(&restored);   /* (v17: the pad after tof_addr isn't taken) */
   assert(lb_hw_restore(&restored,&old,(offsetof(hw_config,tof_addr)+1+3)&~3u) && restored.tof_addr==0x52 && restored.pmon_chip==0 && restored.pmon_addr==0x40 && restored.pmon_shunt[1]==0.1f);old.tof_addr=0;old.pmon_addr=0;old.pmon_chip=0;
+  old.version=18;old.pmon_chip=3221;old.pmon_addr=0x40;hw_defaults(&restored);   /* v18: no IMU power switch */
+  assert(lb_hw_restore(&restored,&old,offsetof(hw_config,imu_pwr_pin)) && restored.pmon_chip==3221 && restored.imu_pwr_pin==-1 && restored.imu_pwr_on==1);old.pmon_chip=0;old.pmon_addr=0;
   old.version=HW_VERSION;old.motor_driver[0]=1;old.motor_max_pct[0]=70;assert(lb_hw_restore(&restored,&old,sizeof old));assert(restored.motor_driver[0]==1 && restored.motor_max_pct[0]==70);
   assert(!lb_hw_restore(&restored,&old,sizeof old-1));assert(!lb_hw_restore(&restored,&old,1));old.version=99;assert(!lb_hw_restore(&restored,&old,sizeof old));
   hw_config settings;hw_defaults(&settings);assert(settings.version==HW_VERSION && settings.brushed_hz==20000 && settings.motor_max_pct[0]==100 && settings.motor_driver[0]==0);
@@ -65,6 +67,14 @@ int main(void){
     assert(hw_set(&c,"tof=82.5",log,sizeof log) && c.tof_addr==0x52);
     assert(hw_set(&c,"imu=3,82",log,sizeof log) && c.imu_driver==0);
     assert(!hw_set(&c,"tof=-1",log,sizeof log) && c.tof_addr==0);
+    /* imu_power=PIN[,LEVEL]: the IMU's supply on a GPIO */
+    assert(!hw_set(&c,"imu_power=4",log,sizeof log) && c.imu_pwr_pin==4 && c.imu_pwr_on==1);
+    assert(!hw_set(&c,"imu_power=4,0",log,sizeof log) && c.imu_pwr_pin==4 && c.imu_pwr_on==0);
+    assert(hw_set(&c,"imu_power=4,2",log,sizeof log) && c.imu_pwr_on==0);
+    assert(hw_set(&c,"imu_power=-2",log,sizeof log) && hw_set(&c,"imu_power=4.5",log,sizeof log) && c.imu_pwr_pin==4);
+    { hw_config d=c; d.imu_pwr_pin=d.sda; assert(hw_check(&d,log,sizeof log) && strstr(log,"twice")); }
+    { char t[1200]; hw_describe(&c,t,sizeof t); assert(strstr(t,"imu_power=")); }
+    assert(!hw_set(&c,"imu_power=-1",log,sizeof log) && c.imu_pwr_pin==-1);
   }
   { hw_config c = settings; char e[300], d[1200];   /* a power monitor: pmon=CHIP,ADDRESS,USE,SHUNT... */
     assert(c.pmon_chip==0);hw_describe(&c,d,sizeof d);assert(strstr(d," pmon=-1"));
@@ -155,5 +165,5 @@ int main(void){
 #endif
    assert(!hw_set(&u,"link_uart=-1",log,sizeof log)&&u.link_tx==-1&&!hw_check(&u,log,sizeof log));
    hw_config v12=u;v12.version=12;v12.link_mqtt=1;hw_config r;hw_defaults(&r);assert(lb_hw_restore(&r,&v12,offsetof(hw_config,link_tx))&&r.link_mqtt==1&&r.link_tx==-1&&r.version==HW_VERSION);}
-  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v17 migration, the TOF250 address, the power monitor (pmon=), the level setting, a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
+  puts("Motor output tests passed: nothing driven by default, I2C address names, mixed timers, zero startup/stop, caps, invalid throttle, setup/write failures, channel limits, v2–v18 migration, the TOF250 address, the power monitor (pmon=), the level setting, the IMU's power switch (imu_power=), a second pack's voltage (battery2=), ESC stop pulses, the MQTT link settings, the link on pins of its own, a second radio link, the other drones' settings.");
 }

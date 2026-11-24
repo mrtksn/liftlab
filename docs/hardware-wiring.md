@@ -68,6 +68,26 @@ a reboot; `level R,P[,Y]` sets a trim and `level yaw Y` the yaw alone, until a r
 The ESP32's `show` lists the trim in use. Needs flight firmware with wiring version 16 for `level_yaw` and trims
 over 45° (14 for the rest).
 
+### When the IMU stops answering
+
+A voltage dip or a spike from the motors starting can knock the IMU out. The flight controller brings it back by
+itself, step by step, and says each step (the Pi's log, the drone card): after 10 ms without a reading it resets the
+I²C bus (clocking out a chip that holds SDA low) and writes the IMU's settings again, which also wakes an MPU that
+reset itself (it wakes up asleep, reading zeros); then a chip reset; then, if none was found, it looks again (an IMU
+powered after the ESP32). Retries slow down to one every 2 s. Readings that can't be real count as missing: all
+zeros, all ones, or 25 the same in a row. Each start frees a stuck bus first and looks for the IMU three times.
+`show` says how many times it came back since the start: more than none means the wiring or the supply needs work
+(short I²C wires away from the motor leads, 10 µF + 100 nF at the module).
+
+A chip latched up by a spike answers nothing, whatever the bus sends: only taking its power away clears it, and a
+reset of the ESP32 alone doesn't. The IMU card's **Power switch** (`imu_power=PIN[,LEVEL]`) puts its supply on a
+GPIO: the module's VCC straight from the pin (a GY-521 or GY-87 draws a few mA; LEVEL 1, the default), or a P-MOSFET's
+gate (LEVEL 0: on while low; a pull-up on the gate keeps it off while the ESP32 resets). The flight controller then
+switches it off for 100 ms at every start and as the last recovery step (at most every 2 s), with the bus's lines
+held low meanwhile so they don't keep it half powered. The sensors sharing the module's supply restart with it and
+are found again. In flight a lost IMU still stops the motors after 0.2 s; this brings it back for the next arming
+without pulling the batteries. Needs flight firmware with wiring version 19.
+
 ### Safety off
 
 `safety off` (a settings line, or the Pi panel's `!` twice) lets it arm without the "not level" check, and stops the

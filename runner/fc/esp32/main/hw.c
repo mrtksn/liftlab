@@ -11,6 +11,7 @@
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/i2c_master.h"
@@ -103,7 +104,15 @@ static int custom_write(int addr,int reg,int value) {
 }
 #include "custom_sensors.h"
 
+static SemaphoreHandle_t bus_lock;   /* the scan (link task) against a power cycle (sensor task) taking the bus down */
+static int i2c_scan(char *out, int n);
 int hw_i2c_scan(char *out, int n) {
+  if (bus_lock) xSemaphoreTake(bus_lock, portMAX_DELAY);
+  const int found = i2c_scan(out, n);
+  if (bus_lock) xSemaphoreGive(bus_lock);
+  return found;
+}
+static int i2c_scan(char *out, int n) {
   int k = 0, found = 0, mpu = 0, mag = 0;
   #define APP(...) do { if (k < n) { int w = snprintf(out + k, (size_t)(n - k), __VA_ARGS__); if (w > 0) k += w < n - k ? w : n - k; } } while (0)
   APP("I2C on SDA %d, SCL %d:", sensor_config.sda, sensor_config.scl);
@@ -174,12 +183,44 @@ static int imu_detect(const hw_config *c, hw_sensors *s, char *log, int logn) {
   return k;
 }
 
-int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
-  memset(s, 0, sizeof *s); int k = 0; sensor_config=*c;
+/* ── the bus, and the IMU's supply (imu_power=, hw.h) ── */
+static int bus_start(const hw_config *c) {
   i2c_unstick(c->sda, c->scl);
   i2c_master_bus_config_t bcfg = { .i2c_port = I2C_NUM_0, .sda_io_num = c->sda, .scl_io_num = c->scl, .clk_source = I2C_CLK_SRC_DEFAULT,
                                    .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
-  if (i2c_new_master_bus(&bcfg, &imu_i2c_bus) != ESP_OK) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
+  return i2c_new_master_bus(&bcfg, &imu_i2c_bus) == ESP_OK ? 0 : -1;
+}
+static void bus_stop(void) {   /* every device off it, then the bus: what was found is looked for again after */
+  for (int a = 0; a < 128; a++) if (dev_at[a]) i2c_master_bus_rm_device(dev_at[a]);
+  memset(dev_at, 0, sizeof dev_at); memset(custom_devices, 0, sizeof custom_devices);
+  imu_dev = baro_dev = mag_dev = tof_dev = pmon_dev = NULL;
+  if (imu_i2c_bus) i2c_del_master_bus(imu_i2c_bus);
+  imu_i2c_bus = NULL;
+  imu_kind = baro_kind = 0; custom_imu = custom_baro = custom_mag = 0; b180_phase = 0;   /* (p0, the height's zero, stays) */
+}
+static void imu_supply(const hw_config *c, int on) { gpio_set_level(c->imu_pwr_pin, on ? c->imu_pwr_on : !c->imu_pwr_on); }
+/* Off for 100 ms, the bus's lines held low meanwhile (through their pull-ups and the chip's input diodes they'd keep
+ * it half powered, still latched), then on, 50 ms for the chip to start. */
+static void imu_power_cycle(const hw_config *c) {
+  gpio_config_t g = { .pin_bit_mask = (1ULL << c->sda) | (1ULL << c->scl), .mode = GPIO_MODE_OUTPUT };
+  gpio_config(&g); gpio_set_level(c->sda, 0); gpio_set_level(c->scl, 0);
+  imu_supply(c, 0); vTaskDelay(pdMS_TO_TICKS(100));
+  imu_supply(c, 1); vTaskDelay(pdMS_TO_TICKS(50));
+}
+static int sensors_find(const hw_config *c, hw_sensors *s, char *log, int logn);
+int hw_sensors_init(const hw_config *c, hw_sensors *s, char *log, int logn) {
+  memset(s, 0, sizeof *s); sensor_config=*c;
+  if (!bus_lock) bus_lock = xSemaphoreCreateMutex();
+  if (c->imu_pwr_pin >= 0) {   /* the IMU started from off: a reset of the ESP32 alone left it as it was */
+    gpio_config_t g = { .pin_bit_mask = 1ULL << c->imu_pwr_pin, .mode = GPIO_MODE_OUTPUT };
+    gpio_config(&g); gpio_set_drive_capability(c->imu_pwr_pin, GPIO_DRIVE_CAP_3);   /* (~40 mA: the module straight from the pin) */
+    imu_power_cycle(c);
+  }
+  if (bus_start(c)) { snprintf(log, logn, "I2C bus on SDA %d, SCL %d didn't start", c->sda, c->scl); return -1; }
+  return sensors_find(c, s, log, logn);
+}
+static int sensors_find(const hw_config *c, hw_sensors *s, char *log, int logn) {
+  int k = 0;
   if (c->tof_addr) tof_dev = add(c->tof_addr);
   if (c->pmon_chip) pmon_dev = add(c->pmon_addr);
   /* the IMU, three tries: a chip that came up with the ESP32 (one supply) can need a moment, or a bus reset */
@@ -306,8 +347,8 @@ int hw_imu_read(fc_imu *m) {
 }
 void hw_gyro_calibrate(const float bias[3]) { for (int i = 0; i < 3; i++) gyro_bias[i] += bias[i]; }
 
-int hw_imu_recover(hw_sensors *s, char *msg, int n) {
-  if (!imu_i2c_bus || sensor_config.imu_driver < 0) { snprintf(msg, n, "no IMU wired (imu=-1) or no I2C bus"); return -1; }
+/* the I2C steps: the bus reset, then the IMU set up again (its registers, else a chip reset), else looked for again */
+static int imu_recover_bus(hw_sensors *s, char *msg, int n) {
   i2c_master_bus_reset(imu_i2c_bus);   /* clocks out a chip holding SDA, and the ESP32's I2C unit starts again */
   if (imu_kind == 1) {
     uint8_t who = 0;
@@ -329,6 +370,37 @@ int hw_imu_recover(hw_sensors *s, char *msg, int n) {
   char log[96] = ""; imu_detect(&sensor_config, s, log, sizeof log);
   if (imu_kind) { snprintf(msg, n, "IMU found: %s", s->imu_name); return 0; }
   snprintf(msg, n, "still no IMU: %s", log[0] ? log : "nothing answers"); return -1;
+}
+int hw_imu_recover(hw_sensors *s, char *msg, int n) {
+  const hw_config *c = &sensor_config;
+  if (c->imu_driver < 0) { snprintf(msg, n, "no IMU wired (imu=-1)"); return -1; }
+  if (!imu_i2c_bus) {   /* (it didn't start again after a power cycle: try again) */
+    if (bus_lock) xSemaphoreTake(bus_lock, portMAX_DELAY);
+    const int up = !bus_start(c); char log[96] = ""; hw_sensors t; memset(&t, 0, sizeof t);
+    if (up) { sensors_find(c, &t, log, sizeof log); *s = t; }
+    if (bus_lock) xSemaphoreGive(bus_lock);
+    if (!up) { snprintf(msg, n, "the I2C bus on SDA %d, SCL %d doesn't start", c->sda, c->scl); return -1; }
+    if (imu_kind) { snprintf(msg, n, "IMU answers again: %s", s->imu_name); return 0; }
+  }
+  if (!imu_recover_bus(s, msg, n)) return 0;
+  /* The last step, with imu_power=: a chip latched by a spike answers nothing, whatever the bus sends; only taking
+   * its power away clears it. The whole bus goes down for it (its other sensors share the supply), every sensor is
+   * looked for again after, and that's said too. At most every 2 s: a missing IMU isn't switched off and on all along. */
+  static int64_t last_cycle;
+  const int64_t now = esp_timer_get_time();
+  if (c->imu_pwr_pin < 0 || (last_cycle && now - last_cycle < 2000000)) return -1;
+  last_cycle = now;
+  if (bus_lock) xSemaphoreTake(bus_lock, portMAX_DELAY);
+  bus_stop(); imu_power_cycle(c);
+  const int up = !bus_start(c);
+  char log[96] = "";
+  hw_sensors t; memset(&t, 0, sizeof t);
+  if (up) sensors_find(c, &t, log, sizeof log);
+  if (bus_lock) xSemaphoreGive(bus_lock);
+  if (!up) { snprintf(msg, n, "IMU power switched off and on, but the I2C bus didn't start again"); return -1; }
+  *s = t;
+  if (imu_kind) { snprintf(msg, n, "IMU answers again (its power switched off and on: %s)", s->imu_name); return 0; }
+  snprintf(msg, n, "IMU power switched off and on: still no IMU (%s)", log[0] ? log : "nothing answers"); return -1;
 }
 
 int hw_baro_read(float *alt) {

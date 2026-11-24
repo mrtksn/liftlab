@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 18
+#define HW_VERSION 19
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -96,6 +96,14 @@ typedef struct {
   int8_t pmon_use[3];
   int8_t pmon_pad;
   float pmon_shunt[3];
+  /* Appended in v19 (v18 blobs migrate with none): the IMU's supply switched by a GPIO (imu_power=PIN[,LEVEL]; −1: not
+   * switched): the pin feeding the module's VCC itself (a few mA; LEVEL 1, the default) or a P-MOSFET's gate (LEVEL
+   * 0: on while the pin is low). A chip latched up by a voltage spike answers nothing on the bus, whatever is sent to
+   * it: the IMU's last recovery step switches it off and on (hw_imu_recover), and every start does (a reset of the
+   * ESP32 alone leaves it powered). */
+  int8_t imu_pwr_pin;
+  int8_t imu_pwr_on;            /* the level that powers it: 1 or 0 */
+  int8_t imu_pwr_pad[2];
 } hw_config;
 
 void hw_defaults(hw_config *c);
