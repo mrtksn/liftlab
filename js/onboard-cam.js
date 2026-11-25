@@ -4,14 +4,23 @@
 // the part is on the airframe (its joints and the drone's attitude included). The camera looks along the part's +X
 // (forward), turned by its tilt (+ up, −90° straight down) and pan (+ left); the picture's top is the part's +Z.
 // Several cameras: the inset's switch button steps through them, as a two-camera video board's app does.
-// Not modelled: lens distortion, exposure, motion blur, compression and the video link's delay.
+// The lens: a normal (rectilinear) one keeps straight lines straight, up to 170° across; a fisheye bends them, and
+// sees as far as 240° across (a circle of picture with black around it past the lens's edge). Three fisheye
+// projections, as lens makers specify them: equidistant (r = f·θ, most FPV and action cameras), equisolid
+// (r = 2f·sin θ/2) and stereographic (r = 2f·tan θ/2, less squeezed at the edge). A fisheye picture is made from the
+// six views round the camera, mapped through the lens.
+// Not modelled: exposure, motion blur, compression and the video link's delay.
 
-const CAMERA_DEFAULTS = Object.freeze({ fov: 90, w: 640, h: 360, fps: 25, tilt: 0, pan: 0 });
+const CAMERA_DEFAULTS = Object.freeze({ fov: 90, w: 640, h: 360, fps: 25, tilt: 0, pan: 0, lens: 'rect' });
 const CAMERA_LIMITS = { fov: [20, 170], w: [64, 1920], h: [48, 1440], fps: [1, 120], tilt: [-90, 90], pan: [-180, 180] };
+const CAMERA_LENSES = { rect: 'Normal (rectilinear)', equidistant: 'Fisheye · equidistant', equisolid: 'Fisheye · equisolid', stereographic: 'Fisheye · stereographic' };
+const CAMERA_FISHEYE_FOV = 240;
 // The camera's settings, filled in and kept in range (a hand-edited design file may hold anything).
 function cameraSpec(c) {
   const o = c && c.camera; if (!o || typeof o !== 'object') return null;
   const s = {}; for (const [k, [lo, hi]] of Object.entries(CAMERA_LIMITS)) s[k] = Number.isFinite(+o[k]) ? clamp(+o[k], lo, hi) : CAMERA_DEFAULTS[k];
+  s.lens = CAMERA_LENSES[o.lens] ? o.lens : 'rect';
+  if (s.lens !== 'rect' && Number.isFinite(+o.fov)) s.fov = clamp(+o.fov, CAMERA_LIMITS.fov[0], CAMERA_FISHEYE_FOV);
   s.w = Math.round(s.w); s.h = Math.round(s.h); return s;
 }
 const cameraParts = () => cfg.comps.filter(c => c.type === 'mass' && cameraSpec(c));
@@ -47,6 +56,37 @@ function onboardSetup() {
   vpEl.appendChild(box); onboard.el = { box, name, meta, next };
 }
 
+// A fisheye picture: the cube of views round the camera, then a pass that turns each pixel into the direction the lens
+// sends it (camera axes: x right, y up, looking along −z) and reads the cube there.
+const FISHEYE_LENS = { equidistant: 0, equisolid: 1, stereographic: 2 };
+function onboardFisheye(s) {
+  const face = Math.min(1024, Math.max(256, 2 ** Math.ceil(Math.log2(Math.max(s.w, s.h) * 0.75))));
+  if (!onboard.cube || onboard.cubeSize !== face) {
+    if (onboard.cube) onboard.cube.rt.dispose();
+    const rt = new THREE.WebGLCubeRenderTarget(face, { generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    onboard.cube = { rt, cam: new THREE.CubeCamera(0.01, 400, rt) }; onboard.cubeSize = face;
+  }
+  if (!onboard.fish) {
+    const mat = new THREE.ShaderMaterial({ depthTest: false, depthWrite: false,
+      uniforms: { tCube: { value: null }, basis: { value: new THREE.Matrix3() }, halfFov: { value: 1 }, aspect: { value: 1 }, lens: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: [
+        'uniform samplerCube tCube; uniform mat3 basis; uniform float halfFov; uniform float aspect; uniform int lens; varying vec2 vUv;',
+        'void main(){',
+        '  vec2 p = vec2(vUv.x * 2.0 - 1.0, (vUv.y * 2.0 - 1.0) / aspect); float r = length(p), th;',   // r = 1 at the picture's left and right edges
+        '  if (lens == 0) th = r * halfFov;',
+        '  else if (lens == 1) { float f = 0.5 / sin(halfFov * 0.5), q = r / (2.0 * f); if (q > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; } th = 2.0 * asin(q); }',
+        '  else { float f = 0.5 / tan(halfFov * 0.5); th = 2.0 * atan(r / (2.0 * f)); }',
+        '  if (th > ' + (CAMERA_FISHEYE_FOV / 2 * Math.PI / 180).toFixed(4) + ') { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }',   // past the lens
+        '  float ph = atan(p.y, p.x); vec3 d = vec3(sin(th) * cos(ph), sin(th) * sin(ph), -cos(th));',
+        '  gl_FragColor = textureCube(tCube, basis * d);',
+        '}'].join('\n') });
+    const sc = new THREE.Scene(); sc.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+    onboard.fish = { scene: sc, mat };
+  }
+  return onboard.fish;
+}
+
 // The inset's place on the canvas [CSS px, x from the left, y from the bottom as WebGL counts]: top right, under the
 // view's own buttons (and its title bar), at most a third of the view's width.
 function onboardRect(aspect) {
@@ -65,7 +105,7 @@ function onboardHideAids(hide) {
 }
 
 function onboardCamRender() {
-  const P = onboard.pose, on = view.onboard && P && fleet.selected && !(typeof liveOn === 'function' && liveOn());
+  const P = onboard.pose, on = view.onboard && P && fleet.selected && !(typeof liveOn === 'function' && liveOn()) && !(typeof bench !== 'undefined' && bench.on);   // (the Computers bench hides it: don't draw it)
   if (onboard.el) onboard.el.box.hidden = !on;
   if (!on) return;
   onboardSetup();
@@ -79,12 +119,19 @@ function onboardCamRender() {
   // being edited): a slow camera's picture steps, as it does on a real video link.
   if (P.edit || P.t < onboard.last || P.t - onboard.last >= 1 / s.fps - 1e-9 || onboard.lastId !== P.id) {
     const cam = onboard.cam, R = P.R, col = j => new THREE.Vector3(R[j], R[3 + j], R[6 + j]);
-    const look = col(0), up = col(2), right = col(1).negate();
-    cam.position.set(...P.p); cam.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, look.negate()));
-    cam.aspect = aspect; cam.fov = 2 * Math.atan(Math.tan(s.fov * D2R / 2) / aspect) / D2R; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    const back = col(0).negate(), up = col(2), right = col(1).negate();   // (camera axes: x right, y up, looking along −z)
+    cam.position.set(...P.p); cam.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, back));
+    cam.aspect = aspect; cam.fov = 2 * Math.atan(Math.tan(Math.min(s.fov, 170) * D2R / 2) / aspect) / D2R; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
     onboardHideAids(true);
-    try { renderer.setRenderTarget(onboard.rt); renderer.clear(); renderer.render(scene, cam); }
-    finally { renderer.setRenderTarget(null); onboardHideAids(false); }
+    try {
+      if (s.lens === 'rect') { renderer.setRenderTarget(onboard.rt); renderer.clear(); renderer.render(scene, cam); }
+      else {   // a fisheye: the six views round it, then through the lens
+        const F = onboardFisheye(s); onboard.cube.cam.position.set(...P.p); onboard.cube.cam.update(renderer, scene);
+        const u = F.mat.uniforms; u.tCube.value = onboard.cube.rt.texture; u.basis.value.setFromMatrix4(new THREE.Matrix4().makeBasis(right, up, back));
+        u.halfFov.value = s.fov * D2R / 2; u.aspect.value = aspect; u.lens.value = FISHEYE_LENS[s.lens];
+        renderer.setRenderTarget(onboard.rt); renderer.clear(); renderer.render(F.scene, onboard.quad.cam);
+      }
+    } finally { renderer.setRenderTarget(null); onboardHideAids(false); }
     onboard.last = P.t; onboard.lastId = P.id;
   }
   const r = onboardRect(aspect), auto = renderer.autoClear;
@@ -94,6 +141,6 @@ function onboardCamRender() {
   const E = onboard.el, n = (onboard.list || []).length;
   Object.assign(E.box.style, { right: (r.W - r.x - r.w) + 'px', bottom: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
   setText(E.name, P.name + (n > 1 ? ` (${(onboard.list.findIndex(x => x.id === P.id) + 1)}/${n})` : ''));
-  setText(E.meta, `${s.w}×${s.h} · ${s.fps} fps`); E.box.title = `${P.name}: ${s.w}×${s.h} at ${s.fps} fps, ${Math.round(s.fov)}° across`;
+  setText(E.meta, `${s.w}×${s.h} · ${s.fps} fps${s.lens === 'rect' ? '' : ' · fisheye'}`); E.box.title = `${P.name}: ${s.w}×${s.h} at ${s.fps} fps, ${Math.round(s.fov)}° across, ${CAMERA_LENSES[s.lens].toLowerCase()} lens`;
   E.next.hidden = n < 2;
 }

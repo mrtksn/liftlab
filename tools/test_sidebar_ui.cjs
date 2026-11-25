@@ -70,9 +70,14 @@ try{
   await page.evaluate(()=>{setEditMode(true);selectComp(cfg.comps[0].id);selectComp(cfg.comps[1].id);});assert.strictEqual(await page.locator('#compList .comp.open').count(),1);
   await page.evaluate(()=>setEditMode(false));
   // Tune uses the same existing inputs; its edits and history retain controller data.
+  // The frame is a card in Airframe's parts: its shape, size and mass, with history; the size reaches the physics.
+  await page.locator('#frameHead').click();assert(await page.locator('#frameMass-n').isVisible()&&await page.locator('#frame-size-x-n').isVisible());
+  const mass=await page.evaluate(()=>cfg.frame.mass);await page.locator('#frameMass-n').fill(String(mass+.25));await page.locator('#frameMass-n').dispatchEvent('input');
+  await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass);assert(await page.locator('#paneAir').isVisible());await page.locator('#redoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass+.25);
+  const I0=await page.evaluate(()=>frameI()[0]);for(const [k,v] of [['x','0.2'],['y','0.1'],['z','0.002']]){await page.locator('#frame-size-'+k+'-n').fill(v);await page.locator('#frame-size-'+k+'-n').dispatchEvent('change');}
+  assert.deepStrictEqual(await page.evaluate(()=>[frameDims(),JSON.parse(designSnap()).frameShape.size]),[[.2,.1,.002],[.2,.1,.002]]);assert.notStrictEqual(await page.evaluate(()=>frameI()[0]),I0,'The frame size did not reach its inertia');
+  assert((await page.locator('#frameSum').innerText()).includes('200 × 100 × 2 mm'));
   await page.locator('#tabTune').click();assert(await page.locator('#bodySec').isVisible());assert(await page.locator('#tuneSec').isVisible());assert(!await page.locator('#partsSec').isVisible());
-  await page.locator('#frameFold > summary').click();const mass=await page.evaluate(()=>cfg.frame.mass);await page.locator('#frameMass-n').fill(String(mass+.25));await page.locator('#frameMass-n').dispatchEvent('input');
-  await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass);assert(await page.locator('#paneTune').isVisible());await page.locator('#redoBtn').click();assert.strictEqual(await page.evaluate(()=>cfg.frame.mass),mass+.25);
   const tuning=await page.evaluate(()=>JSON.stringify(tuneOf()));await page.locator('#tune-rp-fold summary').click();
   await page.evaluate(()=>{const input=$('#tune-rp-fold input[type="range"]');input.value=String(+input.value+.1);input.dispatchEvent(new Event('input',{bubbles:true}));});
   assert.notStrictEqual(await page.evaluate(()=>JSON.stringify(tuneOf())),tuning);await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>JSON.stringify(tuneOf())),tuning);

@@ -140,8 +140,8 @@ Object.assign(AGENT_TOOLS, {
     run: a => { for (const k of ['allowance', 'efficiency', 'servoMove']) if (a[k] != null) allocPrefs[k] = clamp(num(a[k], allocPrefs[k]), 0, 0.2);
       if (a.mix_share != null) { steerMix.share = clamp(num(a.mix_share, steerMix.share), 0, 1); steerMix.rho = 1; }
       for (const r of allocFieldRefs) r(); save(); return { allowance: allocPrefs.allowance, efficiency: allocPrefs.efficiency, servoMove: allocPrefs.servoMove, mix_share: steerMix.share }; } },
-  set_frame_shape: { desc: 'The frame\'s shape in the air: aero "prism" (a box hub: drag only) or "wing" (lift and drag), and for a wing its span, chord, thick(ness) [m] and inc(idence) [deg].',
-    params: obj({ aero: { type: 'string', enum: ['prism', 'wing'] }, span: { type: 'number' }, chord: { type: 'number' }, thick: { type: 'number' }, inc: { type: 'number' } }),
+  set_frame_shape: { desc: 'The frame\'s shape: aero "prism" (a box: a hub or a plate the parts are fixed to; its size [x, y, z] m) or "wing" (lift and drag), and for a wing its span, chord, thick(ness) [m] and inc(idence) [deg]. Its mass: set_frame frame_mass.',
+    params: obj({ aero: { type: 'string', enum: ['prism', 'wing'] }, size: { type: 'array', items: { type: 'number' } }, span: { type: 'number' }, chord: { type: 'number' }, thick: { type: 'number' }, inc: { type: 'number' } }),
     run: a => { setFrameShape({ ...frameShapeOf(), ...Object.fromEntries(Object.entries(a).filter(([, v]) => v != null)) }); renderFrameShape(); undoKey = null; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); return frameShapeOf(); } },
 
   designs: { desc: 'Saved designs: list them, save the airframe under a name, open one (by name or id; the airframe on screen is replaced, and it can be undone), undo or redo an airframe change, share (a link with the whole design in it), or open_shared (a link or code someone shared).',

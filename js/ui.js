@@ -43,7 +43,7 @@ const FD = {
   length: { label: 'Length', path: ['length'], min: 0.02, max: 0.6, step: 0.005, u: 'm', dp: 3 },
   cable: { label: 'Cable length', hmax: 10,  path: ['length'], min: 0.05, max: 2, step: 0.01, u: 'm', dp: 2 },
   inc: { label: 'Incidence (leading edge up)', path: ['inc'], min: -20, max: 20, step: 0.5, u: '°', dp: 1 },
-  camFov: { label: 'Field of view (horizontal)', path: ['camera', 'fov'], min: 20, max: 170, step: 1, u: '°', dp: 0 },
+  camFov: { label: 'Field of view (horizontal)', path: ['camera', 'fov'], min: 20, max: 170, hmax: 240, step: 1, u: '°', dp: 0 },
   camW: { label: 'Picture width', path: ['camera', 'w'], min: 64, max: 1920, step: 8, u: 'px', dp: 0 },
   camH: { label: 'Picture height', path: ['camera', 'h'], min: 48, max: 1440, step: 8, u: 'px', dp: 0 },
   camFps: { label: 'Frame rate', path: ['camera', 'fps'], min: 1, max: 120, step: 1, u: 'fps', dp: 0 },
@@ -252,8 +252,14 @@ function compBody(c, only) {   // only: 'part' (its own settings) or 'phys' (its
       const id = `f-${c.id}-camera`, i = UI.input({ type: 'checkbox', id }); i.checked = !!c.camera;
       i.addEventListener('change', () => { if (i.checked) c.camera = { ...CAMERA_DEFAULTS }; else delete c.camera; edited(c, 'camera'); rerender(); });
       b.append(el('label', { class: 'check', for: id }, i, 'It carries a camera: show its picture on the view'));
+      if (c.camera) {   // the lens: normal, or a fisheye (its projection)
+        const lid = `f-${c.id}-camLens`, ls = UI.select({ id: lid }, ...Object.entries(CAMERA_LENSES).map(([k, t]) => el('option', { value: k, text: t })));
+        ls.value = cameraSpec(c).lens;
+        ls.addEventListener('change', () => { c.camera.lens = ls.value; if (ls.value === 'rect' && c.camera.fov > 170) c.camera.fov = 170; else if (ls.value !== 'rect' && (c.camera.fov ?? 90) <= 120) c.camera.fov = 160;   /* (a fisheye starts wide, as they are) */ edited(c, 'camera'); rerender(); });
+        b.append(el('div', { class: 'field' }, el('label', { for: lid, text: 'Lens' }), ls));
+      }
       if (c.camera) b.append(slider(c, 'camFov'), el('div', { class: 'subgrid' }, slider(c, 'camW'), slider(c, 'camH'), slider(c, 'camFps')), slider(c, 'camTilt'), slider(c, 'camPan'),
-        el('p', { class: 'hint', text: 'It looks along the part\'s forward (+X) axis, turned by the angles above; the picture\'s top is the part\'s up. The view draws it at this resolution and frame rate (Show → Onboard camera; ⇄ switches between cameras). Lens distortion, exposure and the video link\'s delay are not simulated.' }));
+        el('p', { class: 'hint', text: 'It looks along the part\'s forward (+X) axis, turned by the angles above; the picture\'s top is the part\'s up. The view draws it at this resolution and frame rate (Show → Onboard camera; ⇄ switches between cameras). A fisheye lens bends straight lines as the real one does and can see past 180°. Exposure and the video link\'s delay are not simulated.' }));
     }
   } else if (c.type === 'latch') {
     const held = descendants(c);
@@ -336,7 +342,12 @@ function renderComps1() {
   const L = $('#compList'); L.textContent = '';
   // The parts as a tree: the frame at the root, each servo or rod followed by what it carries. Drag a part
   // onto a servo or rod to attach it there, or onto Frame to take it off.
-  const frameRow = el('div', { class: 'tree-frame', 'data-drop': 'frame', text: 'Frame' });
+  const fOpen = openSet.has('frame');
+  const fHead = UI.button({ class: 'comp-head', type: 'button', 'aria-expanded': String(fOpen), 'data-focus-key': 'head-frame', id: 'frameHead', title: 'The frame: its shape, size and mass. Drop a part here to take it off a servo or rod.' },
+    el('span', { class: 'tag tag-frame', text: 'Frame' }), el('span', { class: 'comp-name', text: frameWing() ? 'Frame (wing)' : 'Frame' }), el('span', { class: 'comp-sum', id: 'frameSum', text: frameSummary() }));
+  fHead.addEventListener('click', () => { const open = openSet.has('frame'); openSet.clear(); if (!open) openSet.add('frame'); renderComps(); });
+  frameShapeBox.hidden = !fOpen;
+  const frameRow = UI.card({ class: 'comp frame-card' + (fOpen ? ' open' : ''), 'data-drop': 'frame' }, el('div', { class: 'comp-top' }, fHead), frameShapeBox);
   dropTarget(frameRow, null); L.append(frameRow);
   const put = (c, box) => {
     const node = el('div', { class: 'node' }), card = compCard(c), kids = childrenOf(c);
@@ -884,18 +895,25 @@ function afterLoad() {
   frameMassField.refresh(); renderFrameShape();
   truth = null; recomputeProps(); renderBattery(); cPts = contactPoints(); rebuildDrone(); renderComps(); buildActRows(); doReset(); refreshEnvelope(); renderMass(); if (typeof refreshTuning === 'function') refreshTuning(); save();
 }
-const frameMassField = numField('frameMass', { label: 'Frame hub mass', min: 0.1, max: 2, hmin: 0.02, hmax: 50, step: 0.01, u: 'kg', dp: 2 }, () => cfg.frame.mass,
-  v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); });
-$('#frameMassSlot').replaceWith(frameMassField.node, el('div', { id: 'frameShape' }));
+const frameMassField = numField('frameMass', { label: 'Mass', min: 0.01, max: 2, hmin: 0.002, hmax: 50, step: 0.001, u: 'kg', dp: 3 }, () => cfg.frame.mass,
+  v => { cfg.frame.mass = v; undoKey = 'frame'; recomputeProps(); refreshEnvelope(); renderMass(); save(); setText($('#frameSum'), frameSummary()); });
+// The frame's editor lives in Airframe's Frame card (renderComps), like a part's: one instance, moved into the card.
+const frameShapeBox = el('div', { id: 'frameShape', class: 'comp-body frame-body' });
+const frameSummary = () => { const d = frameDims(), g = cfg.frame.mass * 1000; return (g < 100 ? g.toFixed(g < 10 ? 1 : 0) + ' g' : (g / 1000).toFixed(2) + ' kg') + ' · ' + (frameWing() ? 'wing · span ' + d[1].toFixed(2) + ' m' : d.map(v => +(v * 1000).toFixed(1)).join(' × ') + ' mm'); };
 // The frame's shape in the air: a prism (a box hub: drag) or a wing (lift and drag; its span, chord, thickness and
 // incidence). The flight computers aren't told either way.
 function renderFrameShape() {
-  const box = $('#frameShape'); if (!box) return; box.textContent = '';
-  const changed = () => { undoKey = 'frame-shape'; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); };
-  const sel = UI.select( { id: 'frameAero' }, el('option', { value: 'prism', text: 'Prism: a box hub (drag)' }), el('option', { value: 'wing', text: 'Wing: the body is a wing (lift and drag)' }));
+  const box = frameShapeBox; box.textContent = '';
+  const changed = (key = 'frame-shape') => { undoKey = key; recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass(); save(); setText($('#frameSum'), frameSummary()); };
+  const sel = UI.select( { id: 'frameAero' }, el('option', { value: 'prism', text: 'Box (a hub or a plate)' }), el('option', { value: 'wing', text: 'Wing (lift and drag)' }));
   sel.value = frameWing() ? 'wing' : 'prism';
   sel.addEventListener('change', () => { cfg.frame.aero = sel.value; changed(); renderFrameShape(); });
-  box.append(el('div', { class: 'field' }, el('label', { for: 'frameAero', text: 'Frame shape' }), sel));
+  box.append(el('div', { class: 'field' }, el('label', { for: 'frameAero', text: 'Shape' }), sel));
+  if (!frameWing()) {   // its size: a hub, or the plate everything is fixed to
+    const sz = (i, label, d) => numField('frame-size-' + 'xyz'[i], { label, u: 'm', step: 0.001, dp: 3, hard: true, hmin: FRAME_SIZE_LIMITS[i][0], hmax: FRAME_SIZE_LIMITS[i][1], ...d }, () => frameDims()[i], v => { cfg.frame.size = frameDims().slice(); cfg.frame.size[i] = v; changed('frame-size'); }).node;
+    box.append(el('div', { class: 'subgrid' }, sz(0, 'Size X', { min: 0.02, max: 0.5 }), sz(1, 'Size Y', { min: 0.02, max: 0.5 }), sz(2, 'Size Z', { min: 0.001, max: 0.08 })),
+      frameMassField.node, el('p', { class: 'hint', text: 'X forward, Y left, Z up, centred on the hub. Its inertia, the corners it lands on, its collisions and the rotors\' wash on it follow the size; a thin plate is fine (2 mm).' }));
+  } else box.append(frameMassField.node);
   box.append(partMassFields(cfg.frame, true));
   if (!frameWing()) return;
   const f = (key, d) => numField('frame-' + key, d, () => frameShapeOf()[key], v => { cfg.frame[key] = v; changed(); }).node;
@@ -1108,7 +1126,7 @@ infoize(document);
 { let t = 0; const mo = new MutationObserver(() => { clearTimeout(t); t = setTimeout(() => { infoize($('#airframe')); }, 50); }); mo.observe($('#airframe'), { childList: true, subtree: true }); }
 // The folded rows' summaries (Airframe tab): what's inside, at a glance.
 function syncFolds() {
-  const fs = frameShapeOf(); setText($('#frameSum'), `${cfg.frame.mass.toFixed(2)} kg · ${fs.aero === 'wing' ? 'wing' : 'box hub'}`);
+  setText($('#frameSum'), frameSummary());
   setText($('#steerSum'), { tilt: 'Tilt body', mixed: `Mixed · ${Math.round(steerMix.share * 100)}% servos`, level: 'Stay level' }[mode] || '');
   const n = typeof designs !== 'undefined' ? designs.list.length : 0; setText($('#designsCount'), n ? String(n) : 'none yet');
 }

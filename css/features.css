@@ -1474,3 +1474,5 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .cdetail .dsec .hw-group{border-top:0;padding-top:0}
 .cdetail .dsec .hw-group>h3{display:none}
 .cdetail .dsec>.hw-field input[type=text]{width:100%;max-width:340px}
+.tag-frame{color:var(--ink-2)}
+.frame-card .frame-body[hidden]{display:none}

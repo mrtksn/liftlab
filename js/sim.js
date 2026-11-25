@@ -152,15 +152,20 @@ const scl6 = (c, s) => c.map(x => x * s);
 // the frame (cfg.frame.aero) and each rigid mass (c.aero). A wing is a box: chord along X, span along Y, thickness
 // along Z, tipped by its incidence (inc, degrees, leading edge up). The flight computers aren't told: to them it's
 // an oddly shaped body.
+// A box frame's size (cfg.frame.size, [x, y, z] m: a hub, or a plate everything is screwed to); a design saved before
+// it had one is the 120 × 120 × 40 mm hub. Its mass sits at its centre (or its own centre of mass) and its inertia,
+// landing corners, collisions and the downwash on it follow the size.
 const FRAME_BOX = [0.12, 0.12, 0.04];
+const FRAME_SIZE_LIMITS = [[0.005, 2], [0.005, 2], [0.0005, 0.5]];
+const frameSizeOk = s => Array.isArray(s) && s.length === 3 && s.every((v, i) => Number.isFinite(+v) && +v >= FRAME_SIZE_LIMITS[i][0] && +v <= FRAME_SIZE_LIMITS[i][1]);
 const frameWing = () => cfg.frame.aero === 'wing';
-const frameDims = () => frameWing() ? [cfg.frame.chord || 0.25, cfg.frame.span || 0.8, cfg.frame.thick || 0.03] : FRAME_BOX;
+const frameDims = () => frameWing() ? [cfg.frame.chord || 0.25, cfg.frame.span || 0.8, cfg.frame.thick || 0.03] : frameSizeOk(cfg.frame.size) ? cfg.frame.size : FRAME_BOX;
 function incR(deg) { const a = -(deg || 0) * D2R, c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }   // leading edge (+X) up by deg
 // The frame's shape, as a design keeps it.
-const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0, polar: cfg.frame.polar, source: cfg.frame.source, cog: cfg.frame.cog, points: cfg.frame.points });
+const frameShapeOf = () => ({ aero: frameWing() ? 'wing' : 'prism', size: (frameSizeOk(cfg.frame.size) ? cfg.frame.size : FRAME_BOX).slice(), span: cfg.frame.span ?? 0.8, chord: cfg.frame.chord ?? 0.25, thick: cfg.frame.thick ?? 0.03, inc: cfg.frame.inc ?? 0, polar: cfg.frame.polar, source: cfg.frame.source, cog: cfg.frame.cog, points: cfg.frame.points });
 function setFrameShape(o) {
   o = o || {}; const n = (v, d, lo, hi) => isFinite(+v) ? clamp(+v, lo, hi) : d;
-  Object.assign(cfg.frame, { aero: o.aero === 'wing' ? 'wing' : 'prism', span: n(o.span, 0.8, 0.1, 4), chord: n(o.chord, 0.25, 0.05, 1.5), thick: n(o.thick, 0.03, 0.005, 0.2), inc: n(o.inc, 0, -20, 20) });
+  Object.assign(cfg.frame, { aero: o.aero === 'wing' ? 'wing' : 'prism', size: frameSizeOk(o.size) ? o.size.map(Number) : FRAME_BOX.slice(), span: n(o.span, 0.8, 0.1, 4), chord: n(o.chord, 0.25, 0.05, 1.5), thick: n(o.thick, 0.03, 0.005, 0.2), inc: n(o.inc, 0, -20, 20) });
   cfg.frame.polar = o.polar ? FlightPhysics.polar(o.polar) : undefined; cfg.frame.source = o.source;
   validatePartGeometry(o); cfg.frame.cog = o.cog ? o.cog.slice() : undefined; cfg.frame.points = o.points ? JSON.parse(JSON.stringify(o.points)) : undefined;
 }
@@ -350,7 +355,7 @@ const propOmega = c => flightMotor(c).Om;
 const kappaOf = c => { const mp = flightMotor(c); return mp.ratedQ / Math.max(1e-6, mp.ratedThrust); };
 const payloadR = c => 0.025 + 0.035 * Math.cbrt(c.mass);
 function washParts() {   // parts the downwash can push: the hub plate and rigid masses (horizontal frontal area); a wing meets it in wingAero
-  const parts = frameWing() ? [] : [{ rest: [0, 0, 0], b: 0, area: 0.12 * 0.12 }];
+  const parts = frameWing() ? [] : [{ rest: [0, 0, 0], b: 0, area: frameDims()[0] * frameDims()[1] }];
   for (const c of liveComps()) if (c.type === 'mass' && !isWing(c)) parts.push({ rest: c.pos, b: MB.of.get(c.id) || 0, area: c.shape === 'box' ? c.size[0] * c.size[1] : Math.PI * c.radius * c.radius });
   return parts;
 }

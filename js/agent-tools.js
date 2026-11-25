@@ -79,7 +79,7 @@ const AGENT_TOOLS = {
         if (k === 'camera') {   // (a camera on a rigid mass: added, changed or removed)
           if (c.type !== 'mass') { bad.push('camera: only a rigid mass carries one'); continue; }
           if (v === null || v === false) { delete c.camera; continue; }
-          if (!v || typeof v !== 'object' || Array.isArray(v) || Object.entries(v).some(([f, x]) => !(f in CAMERA_DEFAULTS) || typeof x !== 'number' || !isFinite(x))) { bad.push('camera: an object of numbers: fov, w, h, fps, tilt, pan (or null to remove)'); continue; }
+          if (!v || typeof v !== 'object' || Array.isArray(v) || Object.entries(v).some(([f, x]) => !(f in CAMERA_DEFAULTS) || (f === 'lens' ? !CAMERA_LENSES[x] : typeof x !== 'number' || !isFinite(x)))) { bad.push('camera: an object of numbers: fov, w, h, fps, tilt, pan (or null to remove)'); continue; }
           c.camera = { ...CAMERA_DEFAULTS, ...(c.camera || {}), ...v }; c.camera = cameraSpec(c); continue;
         }
         if (!(k in c)) { bad.push(`${k}: no such field`); continue; }
@@ -113,7 +113,7 @@ const AGENT_TOOLS = {
   set_frame: { desc: 'The frame and the drone as a whole: frame_mass [kg], steering ("tilt" body, "mixed", "level"), battery fields (cells, capacity [Ah], rInt [ohm], startSoc 0…1…).',
     params: obj({ frame_mass: { type: 'number' }, steering: { type: 'string', enum: ['tilt', 'mixed', 'level'] }, battery: { type: 'object' } }),
     run: a => {
-      if (a.frame_mass != null) { cfg.frame.mass = clamp(num(a.frame_mass, cfg.frame.mass), 0.02, 50); frameMassField.refresh(); }
+      if (a.frame_mass != null) { cfg.frame.mass = clamp(num(a.frame_mass, cfg.frame.mass), 0.002, 50); frameMassField.refresh(); }
       if (a.steering && a.steering !== mode) { setMode(a.steering, false); doReset(); }   // (the flight controller reads it at start)
       if (a.battery) { const b = battCfg(); for (const [k, v] of Object.entries(a.battery)) if (k in b && typeof v === typeof b[k]) b[k] = v; renderBattery(); renderBattSmall(); }
       undoKey = null; recomputeProps(); refreshEnvelope(); renderMass(); structural();
