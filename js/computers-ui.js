@@ -200,8 +200,9 @@ function buildComputers() {
     section('computerPowerSec','Power','',list('computerPower')),
     section('computerSensorsSec','Sensors','',list('computerSensors')),
     section('computerElecSec','Other electronics','',list('computerElec')),
-    section('computerWiringSec','Wiring','',list('computerWiring'),list('computerLinks'),list('computerOutputs'),list('computerCargo'),list('computerRadio')),
-    section('computerAssignmentsSec','Duties','Which board runs each part of the flight software.',list('taskRows')));
+    section('computerWiringSec','Wiring','',list('computerWiring'),list('computerLinks'),list('computerRadio')),
+    section('computerOutputsSec','Motors & servos','',list('computerOutputs'),list('computerCargo')),
+    section('computerAssignmentsSec','Duties','',list('taskRows')));
   COMP.detail=el('div',{class:'cdetail',id:'compDetail'},el('h3',{class:'sr-only',id:'compDetailTitle'}),el('div',{class:'computer-detail',id:'compDetailBody'}));
   pane.append(el('div',{id:'hardwareRows',hidden:true}));
   const detail=computerDialog('computerDlg','Computer details');pane.append(detail.dialog);
@@ -317,13 +318,15 @@ function renderComputerList(C){
   count('computerPowerSec',srcs.length);
   // sensors
   const sens=comps.filter(c=>c.type==='sensor');
-  $('#computerSensors').replaceChildren(...sens.map(c=>{const b=hardwareOwner(C,c),p=hardwarePart(C,c,comps),d=DEVICE_PROFILES[c.kind]&&DEVICE_PROFILES[c.kind][p.driver];
-    return crow({kind:'device',id:c.id},{'data-device':c.id},tagOf(c),'tag-sensor',c.name,[b?'→ '+b.name:'no board',d?d.label.replace(/ \(.*/,''):'',p.address?'0x'+p.address.toString(16):''].filter(Boolean).join(' · '),b?'':'empty');}));
+  const SHORT={imu:'IMU',mag:'Mag',baro:'Baro',fix:'GPS',flow:'Flow',tof:'ToF'};
+  $('#computerSensors').replaceChildren(...sens.map(c=>{const b=hardwareOwner(C,c),p=hardwarePart(C,c,comps),i2c=I2C_SENSOR_KINDS.includes(c.kind);
+    const how=p.driver==='none'||c.kind==='flow'?'simulated only':i2c?'I²C '+(p.address?'0x'+p.address.toString(16):'auto'):c.kind==='fix'?'serial '+(p.port||'/dev/ttyUSB0'):'';
+    return crow({kind:'device',id:c.id},{'data-device':c.id},SHORT[c.kind]||tagOf(c),'tag-sensor',c.name,[b?b.name:'no board',how].filter(Boolean).join(' · '),b?'':'empty');}));
   $('#computerSensorsSec').hidden=!sens.length;count('computerSensorsSec',sens.length);
   // other electronics
   const bodies=new Set(C.boards.map(b=>boardBodyOf(b)).filter(Boolean)),other=comps.filter(c=>c.type==='mass'&&partIsElec(c)&&!c.battery&&!bodies.has(c));
   $('#computerElec').replaceChildren(...other.map(c=>crow({kind:'part',id:c.id},{'data-part':c.id},c.camera?'Cam':'Part','tag-mass',c.name,[gramsOf(c),c.deviceW>0?'draws '+c.deviceW+' W':'',c.camera?'camera':''].filter(Boolean).join(' · '))),
-    el('p',{class:'hint',text:other.length?'Converters, cables, a camera board: parts that weigh something and sit somewhere. A rigid mass in Airframe moves here when it\'s marked as electronics.':'Converters, cables, a power monitor, a camera board: add one with + Add, or mark a rigid mass in Airframe as electronics.'}));
+    ...(other.length?[]:[el('p',{class:'hint',text:'Converters, cables, a camera board: add one with + Add, or mark a rigid mass in Airframe as electronics.'})]));
   count('computerElecSec',other.length);
   // wiring
   const wires=benchWires(C,comps),issues=C.boards.reduce((n,b)=>{const P=boardWiringPlan(b);return n+P.errors.length;},0)+powerIssues(C,comps).errors.length;
@@ -331,12 +334,12 @@ function renderComputerList(C){
   const links=boardLinks(C);$('#computerLinks').replaceChildren(...links.map(L=>crow({kind:'link',id:L.b.id},{'data-link':L.b.id},'Link','tag-wire',L.a.name+' ↔ '+L.b.name,!L.pi?'simulated link · no wiring recipe yet':L.transport==='mqtt'?'MQTT · Wi-Fi · '+L.port:(L.port==='/dev/serial0'?'UART wires':'USB serial adapter')+' · '+L.baud+' baud',L.supported?'':'empty')));
   for(const [id,filter]of [['computerOutputs',c=>['motor','joint'].includes(c.type)],['computerCargo',c=>c.type==='latch']]){
     $('#'+id).replaceChildren(...comps.filter(filter).map(c=>{const b=hardwareOwner(C,c),p=hardwarePart(C,c,comps);
-      return crow({kind:'device',id:c.id},{'data-device':c.id},c.type==='motor'?(p.driver==='brushed'?'FET':'ESC'):c.type==='joint'?'Servo':'Latch','tag-'+c.type,c.name,b?b.name+' · '+(p.pin>=0?boardGpioShort(C,b,p.pin):'choose a pin'):'no board',b&&p.pin>=0?'':'empty');}));
+      return crow({kind:'device',id:c.id},{'data-device':c.id},c.type==='motor'?(p.driver==='brushed'?'FET':'ESC'):c.type==='joint'?'Servo':'Latch','tag-'+c.type,c.name,b?b.name+' · '+(p.pin>=0?pinShort(C,b,p.pin):'choose a pin'):'no board',b&&p.pin>=0?'':'empty');}));
   }
-  $('#computerRadio').replaceChildren(crow({kind:'radio'},{'data-radio':'primary'},'Radio','tag-wire',RADIO_LINKS[radioCfg.kind]?.label||'Radio',(boardOf('tlm')?.name||'no board')+(radioTwo()?' · and '+(RADIO_LINKS[radioCfg2.kind]?.label||radioCfg2.kind):'')));
-  count('computerWiringSec',wires.length);
+  $('#computerRadio').replaceChildren(crow({kind:'radio'},{'data-radio':'primary'},'Radio','tag-wire',RADIO_LINKS[radioCfg.kind]?.label||'Radio',(boardOf('tlm')?.name||'no board')+(radioTwo()?' · and '+(RADIO_LINKS[radioCfg2.kind]?.label||radioCfg2.kind):''),boardOf('tlm')?'':'empty'));
+  count('computerWiringSec',wires.length);const outs=comps.filter(c=>['motor','joint','latch'].includes(c.type)).length;count('computerOutputsSec',outs);$('#computerOutputsSec').hidden=!outs;
   // duties
-  $('#taskRows').replaceChildren(...Object.entries(TASKS).map(([id,T])=>{const b=boardOf(id);return crow({kind:'task',id},{'data-task':id},'Duty','tag-duty',T.label,b?b.name+' · '+BOARD_KINDS[b.kind].label:'not assigned · '+T.what,b?'':'empty');}));
+  $('#taskRows').replaceChildren(...Object.entries(TASKS).map(([id,T])=>{const b=boardOf(id);return crow({kind:'task',id},{'data-task':id},'Duty','tag-duty',T.label,b?b.name+(runsFormulas(b)?' · '+boardTaskHz(b,id)+' Hz':''):'not assigned',b?'':'empty');}));
   // the open row's settings, under it
   const card=COMP.focus&&$('#paneForm').querySelector('[data-ckey="'+CSS.escape(viewKey(COMP.focus))+'"]');
   if(card)card.append(COMP.detail);else{COMP.detail.remove();if(COMP.focus&&!['addpower'].includes(COMP.focus.kind)&&!COMP.rendering)COMP.focus=null;}
@@ -369,51 +372,96 @@ function compAddPick(v){
   const c=mkMass('Electronic part',0.03,0,frameDims()[2]/2+0.008,{mass:0.005,size:[0.03,0.02,0.006]});c.elec=true;c.known=true;cfg.comps.push(c);undoKey='addpart';structural();compFocus({kind:'part',id:c.id});
 }
 // A part's own settings (where it sits, what it weighs, its shape), as in Airframe.
-// A part's physical properties (where it sits, how it's turned, its mass and size), behind a button: it puts the view
-// back together and gives the part Airframe's handles, its fields under them.
-function partEditor(c,title){
-  if(!c||typeof compCard!=='function')return el('span');
-  const on=bench.on&&bench.phys===c.id,P=c.pos.map(v=>(v*1000).toFixed(0)).join(', ');
-  const btn=UI.button({class:'btn'+(on?' primary':''),'data-phys':c.id,text:on?'Done':'Edit physical properties…',title:on?'Back to the exploded view':'Place it on the assembled design with handles, and edit its mass and size',onclick:()=>{if(on)benchPhys(null);else{bench.want=true;benchSync();benchPhys(c.id);}}});
-  const box=el('section',{class:'cpart'+(on?' phys-on':'')},el('h3',{text:title||'On the airframe'}),el('div',{class:'cpart-head'},el('span',{class:'computer-meta',text:gramsOf(c)+' · at ('+P+') mm'}),btn));
-  if(on)box.append(el('p',{class:'hint',text:'Drag the arrows or squares in the view to move it, the rings to turn it (Shift: fine steps). Its position, mass and size are below.'}));
-  openSet.add(c.id);box.append(compCard(c));   // (the part's own settings always; its physical ones only while placing it)
+// The inspector: every row's settings are built from the same few parts, always in the same order:
+//   problems (only when there are some) → key facts → the main action → sections (what it is, how it's connected,
+//   what it does, where it sits) → folded advanced settings → removing it, last.
+// Each control appears once: a board is chosen in one place, a part's physical properties in one place.
+const dfacts=(...pairs)=>el('dl',{class:'dfacts'},...pairs.filter(Boolean).map(([k,v,cls])=>el('div',{class:'dfact'+(cls?' '+cls:'')},el('dt',{text:k}),el('dd',{text:v}))));
+const dlead=text=>el('p',{class:'dlead',text});
+const dsec=(title,...kids)=>el('section',{class:'dsec'},el('h3',{class:'dsec-h',text:title}),...kids.filter(Boolean));
+const dfold=(key,title,...kids)=>UI.details({class:'dsec dfold',title,open:HW_UI.open.has('d:'+key),onToggle:o=>{o?HW_UI.open.add('d:'+key):HW_UI.open.delete('d:'+key);}},...kids.filter(Boolean));
+const dactions=(...b)=>el('div',{class:'dactions'},...b.filter(Boolean));
+const dissues=(errors=[],warnings=[])=>errors.length||warnings.length?el('div',{class:'dissues',role:'status'},...errors.map(m=>el('p',{class:'dissue bad',text:m})),...warnings.map(m=>el('p',{class:'dissue',text:m}))):null;
+const ddanger=(...kids)=>el('div',{class:'ddanger'},...kids.filter(Boolean));
+const mm=v=>Math.round(v*1000);
+const put=(box,...kids)=>box.append(...kids.filter(Boolean));
+function nameInput(value,label,id,onName){
+  const i=UI.input({type:'text',value,maxlength:24,'aria-label':label,id,autocomplete:'off',spellcheck:'false'});
+  i.addEventListener('change',()=>onName(i.value.trim()));
+  i.addEventListener('keydown',e=>{if(e.key==='Enter')i.blur();else if(e.key==='Escape'){i.value=value;i.blur();}});
+  return i;
+}
+// Hardware cards (hardware-ui.js) in the inspector: alone in a section they lose their title (the section names them);
+// several (a board's own settings) each fold under their title, closed until opened.
+function cardFolds(nodes,key,drop=''){return nodes.map(n=>{if(n.tagName==='DETAILS'){n.classList.add('dsub');const s=n.querySelector(':scope>summary');if(s&&drop)s.textContent=s.textContent.replace(drop+' · ','').replace(/^./,ch=>ch.toUpperCase());return n;}if(!n.classList||!n.classList.contains('hw-device'))return n;const t=n.querySelector(':scope>.hw-device-title'),title=t?[...t.children].map(x=>x.textContent).filter(x=>x&&x!==drop).join(' · '):'Settings',k='d:'+key+':'+title;return UI.details({class:'dsub',title,open:HW_UI.open.has(k),onToggle:o=>{o?HW_UI.open.add(k):HW_UI.open.delete(k);}},n);});}
+function mounted(selector){const tmp=el('div',{});mountHardware(tmp,selector);return [...tmp.children];}
+// One choice of board, as a list of buttons (the duties, the radio): the one in use pressed, Not assigned last.
+function choiceList(current,boards,apply,none='Not assigned'){
+  const list=el('div',{class:'choice-list',role:'group'});
+  for(const b of boards)list.append(UI.button({class:'choice','aria-pressed':String(current?.id===b.id),'data-assign-board':b.id,onclick:()=>{if(current?.id!==b.id)apply(b.id);}},el('b',{text:b.name}),el('span',{text:BOARD_KINDS[b.kind].label})));
+  list.append(UI.button({class:'choice','aria-pressed':String(!current),'data-remove-assignment':'',onclick:()=>{if(current)apply(null);}},el('b',{text:none}),el('span',{text:'nothing runs it'})));
+  return boards.length?list:el('div',{},list,el('p',{class:'hint',text:'No board can run it yet: add one with + Add.'}));
+}
+// Wires as rows: a colour for what it carries, where it goes; hover picks it out in the view, a click opens its end.
+function wireRows(wires){
+  return wires.map(w=>{
+    const row=UI.button({class:'wire-row','data-wire':w.id,type:'button',title:WIRE_KINDS[w.kind]||w.kind},el('i',{class:'pd-swatch pd-'+(w.kind==='power'?'v5':w.kind==='radio'?'signal':w.kind)}),el('span',{text:w.text}),el('small',{text:WIRE_KINDS[w.kind]||''}));
+    row.addEventListener('mouseenter',()=>benchHiWire(w.id));row.addEventListener('mouseleave',()=>benchHiWire(null));
+    row.addEventListener('focus',()=>benchHiWire(w.id));row.addEventListener('blur',()=>benchHiWire(null));
+    row.addEventListener('click',()=>{if(!sameView(w.view,COMP.focus))compFocus(w.view);});
+    return row;
+  });
+}
+function wireList(C){
+  const wires=benchWires(C,cfg.comps),groups=new Map();
+  for(const w of wires){const k=w.kind==='power'?'Power':w.kind==='radio'?'Radio':(w.a.key.startsWith('board:')?(C.boards.find(b=>'board:'+b.id===w.a.key)||C.ground).name:'Other');if(!groups.has(k))groups.set(k,[]);groups.get(k).push(w);}
+  const box=el('div',{class:'wire-list'});
+  for(const [k,list]of groups)box.append(el('h4',{text:k}),...wireRows(list));
+  if(!wires.length)box.append(el('p',{class:'hint',text:'No wires yet: give the motors and sensors a board.'}));
+  if(typeof pinoutLegend==='function')box.append(pinoutLegend());
   return box;
+}
+// A part's own settings (its name, a camera's picture, a sensor's rate and noise, its draw): always in view.
+function partSettings(c){return typeof compCard==='function'?compCard(c,{only:'part'}):null;}
+// Where it sits: a line, and Edit physical properties, which puts the view back together and gives the part
+// Airframe's handles, its position, mass and size under them.
+function physSection(c,title='On the airframe'){
+  if(!c)return null;
+  const on=bench.on&&bench.phys===c.id,size=c.type==='mass'&&!c.model&&c.shape==='box'?' · '+c.size.map(mm).join('×')+' mm':'';
+  const btn=UI.button({class:'btn sm'+(on?' primary':''),'data-phys':c.id,text:on?'Done':'Edit physical properties…',title:on?'Back to the exploded view':'Place it on the assembled drone with handles, and edit its mass and size',onclick:()=>{if(on)benchPhys(null);else{bench.want=true;benchSync();benchPhys(c.id);}}});
+  const s=dsec(title,el('div',{class:'cpart-head'},el('span',{class:'dmeta',text:gramsOf(c)+' · at '+c.pos.map(mm).join(', ')+' mm'+size}),btn));
+  s.classList.add('cpart');
+  if(on){s.classList.add('phys-on');s.append(el('p',{class:'hint',text:'Drag the arrows or squares in the view to move it, the rings to turn it (Shift: fine steps).'}),compCard(c,{only:'phys'}));}
+  return s;
+}
+function removePart(c,what='part'){
+  return UI.button({class:'btn sm danger','data-remove-part':c.id,text:'Remove '+what,onclick:()=>{for(const x of cfg.comps)if(x.parent===c.id)x.parent=c.parent??null;cfg.comps=cfg.comps.filter(x=>x!==c);openSet.delete(c.id);benchPhysEnd();COMP.focus=null;undoKey='remove'+c.id;structural();compFocus(null);}});
 }
 function renderPartDetail(box,C,id){
   const c=compById(id);if(!c){detClose();return;}detTitle(c.name);
   const b=boardOfBody(c,C);
-  box.append(el('p',{text:'A part on the airframe that the electronics include: its mass and where it sits count in the flight model.'+(c.deviceW>0?' It draws '+c.deviceW+' W: choose its source under Power.':'')}));
-  box.append(hardwareField('This part is the board',hardwareSelect('Board this part is','part-board-'+c.id,[['','No board'],...C.boards.map(x=>[x.id,x.name+' · '+BOARD_KINDS[x.kind].label])],b?b.id:'',v=>{if(v==='')linkBoardBody(b||{id:-2},'');else linkBoardBody(C.boards.find(x=>x.id===Number(v)),c.id);})));
-  box.append(partEditor(c));
+  put(box,dfacts(['Mass',gramsOf(c)],c.deviceW>0&&['Draws',c.deviceW+' W'],['Board',b?b.name:'none']),
+    dsec('Part',partSettings(c),hardwareField('This part is the board',hardwareSelect('Board this part is','part-board-'+c.id,[['','No board'],...C.boards.map(x=>[x.id,x.name+' · '+BOARD_KINDS[x.kind].label])],b?b.id:'',v=>{if(v==='')linkBoardBody(b||{id:-2},'');else linkBoardBody(C.boards.find(x=>x.id===Number(v)),c.id);}))),
+    physSection(c),ddanger(removePart(c)));
 }
+// A board's body: the part that is it on the airframe, or Put it on the airframe.
 function boardBodySection(b){
-  const box=el('section',{class:'board-body'},el('h3',{text:'On the airframe'})),body=boardBodyOf(b),B=benchBody(b.kind);
-  const masses=cfg.comps.filter(c=>c.type==='mass'&&!c.battery&&!isWing(c));
+  const body=boardBodyOf(b),B=benchBody(b.kind),masses=cfg.comps.filter(c=>c.type==='mass'&&!c.battery&&!isWing(c));
   const pick=hardwareField('Its part',hardwareSelect(b.name+' part','bbody-'+b.id,[['','None: not on the airframe'],...masses.map(c=>[c.id,c.name+' · '+gramsOf(c)])],body?body.id:'',v=>linkBoardBody(b,v)));
-  if(body){box.append(el('p',{class:'hint',text:'Drawn as the board in the 3D view, its pins where the board model puts them. Its mass and place are the part\'s'+(body.boardId===b.id?'':' (picked by its name; choose it here to keep it)')+'.'}),pick,partEditor(body,'The board as a part'));}
-  else box.append(el('p',{class:'hint',text:'Not on the airframe: the simulation flies without its '+gramsOf({mass:B.mass})+'. The 3D view shows it above the hub, dashed.'}),
-    UI.button({class:'btn sm','data-place-board':b.id,text:'Put it on the airframe',onclick:()=>{placeBoardBody(b);renderComputers(true);}}),pick);
-  return box;
+  if(body){const s=physSection(body);s.insertBefore(pick,s.children[1]);return s;}
+  return dsec('On the airframe',el('p',{class:'hint',text:'Not on the airframe: the simulation flies without its '+gramsOf({mass:B.mass})+', and the view shows it above the hub, dashed.'}),
+    dactions(UI.button({class:'btn sm','data-place-board':b.id,text:'Put it on the airframe',onclick:()=>{placeBoardBody(b);renderComputers(true);}})),pick);
 }
-// The wiring as a list: each wire, grouped by the board it leaves. Hover one to pick it out in the view.
-function wireList(C){
-  const wires=benchWires(C,cfg.comps),groups=new Map();
-  for(const w of wires){const k=w.kind==='power'?'Power':w.kind==='radio'?'Radio':(bench.items.get(w.a.key)?.name||(w.a.key.startsWith('board:')?(C.boards.find(b=>'board:'+b.id===w.a.key)||{}).name:'')||'Other');if(!groups.has(k))groups.set(k,[]);groups.get(k).push(w);}
-  const box=el('div',{class:'wire-list'},el('p',{class:'hint',text:'Every wire the install guide asks for. Hover a wire to pick it out in the view; click it to open what it goes to.'}));
-  for(const [k,list]of groups){
-    box.append(el('h3',{text:k}));
-    for(const w of list){
-      const row=UI.button({class:'wire-row','data-wire':w.id,type:'button',title:WIRE_KINDS[w.kind]||w.kind},el('i',{class:'pd-swatch pd-'+(w.kind==='power'?'v5':w.kind==='radio'?'signal':w.kind)}),el('span',{text:w.text}),el('small',{text:WIRE_KINDS[w.kind]||''}));
-      row.addEventListener('mouseenter',()=>benchHiWire(w.id));row.addEventListener('mouseleave',()=>benchHiWire(null));
-      row.addEventListener('focus',()=>benchHiWire(w.id));row.addEventListener('blur',()=>benchHiWire(null));
-      row.addEventListener('click',()=>compFocus(w.view));
-      box.append(row);
-    }
-  }
-  if(!wires.length)box.append(el('p',{class:'hint',text:'No wires yet: assign boards to the motors and sensors.'}));
-  if(typeof pinoutLegend==='function')box.append(pinoutLegend());
-  return box;
+// The 5 V a board runs on: what makes it from its source, and what it draws.
+function boardSupplyFields(C,x){
+  const comps=cfg.comps,S=boardSupplyOf(C,x,comps),others=C.boards.filter(o=>o!==x),sx=hardwareBus(C,x);
+  const pick=v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supply:v,...(v==='board'&&!others.some(o=>o.id===sx.supplyFrom)&&others[0]?{supplyFrom:others[0].id}:{})};},x.id+'supply');
+  const kinds=Object.entries(POWER_SUPPLIES).filter(([k])=>(k!=='board'||others.length)&&(k!=='usb'||sx.supply==='usb')&&(k!=='direct'||sx.supply==='direct'||ESP_PROFILES[x.kind]));
+  const autoKind=S.spec.vmin>=4.7&&S.spec.vmax<=5.3?'direct5':S.spec.vmax<5?'boost5':'reg5';
+  const f=el('div',{class:'hw-fields'},hardwareField('5 V from',hardwareSelect(x.name+' supply','pw-supply-'+x.id,[['auto','Automatic: '+POWER_SUPPLIES[autoKind].short],...kinds.map(([k,d])=>[k,d.label])],S.auto?'auto':S.kind,pick)));
+  if(S.kind==='board')f.append(hardwareField('Fed from',hardwareSelect(x.name+' fed from','pw-from-'+x.id,others.map(o=>[o.id,o.name+' · '+supplyPinName(C,o)]),S.from?.id??'',v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supplyFrom:Number(v)};},x.id+'supplyFrom'))));
+  f.append(hardwareNumber('Draw at 5 V (W)',boardWatts(C,x),v=>v>=0&&v<=50&&editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),watts:v};},x.id+'watts'),0,50));
+  return f;
 }
 // Power: a card per source (a battery on the airframe, a USB port or charger, a bench supply) with what it powers, and
 // Add power. A source's detail: its specs (from a preset, then any edited), what it powers (each board, each motor's
@@ -483,19 +531,7 @@ function renderPowerSource(box,C,id){
   const s=sourceOf(id);if(!s){detClose();return;}
   const comps=cfg.comps,on=sourceOn(C,s),P=sourceSpec(C,s,comps),bat=s.kind==='battery';
   detTitle(s.name);
-  box.append(el('p',{text:bat?(P.main?'The main pack: the first motor runs on it, the flight controller\'s battery input reads it, and its cells, capacity and limits are also the Battery settings (Tune). ':'')+'Tick what it powers below. Every source\'s − joins one common ground: the signal wires need it.':'Off the drone: it powers what\'s ticked on the bench, through a cable. Its − joins the common ground.'}));
-  if(bat)box.append(UI.card({class:'board-assignment'},el('div',{},el('b',{text:on?'Connected':'Not connected'}),el('span',{class:'computer-meta',text:sourceLabel(C,s,comps)})),
-    UI.button({class:'btn sm','data-power-toggle':'',text:on?'Disconnect':'Connect',onclick:()=>setBatteryWired(s.part,!on)})));
-  const presets=Object.entries(POWER_PRESETS).filter(([,p])=>p.kind===s.kind);
-  const spec=el('div',{class:'hw-fields'},hardwareText('Name',s.name,v=>renameSource(s,v)),
-    hardwareField('Preset',hardwareSelect(s.name+' preset','pw-preset-'+s.id,[['','Choose a preset…'],...presets.map(([k,p])=>[k,p.label])],'',v=>{const p=POWER_PRESETS[v];if(!p)return;const {kind,label,...x}=p;void kind;void label;setSourceSpec(s,bat?x:{...x,preset:v});})));
-  if(bat)spec.append(hardwareNumber('Cells in series',P.cells,v=>Number.isInteger(v)&&v>=1&&v<=8&&setSourceSpec(s,{cells:v}),1,8),hardwareNumber('Capacity (Ah)',P.capacity,v=>v>0&&v<=50&&setSourceSpec(s,{capacity:v}),0.05,50),
-    hardwareNumber('Most it gives (A)',+P.maxA.toFixed(1),v=>v>0&&v<=1000&&setSourceSpec(s,{maxA:v}),0.1,1000),hardwareNumber('Internal resistance (mΩ)',Math.round(P.rInt*1000),v=>v>0&&v<1000&&setSourceSpec(s,{rInt:v/1000}),1,999),
-    hardwareNumber('Charge at start (%)',Math.round((P.startSoc??1)*100),v=>v>=5&&v<=100&&setSourceSpec(s,{startSoc:v/100}),5,100));
-  else spec.append(hardwareNumber('Volts',P.volts,v=>v>0&&v<=60&&setSourceSpec(s,{volts:v}),0.5,60),hardwareNumber('Most it gives (A)',P.maxA,v=>v>0&&v<=100&&setSourceSpec(s,{maxA:v}),0.05,100));
-  box.append(el('h3',{text:'Specs'}),spec,el('p',{class:'hint',text:bat?'Most it gives: its C rating × its capacity (20C × 1.8 Ah: 36 A). The mass follows the cells and capacity (Airframe → the part).':'A USB port shuts off when asked for well over its rating; a bench supply holds its current limit and the voltage sags.'}));
-  if(!bat)box.append(UI.button({class:'btn sm',text:'Remove this source',onclick:()=>removeSource(s)}));
-  // what it powers
+  // what it powers, and what that draws
   const ks=powerConsumers(C,comps),list=el('div',{class:'pw-powers'}),groups=[['Boards',k=>k.kind==='board'],['ESCs',k=>k.kind==='motor'],['Other',k=>k.kind!=='board'&&k.kind!=='motor']];
   let mineA=0,motorsA=0;
   for(const [title,f]of groups){
@@ -513,31 +549,28 @@ function renderPowerSource(box,C,id){
       list.append(el('label',{class:'check pw-consumer',for:box2.id},box2,el('span',{text:k.name}),el('span',{class:'computer-meta',text:[draw,note].filter(Boolean).join(' · ')})));
     }
   }
-  box.append(el('h3',{text:'Powers'}),list,el('p',{class:'hint',text:'It draws about '+(mineA<1?Math.round(mineA*1000)+' mA':mineA.toFixed(2)+' A')+' without the motors'+(motorsA?', up to '+(mineA+motorsA).toFixed(1)+' A with them at full throttle':'')+'; it gives at most '+P.maxA+' A. (Boards: their draw at 5 V through their converter; ESCs: their motor\'s current limit.)'}));
-  if(!cargo.power)box.append(el('p',{class:'bad',text:'No power now: '+powerWhy()+'.'}));
-  // the boards' 5 V supplies and draws
-  box.append(el('h3',{text:'Board supplies'}),el('p',{class:'hint',text:'What makes each board\'s 5 V from its source: below 5 V (a 1S pack: 3.0–4.2 V) a boost converter steps it up, above it a regulator (BEC) steps it down, a 5 V source goes straight in. Draw: what the board takes at 5 V; the defaults are typical figures (an ESP32 DevKit about 0.4 W, a Pi Zero with a USB Wi-Fi adapter about 1.15 W, measured together at 0.48 A from a 1S pack through a boost converter). Put your own measurement in.'}));
-  const sup=el('div',{class:'hw-fields'});
-  for(const x of C.boards){
-    const S=boardSupplyOf(C,x,comps),others=C.boards.filter(o=>o!==x),sx=hardwareBus(C,x);
-    const pick=v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supply:v,...(v==='board'&&!others.some(o=>o.id===sx.supplyFrom)&&others[0]?{supplyFrom:others[0].id}:{})};},x.id+'supply');
-    const kinds=Object.entries(POWER_SUPPLIES).filter(([k])=>(k!=='board'||others.length)&&(k!=='usb'||sx.supply==='usb')&&(k!=='direct'||sx.supply==='direct'||ESP_PROFILES[x.kind]));
-    const autoKind=S.spec.vmin>=4.7&&S.spec.vmax<=5.3?'direct5':S.spec.vmax<5?'boost5':'reg5';   // (what Automatic picks for this source)
-    sup.append(hardwareField(x.name+' supply'+(S.src?' (from '+S.src.name+')':''),hardwareSelect(x.name+' supply','pw-supply-'+x.id,[['auto','Automatic: '+POWER_SUPPLIES[autoKind].short],...kinds.map(([k,d])=>[k,d.label])],S.auto?'auto':S.kind,pick)));
-    if(S.kind==='board')sup.append(hardwareField(x.name+' fed from',hardwareSelect(x.name+' fed from','pw-from-'+x.id,others.map(o=>[o.id,o.name+' · '+supplyPinName(C,o)]),S.from?.id??'',v=>editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),supplyFrom:Number(v)};},x.id+'supplyFrom'))));
-    sup.append(hardwareNumber(x.name+' draw at 5 V (W)',boardWatts(C,x),v=>v>=0&&v<=50&&editWiring(w=>{w.boards[x.id]={...hardwareBus(computers(),x),watts:v};},x.id+'watts'),0,50));
-  }
-  box.append(sup);
-  if(typeof powerDiagramView==='function')box.append(powerDiagramView(C,comps));
-  const I=powerIssues(C,comps);for(const m of I.errors)box.append(el('p',{class:'bad',text:m}));for(const m of I.warnings)box.append(el('p',{class:'hint',text:m}));
+  const amps=a=>a<1?Math.round(a*1000)+' mA':a.toFixed(2)+' A',I=powerIssues(C,comps);
+  put(box,dissues([...(!cargo.power?['No power now: '+powerWhy()+'.']:[]),...I.errors],[]),
+    dfacts(['Kind',POWER_KINDS[s.kind].short],['Voltage',bat?P.vmin.toFixed(1)+'–'+P.vmax.toFixed(1)+' V':P.volts+' V'],['Gives up to',P.maxA+' A'],['Draw',amps(mineA)+(motorsA?' · '+(mineA+motorsA).toFixed(1)+' A flat out':'')],['State',on?'connected':'not connected',on?'':'bad']));
+  if(bat)put(box,dactions(UI.button({class:'btn sm'+(on?'':' primary'),'data-power-toggle':'',text:on?'Disconnect':'Connect',onclick:()=>setBatteryWired(s.part,!on)})));
+  // specs
+  const presets=Object.entries(POWER_PRESETS).filter(([,p])=>p.kind===s.kind);
+  const spec=el('div',{class:'hw-fields'},...(bat?[]:[hardwareText('Name',s.name,v=>renameSource(s,v))]),
+    hardwareField('Preset',hardwareSelect(s.name+' preset','pw-preset-'+s.id,[['','Choose a preset…'],...presets.map(([k,p])=>[k,p.label])],'',v=>{const p=POWER_PRESETS[v];if(!p)return;const {kind,label,...x}=p;void kind;void label;setSourceSpec(s,bat?x:{...x,preset:v});})));
+  if(bat)spec.append(hardwareNumber('Cells in series',P.cells,v=>Number.isInteger(v)&&v>=1&&v<=8&&setSourceSpec(s,{cells:v}),1,8),hardwareNumber('Capacity (Ah)',P.capacity,v=>v>0&&v<=50&&setSourceSpec(s,{capacity:v}),0.05,50),
+    hardwareNumber('Most it gives (A)',+P.maxA.toFixed(1),v=>v>0&&v<=1000&&setSourceSpec(s,{maxA:v}),0.1,1000),hardwareNumber('Internal resistance (mΩ)',Math.round(P.rInt*1000),v=>v>0&&v<1000&&setSourceSpec(s,{rInt:v/1000}),1,999),
+    hardwareNumber('Charge at start (%)',Math.round((P.startSoc??1)*100),v=>v>=5&&v<=100&&setSourceSpec(s,{startSoc:v/100}),5,100));
+  else spec.append(hardwareNumber('Volts',P.volts,v=>v>0&&v<=60&&setSourceSpec(s,{volts:v}),0.5,60),hardwareNumber('Most it gives (A)',P.maxA,v=>v>0&&v<=100&&setSourceSpec(s,{maxA:v}),0.05,100));
+  put(box,dsec('Specs',spec,el('p',{class:'hint',text:bat?'Most it gives: its C rating × its capacity (20C × 1.8 Ah: 36 A). '+(P.main?'The main pack: the motors run on it, the flight controller reads it, and its specs are also Tune → Battery.':'Its mass follows the cells and capacity.'):'Off the drone, through a cable. A USB port shuts off when asked for well over its rating; a bench supply holds its current limit and the voltage sags.'})));
+  put(box,dsec('Powers',list,el('p',{class:'hint',text:'Each source\'s − joins one common ground. A board\'s 5 V converter is set in the board\'s own settings.'}),dissues([],I.warnings)));
   if(bat){
-    const many=batteryParts(comps).length>1,mp=mainPack(C,comps);
-    box.append(el('h3',{text:'Voltage sensing'}),el('p',{class:'hint',text:'Optional: lets the flight controller see the main pack\'s voltage'+(many&&mp?' ('+mp.name+')':'')+' (low-battery warnings, thrust that stays true as it drains).'+(many?' A second input reads another pack (the boards\'): the flight controller reports its voltage to the ground station (battery2=, flight firmware with wiring version 15).':'')+' A power monitor (INA219, INA226 or INA3221) measures voltage and current instead, a channel per pack, and counts the charge used.'}));
-    mountHardware(box,'[data-hw-role="battery"],[data-hw-role="pmon"]');computerWiringIssues(box,boardOf('core'));
-    box.append(partEditor(s.part,'The pack on the airframe'));
+    const sense=el('div',{});mountHardware(sense,'[data-hw-role="battery"],[data-hw-role="pmon"]');
+    put(box,dfold('sense'+s.id,'Voltage and current sensing',el('p',{class:'hint',text:'Optional: lets the flight controller see this pack (low-battery warnings, thrust that stays true as it drains): a resistor divider on an ADC pin, or a power monitor (INA219, INA226, INA3221) for voltage and current.'}),sense));
   }
+  if(typeof powerDiagramView==='function')put(box,dfold('diagram','Power diagram',powerDiagramView(C,comps)));
+  if(bat)put(box,dsec('Pack',partSettings(s.part)),physSection(s.part));
+  put(box,ddanger(bat?removePart(s.part,'battery'):UI.button({class:'btn sm danger',text:'Remove this source',onclick:()=>removeSource(s)})));
 }
-function deviceDescription(c){return c.type==='sensor'?(SENSOR_KINDS[c.kind]+' sensor: choose the board that receives its measurements.'):c.type==='joint'?'Servo: choose the board that controls its position.':c.type==='latch'?'Cargo latch: choose the board that opens and closes it.':'Motor: choose the board that sends its throttle signal.';}
 function openComputerView(view){
   if(!['bus','addpower'].includes(view.kind)){compFocus(view);return;}   // (everything else opens in the list, with the 3D view on it)
   const dlg=$('#computerDlg');
@@ -555,18 +588,7 @@ function assignDuty(task,id){
   if(id!=null){const b=C.boards.find(b=>b.id===id);if(!b||!eligibleTaskBoards(task).some(x=>x.id===id))return;b.tasks.push(task);}
   if(task==='core')C.unassignedCore=id==null;setComputers(C,'task');
 }
-function assignmentChoices(box,current,boards,apply){
-  box.append(el('h3',{text:current?'Assigned board':'Choose a board'}));
-  for(const b of boards)box.append(UI.card({class:'board-assignment'},el('div',{},el('b',{text:b.name}),el('span',{class:'computer-meta',text:BOARD_KINDS[b.kind].note})),UI.button({class:'btn sm',text:current?.id===b.id?'Assigned':'Assign',disabled:current?.id===b.id?'disabled':null, 'data-assign-board':b.id,onclick:()=>apply(b.id)})));
-  if(!boards.length)box.append(el('p',{class:'hint',text:'No compatible board yet. Add a board or assign the required duty first.'}));
-  if(current)box.append(UI.button({class:'btn sm',text:'Remove assignment','data-remove-assignment':'',onclick:()=>apply(null)}));
-}
 function mountHardware(box,selector){for(const n of [...$('#hardwareRows').querySelectorAll(selector)])box.append(n);}
-function computerWiringIssues(box,b){
-  if(!b)return;const plan=boardWiringPlan(b);
-  for(const msg of plan.errors)box.append(el('p',{class:'bad',text:msg}));
-  for(const msg of plan.warnings)box.append(el('p',{class:'hint',text:msg}));
-}
 function renderComputerDetail(){
   const dlg=$('#computerDlg');
   if(dlg&&dlg.open&&COMP.view)renderDetailInto(COMP.view,$('#computerDlgBody'),t=>{$('#computerDlgTitle').textContent=t;},()=>dlg.close());
@@ -574,72 +596,97 @@ function renderComputerDetail(){
   if(COMP.focus&&host&&host.isConnected)renderDetailInto(COMP.focus,host,t=>{$('#compDetailTitle').textContent=t;},()=>{COMP.focus=null;setTimeout(()=>compFocus(null));});
 }
 const detTitle=t=>COMP.det&&COMP.det.title(t),detClose=()=>COMP.det&&COMP.det.close();
+const planIssues=b=>{if(!b)return null;const P=boardWiringPlan(b);return dissues(P.errors,P.warnings);};
+const pinShort=(C,b,g)=>{const s=boardGpioShort(C,b,g);return /^\d+$/.test(s)?'GPIO '+s:s;};
 function renderDetailInto(view,box,setTitle,close){
-  if(!view||!box)return;COMP.det={title:setTitle,close};box.textContent='';box.classList.toggle('device-detail',view.kind==='device');const C=computers();
+  if(!view||!box)return;COMP.det={title:setTitle,close};box.textContent='';box.className='computer-detail';const C=computers();
   renderUndo();
   if(view.kind==='bus'){renderBusView(box);return;}
-  if(view.kind==='wiring'){detTitle('Wiring');box.append(wireList(C));mountHardware(box,'[data-hw-role="ground"]');box.append(UI.details({class:'hw-advanced',title:'Board diagrams & the full connection list',open:HW_UI.open.has('overview'),onToggle:o=>{o?HW_UI.open.add('overview'):HW_UI.open.delete('overview');}},renderWiringOverview(C)));mountHardware(box,'#hardwareReport');return;}
+  if(view.kind==='addpower'){renderAddPower(box);return;}
+  if(view.kind==='power'){renderPowerSource(box,C,view.id);return;}
   if(view.kind==='part'){renderPartDetail(box,C,view.id);return;}
+  if(view.kind==='wiring'){
+    detTitle('Wiring');const wires=benchWires(C,cfg.comps),bad=C.boards.reduce((n,b)=>n+boardWiringPlan(b).errors.length,0)+powerIssues(C,cfg.comps).errors.length;
+    put(box,dfacts(['Wires',String(wires.length)],['Boards',String(C.boards.length+1)],['Errors',bad?String(bad):'none',bad?'bad':'']));
+    mountHardware(box,'#hardwareReport');   // (the checks first: problems lead, as everywhere)
+    put(box,dsec('Every wire',el('p',{class:'hint',text:'What the install guide asks for. Hover a wire to pick it out in the view; click it to open what it goes to.'}),wireList(C)));
+    mountHardware(box,'[data-hw-role="ground"]');
+    put(box,dfold('overview','Board diagrams & the full connection list',renderWiringOverview(C)));return;
+  }
   if(view.kind==='task'||view.kind==='radio'){
-    const t=view.kind==='radio'?'tlm':view.id,T=TASKS[t];detTitle(view.kind==='radio'?'Radio assignment & wiring':T.label);
-    box.append(el('p',{text:T.what}));assignmentChoices(box,boardOf(t),eligibleTaskBoards(t),id=>assignDuty(t,id));
-    if(view.kind==='radio'){mountHardware(box,'[data-hw-role="radio"]');computerWiringIssues(box,boardOf(t));}
-    else if(T.formulas.length)box.append(UI.button({class:'btn',text:'Open formulas…',onclick:()=>openFormulaEditor(T.formulas[0])}));
+    const t=view.kind==='radio'?'tlm':view.id,T=TASKS[t],b=boardOf(t);
+    detTitle(view.kind==='radio'?'Radio':T.label);
+    put(box,dlead(T.what),dfacts(b&&runsFormulas(b)&&['Rate',boardTaskHz(b,t)+' Hz'],view.kind==='radio'&&['Link',(RADIO_LINKS[radioCfg.kind]?.label||radioCfg.kind)+(radioTwo()?' + '+(RADIO_LINKS[radioCfg2.kind]?.label||radioCfg2.kind):'')],T.formulas.length&&['Formulas',String(T.formulas.length)]),
+      dsec('Runs on',choiceList(b,eligibleTaskBoards(t),id=>assignDuty(t,id))));
+    if(view.kind==='radio'){const w=el('div',{class:'dsolo'});mountHardware(w,'[data-hw-role="radio"]');const P=b&&boardWiringPlan(b),rf=m=>/radio|receiver|crsf|nrf|link|elrs|espnow|esp-now|wi-?fi|bluetooth|ble/i.test(m);put(box,dsec('Wiring',P&&dissues(P.errors.filter(rf),P.warnings.filter(rf)),w));}
+    else if(T.formulas.length)put(box,dactions(UI.button({class:'btn sm',text:'Open its formulas…',onclick:()=>openFormulaEditor(T.formulas[0])})));
     return;
   }
-  if(view.kind==='power'){renderPowerSource(box,C,view.id);return;}
-  if(view.kind==='addpower'){renderAddPower(box);return;}
   if(view.kind==='link'){
     const L=boardLinks(C).find(L=>L.b.id===view.id);if(!L){detClose();return;}detTitle(L.a.name+' ↔ '+L.b.name);
-    box.append(el('p',{text:L.transport==='mqtt'?L.b.name+' talks to '+L.a.name+', which runs the flight core, through an MQTT broker ('+(L.broker==='here'?'on '+L.b.name+': one Wi-Fi hop':'elsewhere on the network: two Wi-Fi hops')+'), one link frame a message. The simulator delays each frame by the hops, with jitter and now and then a burst of retries; each frame is checked, and if the flight core hears nothing for half a second it levels and lands by itself.':L.b.name+' talks to '+L.a.name+', which runs the flight core, over a serial link at '+L.baud+' baud. Each frame is checked; if the flight core hears nothing for half a second it levels and lands by itself.'}));
-    if(L.note)box.append(el('p',{class:'hint',text:L.note}));
-    if(L.ends){const dl=el('dl',{class:'hw-wire-list'});for(const e of L.ends)dl.append(el('dt',{text:e.board.name}),el('dd',{},el('span',{text:e.text}),el('small',{text:BOARD_KINDS[e.board.kind].label})));box.append(el('h3',{text:'Ends'}),dl);}
-    if(L.wires.length)box.append(el('h3',{text:'Wires'}),el('ul',{class:'link-wires'},...L.wires.map(w=>el('li',{text:w}))),el('p',{class:'hint',text:'TX goes to RX both ways. 3.3 V logic on both ends: no level shifter needed.'}));
-    const draw=typeof boardLinkView==='function'&&boardLinkView(C,L);if(draw)box.append(el('h3',{text:'On the boards'}),draw,pinoutLegend());
-    if(L.carries.length)box.append(el('h3',{text:'What it carries'}),el('ul',{class:'link-wires'},...L.carries.map(t=>el('li',{text:t}))));
-    mountHardware(box,'[data-hw-role="link-'+L.b.id+'"]');computerWiringIssues(box,L.b);return;
+    const wires=benchWires(C,cfg.comps).filter(w=>w.view.kind==='link'&&w.view.id===L.b.id),set=el('div',{class:'dsolo'});mountHardware(set,'[data-hw-role="link-'+L.b.id+'"]');
+    put(box,planIssues(L.b),dlead(L.transport==='mqtt'?L.b.name+' and '+L.a.name+' (the flight core) talk through an MQTT broker '+(L.broker==='here'?'on '+L.b.name+': one Wi-Fi hop':'elsewhere on the network: two hops')+'. Every frame is checked; if the flight core hears nothing for half a second it levels and lands.':L.b.name+' and '+L.a.name+' (the flight core) talk over a serial line. Every frame is checked; if the flight core hears nothing for half a second it levels and lands.'),
+      dfacts(['Transport',!L.pi?'simulated':L.transport==='mqtt'?'MQTT · Wi-Fi':L.port==='/dev/serial0'?'UART wires':'USB serial adapter'],L.baud&&['Speed',L.baud+' baud'],L.pi&&L.transport!=='mqtt'&&['Ports',L.port]),
+      L.wires.length?dsec('Wires',...wireRows(wires),el('p',{class:'hint',text:'TX goes to RX both ways, and the grounds join. 3.3 V logic on both ends: no level shifter.'})):null,
+      L.carries.length?dsec('What it carries',el('ul',{class:'link-wires'},...L.carries.map(t=>el('li',{text:t})))):null,
+      L.note?el('p',{class:'hint',text:L.note}):null,dsec('Settings',set));
+    const draw=typeof boardLinkView==='function'&&boardLinkView(C,L);if(draw)put(box,dfold('linkdraw','On the boards',draw,pinoutLegend()));
+    return;
   }
   if(view.kind==='device'){
     const c=compById(view.id);if(!c){detClose();return;}detTitle(c.name);
-    box.append(el('p',{text:deviceDescription(c)}));const current=hardwareOwner(C,c),task=c.type==='latch'?'cargo':c.type==='sensor'&&['fix','flow'].includes(c.kind)?'nav':'core';
-    const boards=c.type==='sensor'&&c.kind==='tof'?C.boards.filter(tofBoardSupported):eligibleTaskBoards(task,true);assignmentChoices(box,current,boards,id=>editWiring(w=>{const same=hardwareOwner(computers(),c)?.id===id;w.parts[c.id]={...w.parts[c.id],board:id,...(c.type==='sensor'?{}:{pin:id==null?-1:same?partWiring(c).pin:-1})};},c.id));
-    if(Object.hasOwn(C.wiring?.parts?.[c.id]||{},'board'))box.append(UI.button({class:'btn sm',text:'Follow '+TASKS[task].label+' automatically',onclick:()=>editWiring(w=>{const p={...w.parts[c.id]};delete p.board;delete p.pin;w.parts[c.id]=p;},c.id)}));
-    else box.append(el('p',{class:'hint',text:'Follows the '+TASKS[task].label+' board automatically.'}));
-    if(current&&['motor','joint'].includes(c.type)&&current.id!==boardOf('core')?.id)box.append(el('p',{class:'hint',text:'Assign Flight core to this board to drive this output. Distributed flight outputs are not supported.'}));
-    mountHardware(box,'[data-hw-part="'+c.id+'"]');computerWiringIssues(box,current);
-    if(c.type==='sensor')box.append(partEditor(c,'The sensor on the airframe'));
-    else box.append(el('p',{class:'hint',text:'Where it sits, its size and its physics are in Airframe.'}),UI.button({class:'btn sm',text:'Open in Airframe',onclick:()=>{bench.want=false;UI_PANELS.editor.select('air');setEditMode(true);selectComp(c.id);}}));
+    const b=hardwareOwner(C,c),p=hardwarePart(C,c,cfg.comps),out=['motor','joint','latch'].includes(c.type),i2c=c.type==='sensor'&&I2C_SENSOR_KINDS.includes(c.kind),bus=b&&hardwareBus(C,b);
+    const drv=c.type==='sensor'&&DEVICE_PROFILES[c.kind]&&DEVICE_PROFILES[c.kind][p.driver];
+    const conn=el('div',{});mountHardware(conn,'[data-hw-part="'+c.id+'"]');
+    const errs=[...(out&&b&&c.type!=='latch'&&b.id!==boardOf('core')?.id?['Only the board running the flight core drives motors and servos: move the flight core to '+b.name+', or choose that board here.']:[])];
+    const own=m=>m.includes(c.name),P=b&&boardWiringPlan(b);
+    put(box,dissues([...errs,...(P?P.errors.filter(own):[])],P?P.warnings.filter(own):[]),
+      dfacts(['Board',b?b.name:'none',b?'':'bad'],
+        out?['Signal',b&&p.pin>=0?pinShort(C,b,p.pin):'no pin',b&&p.pin>=0?'':'bad']:i2c?['I²C',(p.address?'0x'+p.address.toString(16):'auto address')]:c.kind==='fix'?['Port',p.port||'/dev/ttyUSB0']:['Bus','simulation only'],
+        i2c&&b&&['Pins','SDA '+pinShort(C,b,bus.sda).replace('GPIO ','')+' · SCL '+pinShort(C,b,bus.scl).replace('GPIO ','')],
+        out?['Driver',c.type==='motor'?(p.driver==='brushed'?'MOSFET':'PWM ESC'):c.type==='joint'?'PWM servo':p.driver==='pwm'?'PWM servo':'digital']:drv&&['Driver',drv.label.replace(/ \(.*/,'')]),
+      dsec('Connection',conn));
+    if(c.type==='sensor')put(box,dsec(SENSOR_KINDS[c.kind],partSettings(c)),physSection(c),ddanger(removePart(c,'sensor')));
+    else put(box,dsec('On the airframe',el('div',{class:'cpart-head'},el('span',{class:'dmeta',text:'Its place, thrust and physics are set in Airframe.'}),UI.button({class:'btn sm',text:'Open in Airframe',onclick:()=>{bench.want=false;UI_PANELS.editor.select('air');setEditMode(true);selectComp(c.id);}}))));
     return;
   }
-  box.classList.remove('device-detail');
+  // a board
   const ground=view.id==='ground',b=ground?C.ground:C.boards.find(b=>b.id===view.id);if(!b){detClose();return;}
-  const K=BOARD_KINDS[b.kind],budget=ground?groundBudget():boardBudget(b);detTitle(b.name);
-  box.append(nameBox(b.name,'Board name',ground?'gname':'bname-'+b.id,v=>renameComputer(D=>{const x=ground?D.ground:D.boards.find(x=>x.id===b.id);if(x)x.name=(v||K.label).slice(0,24);})),
-    hardwareField('Computer',hardwareSelect('Board kind',ground?'gkind':'bkind-'+b.id,Object.entries(BOARD_KINDS).filter(([,K])=>ground||!K.groundOnly).map(([id,K])=>[id,K.label]),b.kind,v=>{const D=JSON.parse(JSON.stringify(computers()));(ground?D.ground:D.boards.find(x=>x.id===b.id)).kind=v;setComputers(D,'kind');})),
-    el('p',{text:K.note}),el('p',{class:'hint',text:ground?'Command module':!runsFormulas(b)?(appsOn(b).length?'Apps: '+appsOn(b).map(a=>a.name).join(', '):'No apps on it yet'):b.tasks.map(t=>TASKS[t].label+' · '+boardTaskHz(b,t)+' Hz').join(' / ')||'No duties assigned'}),
-    ...(ground||runsFormulas(b)?[el('p',{class:budget.load>0.8?'bad':'hint',text:'Estimated load '+pct(budget.load)+' of '+(K.cores>1?'one core':'its core')+(K.mcu?' · program '+budget.memKB.toFixed(1)+' KB of '+K.ramKB+' KB':'')+(budget.load>1?' · over capacity':'')})]:[]),
-    UI.button({class:'btn primary',id:ground?'ginst':'binst-'+b.id,text:'Install / export…',onclick:()=>openInstall(ground?'ground':b)}));
-  if(!ground)box.append(boardRunsSection(b),boardBodySection(b));
-  const only=!ground&&K.mcu&&C.boards.filter(x=>BOARD_KINDS[x.kind].mcu).length===1;
-  const blocked=ground?'The ground command module is part of the pilot link.':C.boards.length<2?'Keep at least one onboard board.':only?'Add another microcontroller before deleting the last one.':'';
-  const del=UI.button({class:'btn',id:ground?'gdel':'bdel-'+b.id,text:'Delete board',disabled:blocked?'disabled':null,title:blocked,onclick:()=>{COMP.confirm=b.id;renderHardware();renderComputerDetail();}});box.append(del);
-  if(blocked)box.append(el('p',{class:'hint',text:blocked}));
-  if(COMP.confirm===b.id&&!ground){
-    box.append(el('div',{class:'computer-confirm',role:'alert'},el('p',{text:'Delete “'+b.name+'”? Its duties and device connections will be removed.'}),UI.button({class:'btn',text:'Cancel',onclick:()=>{COMP.confirm=null;renderHardware();renderComputerDetail();}}),UI.button({class:'btn primary',id:'boardDeleteConfirm',text:'Delete board',onclick:()=>{
-      const D=JSON.parse(JSON.stringify(computers()));D.boards=D.boards.filter(x=>x.id!==b.id);if(b.tasks.includes('core'))D.unassignedCore=true;
-      if(D.wiring){delete D.wiring.boards?.[b.id];for(const p of Object.values(D.wiring.parts||{}))if(p.board===b.id){p.board=null;p.pin=-1;}}
-      COMP.focus=null;setComputers(D,'remove');benchFocus(null);
-    }})));
+  const K=BOARD_KINDS[b.kind],budget=ground?groundBudget():boardBudget(b),body=!ground&&boardBodyOf(b);detTitle(b.name);
+  const duties=ground?'command module':runsFormulas(b)?b.tasks.map(t=>TASKS[t].label).join(', ')||'none':appsOn(b).map(a=>a.name).join(', ')||'no apps';
+  put(box,ground?null:planIssues(b),
+    dfacts(['Chip',K.label],['Runs',duties],...(ground||runsFormulas(b)?[['Load',pct(budget.load)+' of '+(K.cores>1?'one core':'its core'),budget.load>0.8?'bad':''],K.mcu&&['Program',budget.memKB.toFixed(1)+' of '+K.ramKB+' KB']]:[]),!ground&&['On the airframe',body?gramsOf(body):'no',body?'':'muted']),
+    dactions(UI.button({class:'btn sm primary',id:ground?'ginst':'binst-'+b.id,text:'Install / export…',onclick:()=>openInstall(ground?'ground':b)})),
+    dsec('Board',hardwareField('Name',nameInput(b.name,'Board name',ground?'gname':'bname-'+b.id,v=>renameComputer(D=>{const x=ground?D.ground:D.boards.find(x=>x.id===b.id);if(x)x.name=(v||K.label).slice(0,24);}))),
+      hardwareField('Computer',hardwareSelect('Board kind',ground?'gkind':'bkind-'+b.id,Object.entries(BOARD_KINDS).filter(([,K])=>ground||!K.groundOnly).map(([id,K])=>[id,K.label]),b.kind,v=>{const D=JSON.parse(JSON.stringify(computers()));(ground?D.ground:D.boards.find(x=>x.id===b.id)).kind=v;setComputers(D,'kind');})),
+      el('p',{class:'hint',text:K.note.charAt(0).toUpperCase()+K.note.slice(1)+'.'})));
+  if(ground){
+    const w=el('div',{});mountHardware(w,'[data-hw-role="ground"]');
+    if(!groundHardware(C)){const g=hardwareOverview(C,cfg.comps).groups.find(g=>g.id==='ground');w.append(el('p',{class:'hint',text:g?.rows.map(r=>r.connection+' · '+r.note).join(' ')||'Host inputs and USB serial.'}));}
+    put(box,dsec('Wiring',w),ddanger(el('p',{class:'hint',text:'The command module is part of the pilot link: it stays.'})));
+    return;
   }
-  box.append(el('h3',{text:ground?'Command wiring':'Wiring & devices'}));
-  if(ground){mountHardware(box,'[data-hw-role="ground"]');const group=hardwareOverview(C,cfg.comps).groups.find(g=>g.id==='ground');if(!groundHardware(C))box.append(el('p',{class:'hint',text:group?.rows.map(r=>r.connection+' · '+r.note).join(' ')||'Host inputs and USB serial.'}));}
-  else{
-    for(const c of cfg.comps.filter(c=>hardwareOwner(C,c)?.id===b.id))mountHardware(box,'[data-hw-part="'+c.id+'"]');
-    mountHardware(box,'[data-hw-board="'+b.id+'"]');
-    if(boardOf('tlm')?.id===b.id)mountHardware(box,'[data-hw-role="radio"]');
-    computerWiringIssues(box,b);
-    if(typeof boardModelSection==='function'&&(ESP_PROFILES[b.kind]||b.kind.startsWith('pi')))box.append(el('h3',{text:'Board & pinout'}),boardModelSection(C,b,editWiring));
+  put(box,boardRunsSection(b));
+  {   // its wires (each opens its device), then its own hardware settings
+    const mine=benchWires(C,cfg.comps).filter(w=>w.a.key==='board:'+b.id||w.b.key==='board:'+b.id);
+    const own=[...mounted('[data-hw-board="'+b.id+'"]'),...(boardOf('tlm')?.id===b.id?mounted('[data-hw-role="radio"]'):[])],presets=own.filter(n=>n.classList.contains('hw-preset-btn'));
+    for(const n of presets)n.classList.add('sm');
+    put(box,dsec('Wiring',mine.length?null:el('p',{class:'hint',text:'Nothing wired to it yet.'}),
+      mine.length?UI.details({class:'dsub',title:'Its wires ('+mine.length+')',open:HW_UI.open.has('d:wires'+b.id),onToggle:o=>{o?HW_UI.open.add('d:wires'+b.id):HW_UI.open.delete('d:wires'+b.id);}},...wireRows(mine)):null,
+      ...cardFolds(own.filter(n=>!presets.includes(n)),'b'+b.id,b.name),presets.length?dactions(...presets):null));
   }
+  put(box,dsec('Power',boardSupplyFields(C,b),el('p',{class:'hint',text:'Below 5 V (a 1S pack) a boost converter steps it up, above it a regulator (BEC) steps it down. Draw: what it takes at 5 V; the defaults are typical, put your own measurement in.'})),
+    boardBodySection(b));
+  if(typeof boardModelSection==='function'&&(ESP_PROFILES[b.kind]||b.kind.startsWith('pi')))put(box,dfold('pinout'+b.id,'Pinout & board model',boardModelSection(C,b,editWiring)));
+  const only=K.mcu&&C.boards.filter(x=>BOARD_KINDS[x.kind].mcu).length===1;
+  const blocked=C.boards.length<2?'Keep at least one onboard board.':only?'Add another microcontroller before deleting the last one.':'';
+  const danger=ddanger(UI.button({class:'btn sm danger',id:'bdel-'+b.id,text:'Delete board',disabled:blocked?'disabled':null,title:blocked,onclick:()=>{COMP.confirm=b.id;renderHardware();renderComputerDetail();}}),blocked?el('span',{class:'hint',text:blocked}):null);
+  if(COMP.confirm===b.id)danger.append(el('div',{class:'computer-confirm',role:'alert'},el('p',{text:'Delete “'+b.name+'”? Its duties and device connections go with it.'}),UI.button({class:'btn sm',text:'Cancel',onclick:()=>{COMP.confirm=null;renderHardware();renderComputerDetail();}}),UI.button({class:'btn sm danger',id:'boardDeleteConfirm',text:'Delete board',onclick:()=>{
+    const D=JSON.parse(JSON.stringify(computers()));D.boards=D.boards.filter(x=>x.id!==b.id);if(b.tasks.includes('core'))D.unassignedCore=true;
+    if(D.wiring){delete D.wiring.boards?.[b.id];for(const p of Object.values(D.wiring.parts||{}))if(p.board===b.id){p.board=null;p.pin=-1;}}
+    COMP.focus=null;setComputers(D,'remove');benchFocus(null);
+  }})));
+  put(box,danger);
 }
 function openFormulaEditor(key){const dlg=$('#formulaDlg');if(key)$('#formulaSearch').value='';renderUndo();if(!dlg.open)dlg.showModal();showFormula(key||COMP.formula||formulaGroups()[0].keys[0]);}
 function showFormula(key){
@@ -677,7 +724,8 @@ function boardsExport(what, btn) {
 }
 // A board's settings: what it runs (formulas, WebAssembly apps, native apps), and its apps.
 function boardRunsSection(b){
-  const K=BOARD_KINDS[b.kind],runs=boardRuns(b),box=el('section',{class:'board-runs'},el('h3',{text:'Runs'}));
+  const K=BOARD_KINDS[b.kind],runs=boardRuns(b),box=el('section',{class:'dsec board-runs'},el('h3',{class:'dsec-h',text:'Software'}));
+  if(runsFormulas(b))box.append(el('div',{class:'chips'},...(b.tasks.length?b.tasks.map(t=>UI.button({class:'chip',title:'Open the '+TASKS[t].label+' duty',text:TASKS[t].label+' · '+boardTaskHz(b,t)+' Hz',onclick:()=>compFocus({kind:'task',id:t})})):[el('span',{class:'hint',text:'No duties: give it one under Duties.'})])));
   const msg=UI.status({class:'law-err board-runs-err',role:'status'});
   const set=next=>{
     const lost=runs.filter(r=>!next.includes(r));
@@ -688,7 +736,7 @@ function boardRunsSection(b){
   };
   const choice=el('div',{class:'board-runs-choice'});
   const renderRunsChoice=()=>{
-    if(K.mcu){const sel=UI.select({'aria-label':'What the board runs',id:'bruns-'+b.id},...['formulas','wasm'].map(r=>el('option',{value:r,text:RUNTIMES[r].label})));sel.value=runs[0];sel.addEventListener('change',()=>set([sel.value]));choice.replaceChildren(sel,el('p',{class:'hint',text:RUNTIMES[runs[0]].what+'. A microcontroller runs one or the other: it decides the firmware it gets.'}));}
+    if(K.mcu){const sel=UI.select({'aria-label':'What the board runs',id:'bruns-'+b.id},...['formulas','wasm'].map(r=>el('option',{value:r,text:RUNTIMES[r].label})));sel.value=runs[0];sel.addEventListener('change',()=>set([sel.value]));choice.replaceChildren(sel,el('p',{class:'hint',text:RUNTIMES[runs[0]].what.charAt(0).toUpperCase()+RUNTIMES[runs[0]].what.slice(1)+'. A microcontroller runs one or the other: it decides the firmware it gets.'}));}
     else choice.replaceChildren(...Object.entries(RUNTIMES).map(([r,R])=>el('label',{class:'check'},Object.assign(UI.input({type:'checkbox',value:r,'data-runs':r}),{checked:runs.includes(r),onchange:e=>{const next=Object.keys(RUNTIMES).filter(k=>k===r?e.target.checked:runs.includes(k));if(!next.length){e.target.checked=true;return;}set(next);}}),el('span',{text:R.label+' · '+R.what}))));
   };
   renderRunsChoice();box.append(choice,msg);
@@ -702,7 +750,7 @@ function boardRunsSection(b){
     const pick=UI.select({'aria-label':'An app to put on this board',id:'bapp-'+b.id},el('option',{value:'',text:fits.length?'Put an app on it…':'No other apps for it'}),...fits.map(a=>{const at=appBoard(a);return el('option',{value:a.id,text:a.name+' · '+APP_KINDS[a.kind].label+(at?' (now on '+at.name+')':'')});}));
     pick.disabled=!fits.length;pick.addEventListener('change',()=>{if(pick.value)boardApp(b,pick.value,true);});
     const kind=appRt.includes('wasm')?'wasm':'python';
-    box.append(el('h3',{text:'Apps on this board'}),list,el('div',{class:'law-actions'},pick,UI.button({class:'btn sm',text:'+ New app here','data-new-app':b.id,onclick:()=>{$('#computerDlg').close();newApp(kind,b.id);}})));
+    box.append(el('h4',{text:'Apps on this board'}),list,el('div',{class:'law-actions'},pick,UI.button({class:'btn sm',text:'+ New app here','data-new-app':b.id,onclick:()=>{$('#computerDlg').close();newApp(kind,b.id);}})));
     if(K.mcu)box.append(el('p',{class:'hint',text:'On the drone it needs the app-board firmware (the WebAssembly runtime); see Install / export. Until then its apps run in the simulator.'}));
   }
   return box;

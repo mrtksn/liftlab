@@ -182,8 +182,8 @@ function checkF(c, key, label) {
 // are marked phys-f: Computers keeps them behind Edit physical properties, with what's particular to the part (a
 // camera's picture, a sensor's rate and noise, a draw) always in view. Airframe shows them all.
 const physF = n => { if (n && n.classList) n.classList.add('phys-f'); return n; };
-function compBody(c) {
-  cardRefresh.set(c.id, []);
+function compBody(c, only) {   // only: 'part' (its own settings) or 'phys' (its physical properties), or everything
+  if (!only) cardRefresh.set(c.id, []); else if (!cardRefresh.has(c.id)) cardRefresh.set(c.id, []);   // (a half keeps the other half's refreshers)
   const b = el('div', { class: 'comp-body' });
   const nid = `f-${c.id}-name`; const ni = UI.input( { type: 'text', id: nid, value: c.name, maxlength: '60' });
   ni.addEventListener('input', () => { c.name = ni.value || tagOf(c); document.querySelector(`[data-id="${c.id}"] .comp-name`).textContent = c.name; buildActRows(); save(); });
@@ -205,7 +205,7 @@ function compBody(c) {
   };
   const spinSel = () => selectF(c, 'spin', 'Spin, facing the prop', [[1, 'CCW'], [-1, 'CW']]);
   const pushSel = () => selectF(c, 'push', 'Prop', [['false', 'Pulls (tractor)'], ['true', 'Pushes (pusher)']], rerender);
-  const rerender = () => keepFocus(() => { document.querySelector(`[data-id="${c.id}"]`).replaceWith(compCard(c)); });
+  const rerender = () => keepFocus(() => { for (const n of document.querySelectorAll(`[data-id="${c.id}"]`)) n.replaceWith(compCard(c, n.dataset.only ? { only: n.dataset.only, bare: true } : undefined)); });
   if (c.type === 'motor') {
     b.append(pos, slider(c, 'tilt'), slider(c, 'az'), slider(c, 'tmax'), slider(c, 'prop'), pushSel(), spinSel(), selectF(c, 'pitch', 'Blade pitch', [['fixed', 'Fixed: speed sets thrust'], ['collective', 'Collective: governed speed, pitch sets thrust']]), slider(c, 'tau'), slider(c, 'fm'), propInfo(c), slider(c, 'mass'), slider(c, 'health'), checkF(c, 'healthKnown', 'Controller knows the health'),
       el('span', { class: 'lbl', text: 'Heat, sensing and failure' }),
@@ -247,7 +247,7 @@ function compBody(c) {
       b.append(el('label', { class: 'check', for: id }, i, 'Electronics: listed in Computers, not Airframe'));
     }
     b.append(physF(checkF(c, 'known', 'Controller knows this mass')), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
-      el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }));
+      c.battery ? el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }) : '');
     {   // a camera on it: its picture shows in a corner of the view (onboard-cam.js)
       const id = `f-${c.id}-camera`, i = UI.input({ type: 'checkbox', id }); i.checked = !!c.camera;
       i.addEventListener('change', () => { if (i.checked) c.camera = { ...CAMERA_DEFAULTS }; else delete c.camera; edited(c, 'camera'); rerender(); });
@@ -284,9 +284,14 @@ function compBody(c) {
     for (const key of ['tmax', 'tau']) b.querySelectorAll(`[id^="f-${c.id}-${key}"]`).forEach(input => { input.disabled = true; input.title = 'Derived by the fixed physical model'; });
   }
   b.append(physF(partMassFields(c)));
+  if (only) for (const n of [...b.children]) if (n.classList.contains('phys-f') !== (only === 'phys')) n.remove();
   return b;
 }
-function compCard(c) {
+function compCard(c, opt) {
+  if (opt && opt.only) {   // half of the editor, without its header (Computers: the row above already names it)
+    const card = UI.card({ class: 'comp open bare', 'data-id': c.id, 'data-only': opt.only }, el('span', { class: 'comp-name', hidden: true, text: c.name }), compBody(c, opt.only));
+    return card;
+  }
   const open = openSet.has(c.id);
   const head = UI.button( { class: 'comp-head', type: 'button', 'aria-expanded': String(open), 'data-focus-key': 'head-' + c.id }, el('span', { class: 'tag tag-' + c.type, text: tagOf(c) }), el('span', { class: 'comp-name', text: c.name }), el('span', { class: 'comp-sum', text: summary(c) }));
   const del = UI.button( { class: 'icon-btn', type: 'button', 'aria-label': 'Remove ' + c.name, title: 'Remove', text: '×', 'data-focus-key': 'del-' + c.id });

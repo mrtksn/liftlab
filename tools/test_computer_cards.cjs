@@ -59,8 +59,9 @@ try{
  assert(await page.evaluate(()=>!boardOf('core')&&computers().unassignedCore));await page.evaluate(()=>{doReset();fleetStep(50);});assert(await page.evaluate(()=>actuators().every(c=>act.get(c.id).u===0)));
  await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>boardOf('core').id),core);await shut();
  // Device assignment/removal and saved GPIO edits; ID uniqueness across staged/mounted hardware.
- await device(motor).click();await page.locator('[data-remove-assignment]').click();await shut();assert(await page.locator('#computerOutputs [data-device="'+motor+'"]').evaluate(n=>n.classList.contains('empty')));
- await device(motor).click();await page.locator('[data-assign-board="'+core+'"]').click();
+ await device(motor).click();assert.strictEqual(await page.locator('#compDetail [data-assign-board]').count(),0,'A device offers its board twice');
+ await pick('#hw-board-'+motor,'off');await shut();assert(await page.locator('#computerOutputs [data-device="'+motor+'"]').evaluate(n=>n.classList.contains('empty')));
+ await device(motor).click();await pick('#hw-board-'+motor,core);
  const pin=await page.locator('#hw-pin-'+motor+' option:not([disabled])').evaluateAll(nodes=>nodes.map(n=>n.value).find(v=>v!=='-1'&&v!==nodes[0].parentNode.value));
  await pick('#hw-pin-'+motor,pin);assert.strictEqual(await page.evaluate(id=>partWiring(compById(id)).pin,motor),+pin);
  assert(await page.evaluate(()=>{const ids=[...document.querySelectorAll('[id]')].map(n=>n.id);return ids.length===new Set(ids).size;}),'Duplicate DOM IDs after mounting wiring');
@@ -78,7 +79,8 @@ try{
  assert.notStrictEqual(await page.evaluate(id=>compById(id).pos[0],imu),imuX,'The X arrow did not move the part');await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(id=>compById(id).pos[0],imu),imuX);
  await page.locator('#compDetail [data-phys="'+imu+'"]').click();await page.waitForFunction(()=>bench.phys==null&&!gizmo.visible);await page.locator('#compDetail [data-phys="'+imu+'"]').click();await pick('#hw-driver-'+imu,'custom');await page.locator('#compDetail button').filter({hasText:'Edit C driver'}).click();
  assert(await page.locator('#hw-code-'+core).isVisible());const draft='// owner-specific driver draft';await page.locator('#hw-code-'+core).fill(draft);
- await shut();await board(core).click();assert.strictEqual(await page.locator('#hw-code-'+core).inputValue(),draft);assert(await page.locator('#hw-pin-'+motor).isVisible());
+ await shut();await board(core).click();assert.strictEqual(await page.locator('#hw-code-'+core).inputValue(),draft);assert(!await page.locator('#compDetail #hw-pin-'+motor).count(),'A device\'s wiring repeated in its board');
+ assert(await page.locator('#compDetail .dsub summary').filter({hasText:/^Its wires \(\d+\)$/}).count(),'The board does not list its wires');await shut();await device(imu).click();
  const sda=await page.locator('#hw-sda-'+imu+' option:not([disabled])').evaluateAll(nodes=>nodes.map(n=>n.value).find(v=>v!==nodes[0].parentNode.value));await pick('#hw-sda-'+imu,sda);
  assert.strictEqual(await page.locator('#hw-sda-'+mag).inputValue(),sda);await shut();
  // Radio and its second link share the telemetry duty; settings and the row's summary follow edits.
@@ -88,10 +90,10 @@ try{
  await row('[data-wiring]').click();assert.strictEqual(await page.evaluate(()=>bench.view&&bench.view.kind),'wiring');
  const wires=await page.locator('#compDetail .wire-row').count();assert(wires>5&&wires===await page.evaluate(()=>benchWires().length),'Wire list does not match the wiring');
  await page.locator('#compDetail .wire-row').first().hover();assert(await page.evaluate(()=>!!bench.hiWire));
- assert.strictEqual(await page.locator('#compDetailBody > [data-hw-role="ground"] h3').innerText(),'Command-module wiring');await page.locator('#compDetail .hw-advanced').filter({hasText:'Board diagrams'}).locator('summary').first().click();await page.locator('#wiringOverview [data-view="list"]').click();assert((await page.locator('#wiringOverview').innerText()).includes('Command module'));assert((await page.locator('#wiringOverview').innerText()).includes('Arm button'));
+ assert.strictEqual((await page.locator('#compDetailBody > [data-hw-role="ground"] h3').innerText()).toLowerCase(),'command-module wiring');await page.locator('#compDetail .dfold').filter({hasText:'Board diagrams'}).locator('summary').first().click();await page.locator('#wiringOverview [data-view="list"]').click();assert((await page.locator('#wiringOverview').innerText()).includes('Command module'));assert((await page.locator('#wiringOverview').innerText()).includes('Arm button'));
  await page.locator('[data-hw-role="ground"] summary').click();const arm=await page.locator('#hw-ground-arm-0 option:not([disabled])').evaluateAll(nodes=>nodes.map(n=>n.value).find(v=>v!=='-1'&&v!==nodes[0].parentNode.value));await pick('#hw-ground-arm-0',arm);
  assert.strictEqual(await page.evaluate(()=>groundHardware(computers()).arm[0]),+arm);assert((await page.locator('#wiringOverview').innerText()).includes('GPIO '+arm));await shut();
- await board('ground').click();assert(await page.locator('[data-hw-role="ground"]').isVisible());assert(await page.locator('#gdel').isDisabled());await shut();
+ await board('ground').click();assert(await page.locator('[data-hw-role="ground"]').isVisible());assert(!await page.locator('#gdel').count()&&(await page.locator('#compDetail .ddanger').innerText()).includes('stays'));await shut();
  // A click on a part in the view opens its row.
  await page.waitForFunction(()=>!bench.zoom&&!cam.anim&&bench.ex===1);await page.waitForTimeout(2500);
  const imuAt=await page.evaluate(id=>{const it=bench.items.get('part:'+id),w=it.obj.getWorldPosition(new THREE.Vector3()).project(camera),r=vpEl.getBoundingClientRect();return {x:r.left+(w.x+1)/2*r.width,y:r.top+(1-w.y)/2*r.height};},imu);
@@ -141,7 +143,7 @@ try{
  await page.evaluate(()=>{RN.P=window._savedProgram;delete window._savedProgram;RN.P.errors.positionControl='test formula diagnostic';renderRunner();});assert((await page.locator('#rnProblems').innerText()).includes('test formula diagnostic'));await page.evaluate(()=>{delete RN.P.errors.positionControl;RN.buildErr='';renderRunner();});
  assert(await page.evaluate(()=>!fleetSelect(null)),'Editor permitted drone deselection');await close();
  // Board deletion disconnects explicit device routes, never silently assigns them to a reused ID.
- await device(motor).click();await page.locator('[data-assign-board="'+extra+'"]').click();await shut();await board(extra).click();await page.locator('#bdel-'+extra).click();await page.locator('#boardDeleteConfirm').click();
+ await device(motor).click();await pick('#hw-board-'+motor,extra);await shut();await board(extra).click();await page.locator('#bdel-'+extra).click();await page.locator('#boardDeleteConfirm').click();
  assert(await page.evaluate(id=>hardwareOwner(computers(),compById(id))===null,motor));assert(await page.evaluate(()=>!boardOf('tlm')));
  await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(id=>hardwareOwner(computers(),compById(id)).id,motor),extra);
  const owner=await page.evaluate(()=>fleet.selected.id);await page.evaluate(()=>fleetCreate('hex'));await page.evaluate(id=>fleetSelect(id),owner);

@@ -65,7 +65,7 @@ const MOCK = () => {
     });
     await page.evaluate(() => compFocus(null));   // (the new sensor opened as it was added)
     await page.locator(`#computerSensors [data-device="${tof}"] > .comp-top > .comp-head`).click();
-    await page.locator(`#compDetail [data-assign-board="${pi}"]`).click();
+    await page.locator(`#hw-board-${tof}`).dispatchEvent('pointerdown'); await page.locator(`#hw-board-${tof}`).selectOption(String(pi));   // (a device's board: one select, in its Connection)
     assert.deepStrictEqual(await page.evaluate(() => {
       const c = sensorsOf('tof')[0], owner = wiredTo(c);
       const pins = boardPinUses(computers(), cfg.comps, owner);
