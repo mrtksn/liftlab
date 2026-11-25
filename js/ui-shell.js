@@ -76,6 +76,7 @@ const UI_PANELS = {
       document.getElementById('sidebarHistory').hidden = !['air', 'tune', 'form'].includes(key);
       if (typeof closePlace === 'function') closePlace();
       if (key === 'gs') renderGs(true);
+      if (typeof benchSync === 'function') benchSync();
       try { localStorage.setItem(LS + '-tab', key); } catch (e) {}
     },
   }),

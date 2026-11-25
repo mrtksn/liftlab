@@ -36,7 +36,7 @@ function renderWiringOverview(C){
   const data=hardwareOverview(C,cfg.comps),section=el('div',{class:'hw-group hw-overview',id:'wiringOverview'});
   const bs=typeof boardPinoutView==='function'?C.boards.filter(b=>boardModel(C,b)):[];
   const drawings=el('div',{class:'hw-overview-view'}),list=el('div',{class:'hw-overview-view'});
-  if(bs.length){drawings.append(el('p',{class:'hint',text:'Each board as you hold it, every pin in use labelled with what it goes to. A board\'s model and pinout are set (and editable) in its own dialog: Computers → the board → Board & pinout.'}));for(const b of bs)drawings.append(boardPinoutView(C,b));drawings.append(pinoutLegend());}
+  if(bs.length){drawings.append(el('p',{class:'hint',text:'Each board as you hold it, every pin in use labelled with what it goes to. A board\'s model and pinout are set (and editable) in its settings: Computers → the board → Board & pinout. The 3D view draws the same pins on each board.'}));for(const b of bs)drawings.append(boardPinoutView(C,b));drawings.append(pinoutLegend());}
   list.append(el('p',{class:'hint',text:'Your connection list, grouped by board. GPIO numbers use the chip’s GPIO names'+(bs.length?'; the drawings show where they are on the headers':'')+'.'}));
   for(const g of [...data.groups.filter(g=>g.id==='ground'),...data.groups.filter(g=>g.id!=='ground'),...(data.unassigned.length?[{name:'Unassigned devices',kind:'',rows:data.unassigned}]:[])]){
     const card=UI.card({class:'hw-device'},el('div',{class:'hw-device-title'},el('b',{text:g.name}),el('span',{class:'hw-kind',text:BOARD_KINDS[g.kind]?.label||g.kind}))),dl=el('dl',{class:'hw-wire-list'});
@@ -53,7 +53,7 @@ function renderWiringOverview(C){
   return section;
 }
 function renderHardware() {
-  const box=$('#hardwareRows');if(!box)return;box.textContent='';$('#computerDlgBody')?.querySelectorAll('[data-hw-part],[data-hw-board],[data-hw-role],#hardwareReport').forEach(n=>n.remove());
+  const box=$('#hardwareRows');if(!box)return;box.textContent='';for(const host of [$('#computerDlgBody'),$('#compDetailBody')])host?.querySelectorAll('[data-hw-part],[data-hw-board],[data-hw-role],#hardwareReport').forEach(n=>n.remove());
   const C=computers(),parts=cfg.comps.filter(c=>['motor','joint','sensor','latch'].includes(c.type));
   // The complete overview is opened on demand from Computers.
   const pinsFor=b=>ESP_PROFILES[b.kind]?ESP_PROFILES[b.kind].pins:PI_GPIO_PINS;

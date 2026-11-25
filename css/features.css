@@ -1160,10 +1160,6 @@ html.phone .work.world-view .view{height:calc(100dvh - var(--world-header-height
 .computer-detail.device-detail .hw-device>.hw-field:first-of-type{display:none}
 .board-assignment{display:flex;align-items:center;justify-content:space-between;gap:var(--space-12);padding:var(--space-10)}
 .board-assignment>div{display:flex;flex-direction:column;gap:var(--space-3)}
-.computer-add-group{display:flex;flex-direction:column;gap:var(--space-8)}
-.computer-add-group h3{margin:0;font-family:var(--f-display);font-size:var(--text-label)}
-.board-choice{display:flex;flex-direction:column;gap:var(--space-4);text-align:left;padding:var(--space-12);border:1px solid var(--line);border-radius:var(--radius-card);background:var(--panel-2);cursor:pointer}
-.board-choice span{font-size:var(--text-sm);color:var(--muted)}
 .computer-tools,.computer-export-files{display:flex;flex-wrap:wrap;gap:var(--space-8)}
 .computer-export{margin-bottom:var(--space-14)}
 .computer-export summary{cursor:pointer;margin-bottom:var(--space-8)}
@@ -1377,3 +1373,46 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .power-diagram .pw-rail { fill: var(--muted); font-size: 10px; }
 .power-diagram .pd-lead { stroke-linejoin: round; }
 .pinout-diagram.power-diagram { max-width: 100%; height: auto; }
+
+/* Computers: the electronics as a list (like Airframe's parts), the open row's settings under it, and the 3D bench's
+   labels over the view (bench3d.js). */
+.clist{gap:var(--space-5)}
+.clist:empty{display:none}
+#computerWiringSec .clist+.clist{margin-top:var(--space-5)}
+.crow.virtual .comp-name::after{content:' · not placed';font-weight:400;color:var(--muted)}
+.crow.empty .tag{opacity:.6}
+.crow.bad .comp-sum{color:var(--bad)}
+.tag-board{color:var(--accent)}
+.tag-ground{color:var(--ink-2)}
+.tag-power{color:var(--bad)}
+.tag-wire{color:var(--ink-2)}
+.tag-duty{color:var(--muted)}
+.cdetail{border-top:1px solid var(--line);padding:var(--space-8) var(--space-10) var(--space-11)}
+.cdetail .computer-detail{display:flex;flex-direction:column;gap:var(--space-8)}
+.cdetail .computer-detail>h3,.cdetail .cpart>h3,.cdetail .board-body>h3{margin:var(--space-6) 0 0;font-size:var(--text-sm)}
+.cpart .comp{border-color:var(--line)}
+.board-body{display:flex;flex-direction:column;gap:var(--space-6)}
+.comp-viewbar{margin-top:var(--space-8);align-items:center}
+.comp-viewbar .seg{margin-left:auto}
+.elec-row{border-style:dashed}
+.elec-link .tag{min-width:58px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.wire-list{display:flex;flex-direction:column;gap:var(--space-2)}
+.wire-list>h3{margin:var(--space-8) 0 var(--space-2);font-size:var(--text-sm)}
+.wire-row{display:grid;grid-template-columns:auto 1fr auto;gap:var(--space-7);align-items:center;text-align:left;border:1px solid transparent;background:transparent;border-radius:var(--radius-control);padding:var(--space-3) var(--space-6);font-size:var(--text-sm);color:var(--ink);cursor:pointer}
+.wire-row small{color:var(--muted);font-size:var(--text-xs);white-space:nowrap}
+.wire-row:hover,.wire-row.hi{border-color:var(--accent);background:var(--panel-2,transparent)}
+.wire-row .pd-swatch{width:14px;height:4px;border-radius:2px;display:inline-block;background:var(--pd-c)}
+.bench-bar .seg button{padding:var(--space-2) var(--space-9)}
+.bench-layer{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:3}
+.bench-layer>div{position:absolute;left:0;top:0;white-space:nowrap;will-change:transform}
+.bench-tag{translate:-50% -100%;font-family:var(--f-display);font-weight:600;font-size:var(--text-xs);letter-spacing:.04em;padding:1px var(--space-5);border-radius:var(--radius-control);background:color-mix(in srgb,var(--panel) 88%,transparent);color:var(--ink);border:1px solid var(--line)}
+.bench-tag.focus{border-color:var(--accent);color:var(--accent);font-size:var(--text-sm)}
+.bench-tag.virtual{border-style:dashed}
+.bench-info{translate:-50% -100%;font-family:var(--f-mono);font-size:10.5px;color:var(--ink-2);background:color-mix(in srgb,var(--panel) 80%,transparent);padding:0 var(--space-4);border-radius:3px}
+.bench-pin{font-family:var(--f-mono);font-size:10px;line-height:1.25;color:var(--ink);background:color-mix(in srgb,var(--panel) 90%,transparent);border-left:3px solid var(--pd-c);padding:0 var(--space-4);border-radius:2px}
+.bench-pin.left{translate:calc(-100% - 6px) -50%;border-left:0;border-right:3px solid var(--pd-c)}
+.bench-pin.right{translate:6px -50%}
+.bench-wire{translate:-50% -130%;font-family:var(--f-mono);font-size:var(--text-xs);color:var(--ink);background:var(--panel);border:1px solid var(--pd-c);padding:1px var(--space-6);border-radius:var(--radius-control)}
+.view.benching #liveBar{display:none}
+.view.benching .onboard-cam{display:none}

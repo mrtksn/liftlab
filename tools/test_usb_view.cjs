@@ -46,9 +46,9 @@ const MOCK = () => {
     await page.addInitScript(MOCK);
     await page.goto('http://127.0.0.1:' + server.address().port, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => typeof brt !== 'undefined' && brt.ready && typeof fleet !== 'undefined' && fleet.ready);
-    await page.click('#addPart');
-    await page.click('[data-add="tof"]');
-    await page.locator('.place-opt').first().click();
+    await page.evaluate(() => UI_PANELS.editor.select('form'));   // (sensors are added in Computers)
+    await page.click('#compAddMenu > button');
+    await page.locator('#compAddMenu [role=menuitem]').filter({ hasText: /^ToF/ }).click();
     assert.deepStrictEqual(await page.evaluate(() => {
       const c = sensorsOf('tof')[0], wiring = partWiring(c);
       const ideal = { ...c, rangeNoise: 0 }, rt = sens.get(c.id);
@@ -63,8 +63,9 @@ const MOCK = () => {
       UI_PANELS.editor.select('form');
       return [sensorsOf('tof')[0].id, boardOf('nav').id];
     });
-    await page.locator(`#computerSensors [data-device="${tof}"]`).click();
-    await page.locator(`#computerDlg [data-assign-board="${pi}"]`).click();
+    await page.evaluate(() => compFocus(null));   // (the new sensor opened as it was added)
+    await page.locator(`#computerSensors [data-device="${tof}"] > .comp-top > .comp-head`).click();
+    await page.locator(`#compDetail [data-assign-board="${pi}"]`).click();
     assert.deepStrictEqual(await page.evaluate(() => {
       const c = sensorsOf('tof')[0], owner = wiredTo(c);
       const pins = boardPinUses(computers(), cfg.comps, owner);

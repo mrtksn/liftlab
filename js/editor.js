@@ -68,17 +68,18 @@ function setEditMode(on) {
   if (on && typeof fleet !== 'undefined' && fleet.ready && !fleet.selected) return;
   if (on === editMode) return;
   editMode = on;
-  if (on) { editWasRunning = running; running = false; releaseAll(); UI_PANELS.editor.select('air'); }
-  else { running = editWasRunning; selectComp(null); setHover(null); }
+  if (on) { editWasRunning = running; running = false; releaseAll(); if (!bench.on) UI_PANELS.editor.select('air'); }
+  else { running = editWasRunning; selectComp(null); setHover(null); benchEditEnded(); }
   renderRun();
   $('#tEdit').setAttribute('aria-pressed', String(on));
   $('.view').classList.toggle('editing', on);
-  $('#editBar').hidden = !on;
-  updateEditMsg();
+  $('#editBar').hidden = !on || bench.on;
+  updateEditMsg(); benchBarSync();
   renderDesignHud();
 }
 
 function selectComp(id) {
+  if (bench.on && id != null) { const c = compById(id); if (c && typeof compFocus === 'function') compFocus(benchViewOf('part:' + id) || (partIsElec(c) ? { kind: 'part', id } : null)); return; }   // (the Computers bench: the list opens it)
   const prev = edit.sel; edit.sel = id;
   if (id != null) cam.pan.set(0,0,0);
   document.querySelectorAll('.comp.sel').forEach(n => n.classList.remove('sel'));
@@ -276,6 +277,7 @@ function showDragReadout(c) {
 function editPointerDown(e) {
   if (worldEditOn()) return worldPointerDown(e);   // (the world's objects: world-edit.js)
   if (!editMode || e.button !== 0) return false;
+  if (bench.on) { edit.down = { x: e.clientX, y: e.clientY }; return false; }
   if (partImport.active || partEditPick) { edit.down = { x: e.clientX, y: e.clientY }; return false; }
   const h = pickHandle(e);
   if (h && startDrag(h, e)) return true;
@@ -285,6 +287,7 @@ function editPointerDown(e) {
 function editPointerMove(e, orbiting) {
   if (worldEditOn()) return worldPointerMove(e, orbiting);
   if (!editMode) return false;
+  if (bench.on) return benchPointerMove(e, orbiting);
   if (partImport.active || partEditPick) return false;
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)dragTo(e); return true; }
   if (orbiting) { setHover(null); return false; }
@@ -302,6 +305,7 @@ function editPointerMove(e, orbiting) {
 function editPointerUp(e) {
   if (worldEditOn()) return worldPointerUp(e);
   if (!editMode) return false;
+  if (bench.on) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) benchClick(e); edit.down = null; return false; }
   if (partImport.active) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partImportPick(e); edit.down = null; return true; }
   if (partEditPick) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partPickSurface(e); edit.down = null; return true; }
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)endDrag(); return true; }
@@ -315,7 +319,7 @@ function updateEditView() {
   partPhysicalView();
   if (!gizmo || worldEditView()) return;
   if (partImport.active) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
-  if (!editMode) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
+  if (!editMode || bench.on) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);
   selBox.visible = !!g; if (g) boxOf(g, selBox.box);
@@ -350,6 +354,7 @@ $('#tEdit').addEventListener('click', () => setEditMode(!editMode));
 $('#editDone').addEventListener('click', () => setEditMode(false));
 window.addEventListener('keydown', e => {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || typingIn(e.target)) return;
+  if (bench.on && (e.code === 'KeyE' || e.code === 'Escape')) { if (e.code === 'KeyE' && !e.repeat) { e.preventDefault(); bench.want = false; UI_PANELS.editor.select('air'); setEditMode(true); } return; }   // (the Computers bench has its own Escape)
   if (e.code === 'KeyE' && !e.repeat) { setEditMode(!editMode); e.preventDefault(); }
   else if (e.code === 'Escape' && editMode) { if (edit.sel != null) selectComp(null); else setEditMode(false); }
 });

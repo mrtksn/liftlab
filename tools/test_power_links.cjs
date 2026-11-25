@@ -25,9 +25,9 @@ try{
   const check=(v,m)=>{if(!v)throw Error(m);},wait=ms=>new Promise(r=>setTimeout(r,ms));
   UI_PANELS.editor.select('form');renderComputers(true);
   const bat=batteryParts(cfg.comps)[0];check(bat&&cargo.power,'The layout should start powered by its battery');
-  check($('[data-power="'+bat.id+'"]').innerText.includes('Connected'),'Battery card not shown as connected');
+  check($('[data-power="'+bat.id+'"]').innerText.includes('powers '),'Battery row not shown as powering');
   // disconnect: no power, and why
-  $('[data-power="'+bat.id+'"]').click();await wait(50);$('[data-power-toggle]').click();await wait(50);
+  $('[data-power="'+bat.id+'"] .comp-head').click();await wait(50);$('[data-power-toggle]').click();await wait(50);
   check(!cargo.power&&powerWhy()==="the battery isn't connected"&&!batteryWired(computers(),bat),'Disconnecting did not cut the power');
   running=true;await wait(800);check([...act.values()].every(s=>!(s.u>0))&&brt.fcState===0,'Motors or flight core ran with no power');
   check(/isn't connected/.test(brt.fcWhy),'Flight core status does not say why: '+brt.fcWhy);
@@ -37,23 +37,26 @@ try{
   const file=JSON.stringify({format:FILE_FORMAT,version:1,name:'t',design:JSON.parse(designSnap())});
   undoStep();check(cargo.power&&batteryWired(computers(),bat),'Undo did not reconnect');
   applyDesign(readDesignFile(file).design);afterLoad();check(!cargo.power,'A design file lost the disconnection');
-  $('#computerDlg').close();renderComputers(true);$('[data-power="'+bat.id+'"] button').click();check(cargo.power,'Connect on the card did not restore power');
+  compFocus(null);renderComputers(true);check($('[data-power="'+bat.id+'"]').innerText.includes('not connected'),'Battery row does not say it is unplugged');
+  $('[data-power="'+bat.id+'"] .comp-head').click();await wait(50);$('[data-power-toggle]').click();check(cargo.power,'Connect in the battery\'s settings did not restore power');compFocus(null);
   // no battery at all: no power; Add a part → Battery fixes it
   cfg.comps=cfg.comps.filter(c=>!c.battery);structural();doReset();save();renderComputers(true);
   check(!cargo.power&&powerWhy()==='no battery on the drone','A drone with no battery still had power');
-  check($('[data-power="none"]').innerText.includes('No power'),'No-power card missing');
-  $('#addPart').click();check(!!$('#addPartDlg [data-add="battery"]'),'Add a part has no Battery');
-  $('#addPartDlg [data-add="battery"]').click();await wait(50);$('.place-opt').click();doReset();
+  check($('[data-power="none"]').innerText.includes('No power'),'No-power row missing');
+  $('#compAddMenu > button').click();const item=[...document.querySelectorAll('#compAddMenu [role=menuitem]')].find(b=>b.textContent.includes('Battery (LiPo)'));check(!!item,'+ Add has no battery');
+  item.click();await wait(50);$('[data-add-power-go]').click();await wait(50);doReset();
   check(cargo.power&&batteryParts(cfg.comps).length===1,'Adding a battery did not power the drone');
-  return 'Power: disconnect cuts it (motors, boards, status), undo and design files keep it, no battery = no power, Add a part → Battery restores it';
+  check(COMP.focus&&COMP.focus.kind==='power'&&!$('#computerDlg').open,'The new battery did not open in the list');
+  return 'Power: disconnect cuts it (motors, boards, status), undo and design files keep it, no battery = no power, Computers → + Add → Battery restores it';
  }));
  console.log(await page.evaluate(async()=>{
   const check=(v,m)=>{if(!v)throw Error(m);};
   const L=boardLinks(computers());check(L.length===1&&L[0].pi,'Expected one flight controller ↔ Pi link');
-  const card=$('[data-link="'+L[0].b.id+'"]');check(card&&card.innerText.includes('↔'),'Link card missing');card.click();
-  const t=$('#computerDlg').innerText;check(/GPIO 1 \(TX\) → .*GPIO 15 \(RX\)/.test(t)&&/GPIO 14 \(TX\) → .*GPIO 3 \(RX\)/.test(t)&&/navigation:/.test(t),'Link detail lacks the wires or what it carries');
-  check(!!$('#computerDlg [aria-label$="flight link serial port"]'),'Pi serial port setting not in the link detail');
-  $('#computerDlg').close();return 'Board links: the flight controller ↔ Pi card shows both ends, the wires, what it carries and the Pi port';
+  const card=$('[data-link="'+L[0].b.id+'"]');check(card&&card.innerText.includes('↔'),'Link row missing');card.querySelector('.comp-head').click();
+  const t=$('#compDetail').innerText;check(/GPIO 1\) TX → .*GPIO 15\) RX/.test(t)&&/GPIO 14\) TX → .*GPIO 3\) RX/.test(t)&&/navigation:/.test(t),'Link detail lacks the wires or what it carries: '+t.slice(-400));
+  check(!!$('#compDetail [aria-label$="flight link serial port"]'),'Pi serial port setting not in the link detail');
+  check(bench.wires.some(w=>w.view.kind==='link'&&w.kind==='tx'),'The link\'s wires are not drawn');
+  compFocus(null);return 'Board links: the flight controller ↔ Pi card shows both ends, the wires, what it carries and the Pi port';
  }));
  await page.reload({waitUntil:'networkidle'});await page.waitForFunction(()=>fleet.ready&&brt.ready);
  assert(await page.evaluate(()=>cargo.power&&batteryParts(cfg.comps).length===1),'Reload lost the added battery');

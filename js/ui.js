@@ -237,6 +237,11 @@ function compBody(c) {
       if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
       else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
     }
+    {   // electronics are listed (and drawn apart) in the Computers tab; anything else here
+      const id = `f-${c.id}-elec`, i = UI.input({ type: 'checkbox', id }); i.checked = partIsElec(c);
+      i.addEventListener('change', () => { c.elec = i.checked; undoKey = c.id + ':elec'; structural(); if (typeof renderComputers === 'function') renderComputers(true); });
+      b.append(el('label', { class: 'check', for: id }, i, 'Electronics: listed in Computers, not Airframe'));
+    }
     b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
       el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }));
     {   // a camera on it: its picture shows in a corner of the view (onboard-cam.js)
@@ -330,9 +335,18 @@ function renderComps1() {
     if (kids.length && !foldSet.has(c.id)) { const kb = el('div', { class: 'kids' }); node.append(kb); for (const k of kids) put(k, kb); }
   };
   const top = el('div', { class: 'kids root' }); L.append(top);
-  for (const c of cfg.comps.filter(x => !parentOf(x))) put(c, top);
-  const na = actuators().length, nj = joints().length, ns = allSensors().length, np = cfg.comps.length - na - nj - ns;
-  $('#compCount').textContent = `${na} motor${na === 1 ? '' : 's'} · ${nj} servo${nj === 1 ? '' : 's'} · ${ns} sensor${ns === 1 ? '' : 's'} · ${np} other`;
+  for (const c of cfg.comps.filter(x => !parentOf(x) && !partIsElec(x))) put(c, top);
+  // The electronics (boards, batteries, sensors, converters, cables) are in the Computers tab, with the 3D view on them.
+  const elec = cfg.comps.filter(partIsElec);
+  if (elec.length) {
+    const g = elec.reduce((m, c) => m + (c.mass || 0), 0), names = elec.slice(0, 4).map(c => c.name).join(', ') + (elec.length > 4 ? '…' : '');
+    const go = UI.button({ class: 'comp-head elec-link', type: 'button', id: 'elecLink', title: 'Boards, batteries, sensors and wiring are managed in the Computers tab' },
+      el('span', { class: 'tag tag-sensor', text: 'Elec' }), el('span', { class: 'comp-name', text: elec.length + ' electronic part' + (elec.length === 1 ? '' : 's') + ' → Computers' }), el('span', { class: 'comp-sum', text: Math.round(g * 1000) + ' g · ' + names }));
+    go.addEventListener('click', () => { if (typeof compFocus === 'function') { bench.want = true; UI_PANELS.editor.select('form'); } });
+    L.append(UI.card({ class: 'comp elec-row' }, el('div', { class: 'comp-top' }, go)));
+  }
+  const air = cfg.comps.filter(x => !partIsElec(x)), na = actuators().length, nj = joints().length, np = air.length - na - nj;
+  $('#compCount').textContent = `${na} motor${na === 1 ? '' : 's'} · ${nj} servo${nj === 1 ? '' : 's'} · ${np} other · ${elec.length} electronic`;
 }
 function edited(c, key) {
   if (c.type === 'mass' && c.battery && key === 'mass') {
@@ -393,6 +407,7 @@ function addComp(type, place = null) {
   if (type === 'latch') latchNeedsBoard();
   openSet.clear(); openSet.add(c.id); for (let p = parentOf(c); p; p = parentOf(p)) foldSet.delete(p.id);   // (open, and what it's on unfolded)
   structural();
+  if (partIsElec(c) && typeof compFocus === 'function' && $('#paneForm').hidden) { compFocus(benchViewOf('part:' + c.id) || (c.battery ? { kind: 'power', id: c.id } : c.type === 'sensor' ? { kind: 'device', id: c.id } : { kind: 'part', id: c.id })); return c; }   // (electronics live in Computers)
   requestAnimationFrame(() => { const card = document.querySelector(`[data-id="${c.id}"]`); if (card) card.scrollIntoView({ block: 'nearest' }); });
   return c;
 }
@@ -896,7 +911,7 @@ function renderRun() {   // one button: shows pause while running, play while pa
 }
 $('#runBtn').addEventListener('click', () => {
   if (typeof liveOn === 'function' && liveOn()) return;               // (the real drone: no simulation to run)
-  if (editMode) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode
+  if (editMode && !bench.on) { editWasRunning = true; setEditMode(false); return; }   // Run leaves edit mode (the Computers bench only shows the design: it runs and pauses as it is)
   if (worldEditOn()) { wedit.wasRunning = true; worldEditSet(false); return; }   // (and editing the world's objects)
   if (typeof usbViewOn === 'function' && usbViewOn()) usbViewStop(false);   // (Run ends the board's view)
   running = !running; renderRun();

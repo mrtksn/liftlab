@@ -359,6 +359,7 @@ function rebuildDrone() {
     const ball = new THREE.Mesh(new THREE.SphereGeometry(0.025 + 0.035 * Math.cbrt(c.mass), 18, 12), mats.payload);
     worldFx.add(line); worldFx.add(ball); pendVis.set(c.id, { line, ball });
   }
+  if (typeof benchRebuild === 'function') try { benchRebuild(); } catch (e) { console.error(e); }   // (the Computers tab's exploded electronics; never at the cost of the view)
 }
 function buildGhost() {   // outline of where the flight software thinks the drone is
   if (ghost) { worldFx.remove(ghost); ghost.traverse(o => o.geometry && o.geometry.dispose()); }
@@ -612,6 +613,7 @@ function updateScene(selected = true) {
     }
     tgt = drone.localToWorld(new THREE.Vector3(...edit.focusLocal)).add(edit.focusShift);
   } else if (editMode) edit.focusId = null;
+  if (typeof bench !== 'undefined' && bench.on && editMode) { try { const bt = benchFrame(hub); if (bt) tgt = bt; } catch (e) { console.error(e); bench.on = false; } }
   cam.target.lerp(tgt.add(cam.pan), view.follow ? 0.12 : 0.06);
   if (view.chase && live) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));

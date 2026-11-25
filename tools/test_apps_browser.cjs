@@ -39,7 +39,7 @@ try{
    applied:async(re=/Add app|^Apply$/)=>{T.press(re);for(let i=0;i<1200&&T.card().querySelector('button.primary').disabled;i++)await T.wait(100);await T.wait(100);},
    err:()=>T.card().querySelector('.law-err').textContent,out:()=>T.card().querySelector('.app-compiler').textContent,
    topic:(b,n)=>busTopics(brt.inst.get(b.id)).find(t=>t.name===n),
-   board:id=>{openComputerView({kind:'board',id});return $('#computerDlgBody');}};
+   board:id=>{openComputerView({kind:'board',id});return $('#compDetailBody');}};
  });
  console.log(await page.evaluate(async()=>{
   const {wait,check,set,read,code,applied,err,out,topic,board}=T;
@@ -50,10 +50,10 @@ try{
   let box=board(9),runs=box.querySelector('#bruns-9');check(runs&&runs.value==='formulas','The board\'s settings have no Runs choice');
   runs.value='wasm';runs.dispatchEvent(new Event('change'));await wait(50);
   check(boardRuns(computers().boards.find(b=>b.id===9))[0]==='wasm','Runs not saved');
-  box=$('#computerDlgBody');check(/Apps on this board/.test(box.textContent),'An app board has no apps section');
+  box=$('#compDetailBody');check(/Apps on this board/.test(box.textContent),'An app board has no apps section');
   // the flight core's board can't stop running formulas while it has duties
-  board(boardOf('core').id).querySelector('[id^=bruns-]').value='wasm';$('#computerDlgBody [id^=bruns-]').dispatchEvent(new Event('change'));await wait(50);
-  check(/Move its duties/.test($('#computerDlgBody .board-runs-err').textContent)&&runsFormulas(boardOf('core')),'The flight controller was switched to apps with its duties on it');
+  board(boardOf('core').id).querySelector('[id^=bruns-]').value='wasm';$('#compDetailBody [id^=bruns-]').dispatchEvent(new Event('change'));await wait(50);
+  check(/Move its duties/.test($('#compDetailBody .board-runs-err').textContent)&&runsFormulas(boardOf('core')),'The flight controller was switched to apps with its duties on it');
   // + New app here: the app manager, a C app on this board
   board(9).querySelector('[data-new-app="9"]').click();await wait(50);
   check($('#appDlg').open&&T.card(),'The app manager did not open');
@@ -65,11 +65,11 @@ try{
   await applied();check(err()==='','Adding refused: '+err()+' / '+out());
   check(/Compiled: [\d.]+ KB/.test(out()),'Not compiled: '+out());
   check(apps().length===1&&apps()[0].bin&&appBoard(apps()[0]).id===9,'Not added to the design on the board');
-  check(document.querySelector('[data-board="9"]').textContent.includes('Apps: altC'),'The board card does not list its app');
+  check(document.querySelector('[data-board="9"] .comp-sum').textContent.includes('apps: altC'),'The board row does not list its app');
   // the Pi runs formulas and WebAssembly apps; its app reads altC's topic (relayed) and the flight core's state
   const pi=boardOf('nav');box=board(pi.id);const wasmBox=box.querySelector('[data-runs="wasm"]');wasmBox.checked=true;wasmBox.dispatchEvent(new Event('change'));await wait(50);
   check(boardRuns(computers().boards.find(b=>b.id===pi.id)).join()==='formulas,wasm'&&boardOf('nav').id===pi.id,'The Pi does not run both');
-  $('#computerDlgBody [data-new-app="'+pi.id+'"]').click();await wait(50);
+  $('#compDetailBody [data-new-app="'+pi.id+'"]').click();await wait(50);
   set('App name','climbC');set('When it runs','every');set('Every (ms)','100');read('user.altc');read('fc.state');set('Topic it writes (after user.)','climbc');set('Its fields','climbing armed maxRate');
   code('#include "liftlab.h"\nstatic float mx;\nint step(const struct inputs *in, struct output *out, float dt) {\n  if (in->altc.rate > mx) mx = in->altc.rate;\n  out->climbing = in->altc.rate > 0.2f; out->armed = in->state.state == 1; out->maxRate = mx;\n  return 1;\n}\n');
   await applied();check(err()==='','Adding the Pi app refused: '+err()+' / '+out());

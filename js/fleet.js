@@ -87,7 +87,7 @@ function fleetSelect(id) {
   }
   const library = {list:designs.list,col:designs.col,where:designs.where};
   droneSwitch(d); droneGraphicsSwitch(d); fleet.selected = d; cam.pan.set(0,0,0); Object.assign(designs,library);
-  fleetRefresh(); fleetSave(); return true;
+  fleetRefresh(); fleetSave(); if (typeof benchSync === 'function') benchSync(); return true;
 }
 function fleetRememberUi() {
   const d = fleet.selected; if (!d) return;

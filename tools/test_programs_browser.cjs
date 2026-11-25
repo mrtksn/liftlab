@@ -48,7 +48,7 @@ try{
   code('function altFilter(st, inp, dt) {\n  if (st.h == null) st.h = inp.baro.height;\n  const h = st.h + 0.2 * (inp.baro.height - st.h), rate = (h - st.h) / dt;\n  st.h = h;\n  return { height: h, rate };\n}');
   press(/Add program/);await wait(50);check(err()==='','Adding refused: '+err());
   check(programs().length===1&&programs()[0].board===9,'Not added to the design');
-  check(document.querySelector('[data-board="9"]').textContent.includes('Programs: altFilter'),'The board card does not list its program');
+  check(document.querySelector('[data-board="9"] .comp-sum').textContent.includes('programs: altFilter'),'The board row does not list its program');
   // the Pi's program, every 100 ms, on the sensor board's topic (relayed) and the flight core's state
   $('#progNew').click();await wait(50);const pi=boardOf('nav');
   set('Program name','climbWatch');set('Board',String(pi.id));set('When it runs','every');set('Every (ms)','100');read('user.alt');read('fc.state');

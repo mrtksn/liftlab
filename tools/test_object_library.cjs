@@ -52,6 +52,7 @@ try{
  await page.locator('#partImportAdd').click();await page.waitForFunction(()=>!partImport.active);
  let r=await page.evaluate(()=>{const c=cfg.comps.find(c=>c.model);return {battery:isBattery(c),fileId:c.model.fileId,mass:c.mass,drag:c.dragCd,points:c.points.length,collision:c.model.collision,shape:fleetShapesCurrent().boxes.some(b=>b.mesh&&b.part===c)};});assert(r.battery&&r.fileId===assetId&&r.mass===.31&&r.drag===1.7&&r.points===2&&r.collision==='mesh'&&r.shape);
  const original=await page.evaluate(()=>designSnap());
+ await page.evaluate(()=>compFocus({kind:'power',id:cfg.comps.find(c=>c.model).id}));   // (a battery is in Computers → Power)
  await page.locator('#objectEditCopy-'+await page.evaluate(()=>cfg.comps.find(c=>c.model).id)).click();await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#partImportMass').fill('9');await page.locator('#partImportMass').dispatchEvent('change');await page.locator('#partImportCancel').click();assert.strictEqual(await page.evaluate(()=>designSnap()),original,'Canceled edits mutated the drone');
  // The copy editor preserves mounting relationships and commits only on Save.
  const copyId=await page.evaluate(()=>cfg.comps.find(c=>c.model).id);
@@ -63,7 +64,7 @@ try{
  await page.locator('#partImportAdd').click();await page.waitForFunction(()=>!partImport.active);
  assert(await page.evaluate(id=>{const c=compById(id),child=compById(window.libraryChild);return c.mass===.31&&Math.abs(Math.max(...c.size)-.4)<1e-8&&nrm(sub(child.pos,partPointRest(c,c.points[1].id)))<1e-8&&nrm(partPointRest(c,c.selfPoint))<1e-8;},copyId));
  await page.locator('[data-id="'+copyId+'"] button').filter({hasText:'Save drone use defaults'}).click();await page.waitForFunction(()=>objectLibrary.list[0].droneCollision==='mesh');
- await page.locator('#addPart').click();await page.locator('#objectLibraryOpen').click();await page.locator('[data-object-use="'+assetId+'"]').click();await page.waitForFunction(()=>partImport.draft&&!partImport.busy);
+ await page.evaluate(()=>UI_PANELS.editor.select('air'));await page.locator('#addPart').click();await page.locator('#objectLibraryOpen').click();await page.locator('[data-object-use="'+assetId+'"]').click();await page.waitForFunction(()=>partImport.draft&&!partImport.busy);
  assert(await page.evaluate(()=>partImport.draft.battery&&partImport.draft.mass===.31&&partImport.draft.model.collision==='mesh'&&Math.abs(Math.max(...partImport.draft.size)-.4)<1e-8));
  await page.locator('#objectRole').selectOption('wing');assert(await page.evaluate(()=>isWing(partImport.draft)&&!isBattery(partImport.draft)));await page.locator('#partImportCancel').click();
  await page.selectOption('#droneSelect','');await page.locator('#worldObjEdit').click();await page.locator('#worldObjectLibrary').click();await page.locator('[data-object-use="'+assetId+'"]').click();await page.waitForFunction(()=>worldObjects.list.length===1&&!wedit.busy);

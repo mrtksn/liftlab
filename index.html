@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=58a0b35eda">
+<link rel="stylesheet" href="css/style.css?v=17ecee2528">
 </head>
 <body>
 <div class="app">
@@ -311,6 +311,15 @@
         <button class="btn" type="button" id="redoBtn2" title="Redo (Ctrl+Shift+Z or ⌘⇧Z)">Redo</button>
         <button class="btn primary" type="button" id="editDone">Done</button>
       </div>
+      <div class="edit-bar bench-bar" id="benchBar" role="status" hidden>
+        <b>Computers</b>
+        <span id="benchMsg"></span>
+        <div class="seg" role="group" aria-label="Show">
+          <button type="button" data-bench-mode="parts" aria-pressed="true" title="The electronics pulled apart: click one to close in on it">Parts</button>
+          <button type="button" data-bench-mode="wiring" aria-pressed="false" title="Every wire, from the pin it leaves to the part it reaches">Wiring</button>
+        </div>
+        <button class="btn primary" type="button" id="benchDone" title="Leave the exploded view and watch the drone fly">Fly</button>
+      </div>
       <div class="edit-bar" id="worldEditBar" role="status" hidden>
         <b>Editing world</b>
         <span id="worldEditMsg"></span>
@@ -508,9 +517,6 @@
           <button class="btn" type="button" data-add="motor">Motor</button>
           <button class="btn" type="button" data-add="tilt">Motor on servo</button>
         </div></section>
-        <section><h3>Power</h3><div class="addrow">
-          <button class="btn" type="button" data-add="battery" title="A battery pack: it powers the motors and the boards once it's connected (Computers → Power)">Battery</button>
-        </div></section>
         <section><h3>Structure &amp; motion</h3><div class="addrow">
           <button class="btn" type="button" data-add="joint">Servo joint</button>
           <button class="btn" type="button" data-add="link">Rod / lever</button>
@@ -521,14 +527,9 @@
           <button class="btn" type="button" data-add="hang">Mass on cable</button>
           <button class="btn" type="button" data-add="latch">Latch / gripper</button>
         </div></section>
-        <section><h3>Sensors</h3><div class="addrow">
-          <button class="btn" type="button" data-add="imu">IMU</button>
-          <button class="btn" type="button" data-add="mag">Compass</button>
-          <button class="btn" type="button" data-add="baro">Barometer</button>
-          <button class="btn" type="button" data-add="fix">Position fix</button>
-          <button class="btn" type="button" data-add="flow">Optical flow + rangefinder</button>
-          <button class="btn" type="button" data-add="tof">ToF rangefinder</button>
-        </div></section>
+        <section><h3>Electronics</h3>
+          <p class="hint">Boards, batteries, sensors and the parts that wire them are in the Computers tab, where the view pulls them apart: <button class="btn sm" type="button" id="addElecGo">+ Add in Computers…</button></p>
+        </section>
         <div class="ask-btns"><button class="btn" type="button" data-close-dialog>Cancel</button></div>
       </dialog>
       <dialog class="ask" id="saveAsk" aria-labelledby="saveAskTitle">
@@ -641,7 +642,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/ui-components.js?v=7bee7a1164"></script>
-<script src="js/ui-shell.js?v=7b79a0c102"></script>
+<script src="js/ui-shell.js?v=2cb6cfffcf"></script>
 <script src="js/math.js?v=0a111ef564"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=9a7a6e8f3d"></script>
@@ -667,11 +668,11 @@
 <script src="js/health.js?v=cbf60f2e4c"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
 <script src="js/learn.js?v=4139e0373b"></script>
-<script src="js/view3d.js?v=8d435ad4b9"></script>
+<script src="js/view3d.js?v=e2b7a608da"></script>
 <script src="js/onboard-cam.js?v=5033f705e8"></script>
 <script src="js/pilot.js?v=12b8fd8abe"></script>
-<script src="js/computers-ui.js?v=29249de403"></script>
-<script src="js/ui.js?v=3bcaca0a9f"></script>
+<script src="js/computers-ui.js?v=e7fc690070"></script>
+<script src="js/ui.js?v=57f9a654ef"></script>
 <script src="js/place-ui.js?v=0ad9ce0b1f"></script>
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=545558fd8b"></script>
@@ -681,12 +682,13 @@
 <script src="js/designs.js?v=d4557d0384"></script>
 <script src="js/share.js?v=626dfa369f"></script>
 <script src="js/board-hardware.js?v=e559b18bd8"></script>
-<script src="js/hardware.js?v=cee86a8fba"></script>
+<script src="js/hardware.js?v=62301714d5"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/board-pinouts.js?v=78ac0bf7c1"></script>
-<script src="js/hardware-ui.js?v=97728b2f1b"></script>
+<script src="js/hardware-ui.js?v=e1cbb85a38"></script>
 <script src="js/install-ui.js?v=22de83b1a8"></script>
-<script src="js/editor.js?v=c27e8eba2b"></script>
+<script src="js/editor.js?v=1dcdce78f9"></script>
+<script src="js/bench3d.js?v=ee98c3ed1d"></script>
 <script src="js/fc-export.js?v=8d72da5f52"></script>
 <script src="js/board-wasm.js?v=99d766878f"></script>
 <script src="js/crsf.js?v=004ad7fe81"></script>
@@ -710,14 +712,14 @@
 <script src="js/agent-tools.js?v=c696c2cf34"></script>
 <script src="js/agent-tools-more.js?v=9b996aefba"></script>
 <script src="js/agent-flight.js?v=fafa971389"></script>
-<script src="js/agent-hardware.js?v=d7013ce4a7"></script>
+<script src="js/agent-hardware.js?v=cfe866a326"></script>
 <script src="js/vendor/marked-18.1.0.umd.js?v=f424dcb508"></script>
 <script src="js/vendor/dompurify-3.4.16.min.js?v=2c90a9b46d"></script>
 <script src="js/chat-markdown.js?v=5af3250f82"></script>
 <script src="js/agent-ui.js?v=3d52b5e041"></script>
 <script src="js/audio.js?v=5bb422df87"></script>
 <script src="js/drone-context.js?v=b7075d943b"></script>
-<script src="js/fleet.js?v=2d436df689"></script>
+<script src="js/fleet.js?v=ad7604897b"></script>
 <script src="js/fleet-collisions.js?v=0f07b736ea"></script>
 <script src="js/room-survey.js?v=abfc62fc3f"></script>
 <script src="js/world-objects.js?v=8c5231a7ff"></script>
