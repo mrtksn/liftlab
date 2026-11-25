@@ -1,0 +1,22 @@
+{
+  "target": "esp32",
+  "board": "ESP32-WROOM-32 / ESP32-D0WDQ6 revision 1.0",
+  "firmware": "signal-workbench/2",
+  "protocol": 2,
+  "esp_idf": "v5.3.2",
+  "date": "2026-11-18",
+  "flash_offset": "0x0",
+  "baud": 921600,
+  "image_sha256": "47573d61f736f0f7dab7b681b224fbd54808664d10a40cda1cd37082cbbae7c3",
+  "source_sha256": {
+    "runner/signalbench/main/signalbench.c": "3dbc3a4cf9b108d36ff48dfd177f7d94fe9f050497834d5b79ae7706a032df3d",
+    "runner/signalbench/main/CMakeLists.txt": "c8cd362feb25b682bd28e4c10da02f514723ee0b6dec83817832266e5fe5b3f9",
+    "runner/signalbench/CMakeLists.txt": "6afd84dde8f22c922af6f7f9ff3fedf7379b2618f3f7dc243abd691f09446563",
+    "runner/signalbench/sdkconfig.defaults": "37537133cb24e5b949c29a0bade0fa90a7dcb7538c644ff800d0b6113c861692",
+    "runner/escsniff/main/sniff_core.c": "2b8e5ff9e78390fd507442e72ebf9bb2891bf90c392d8e7088fd56e6f7725cbf",
+    "runner/escsniff/main/sniff_core.h": "937367251dd08256053aac843c68b5add7ba3846959e1f84249944f8da7704d2"
+  },
+  "verification": "captures/wroom-signal-workbench-2026-11-18/v2/full/verification.json",
+  "adc": true,
+  "adc_verification": "captures/wroom-signal-workbench-2026-11-18/v2/verification.json"
+}

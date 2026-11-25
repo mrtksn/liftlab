@@ -13,12 +13,44 @@ try{
  browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
  const page=await browser.newPage({viewport:{width:1700,height:1100}}),errors=[];
  await page.emulateMedia({reducedMotion:'reduce'});page.on('pageerror',e=>{errors.push(e.stack);console.error(e.stack);});await page.route(/fonts\.google|goatcounter|gc\.zgo/,r=>r.abort());
+ if(process.env.THREE_PATH)await page.route(/three\.min\.js/,r=>r.fulfill({path:process.env.THREE_PATH,contentType:'application/javascript'}));
  await page.goto(process.env.LIVE_URL||'http://127.0.0.1:'+server.address().port,{waitUntil:'networkidle'});await page.waitForFunction(()=>typeof fleet!=='undefined'&&fleet.ready&&brt.ready);
  await page.evaluate(()=>{running=false;setTerrain('open',1);UI_PANELS.editor.select('gs');renderGs(true);});
  const pick=async(selector,value)=>{await page.locator(selector).dispatchEvent('pointerdown');await page.locator(selector).selectOption(String(value));};
  const close=async()=>{await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('dialog[open]'));};
  assert.deepStrictEqual(await page.locator('#paneGs > .sec > h2').evaluateAll(nodes=>nodes.map(n=>{const c=n.cloneNode(true);c.querySelectorAll('.srcs,.src-tag').forEach(e=>e.remove());return c.textContent;})),['Real drone','Telemetryreceived from the drone','Radio link','Other dronesthe drone\'s own link to them','Cargothe latches','Link loginside the simulated radio','Telemetry messages']);
  assert.strictEqual(await page.locator('#gsTelemetrySec canvas').count(),3);
+ const attitude = await page.evaluate(() => {
+  const gauge = GS_UI.w.horizon, cv = gauge.el.querySelector('canvas');
+  const ctx = cv.getContext('2d'), scale = cv.width / cv.clientWidth;
+  const colour = (x, y) => ctx.getImageData(cv.width / 2 + x * scale, cv.height / 2 + y * scale, 1, 1).data.join(',');
+  const set = (roll, pitch, yaw = 0) => {
+   gauge.set({ roll: roll * D2R, pitch: pitch * D2R, yaw: yaw * D2R }, 1);
+   gauge.age(1);
+  };
+  const label = () => cv.getAttribute('aria-label');
+  set(0, 0);
+  const sky = colour(80, -40), ground = colour(80, 40), level = label();
+  set(-13, -3, -3);
+  const left = label(), leftHorizon = colour(-80, 0) === ground && colour(80, 0) === sky;
+  set(13, 3, 3);
+  const right = label(), rightHorizon = colour(-80, 0) === sky && colour(80, 0) === ground;
+  set(0, -10);
+  const noseUp = colour(80, 0) === sky;
+  set(0, 10);
+  const noseDown = colour(80, 0) === ground;
+  gauge.age(7);
+  const stale = label();
+  gauge.set(null, null); renderGs(true);
+  return { level, left, right, distinctColours: sky !== ground, leftHorizon, rightHorizon, noseUp, noseDown, stale };
+ });
+ assert.deepStrictEqual(attitude, {
+  level: 'Wings level. Nose level. Heading 000°',
+  left: 'Bank left 13°. Nose up 3°. Heading 003°',
+  right: 'Bank right 13°. Nose down 3°. Heading 357°',
+  distinctColours: true, leftHorizon: true, rightHorizon: true, noseUp: true, noseDown: true, stale: 'No attitude',
+ });
+ console.log('Attitude bank labels, horizon direction, pitch and staleness passed');
  assert.strictEqual(await page.locator('#paneGs input,#paneGs select,#paneGs textarea').count(),0);
  assert.strictEqual(await page.locator('#gsRadioCard .w-bar').count(),2);
  await page.evaluate(()=>{const a=fleet.selected;fleetCreate('quadx');fleetSelect(a.id);renderGs(true);return a.id;});

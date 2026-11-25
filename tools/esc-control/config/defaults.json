@@ -1,0 +1,296 @@
+{
+  "palette": {
+    "mint": "#B4F3CF",
+    "blue": "#A8C5FF",
+    "amber": "#F8D788",
+    "red": "#FFC0AD",
+    "purple": "#D9B4F6",
+    "neutral": "#C0CAD6"
+  },
+  "signal": {
+    "kind": "pwm",
+    "value": 1500,
+    "hz": 50,
+    "baud": 115200,
+    "data": "55AA",
+    "rate": 150,
+    "telemetry": 0,
+    "duration": 1000,
+    "idleLevel": 0,
+    "pulses": [
+      [
+        1,
+        1000
+      ],
+      [
+        0,
+        1000
+      ]
+    ]
+  },
+  "channelIdle": {
+    "kind": "digital",
+    "value": 0
+  },
+  "analog": {
+    "attenuation": 12,
+    "scale": 1,
+    "offset": 0,
+    "unit": "V"
+  },
+  "control": {
+    "name": "Signal",
+    "mode": "continuous",
+    "source": "slider",
+    "min": 0,
+    "max": 20000,
+    "step": 10,
+    "value": 1500,
+    "repeatMs": 100,
+    "placement": "card",
+    "color": "#B4F3CF",
+    "activeColor": "#FFC0AD",
+    "labelOff": "",
+    "labelOn": ""
+  },
+  "newPreset": {
+    "name": "My instrument",
+    "description": "",
+    "channels": [
+      {
+        "name": "Output",
+        "pin": 18,
+        "direction": "out",
+        "idle": {
+          "kind": "digital",
+          "value": 0
+        }
+      },
+      {
+        "name": "Probe",
+        "pin": 19,
+        "direction": "in"
+      }
+    ]
+  },
+  "legacy": {
+    "defaultControls": [
+      {
+        "id": "pwm-loopback-control-3",
+        "name": "Stop outputs",
+        "mode": "stop",
+        "channel": 0,
+        "source": "fixed",
+        "min": 550,
+        "max": 2000,
+        "step": 10,
+        "value": 1070,
+        "repeatMs": 100,
+        "placement": "toolbar",
+        "color": "#FFC0AD",
+        "activeColor": "#FFC0AD",
+        "labelOff": "",
+        "labelOn": "",
+        "steps": [
+          {
+            "action": "signal",
+            "channel": 0,
+            "mode": "once",
+            "source": "fixed",
+            "repeatMs": 100,
+            "signal": {
+              "kind": "pwm",
+              "value": 1500,
+              "hz": 490,
+              "baud": 115200,
+              "data": "55AA",
+              "rate": 150,
+              "telemetry": 0,
+              "duration": 1000,
+              "idleLevel": 0,
+              "pulses": [
+                [
+                  1,
+                  1000
+                ],
+                [
+                  0,
+                  1000
+                ]
+              ]
+            }
+          }
+        ],
+        "on": {
+          "kind": "pwm",
+          "value": 1500,
+          "hz": 490,
+          "baud": 115200,
+          "data": "55AA",
+          "rate": 150,
+          "telemetry": 0,
+          "duration": 1000,
+          "idleLevel": 0,
+          "pulses": [
+            [
+              1,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ]
+        },
+        "off": {
+          "kind": "idle"
+        }
+      }
+    ],
+    "presetControls": {
+      "toy-esc": [
+        {
+          "id": "toy-esc-control-1",
+          "name": "Arm ESC",
+          "mode": "sequence",
+          "channel": 0,
+          "source": "fixed",
+          "min": 550,
+          "max": 2000,
+          "step": 10,
+          "value": 1070,
+          "repeatMs": 100,
+          "placement": "toolbar",
+          "color": "#B4F3CF",
+          "activeColor": "#FFC0AD",
+          "labelOff": "",
+          "labelOn": "",
+          "steps": [
+            {
+              "action": "signal",
+              "channel": 0,
+              "source": "fixed",
+              "mode": "continuous",
+              "repeatMs": 100,
+              "signal": {
+                "kind": "pwm",
+                "hz": 490,
+                "value": 550
+              }
+            },
+            {
+              "action": "wait",
+              "ms": 1000
+            }
+          ],
+          "on": {
+            "kind": "pwm",
+            "value": 1500,
+            "hz": 490,
+            "baud": 115200,
+            "data": "55AA",
+            "rate": 150,
+            "telemetry": 0,
+            "duration": 1000,
+            "idleLevel": 0,
+            "pulses": [
+              [
+                1,
+                1000
+              ],
+              [
+                0,
+                1000
+              ]
+            ]
+          },
+          "off": {
+            "kind": "idle"
+          }
+        }
+      ],
+      "pwm-loopback": [],
+      "uart-loopback": [],
+      "dshot-loopback": [],
+      "logic-8": [],
+      "analog-adc": []
+    },
+    "seedPresets": [
+      {
+        "id": "analog-adc",
+        "marker": "signal-workbench.adcPreset.v1"
+      }
+    ]
+  },
+  "stopControl": {
+    "id": "pwm-loopback-control-3",
+    "name": "Stop outputs",
+    "mode": "stop",
+    "channel": 0,
+    "source": "fixed",
+    "min": 550,
+    "max": 2000,
+    "step": 10,
+    "value": 1070,
+    "repeatMs": 100,
+    "placement": "toolbar",
+    "color": "#FFC0AD",
+    "activeColor": "#FFC0AD",
+    "labelOff": "",
+    "labelOn": "",
+    "steps": [
+      {
+        "action": "signal",
+        "channel": 0,
+        "mode": "once",
+        "source": "fixed",
+        "repeatMs": 100,
+        "signal": {
+          "kind": "pwm",
+          "value": 1500,
+          "hz": 490,
+          "baud": 115200,
+          "data": "55AA",
+          "rate": 150,
+          "telemetry": 0,
+          "duration": 1000,
+          "idleLevel": 0,
+          "pulses": [
+            [
+              1,
+              1000
+            ],
+            [
+              0,
+              1000
+            ]
+          ]
+        }
+      }
+    ],
+    "on": {
+      "kind": "pwm",
+      "value": 1500,
+      "hz": 490,
+      "baud": 115200,
+      "data": "55AA",
+      "rate": 150,
+      "telemetry": 0,
+      "duration": 1000,
+      "idleLevel": 0,
+      "pulses": [
+        [
+          1,
+          1000
+        ],
+        [
+          0,
+          1000
+        ]
+      ]
+    },
+    "off": {
+      "kind": "idle"
+    }
+  }
+}

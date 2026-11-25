@@ -1,0 +1,588 @@
+{
+  "id": "wroom30",
+  "name": "ESP32-WROOM-32",
+  "title": "30-pin WROOM · component side · USB at top",
+  "moduleLabels": [
+    "ESP32",
+    "WROOM-32",
+    "FRONT VIEW"
+  ],
+  "usbLabel": "USB · 5 V power",
+  "caption": "GPIO names, not header numbers",
+  "description": "Component side, matching the photographed board. Colored pads belong to this preset; the ring marks the selected channel. Gray boot/USB pins are reserved.",
+  "powerTitle": "USB → ESP32 power + host connection",
+  "powerNote": "Share GND with the target. GPIO signals: 0–3.3 V. VIN stays unconnected; never connect another power source to 3V3.",
+  "signal": {
+    "min": 0,
+    "max": 3.3
+  },
+  "adcRanges": {
+    "0": [
+      0.1,
+      0.95
+    ],
+    "2.5": [
+      0.1,
+      1.25
+    ],
+    "6": [
+      0.15,
+      1.75
+    ],
+    "12": [
+      0.15,
+      2.45
+    ]
+  },
+  "capabilities": {
+    "outputs": [
+      4,
+      13,
+      14,
+      16,
+      17,
+      18,
+      19,
+      21,
+      22,
+      23,
+      25,
+      26,
+      27,
+      32,
+      33
+    ],
+    "inputs": [
+      4,
+      13,
+      14,
+      16,
+      17,
+      18,
+      19,
+      21,
+      22,
+      23,
+      25,
+      26,
+      27,
+      32,
+      33,
+      34,
+      35,
+      36,
+      39
+    ],
+    "adc1": [
+      32,
+      33,
+      34,
+      35,
+      36,
+      39
+    ],
+    "adc2": [
+      4,
+      13,
+      14,
+      25,
+      26,
+      27
+    ]
+  },
+  "colors": [
+    "#a8edbf",
+    "#a8c5ff",
+    "#f2cd8a",
+    "#d9b4f6",
+    "#86dcd7",
+    "#eeadbf",
+    "#b9d582",
+    "#edae81"
+  ],
+  "pinStyle": {
+    "radius": 5,
+    "focusRadius": 10,
+    "inactive": "#9aabbc",
+    "reserved": "#5f6c79",
+    "power": "#ffc0ad",
+    "background": "#111a22"
+  },
+  "pins": [
+    {
+      "id": "3V3",
+      "gpio": null,
+      "label": "3V3",
+      "reserved": false,
+      "power": true,
+      "x": 96,
+      "y": 122,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "GND",
+      "gpio": null,
+      "label": "GND",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 151,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "15",
+      "gpio": 15,
+      "label": "D15",
+      "reserved": true,
+      "power": false,
+      "x": 96,
+      "y": 180,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "2",
+      "gpio": 2,
+      "label": "D2",
+      "reserved": true,
+      "power": false,
+      "x": 96,
+      "y": 209,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "4",
+      "gpio": 4,
+      "label": "D4",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 238,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "16",
+      "gpio": 16,
+      "label": "RX2 · 16",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 267,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "17",
+      "gpio": 17,
+      "label": "TX2 · 17",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 296,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "5",
+      "gpio": 5,
+      "label": "D5",
+      "reserved": true,
+      "power": false,
+      "x": 96,
+      "y": 325,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "18",
+      "gpio": 18,
+      "label": "D18",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 354,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "19",
+      "gpio": 19,
+      "label": "D19",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 383,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "21",
+      "gpio": 21,
+      "label": "D21",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 412,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "3",
+      "gpio": 3,
+      "label": "RX0 · 3",
+      "reserved": true,
+      "power": false,
+      "x": 96,
+      "y": 441,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "1",
+      "gpio": 1,
+      "label": "TX0 · 1",
+      "reserved": true,
+      "power": false,
+      "x": 96,
+      "y": 470,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "22",
+      "gpio": 22,
+      "label": "D22",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 499,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "23",
+      "gpio": 23,
+      "label": "D23",
+      "reserved": false,
+      "power": false,
+      "x": 96,
+      "y": 528,
+      "labelX": 78,
+      "anchor": "end"
+    },
+    {
+      "id": "VIN",
+      "gpio": null,
+      "label": "VIN",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 122,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "GND",
+      "gpio": null,
+      "label": "GND",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 151,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "13",
+      "gpio": 13,
+      "label": "D13",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 180,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "12",
+      "gpio": 12,
+      "label": "D12",
+      "reserved": true,
+      "power": false,
+      "x": 244,
+      "y": 209,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "14",
+      "gpio": 14,
+      "label": "D14",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 238,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "27",
+      "gpio": 27,
+      "label": "D27",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 267,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "26",
+      "gpio": 26,
+      "label": "D26",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 296,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "25",
+      "gpio": 25,
+      "label": "D25",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 325,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "33",
+      "gpio": 33,
+      "label": "D33",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 354,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "32",
+      "gpio": 32,
+      "label": "D32",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 383,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "35",
+      "gpio": 35,
+      "label": "D35",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 412,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "34",
+      "gpio": 34,
+      "label": "D34",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 441,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "39",
+      "gpio": 39,
+      "label": "VN · 39",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 470,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "36",
+      "gpio": 36,
+      "label": "VP · 36",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 499,
+      "labelX": 262,
+      "anchor": "start"
+    },
+    {
+      "id": "EN",
+      "gpio": null,
+      "label": "EN",
+      "reserved": false,
+      "power": false,
+      "x": 244,
+      "y": 528,
+      "labelX": 262,
+      "anchor": "start"
+    }
+  ],
+  "legend": [
+    "GPIO34 / 35 / VP / VN: input only",
+    "VP = GPIO36 · VN = GPIO39",
+    "3V3: regulated 3.3 V output",
+    "VIN: leave open with USB power"
+  ],
+  "notes": [
+    "This profile describes the photographed WROOM board. Use its printed GPIO labels. Never apply negative voltage or 5 V directly to a GPIO. The configured 3.3 V ceiling is a wiring limit, not a silicon absolute-maximum rating. ADC measurement ranges are narrower.",
+    "Signals can back-power an unpowered board. Disconnect signals before removing board power. Documentation settings do not change physical components or firmware capabilities."
+  ],
+  "sources": [
+    {
+      "title": "Espressif pin and ADC specifications",
+      "url": "https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32_datasheet_en.pdf"
+    },
+    {
+      "title": "ADC capacitor guidance",
+      "url": "https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32/api-reference/peripherals/adc_calibration.html#minimize-noise"
+    }
+  ],
+  "drawing": {
+    "viewBox": [
+      0,
+      0,
+      340,
+      640
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "96",
+          "y": "80",
+          "width": "148",
+          "height": "530",
+          "rx": "16",
+          "class": "board-body"
+        }
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "138",
+          "y": "53",
+          "width": "64",
+          "height": "54",
+          "rx": "7",
+          "class": "usb-socket"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "37",
+          "class": "board-usb",
+          "text-anchor": "middle"
+        },
+        "text": "USB · 5 V power"
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M170 40v13",
+          "class": "wire power",
+          "stroke": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "116",
+          "y": "262",
+          "width": "108",
+          "height": "201",
+          "rx": "6",
+          "class": "metal-can"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "320",
+          "class": "module-label",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "342",
+          "class": "module-small",
+          "text-anchor": "middle"
+        },
+        "text": "WROOM-32"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "377",
+          "class": "module-small",
+          "text-anchor": "middle"
+        },
+        "text": "FRONT VIEW"
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M120 534h100v13h-85v13h85v13h-85v13",
+          "class": "antenna"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "508",
+          "class": "module-small",
+          "text-anchor": "middle"
+        },
+        "text": "ANTENNA ↓"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "170",
+          "y": "632",
+          "class": "board-caption",
+          "text-anchor": "middle"
+        },
+        "text": "GPIO names, not header numbers"
+      }
+    ]
+  },
+  "appCopy": {
+    "summary": "8 configurable channels · Digital + 12-bit ADC · USB serial",
+    "generator": "Output is {{board.signal.min}}–{{board.signal.max}} V logic. Every generator button belongs to the preset. Continuous output stops on focus loss or a lost host lease.",
+    "analog": "Analog pin voltage must stay within {{board.signal.min}}–{{board.signal.max}} V. Measurement ranges depend on each channel’s configured attenuation; see Wiring diagram. Use a physical divider for higher voltage; software scaling changes displayed units only.",
+    "analogFootnote": "Channels are converted sequentially using the ADC oneshot driver. Actual timing is recorded. This is a slow signal logger, not a high-speed analog oscilloscope. Factory calibration is used when present. ADC2 is available because Wi-Fi is off.",
+    "footer": "Signal Workbench · dedicated USB instrument"
+  }
+}

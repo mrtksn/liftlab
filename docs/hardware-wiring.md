@@ -42,6 +42,8 @@ Each motor card selects **PWM ESC** or **Brushed motor · MOSFET**. ESCs use the
 
 The card shows each pulse as a duty cycle as well (what a scope or logic analyser shows). The board gets `esc_hz=` and `esc_us=MIN,MAX[,STOP]`. Two values clear a stop pulse saved earlier, so a standard ESC never keeps one. The stop pulse needs flight firmware newer than build 038dec0 (wiring version 12); older builds refuse three values. Install also sends `vref=`, the pack voltage the exported airframe's thrust tables are for (4 V a cell of the design's battery).
 
+**Our 1S toy-drone ESC:** the [ESC bench notes](../tools/esc-control/README.md) record its measured PWM behavior and the 18 November 2026 supply-voltage test. The user reported normal operation through 5.1 V, arming problems above 5.1 V, and ESC resets above 5.5 V. These are observations from the tested specimen, not a rated voltage range for all matching ESCs.
+
 ### Which way is level
 
 The IMU's card has **Level**: which way up the flight controller takes as level. The board gets `level=`:

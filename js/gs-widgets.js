@@ -43,14 +43,17 @@ const GSW = (() => {
   }
   // An artificial horizon: roll and pitch move the horizon, the heading in the corner.
   function horizon() {
-    const el = mk('div', 'w-horizon'), cv = mk('canvas'); el.append(cv);
+    const el = mk('div', 'w-horizon'), cv = mk('canvas');
+    cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', 'No attitude'); el.append(cv);
     let a = null, t = null, stale = false;
     const draw = () => {
       const { c, W, H } = fit(cv); if (!W) return;
       const cx = W / 2, cy = H / 2, R = Math.hypot(W, H);
       const sky = stale ? tok('--panel-2') : tok('--accent-soft'), ground = stale ? tok('--line') : tok('--warn-soft'), ink = tok('--ink'), muted = tok('--muted');
       const roll = a ? a.roll : 0, pitch = a ? a.pitch : 0, ppr = H / 1.2;   // pixels per radian of pitch
-      c.save(); c.translate(cx, cy); c.rotate(-roll); c.translate(0, pitch * ppr);
+      // In the flight core's X-forward, Y-left, Z-up axes, positive roll banks right and positive pitch lowers the nose.
+      // The horizon moves in the opposite direction from the aircraft, whose reference symbol stays fixed.
+      c.save(); c.translate(cx, cy); c.rotate(-roll); c.translate(0, -pitch * ppr);
       c.fillStyle = sky; c.fillRect(-R, -R, 2 * R, R); c.fillStyle = ground; c.fillRect(-R, 0, 2 * R, R);
       c.strokeStyle = ink; c.lineWidth = 1.5; c.beginPath(); c.moveTo(-R, 0); c.lineTo(R, 0); c.stroke();
       c.lineWidth = 1; c.fillStyle = muted; c.font = '10px ' + tok('--f-mono'); c.textAlign = 'left'; c.textBaseline = 'middle';
@@ -59,8 +62,17 @@ const GSW = (() => {
       c.strokeStyle = tok('--bad'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(cx - 40, cy); c.lineTo(cx - 12, cy); c.lineTo(cx - 6, cy + 6); c.moveTo(cx + 40, cy); c.lineTo(cx + 12, cy); c.lineTo(cx + 6, cy + 6); c.stroke();
       c.fillStyle = tok('--bad'); c.beginPath(); c.arc(cx, cy, 2.5, 0, 7); c.fill();
       c.fillStyle = ink; c.font = '600 12px ' + tok('--f-mono'); c.textAlign = 'right'; c.textBaseline = 'top';
-      c.fillText(a ? `${String((Math.round(-a.yaw * R2D) % 360 + 360) % 360).padStart(3, '0')}°` : '---', W - 6, 6);   // a compass heading (x north; yaw turns from x toward y, west)
-      c.textAlign = 'left'; c.fillText(a ? `R ${(roll * R2D).toFixed(0)}° P ${(pitch * R2D).toFixed(0)}°` : '', 6, 6);
+      let label = 'No attitude';
+      if (a && !stale) {
+        const bankDeg = Math.round(Math.abs(roll) * R2D), noseDeg = Math.round(Math.abs(pitch) * R2D);
+        const bank = bankDeg ? `Bank ${roll < 0 ? 'left' : 'right'} ${bankDeg}°` : 'Wings level';
+        const nose = noseDeg ? `Nose ${pitch < 0 ? 'up' : 'down'} ${noseDeg}°` : 'Nose level';
+        const heading = `${String((Math.round(-a.yaw * R2D) % 360 + 360) % 360).padStart(3, '0')}°`;   // yaw increases toward west
+        c.fillText(heading, W - 6, 6);
+        c.textAlign = 'left'; c.fillText(bank, 6, 6); c.fillText(nose, 6, 21);
+        label = `${bank}. ${nose}. Heading ${heading}`;
+      } else c.fillText('---', W - 6, 6);
+      if (cv.getAttribute('aria-label') !== label) cv.setAttribute('aria-label', label);
       if (stale) { c.fillStyle = muted; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('NO ATTITUDE', cx, cy + 22); }
     };
     return { el, set(att, at) { a = att; t = at; draw(); }, age(now) { const s = staleness(el, t, now) > 5; if (s !== stale) { stale = s; draw(); } }, draw };

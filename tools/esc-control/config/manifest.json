@@ -1,0 +1,18 @@
+{
+  "revision": "configured-wiring2",
+  "resources": {
+    "board": "board.json",
+    "defaults": "defaults.json",
+    "presets": "presets.json",
+    "templates": "wiring-templates.json"
+  },
+  "scripts": [
+    "bytes.js",
+    "sequence.js",
+    "wiring.js",
+    "model.js",
+    "serial.js",
+    "wiring-editor.js",
+    "app.js"
+  ]
+}

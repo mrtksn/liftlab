@@ -1,0 +1,2073 @@
+[
+  {
+    "id": "analog",
+    "label": "Analog · direct voltage",
+    "title": "Direct analog input",
+    "directions": [
+      "analog"
+    ],
+    "includeInNew": true,
+    "preferred": true,
+    "viewBox": [
+      0.0,
+      85.0,
+      760.0,
+      275.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "VOLTAGE SOURCE"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "{{adc.min}}–{{adc.max}} V measured"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 ADC"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "circle",
+        "attrs": {
+          "cx": "400",
+          "cy": "165",
+          "r": "4",
+          "class": "junction signal",
+          "fill": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "400,165 400,183",
+          "class": "wire signal optional",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "g",
+        "attrs": {
+          "class": "optional-cap"
+        },
+        "children": [
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "400,183 400,208",
+              "class": "wire ground optional",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "path",
+            "attrs": {
+              "d": "M385 208h30 M385 218h30",
+              "class": "wire ground",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "400,218 400,243",
+              "class": "wire ground optional",
+              "stroke": "#93a9bd"
+            }
+          }
+        ]
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "400,243 400,280",
+          "class": "wire ground optional",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "423",
+          "y": "242",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "C1 · {{params.capNf}} nF"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "423",
+          "y": "259",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "optional"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "capNf",
+        "label": "C1 capacitance (nF)",
+        "type": "number",
+        "value": 100,
+        "min": 1,
+        "max": 100000
+      }
+    ],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "{{channel.pinLabel}}: keep within {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "{{channel.attenuation}} dB measurement range: {{adc.min}}–{{adc.max}} V"
+      }
+    ],
+    "components": [
+      "No divider for a source already within the ADC range",
+      "C1: {{params.capNf}} nF ceramic, ≥10 V, optional noise filter"
+    ],
+    "notes": [
+      "Measure relative to GND. VP and VN are ordinary single-ended inputs, not a differential pair.",
+      "C1 goes from the ADC node to GND, close to the ESP32. It filters fast changes; omit for faster analog signals. Never add this capacitor to a digital signal line.",
+      "ADC input limits apply even while USB is disconnected; disconnect the measured source before powering the ESP32 off. High resistor values increase source impedance and measurement error; verify against a reference."
+    ],
+    "sources": []
+  },
+  {
+    "id": "divider",
+    "label": "Analog · voltage divider",
+    "title": "Analog voltage divider",
+    "directions": [
+      "analog"
+    ],
+    "includeInNew": true,
+    "preferred": false,
+    "viewBox": [
+      0.0,
+      85.0,
+      760.0,
+      275.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "VOLTAGE SOURCE"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "DC / slow positive voltage"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 ADC"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 276,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "276",
+          "y": "157",
+          "width": "58",
+          "height": "16",
+          "class": "resistor"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "334,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "circle",
+        "attrs": {
+          "cx": "400",
+          "cy": "165",
+          "r": "4",
+          "class": "junction signal",
+          "fill": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "400,165 400,201",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "392",
+          "y": "201",
+          "width": "16",
+          "height": "58",
+          "class": "resistor"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "400,259 400,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "305",
+          "y": "125",
+          "class": "",
+          "text-anchor": "middle"
+        },
+        "text": "R1 · {{params.rTop}} kΩ"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "375",
+          "y": "234",
+          "class": "",
+          "text-anchor": "end"
+        },
+        "text": "R2 · {{params.rBottom}} kΩ"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "305",
+          "y": "104",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "SOURCE SIDE"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "500,165 500,183",
+          "class": "wire signal optional",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "g",
+        "attrs": {
+          "class": "optional-cap"
+        },
+        "children": [
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "500,183 500,208",
+              "class": "wire ground optional",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "path",
+            "attrs": {
+              "d": "M485 208h30 M485 218h30",
+              "class": "wire ground",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "500,218 500,243",
+              "class": "wire ground optional",
+              "stroke": "#93a9bd"
+            }
+          }
+        ]
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "500,243 500,280",
+          "class": "wire ground optional",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "523",
+          "y": "242",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "C1 · {{params.capNf}} nF"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "523",
+          "y": "259",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "optional"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "rTop",
+        "label": "R1 · source side (kΩ)",
+        "type": "number",
+        "value": 20,
+        "min": 1,
+        "max": 1000
+      },
+      {
+        "id": "rBottom",
+        "label": "R2 · to GND (kΩ)",
+        "type": "number",
+        "value": 10,
+        "min": 1,
+        "max": 1000
+      },
+      {
+        "id": "sourceV",
+        "label": "Source voltage to check (V)",
+        "type": "number",
+        "value": 5.5,
+        "min": 0,
+        "max": 12
+      },
+      {
+        "id": "capNf",
+        "label": "C1 capacitance (nF)",
+        "type": "number",
+        "value": 100,
+        "min": 1,
+        "max": 100000
+      }
+    ],
+    "calculations": {
+      "ratio": [
+        "add",
+        1,
+        [
+          "divide",
+          {
+            "ref": "params.rTop"
+          },
+          {
+            "ref": "params.rBottom"
+          }
+        ]
+      ],
+      "pinVoltage": [
+        "divide",
+        {
+          "ref": "params.sourceV"
+        },
+        {
+          "ref": "calc.ratio"
+        }
+      ],
+      "sourceMin": [
+        "multiply",
+        {
+          "ref": "adc.min"
+        },
+        {
+          "ref": "calc.ratio"
+        }
+      ],
+      "sourceMax": [
+        "min",
+        12,
+        [
+          "multiply",
+          {
+            "ref": "adc.max"
+          },
+          {
+            "ref": "calc.ratio"
+          }
+        ]
+      ],
+      "sourcePinLimit": [
+        "multiply",
+        {
+          "ref": "board.signal.max"
+        },
+        {
+          "ref": "calc.ratio"
+        }
+      ],
+      "cutoffHz": [
+        "divide",
+        1,
+        [
+          "multiply",
+          2,
+          3.141592653589793,
+          [
+            "divide",
+            [
+              "multiply",
+              {
+                "ref": "params.rTop"
+              },
+              {
+                "ref": "params.rBottom"
+              },
+              1000
+            ],
+            [
+              "add",
+              {
+                "ref": "params.rTop"
+              },
+              {
+                "ref": "params.rBottom"
+              }
+            ]
+          ],
+          {
+            "ref": "params.capNf"
+          },
+          1e-09
+        ]
+      ]
+    },
+    "limits": [
+      {
+        "text": "{{channel.pinLabel}}: keep within {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "{{channel.attenuation}} dB measurement range: {{adc.min}}–{{adc.max}} V"
+      },
+      {
+        "text": "Divider source measurement range ≈ {{calc.sourceMin}}–{{calc.sourceMax}} V",
+        "when": [
+          "lte",
+          {
+            "ref": "calc.sourceMin"
+          },
+          {
+            "ref": "calc.sourceMax"
+          }
+        ]
+      },
+      {
+        "text": "Divider ratio too large for this configured source-voltage range",
+        "severity": "danger",
+        "when": [
+          "gt",
+          {
+            "ref": "calc.sourceMin"
+          },
+          {
+            "ref": "calc.sourceMax"
+          }
+        ]
+      },
+      {
+        "text": "{{params.sourceV}} V source → {{calc.pinVoltage}} V at pin"
+      },
+      {
+        "text": "UNSAFE · above the configured GPIO voltage ceiling",
+        "severity": "danger",
+        "when": [
+          "gt",
+          {
+            "ref": "calc.pinVoltage"
+          },
+          {
+            "ref": "board.signal.max"
+          }
+        ]
+      },
+      {
+        "text": "Outside the characterized ADC measurement range",
+        "when": [
+          "or",
+          [
+            "gt",
+            {
+              "ref": "calc.pinVoltage"
+            },
+            {
+              "ref": "adc.max"
+            }
+          ],
+          [
+            "lt",
+            {
+              "ref": "calc.pinVoltage"
+            },
+            {
+              "ref": "adc.min"
+            }
+          ]
+        ]
+      }
+    ],
+    "components": [
+      "R1: {{params.rTop}} kΩ, 1%, ¼ W",
+      "R2: {{params.rBottom}} kΩ, 1%, ¼ W",
+      "C1: {{params.capNf}} nF ceramic, ≥10 V, optional noise filter"
+    ],
+    "notes": [
+      "This example uses 1–1000 kΩ resistors and a source of at most 12 V DC.",
+      "Vpin = Vsource ÷ {{calc.ratio}}. For source volts, use scale {{calc.ratio}} and offset 0. Preset scale: {{channel.scale}}; offset: {{channel.offset}}; unit: {{channel.unit}}.",
+      "The GPIO ceiling corresponds to {{calc.sourcePinLimit}} V at the source with ideal resistors. Use the lower measurement range, with margin for tolerance and spikes.",
+      "C1 connects from the ADC node to GND, close to the board. It filters fast changes; omit it for faster analog signals. Do not add a filter capacitor to digital data.",
+      "High resistor values increase source impedance and measurement error. Verify against a reference.",
+      "The ideal RC corner is about {{calc.cutoffHz}} Hz. Software scaling does not change the physical circuit."
+    ],
+    "sources": []
+  },
+  {
+    "id": "buffer",
+    "label": "Digital · protected 5 V input",
+    "title": "Protected digital input · 5 V → 3.3 V",
+    "directions": [
+      "in"
+    ],
+    "includeInNew": true,
+    "preferred": false,
+    "viewBox": [
+      0.0,
+      0.0,
+      760.0,
+      360.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "20",
+          "y": "137",
+          "width": "170",
+          "height": "73",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "105",
+          "y": "166",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "TARGET SIGNAL"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "105",
+          "y": "187",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "0–5.5 V digital"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "285",
+          "y": "115",
+          "width": "185",
+          "height": "105",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "377.5",
+          "y": "144",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "SN74LVC125A"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "377.5",
+          "y": "165",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "SOIC / SSOP / TSSOP"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "565",
+          "y": "137",
+          "width": "175",
+          "height": "73",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "652.5",
+          "y": "166",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 INPUT"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "652.5",
+          "y": "187",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "190,170 285,170",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "470,170 565,170",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "267",
+          "y": "156",
+          "class": "",
+          "text-anchor": "end"
+        },
+        "text": "2 · 1A"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "488",
+          "y": "197",
+          "class": "",
+          "text-anchor": "start"
+        },
+        "text": "3 · 1Y"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "285,205 250,205 250,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "238",
+          "y": "242",
+          "class": "circuit-small",
+          "text-anchor": "end"
+        },
+        "text": "1 · /OE"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "375,55 375,115",
+          "class": "wire power",
+          "stroke": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "375",
+          "y": "35",
+          "class": "power-label",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 3V3 → pin 14 / VCC"
+      },
+      {
+        "tag": "circle",
+        "attrs": {
+          "cx": "375",
+          "cy": "70",
+          "r": "4",
+          "class": "junction power",
+          "fill": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "375,70 510,70",
+          "class": "wire power",
+          "stroke": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "g",
+        "attrs": {},
+        "children": [
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "510,70 510,95",
+              "class": "wire ground",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "path",
+            "attrs": {
+              "d": "M495 95h30 M495 105h30",
+              "class": "wire ground",
+              "stroke": "#93a9bd"
+            }
+          },
+          {
+            "tag": "polyline",
+            "attrs": {
+              "points": "510,105 510,130",
+              "class": "wire ground",
+              "stroke": "#93a9bd"
+            }
+          }
+        ]
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "510,130 510,142",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M497 142h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "535",
+          "y": "93",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "C1"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "535",
+          "y": "112",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "100 nF"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "375,220 375,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "354",
+          "y": "248",
+          "class": "circuit-small",
+          "text-anchor": "end"
+        },
+        "text": "7 · GND"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "100,210 100,280 650,280 650,210",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "circle",
+        "attrs": {
+          "cx": "375",
+          "cy": "280",
+          "r": "4",
+          "class": "junction ground",
+          "fill": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "375,280 375,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M362 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "375",
+          "y": "337",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "All grounds shared · power buffer before probing"
+      }
+    ],
+    "parameters": [],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "Target input: 0–5.5 V digital"
+      },
+      {
+        "text": "Buffer VCC: ESP32 3.3 V"
+      },
+      {
+        "text": "Buffer output to GPIO: {{board.signal.min}}–{{board.signal.max}} V"
+      }
+    ],
+    "components": [
+      "SN74LVC125A (exact part; generic HC125 is different)",
+      "C1: 100 nF ceramic, ≥10 V, between pins 14 and 7, close to chip"
+    ],
+    "notes": [
+      "Used gate: 1A pin 2, 1Y pin 3, /OE pin 1 to GND. Pin numbers shown are for D/DB/NS/PW packages, top view; check your package.",
+      "Unused gates: /OE pins 4, 10, 13 → 3V3; A pins 5, 9, 12 → GND; Y pins 6, 8, 11 left unconnected.",
+      "This is a one-way digital probe. It preserves logic states, not analog voltage. No external capacitor on A or Y."
+    ],
+    "sources": [
+      {
+        "title": "SN74LVC125A package pinout",
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc125a.pdf"
+      }
+    ]
+  },
+  {
+    "id": "esc",
+    "label": "Toy ESC + external supply",
+    "title": "Toy ESC · separate motor power",
+    "directions": [
+      "out"
+    ],
+    "includeInNew": false,
+    "preferred": false,
+    "viewBox": [
+      0.0,
+      0.0,
+      760.0,
+      360.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "25",
+          "y": "135",
+          "width": "180",
+          "height": "90",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "115",
+          "y": "164",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 · USB power"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "115",
+          "y": "185",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}} · 3.3 V signal"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "365",
+          "y": "135",
+          "width": "170",
+          "height": "90",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "450",
+          "y": "164",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "TOY ESC"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "450",
+          "y": "185",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "blue M input"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "605",
+          "y": "135",
+          "width": "130",
+          "height": "90",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "670",
+          "y": "164",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "MOTOR"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "670",
+          "y": "185",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESC driven"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "205,173 365,173",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "280",
+          "y": "154",
+          "class": "",
+          "text-anchor": "middle"
+        },
+        "text": "PWM → M"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "535,178 605,178",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "574",
+          "y": "159",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "motor wires"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "365",
+          "y": "15",
+          "width": "170",
+          "height": "65",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "450",
+          "y": "44",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "EXTERNAL SUPPLY"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "450",
+          "y": "65",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "1S battery preferred"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "450,80 450,135",
+          "class": "wire power",
+          "stroke": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "467",
+          "y": "105",
+          "class": "power-label",
+          "text-anchor": "start"
+        },
+        "text": "+ → ESC red"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "115,225 115,285 450,285 450,225",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "285,285 285,297",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M272 297h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "285",
+          "y": "339",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 GND ↔ supply − ↔ ESC −"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "535,48 740,48 740,285 450,285",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "595",
+          "y": "38",
+          "class": "circuit-small",
+          "text-anchor": "start"
+        },
+        "text": "Supply −"
+      }
+    ],
+    "parameters": [],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "GPIO signal: {{board.signal.min}}–{{board.signal.max}} V only"
+      },
+      {
+        "text": "This ESC: observed working through 5.1 V supply"
+      },
+      {
+        "text": "Above 5.1 V: arming faults; above 5.5 V: resets"
+      }
+    ],
+    "components": [
+      "ESP32 powered by its USB cable",
+      "Motor / ESC powered by a separate 1S battery or bench supply",
+      "No extra resistor or capacitor assumed for the tested hookup"
+    ],
+    "notes": [
+      "ESC voltage figures are observations for this specimen, not a rated operating range. Keep the existing ESC power capacitors.",
+      "Do not connect ESC supply + to ESP32 3V3, VIN, or a GPIO. Only signal and ground cross between the two circuits.",
+      "Motor current returns directly to supply −. Add a separate ground lead from that common point to the ESP32; do not route motor current through the ESP32 board."
+    ],
+    "sources": []
+  },
+  {
+    "id": "output",
+    "label": "Digital · 3.3 V output",
+    "title": "3.3 V digital generator",
+    "directions": [
+      "out"
+    ],
+    "includeInNew": true,
+    "preferred": true,
+    "viewBox": [
+      0.0,
+      85.0,
+      760.0,
+      275.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 output"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "TARGET INPUT"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "3.3 V compatible"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "Signal at every ESP32 GPIO: {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "5 V / 1S battery voltage must not connect directly"
+      }
+    ],
+    "components": [
+      "No resistor or capacitor required for a short 3.3 V push-pull signal"
+    ],
+    "notes": [
+      "Target must accept 3.3 V logic. Power the target from its own suitable supply and share GND; do not power a load from a GPIO.",
+      "For UART, connect this TX output to the other board’s RX. Sniff the other board’s TX with a separate input channel.",
+      "No filter capacitor on digital data: it can distort UART, PWM, DShot, I²C, or SPI edges."
+    ],
+    "sources": []
+  },
+  {
+    "id": "loopback",
+    "label": "Output → input loopback",
+    "title": "Output → input loopback",
+    "directions": [
+      "out"
+    ],
+    "includeInNew": true,
+    "preferred": false,
+    "viewBox": [
+      0.0,
+      85.0,
+      760.0,
+      275.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 output"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "{{params.probe.pinLabel}}"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 input"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "probe",
+        "label": "Receiving input",
+        "type": "channel",
+        "direction": "in",
+        "value": 1
+      }
+    ],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "Signal at every ESP32 GPIO: {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "5 V / 1S battery voltage must not connect directly"
+      }
+    ],
+    "components": [
+      "No resistor or capacitor required for a short 3.3 V push-pull signal"
+    ],
+    "notes": [
+      "Use an input channel for the receiving end; never join two active outputs. Both pads are on this ESP32, so GND is already shared.",
+      "The diagram follows configured GPIOs; it does not change channel direction or enable output.",
+      "No filter capacitor on digital data: it can distort UART, PWM, DShot, I²C, or SPI edges."
+    ],
+    "sources": []
+  },
+  {
+    "id": "input",
+    "label": "Digital · 0–3.3 V input",
+    "title": "3.3 V digital probe",
+    "directions": [
+      "in"
+    ],
+    "includeInNew": true,
+    "preferred": true,
+    "viewBox": [
+      0.0,
+      85.0,
+      760.0,
+      275.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "TARGET SIGNAL"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "TX / PWM / data / clock"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 input"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "Signal at every ESP32 GPIO: {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "5 V / 1S battery voltage must not connect directly"
+      }
+    ],
+    "components": [
+      "No resistor or capacitor required for a short 3.3 V push-pull signal"
+    ],
+    "notes": [
+      "Power the target separately and share GND. A signal already actively driven at 3.3 V needs no added pull resistor.",
+      "Input-only GPIO34/35/VP/VN have no internal pulls. If a line can float, use a protocol-appropriate external pull-up or pull-down.",
+      "No filter capacitor on digital data: it can distort UART, PWM, DShot, I²C, or SPI edges."
+    ],
+    "sources": []
+  },
+  {
+    "id": "openDrain",
+    "label": "I²C / open-drain · 3.3 V",
+    "title": "3.3 V I²C / open-drain probe",
+    "directions": [
+      "in"
+    ],
+    "includeInNew": true,
+    "preferred": false,
+    "viewBox": [
+      0.0,
+      0.0,
+      760.0,
+      360.0
+    ],
+    "elements": [
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "30",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "TARGET SIGNAL"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "120",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "TX / PWM / data / clock"
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "550",
+          "y": "130",
+          "width": "180",
+          "height": "75",
+          "rx": "9",
+          "class": "circuit-box"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "159",
+          "class": "circuit-title",
+          "text-anchor": "middle"
+        },
+        "text": "{{channel.pinLabel}}"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "640",
+          "y": "180",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "ESP32 input"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "210,165 550,165",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "395,165 395,122",
+          "class": "wire signal",
+          "stroke": "#a8edbf"
+        }
+      },
+      {
+        "tag": "circle",
+        "attrs": {
+          "cx": "395",
+          "cy": "165",
+          "r": "4",
+          "class": "junction signal",
+          "fill": "#a8edbf"
+        }
+      },
+      {
+        "tag": "rect",
+        "attrs": {
+          "x": "387",
+          "y": "64",
+          "width": "16",
+          "height": "58",
+          "class": "resistor"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "395,64 395,40",
+          "class": "wire power",
+          "stroke": "#ffc0ad"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "395",
+          "y": "22",
+          "class": "power-label",
+          "text-anchor": "middle"
+        },
+        "text": "3.3 V ONLY"
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "420",
+          "y": "97",
+          "class": "",
+          "text-anchor": "start"
+        },
+        "text": "R1 · 4.7 kΩ"
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,205 120,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "650,205 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "120,280 650,280",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "polyline",
+        "attrs": {
+          "points": "385,280 385,292",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "path",
+        "attrs": {
+          "d": "M372 292h26 m-21 6h16 m-12 6h8",
+          "class": "wire ground",
+          "stroke": "#93a9bd"
+        }
+      },
+      {
+        "tag": "text",
+        "attrs": {
+          "x": "385",
+          "y": "330",
+          "class": "circuit-small",
+          "text-anchor": "middle"
+        },
+        "text": "COMMON GND · target − ↔ ESP32 GND"
+      }
+    ],
+    "parameters": [],
+    "calculations": {},
+    "limits": [
+      {
+        "text": "Signal at every ESP32 GPIO: {{board.signal.min}}–{{board.signal.max}} V"
+      },
+      {
+        "text": "5 V / 1S battery voltage must not connect directly"
+      }
+    ],
+    "components": [
+      "R1: 4.7 kΩ example pull-up to 3V3, only if the bus lacks one"
+    ],
+    "notes": [
+      "Repeat the pull-up on SDA and SCL if needed; existing board pull-ups count. 4.7 kΩ is a starting value, not a universal bus-speed guarantee.",
+      "Probe passively with two input channels. Do not add pull-ups to 5 V on ESP32 inputs. Never add a filter capacitor to SDA or SCL."
+    ],
+    "sources": [
+      {
+        "title": "I²C pull-up sizing",
+        "url": "https://www.nxp.com/docs/en/user-guide/UM10204.pdf"
+      }
+    ]
+  }
+]

@@ -1,5 +1,7 @@
 # ESC signal sniffer
 
+For the dedicated **ESP32-WROOM sniffer + generator with a browser UI**, use [Signal Workbench](signal-workbench.md). The S3 firmware below is the earlier listening-only instrument. The toy ESC’s PWM has since been characterized; see the [ESC bench observations](../tools/esc-control/README.md).
+
 `runner/escsniff` is ESP32-S3 firmware that only listens. It reads up to four motor-signal lines and reports what each one carries: servo-style PWM, OneShot, duty PWM, DShot (decoded and CRC-checked), or UART serial (with the decoded bytes). Each guess is printed with the timing numbers it is based on. It was written for the salvaged AirVolt A13 toy drone: its flight board drives four small brushless ESCs, and we don't know what signal it sends them. Until we know, an ESP32 can't drive those ESCs.
 
 Nothing here drives a motor. The only output is an optional test signal on GPIO8.

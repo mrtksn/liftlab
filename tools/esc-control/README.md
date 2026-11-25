@@ -1,16 +1,16 @@
-# ESC Bench Control
+# Signal Workbench / ESC bench notes
 
-Local Web Serial interface for the classic ESP32 running MicroPython. From the repository root:
+This directory now serves the dedicated **ESP32 Signal Workbench**: multi-channel digital sniffing and generation, analog ADC logging, editable presets and sequences, configurable toolbar/large buttons, live sliders, editable UART text/numbers/bytes, waveform visualization, protocol decoders, captures and logs. The toy-drone motor UI is an editable preset. The top-right Wiring diagram button renders preset-owned configuration for GPIO assignments, circuit wiring, power, components and voltage limits. Use Edit wiring to change it; shipped presets, board profiles and diagram-library examples live in `config/*.json`.
+
+See [the workbench guide](../../docs/signal-workbench.md) for capabilities, wiring, presets, firmware installation, and tests. Serve this directory locally and open it in Chrome or Edge:
 
 ```sh
 python3 -m http.server 8765 --bind 127.0.0.1 --directory tools/esc-control
 ```
 
-Open http://127.0.0.1:8765/ in Chrome or Edge. Disconnect the ESC battery before connecting the panel to USB. The panel starts `device.py` in the MicroPython REPL; it does not install or auto-start the program on the board. The serial port must not be open in another application.
+Open <http://127.0.0.1:8765/>. The dedicated firmware is `runner/signalbench` (ESP32-WROOM, USB serial at 921600 baud). The [original ESC panel](legacy/index.html) is preserved under `legacy/` and requires MicroPython; its device script is loaded into the REPL at 115200 baud when connected. The new native firmware and old MicroPython panel are separate protocols.
 
-Choose a frequency with the battery disconnected and before connecting the panel: 490 Hz (up to 2,000 µs), 400 Hz (up to 2,450 µs), or 300 Hz (up to 3,000 µs). Operation and release-to-stop were observed in the limited 490 Hz and 300 Hz tests below; 400 Hz remains untested. A 550 µs stop-like pulse changes duty cycle with frequency, and stopping has not been established under every condition. Start with a short low-speed test and disconnect the battery if the motor does not stop. The maximum pulse values are timing limits, not motor speed ratings.
-
-Arm sends a 550 µs stop-like signal at the selected frequency. Hold Run to send the selected pulse; release, Stop, or Disarm restores the stop-like pulse. Disarm also prevents Run until rearmed; it does not remove electrical power. While Run is held, the browser renews a short lease. If the device stops receiving run commands for 650 ms while its program is running, it returns to the stop-like pulse and disarms. Browser disconnect or a device reset can instead leave the signal undriven; ESC behavior on signal loss is unknown. Neither software stop nor the watchdog is a substitute for a physical battery disconnect.
+The hardware observations below describe our particular salvaged 1S toy-drone ESC and remain the basis of the motor-test preset.
 
 ## Bench notes — 8–9 November 2026
 
@@ -27,4 +27,17 @@ The setup uses a classic ESP32-D0WDQ6 revision 1.0 with 4 MB flash and MicroPyth
 
 These are limited bench observations, not flight validation. Use a propeller-free setup with the battery connector accessible, and verify stopping at each frequency before further experiments. The panel's conservative 300 Hz warning predates the limited test; the behavior is observed but not fully characterized.
 
-Run the simulated watchdog test with `python3 tools/esc-control/test_device.py`.
+## ESC supply-voltage test — 18 November 2026
+
+The user tested a spare motor and ESC from the same 1S toy drone using this ESP32-WROOM control panel and confirmed the following behavior for this particular ESC. Voltages below refer to the **ESC power input**, not its PWM signal input.
+
+| ESC supply voltage | User-reported behavior |
+| --- | --- |
+| Up to and including 5.1 V, within the tested range | Motor and ESC worked normally. |
+| Above 5.1 V | Abnormal behavior, including failure to arm the motor. |
+| Above 5.5 V | ESC began resetting itself. |
+
+**Observed upper working supply voltage: 5.1 V for this specimen in this test.** This is a bench observation, not a manufacturer rating or a verified continuous operating limit. The reset mechanism has not been diagnosed. The exact PWM setting, supply/current limit, motor load, and test duration were not recorded in the voltage-test report; the earlier PWM observations above remain separate results.
+
+Run the legacy MicroPython watchdog regression with `python3 tools/esc-control/test_device.py`.
+Run the simulated browser control tests with `node --test tools/esc-control/test_app.cjs`.
