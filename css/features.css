@@ -1417,3 +1417,4 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .view.benching #liveBar{display:none}
 .view.benching .onboard-cam{display:none}
 .cpart-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-8);flex-wrap:wrap}
+.cpart:not(.phys-on) .phys-f{display:none}

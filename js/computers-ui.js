@@ -375,8 +375,9 @@ function partEditor(c,title){
   if(!c||typeof compCard!=='function')return el('span');
   const on=bench.on&&bench.phys===c.id,P=c.pos.map(v=>(v*1000).toFixed(0)).join(', ');
   const btn=UI.button({class:'btn'+(on?' primary':''),'data-phys':c.id,text:on?'Done':'Edit physical properties…',title:on?'Back to the exploded view':'Place it on the assembled design with handles, and edit its mass and size',onclick:()=>{if(on)benchPhys(null);else{bench.want=true;benchSync();benchPhys(c.id);}}});
-  const box=el('section',{class:'cpart'},el('h3',{text:title||'On the airframe'}),el('div',{class:'cpart-head'},el('span',{class:'computer-meta',text:gramsOf(c)+' · at ('+P+') mm'}),btn));
-  if(on){openSet.add(c.id);box.append(el('p',{class:'hint',text:'Drag the arrows or squares in the view to move it, the rings to turn it (Shift: fine steps). Its fields are below.'}),compCard(c));}
+  const box=el('section',{class:'cpart'+(on?' phys-on':'')},el('h3',{text:title||'On the airframe'}),el('div',{class:'cpart-head'},el('span',{class:'computer-meta',text:gramsOf(c)+' · at ('+P+') mm'}),btn));
+  if(on)box.append(el('p',{class:'hint',text:'Drag the arrows or squares in the view to move it, the rings to turn it (Shift: fine steps). Its position, mass and size are below.'}));
+  openSet.add(c.id);box.append(compCard(c));   // (the part's own settings always; its physical ones only while placing it)
   return box;
 }
 function renderPartDetail(box,C,id){

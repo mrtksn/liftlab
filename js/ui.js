@@ -178,6 +178,10 @@ function checkF(c, key, label) {
   i.addEventListener('change', () => { c[key] = i.checked; edited(c, key); });
   return el('label', { class: 'check', for: id }, i, label);
 }
+// Fields that are the part's physical properties (where it sits and how it's turned, its mass, size, shape and drag)
+// are marked phys-f: Computers keeps them behind Edit physical properties, with what's particular to the part (a
+// camera's picture, a sensor's rate and noise, a draw) always in view. Airframe shows them all.
+const physF = n => { if (n && n.classList) n.classList.add('phys-f'); return n; };
 function compBody(c) {
   cardRefresh.set(c.id, []);
   const b = el('div', { class: 'comp-body' });
@@ -189,10 +193,10 @@ function compBody(c) {
   const aid = `f-${c.id}-parent`, asel = UI.select( { id: aid });
   for (const [v, t] of holders) { const o = el('option', { value: v, text: t }); if (String(c.parent ?? '') + (c.parentPoint ? '|' + c.parentPoint : '') === v) o.selected = true; asel.append(o); }
   asel.addEventListener('change', () => { partChooseMount(c, asel.value); if (c.type === 'hang') reseatPend(c); structural(); });
-  b.append(el('div', { class: 'field' }, el('label', { for: aid, text: 'Attached to' }), asel));
-  const own = partOwnMountField(c); if (own) b.append(own);
-  const pos = el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z'));
-  if (parentOf(c) || isHolder(c)) b.append(el('p', { class: 'hint', text: 'Positions are body axes with every servo at 0°; the servos above a part carry it from there. Moving or turning a servo or rod carries what\'s on it.' }));
+  b.append(physF(el('div', { class: 'field' }, el('label', { for: aid, text: 'Attached to' }), asel)));
+  const own = partOwnMountField(c); if (own) b.append(physF(own));
+  const pos = physF(el('div', { class: 'subgrid' }, slider(c, 'x'), slider(c, 'y'), slider(c, 'z')));
+  if (parentOf(c) || isHolder(c)) b.append(el('p', { class: 'hint phys-f', text: 'Positions are body axes with every servo at 0°; the servos above a part carry it from there. Moving or turning a servo or rod carries what\'s on it.' }));
   const presetSel = (list, kAz, kEl, label) => {   // quick directions, with the exact angles below
     const id = `f-${c.id}-${kAz}-preset`, sel = UI.select( { id }), cur = presetOf(list, c[kAz], c[kEl]);
     for (const [k, t] of list) { const o = el('option', { value: k, text: t }); if (k === cur) o.selected = true; sel.append(o); }
@@ -228,21 +232,21 @@ function compBody(c) {
       el('span', { class: 'lbl', text: 'Base' }), pos, presetSel(ROD_PRESETS, 'az', 'el', 'Points'), slider(c, 'laz'), slider(c, 'lel'), slider(c, 'lroll'), slider(c, 'llen'), slider(c, 'mass'),
       checkF(c, 'known', 'Controller knows this rod\'s mass'));
   } else if (c.type === 'mass') {
-    if (c.model) b.append(slider(c, 'mass'), pos, partModelFields(c));
-    else b.append(selectF(c, 'aero', 'In the air', [['prism', 'Prism: blunt (drag)'], ['wing', 'Wing: lift and drag']], () => { if (c.aero === 'wing') c.shape = 'box'; edited(c, 'shape'); rerender(); }));
+    if (c.model) b.append(physF(slider(c, 'mass')), pos, physF(partModelFields(c)));
+    else b.append(physF(selectF(c, 'aero', 'In the air', [['prism', 'Prism: blunt (drag)'], ['wing', 'Wing: lift and drag']], () => { if (c.aero === 'wing') c.shape = 'box'; edited(c, 'shape'); rerender(); })));
     if (!c.model && isWing(c)) b.append(slider(c, 'mass'), pos, el('div', { class: 'subgrid' }, slider(c, 'wchord'), slider(c, 'wspan'), slider(c, 'wthick')), slider(c, 'inc'),
       el('p', { class: 'hint', text: 'Chord along X (the leading edge forward), span along Y. It lifts as the air meets it at an angle, stalls past about 15°, and catches the wind and the rotors\' wash (the Wing lift and drag formula). On a servo set by you, it is a flap, a tilting wing or an air brake. The flight computers aren\'t told about it: to them it\'s an oddly shaped body.' }));
     else if (!c.model) {
-      b.append(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender), slider(c, 'mass'), pos);
-      if (c.shape === 'box') b.append(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz')));
-      else if (c.shape === 'sphere') b.append(slider(c, 'radius')); else b.append(slider(c, 'radius'), slider(c, 'length'));
+      b.append(physF(selectF(c, 'shape', 'Shape', [['box', 'Box'], ['sphere', 'Sphere'], ['cylinder', 'Cylinder (vertical)']], rerender)), physF(slider(c, 'mass')), pos);
+      if (c.shape === 'box') b.append(physF(el('div', { class: 'subgrid' }, slider(c, 'lx'), slider(c, 'ly'), slider(c, 'lz'))));
+      else if (c.shape === 'sphere') b.append(physF(slider(c, 'radius'))); else b.append(physF(slider(c, 'radius')), physF(slider(c, 'length')));
     }
     {   // electronics are listed (and drawn apart) in the Computers tab; anything else here
       const id = `f-${c.id}-elec`, i = UI.input({ type: 'checkbox', id }); i.checked = partIsElec(c);
       i.addEventListener('change', () => { c.elec = i.checked; undoKey = c.id + ':elec'; structural(); if (typeof renderComputers === 'function') renderComputers(true); });
       b.append(el('label', { class: 'check', for: id }, i, 'Electronics: listed in Computers, not Airframe'));
     }
-    b.append(checkF(c, 'known', 'Controller knows this mass'), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
+    b.append(physF(checkF(c, 'known', 'Controller knows this mass')), checkF(c, 'battery', 'It\'s a battery: it powers the drone'),
       el('p', { class: 'hint', text: 'It powers the drone while it\'s on board and connected (Computers → Power). With no battery connected, or the last one dropped from a latch, the motors stop and the boards go dark until the next reset.' }));
     {   // a camera on it: its picture shows in a corner of the view (onboard-cam.js)
       const id = `f-${c.id}-camera`, i = UI.input({ type: 'checkbox', id }); i.checked = !!c.camera;
@@ -257,7 +261,7 @@ function compBody(c) {
       pos, slider(c, 'lreach'), slider(c, 'ltravel'), slider(c, 'lmass'), checkF(c, 'closed', 'Closed at take-off'), checkF(c, 'sense', 'Load switch: it can tell when something hangs from it'),
       el('p', { class: 'hint', text: 'A hook, gripper or electromagnet that a board running the Cargo task opens and closes (Computers tab). Half open, what it holds falls; closed again, it holds whatever loose thing has its top within reach of the hook, snapped under it. The buttons on the view (G) send the command, up the radio when the drone has one.' }));
   } else if (c.type === 'sensor') {
-    const mount = el('div', { class: 'subgrid' }, slider(c, 'mr'), slider(c, 'mp'), slider(c, 'my'));
+    const mount = physF(el('div', { class: 'subgrid' }, slider(c, 'mr'), slider(c, 'mp'), slider(c, 'my')));
     if (c.kind === 'imu') b.append(pos, mount, slider(c, 'rateImu'), slider(c, 'latImu'), slider(c, 'gyroNoise'), slider(c, 'gyroBias'), slider(c, 'gyroDrift'),
       selectF(c, 'gyroRange', 'Gyro range', [[250, '±250 °/s'], [500, '±500 °/s'], [1000, '±1000 °/s'], [2000, '±2000 °/s']]),
       slider(c, 'accNoise'), slider(c, 'accBias'), selectF(c, 'accRange', 'Accel range', [[2, '±2 g'], [4, '±4 g'], [8, '±8 g'], [16, '±16 g']]), slider(c, 'scaleErr'), slider(c, 'misalign'), slider(c, 'vib'));
@@ -271,15 +275,15 @@ function compBody(c) {
       });
       b.append(q, el('p', { class: 'hint', text: 'Antenna or marker position:' }), pos, slider(c, 'rateFix'), slider(c, 'lat'), slider(c, 'fixNoise'), slider(c, 'wander'), slider(c, 'velNoise'), checkF(c, 'dropout', 'Signal lost (no fix)'));
     }
-    b.append(slider(c, 'smass'), checkF(c, 'known', c.kind === 'baro' ? 'Controller knows the position' : c.kind === 'fix' ? 'Controller knows the antenna position' : 'Controller knows the position and mount'));
+    b.append(physF(slider(c, 'smass')), physF(checkF(c, 'known', c.kind === 'baro' ? 'Controller knows the position' : c.kind === 'fix' ? 'Controller knows the antenna position' : 'Controller knows the position and mount')));
   } else {
     b.append(el('p', { class: 'hint', text: 'Attachment point:' }), pos, slider(c, 'cable'), slider(c, 'mass'), checkF(c, 'known', 'Controller knows the static load'));
   }
-  if (typeof flightPhysicsFields === 'function') b.append(flightPhysicsFields(c));
+  if (typeof flightPhysicsFields === 'function') { const fp = physF(flightPhysicsFields(c)); b.append(fp); if (fp.deviceDraw && (c.type === 'mass' || c.type === 'sensor')) b.insertBefore(fp.deviceDraw, fp); }   // (a draw is the part's own, outside the physical model)
   if (c.type === 'motor' && (flightMotor(c).kind !== 'generic' || c.propPhysics?.rows)) {
     for (const key of ['tmax', 'tau']) b.querySelectorAll(`[id^="f-${c.id}-${key}"]`).forEach(input => { input.disabled = true; input.title = 'Derived by the fixed physical model'; });
   }
-  b.append(partMassFields(c));
+  b.append(physF(partMassFields(c)));
   return b;
 }
 function compCard(c) {

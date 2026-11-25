@@ -93,7 +93,7 @@ function flightPhysicsFields(c, onChanged) {
     if (isWing(c)) box.append(flightPolarEditor(c, changed, prefix));
     else box.append(num(c, 'dragCd', 'Body drag coefficient', .05, 3, .05, '', 1.05));
   }
-  box.append(num(c, 'deviceW', 'Additional powered-device draw', 0, 200, .1, 'W', 0));
+  const draw = num(c, 'deviceW', 'Additional powered-device draw', 0, 200, .1, 'W', 0); box.append(draw); box.deviceDraw = draw.node || draw;   // (electrical, not physical: Computers shows it with the part)
   return box;
 }
 function flightPolarEditor(c, changed, prefix) {

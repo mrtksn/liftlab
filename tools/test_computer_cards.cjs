@@ -68,8 +68,10 @@ try{
  // Deleting the core board leaves its duties empty; undo restores its devices and duty.
  await board(core).click();await page.locator('#bdel-'+core).click();await page.locator('#boardDeleteConfirm').click();assert(await page.evaluate(()=>!boardOf('core')&&computers().unassignedCore));await page.locator('#undoBtn').click();assert.strictEqual(await page.evaluate(()=>boardOf('core').id),core);assert.strictEqual(await page.evaluate(id=>partWiring(compById(id)).pin,motor),+pin);
  // Sensor drivers and shared I2C bus live in device and owning board views; a sensor's own part settings are there too.
- await device(imu).click();assert(!await page.locator('#compDetail .cpart [data-id="'+imu+'"]').count(),'Physical fields shown before asked for');
- await page.locator('#compDetail [data-phys="'+imu+'"]').click();assert(await page.locator('#compDetail .cpart [data-id="'+imu+'"]').isVisible());
+ await device(imu).click();   // the sensor's own settings in view, its physical ones (place, mount, mass) behind the button
+ assert(await page.locator('#f-'+imu+'-rateImu-n').isVisible()&&await page.locator('#f-'+imu+'-gyroNoise-n').isVisible(),'The sensor\'s own settings are hidden');
+ assert(!await page.locator('#f-'+imu+'-x-n').isVisible()&&!await page.locator('#f-'+imu+'-smass-n').isVisible()&&!await page.locator('#physics-'+imu+'-fold').isVisible(),'Physical fields shown before asked for');
+ await page.locator('#compDetail [data-phys="'+imu+'"]').click();assert(await page.locator('#f-'+imu+'-x-n').isVisible()&&await page.locator('#f-'+imu+'-smass-n').isVisible()&&await page.locator('#f-'+imu+'-rateImu-n').isVisible());
  await page.waitForFunction(()=>bench.ex<0.02&&gizmo.visible,null,{timeout:4000});   // put back together, Airframe's handles on the part
  const imuX=await page.evaluate(id=>compById(id).pos[0],imu),drag=await page.evaluate(()=>{const p=gizmo.position.clone(),a=gizmo.localToWorld(new THREE.Vector3(0.42,0,0)),r=vpEl.getBoundingClientRect(),s=v=>{const q=v.clone().project(camera);return {x:r.left+(q.x+1)/2*r.width,y:r.top+(1-q.y)/2*r.height};};return {a:s(a),b:s(p)};});
  await page.mouse.move(drag.a.x,drag.a.y);await page.mouse.down();const k=40/Math.hypot(drag.a.x-drag.b.x,drag.a.y-drag.b.y);await page.mouse.move(drag.a.x+(drag.a.x-drag.b.x)*k,drag.a.y+(drag.a.y-drag.b.y)*k,{steps:6});await page.mouse.up();
