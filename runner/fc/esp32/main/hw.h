@@ -152,6 +152,11 @@ int hw_tof_poll(int64_t now, float *range);
 int hw_pmon_poll(int64_t now, float volts[3], float amps[3]);
 int hw_mag_read(float mag[3]);
 void hw_gyro_calibrate(const float bias[3]);
+/* The accelerometer's gain, times k (the gain starts at 1). A cheap card can read 0.9 g or 1.1 g lying still, and the
+ * attitude estimate trusts the accelerometer's "up" only within 5% of 1 g: without this it would follow the gyro
+ * alone, drifting. hw_acc_gain is the gain now. */
+void hw_acc_calibrate(float k);
+float hw_acc_gain(void);
 /* The IMU stopped answering (or none was found at the start): resets the I2C bus (clocking out a chip that holds
  * SDA) and sets the IMU up again, its registers rewritten, else the chip reset (100 ms), else looked for again.
  * 0 when it answers again; msg says what was done or what's wrong. From the sensor task only. */

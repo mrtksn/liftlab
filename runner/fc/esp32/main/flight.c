@@ -184,6 +184,14 @@ static void pmon_pack(float out[12]) {
   float v[3], a[3], m[3]; pmon_get(v, a, m);
   for (int k = 0; k < 3; k++) { out[4 * k] = HW.pmon_use[k]; out[4 * k + 1] = v[k]; out[4 * k + 2] = a[k]; out[4 * k + 3] = m[k]; }
 }
+/* The accelerometer's reading lying still (acc, its average) is 1 g: its gain is set so (acc follows). Only for a
+ * reading within 25% of 1 g (more is a wrong range or a moving drone: said, and left as it is). The message in t. */
+static void acc_one_g(float acc[3], char *t, int n) {
+  const float g0 = 9.80665f, a = sqrtf(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+  if (!(a > 0.75f * g0 && a < 1.25f * g0)) { snprintf(t, n, "accelerometer: %.2f g lying still, not near 1 g (range wrong?): gain kept %.3f", (double)(a / g0), (double)hw_acc_gain()); return; }
+  const float k = g0 / a; hw_acc_calibrate(k); for (int i = 0; i < 3; i++) acc[i] *= k;
+  snprintf(t, n, "accelerometer: %.3f g lying still; gain now %.3f, so it reads 1 g", (double)(a / g0), (double)hw_acc_gain());
+}
 /* The gyro's offset: averaged over a second while the drone stands still (skipped if it's moving). 1 if measured,
  * with the accelerometer's average in acc. */
 static int gyro_offset(float acc[3]) {
@@ -193,8 +201,9 @@ static int gyro_offset(float acc[3]) {
     if (n < 400) { post("gyro offset not measured: the IMU missed readings (the estimator learns it)"); return 0; }
     double var = 0; float b[3]; for (int i = 0; i < 3; i++) { b[i] = (float)(s[i] / n); var += s2[i] / n - (double)b[i] * b[i]; }
     if (var < 3e-4) {
-      char t[80]; hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
+      char t[120]; hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
       for (int i = 0; i < 3; i++) acc[i] = (float)(sa[i] / n);
+      acc_one_g(acc, t, sizeof t); post(t);
       return 1;
     }
     post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
@@ -467,8 +476,8 @@ static void setting(const char *line) {
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
     if (memcmp(&HW, &HW_next, sizeof HW)) { strcpy(s, "after a reboot: "); hw_describe(&HW_next, s + 16, sizeof s - 16); report(s); }
     strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
-    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
-             (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", F.safety_off ? "OFF" : "on");
+    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); accelerometer gain %.3f; safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
+             (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", (double)hw_acc_gain(), F.safety_off ? "OFF" : "on");
     report(s);
     if (imu_recoveries) { snprintf(s, sizeof s, "IMU set up again %d times since start (it stopped answering: check its wiring and supply)", imu_recoveries); report(s); }
     return;
@@ -509,7 +518,8 @@ static void setting(const char *line) {
     }
     if (n < 30) { report("level: no IMU readings"); return; }
     if (sg / n > 0.05 * 0.05) { report("level: it's moving; keep it still and try again"); return; }
-    float g[4] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n), NAN }; level_ask(1, g);
+    float g[4] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n), NAN };
+    acc_one_g(g, s, sizeof s); report(s); level_ask(1, g);
     report("level: measured; the trim follows (until a reboot: level=boot measures it at every start)"); return;
   }
   if (!strcmp(line, "accel")) {

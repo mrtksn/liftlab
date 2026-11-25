@@ -64,6 +64,7 @@ static hw_config sensor_config;
 static int custom_imu,custom_baro,custom_mag;
 static int imu_kind, baro_kind;
 static float gyro_bias[3];
+static float acc_gain = 1;   /* the accelerometer's gain: makes it read 1 g at rest (hw_acc_calibrate) */
 static int wr(i2c_master_dev_handle_t d, uint8_t reg, uint8_t v) { uint8_t b[2] = { reg, v }; return i2c_master_transmit(d, b, 2, 5) == ESP_OK ? 0 : -1; }
 static int rd(i2c_master_dev_handle_t d, uint8_t reg, uint8_t *buf, int n) { return i2c_master_transmit_receive(d, &reg, 1, buf, (size_t)n, 5) == ESP_OK ? 0 : -1; }
 static i2c_master_dev_handle_t dev_at[128];   /* one handle an address: looking for the IMU again doesn't add more */
@@ -318,7 +319,13 @@ int hw_pmon_poll(int64_t now, float volts[3], float amps[3]) {
   step++; next = now + 3000; return 0;
 }
 
+static int imu_read_raw(fc_imu *m);
 int hw_imu_read(fc_imu *m) {
+  const int e = imu_read_raw(m);
+  if (!e) for (int i = 0; i < 3; i++) m->acc[i] *= acc_gain;
+  return e;
+}
+static int imu_read_raw(fc_imu *m) {
   uint8_t b[14];
   m->have_gyro = 0;
   if(custom_imu) { int e=custom_imu_read(m);if(!e && m->have_gyro) for(int i=0;i<3;i++) m->gyro[i]-=gyro_bias[i];return e; }
@@ -346,6 +353,8 @@ int hw_imu_read(fc_imu *m) {
   return -1;
 }
 void hw_gyro_calibrate(const float bias[3]) { for (int i = 0; i < 3; i++) gyro_bias[i] += bias[i]; }
+void hw_acc_calibrate(float k) { acc_gain *= k; }
+float hw_acc_gain(void) { return acc_gain; }
 
 /* the I2C steps: the bus reset, then the IMU set up again (its registers, else a chip reset), else looked for again */
 static int imu_recover_bus(hw_sensors *s, char *msg, int n) {

@@ -51,6 +51,9 @@ The IMU's card has **Level**: which way up the flight controller takes as level.
 - **As it sits at power-up** (`level=boot`, the default). The flight controller already keeps still for a second
   at power-up to measure the gyro's offset. It also takes the gravity it reads then as straight up. A sensor fitted
   slightly tilted is trimmed out; start it on a level surface. If it was moving, there is no trim and it says so.
+  The same still second sets the accelerometer's gain so that it reads exactly 1 g. A cheap card can read 0.9 g, and
+  the attitude estimate trusts its "up" only within 5% of 1 g, so without that gain it would follow the gyro alone
+  and drift. `level` measures the gain again. A card started while moving keeps a gain of 1 until then.
 - **The mount as set in Airframe** (`level=off`): no trim. A sensor fitted tilted shows as a tilt.
 - **A fixed trim** (`level=ROLL,PITCH`, degrees: roll −180…180, pitch −90…90, at most 170° from straight up): what a
   level drone reads. Use it to start on a slope, where "as it sits" would be wrong. Measure it once on level ground:
