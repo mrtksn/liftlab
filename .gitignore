@@ -28,3 +28,14 @@ runner/ground/esp32/build/
 runner/ground/esp32/sdkconfig
 runner/ground/esp32/sdkconfig.old
 captures/room-surveys/
+
+# Private and local-only: recordings, chat exports, tool state, caches, third-party documents
+/captures/
+/tools/claude-conversations/
+/smooth-q3-controller/
+/.claude/
+/.playwright-mcp/
+/target/
+/survey/target/
+/PDB-XT60_Manual_EN.pdf
+/docs/This video shows how to downgrade*.pdf
