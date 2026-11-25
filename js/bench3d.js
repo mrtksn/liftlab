@@ -6,7 +6,7 @@
 // they leave to the part they reach; the wiring view draws all of them. Nothing here is saved: it only reads the design
 // and its wiring (hardware.js), so every wire shown is one the install guide asks for.
 
-const bench = { on: false, want: true, wasEdit: false, view: null, hoverKey: null, hiWire: null, ex: 0, t0: 0,
+const bench = { on: false, want: true, wasEdit: false, view: null, phys: null, hoverKey: null, hiWire: null, ex: 0, exT: 0, t0: 0,
   items: new Map(), wires: [], group: null, ghosts: [], layer: null, labels: [], zoom: null, dirty: true, hoverBox: null, sig: '' };
 
 // What each kind of board looks like when it has no part of its own on the airframe [m], what Put it on the airframe
@@ -171,7 +171,7 @@ function benchSync() {
   benchBarSync();
 }
 function benchEnter() {
-  bench.on = true; bench.wasEdit = editMode; bench.ex = 0; bench.t0 = performance.now(); bench.dirty = true; bench.view = typeof COMP !== 'undefined' ? COMP.focus : null;
+  bench.on = true; bench.wasEdit = editMode; bench.ex = 0; bench.exT = 0; bench.phys = null; bench.t0 = performance.now(); bench.dirty = true; bench.view = typeof COMP !== 'undefined' ? COMP.focus : null;
   const r = running;   // (only the view changes: the flight, or the pause, carries on, so Live data and apps keep running)
   if (!editMode) { setEditMode(true); running = r; editWasRunning = r; renderRun(); } else { selectComp(null); setHover(null); $('#editBar').hidden = true; }
   if (cam.el < 0.35) cam.el = 0.55;
@@ -179,13 +179,14 @@ function benchEnter() {
   droneShown = '';   // redraw for the bench
 }
 function benchLeave() {
+  benchPhysEnd();
   bench.on = false; benchClearLabels(); bench.items = new Map(); bench.wires = []; bench.group = null; bench.ghosts = [];
   if (bench.hoverBox) bench.hoverBox.visible = false;
   if (editMode) { if (bench.wasEdit && !$('#paneAir').hidden) { $('#editBar').hidden = false; updateEditMsg(); } else { const r = bench.wasEdit ? editWasRunning : running; editWasRunning = r; setEditMode(false); } }
   droneShown = '';
 }
 // Called by setEditMode(false) from elsewhere (Run, a flight starting): the bench closes with it.
-function benchEditEnded() { if (!bench.on) return; bench.on = false; benchClearLabels(); bench.items = new Map(); bench.wires = []; bench.group = null; bench.ghosts = []; droneShown = ''; benchBarSync(); }
+function benchEditEnded() { if (!bench.on) return; bench.phys = null; bench.on = false; benchClearLabels(); bench.items = new Map(); bench.wires = []; bench.group = null; bench.ghosts = []; droneShown = ''; benchBarSync(); }
 function benchBarSync() {
   const bar = $('#benchBar'); if (!bar) return; bar.hidden = !bench.on;
   $('.view').classList.toggle('benching', bench.on && !(typeof liveOn === 'function' && liveOn()));   // (the drone card steps aside while the sim is paused for the bench)
@@ -197,12 +198,14 @@ function benchBarSync() {
 function benchMessage() {
   const v = bench.view;
   if (!v) return 'Exploded view · click a part or pick one in the list to close in on it.' + (running ? ' The drone flies on: Fly shows it.' : '');
+  if (bench.phys != null) { const c = compById(bench.phys); return (c ? c.name : 'The part') + ': drag the arrows or squares to move it, the rings to turn it. Shift for fine steps; Esc or Done when it sits right.'; }
   if (v.kind === 'wiring') return 'Every wire, from the pin it leaves to the part it reaches. Hover a wire to name it.';
   const it = benchFocusKeys(v).map(k => bench.items.get(k)).filter(Boolean)[0];
   return (it ? it.name : 'Selected') + ' · its wires are drawn; Esc or click empty space to step back.';
 }
 // The bench follows what the Computers list has open.
 function benchFocus(view) {
+  if (bench.phys != null && !(view && benchFocusKeys(view).includes('part:' + bench.phys) || view && view.kind === 'board' && boardBodyOf(computers().boards.find(b => b.id === view.id)) === compById(bench.phys))) benchPhysEnd();
   bench.view = view || null; bench.hiWire = null; bench.dirty = true;
   if (view) bench.want = true;
   benchSync();
@@ -356,7 +359,9 @@ function benchWorldPin(it, pin, toward) {
 function benchFrame(hub) {
   if (!bench.on || !bench.group) return null;
   const now = performance.now();
-  const target = Math.min(1, (now - bench.t0) / 550), was = bench.ex; bench.ex = benchEase(target);
+  const dt = Math.min(0.1, (now - (bench.lastT || now)) / 1000); bench.lastT = now;
+  const goal = bench.phys != null ? 0 : 1, was = bench.ex;   // (put back together while a part is placed: its handles act where it really is)
+  bench.exT = goal > bench.exT ? Math.min(goal, bench.exT + dt / 0.55) : Math.max(goal, bench.exT - dt / 0.4); bench.ex = benchEase(bench.exT);
   const moving = bench.ex !== was;
   const v = bench.view, wiring = !!(v && v.kind === 'wiring'), focus = new Set(benchFocusKeys(v));
   const related = new Set(focus), hiWires = new Set();
@@ -382,7 +387,6 @@ function benchFrame(hub) {
   // labels
   benchLabels(focus, related, hiWires, wiring);
   // camera: closes in on what's open (once, as it opens: after that the wheel is yours)
-  const dt = Math.min(0.1, (now - (bench.lastT || now)) / 1000); bench.lastT = now;
   if (bench.zoom) { cam.dist += (bench.zoom.to - cam.dist) * (1 - Math.exp(-dt * 9)); if (Math.abs(bench.zoom.to - cam.dist) < 0.004 || now - bench.zoom.t0 > 3000) bench.zoom = null; }
   const keys = focus.size ? [...focus] : wiring ? bench.wires.flatMap(w => [w.a.key, w.b.key]) : [...bench.items.values()].filter(i => i.explode || !v).map(i => i.key);
   const box = new THREE.Box3();
@@ -540,7 +544,7 @@ function benchClick(e) {
 if (typeof vpEl !== 'undefined') for (const t of ['wheel', 'pointerdown', 'touchstart']) vpEl.addEventListener(t, () => { bench.zoom = null; }, { passive: true });   // (your own zoom wins)
 window.addEventListener('keydown', e => {
   if (!bench.on || e.defaultPrevented || typingIn(e.target)) return;
-  if (e.code === 'Escape' && !document.querySelector('dialog[open]')) { e.preventDefault(); if (bench.view && typeof compFocus === 'function') compFocus(null); }
+  if (e.code === 'Escape' && !document.querySelector('dialog[open]')) { e.preventDefault(); if (bench.phys != null) { benchPhys(null); return; } if (bench.view && typeof compFocus === 'function') compFocus(null); }
 });
 
 /* ───────── the bar over the view ───────── */
@@ -550,3 +554,20 @@ document.querySelectorAll('#benchBar [data-bench-mode]').forEach(b => b.addEvent
 }));
 $('#benchDone')?.addEventListener('click', () => { bench.want = false; benchSync(); if (typeof renderComputers === 'function') renderComputers(true); });
 $('#addElecGo')?.addEventListener('click', () => { $('#addPartDlg').close(); bench.want = true; UI_PANELS.editor.select('form'); requestAnimationFrame(() => $('#compAddMenu button')?.click()); });
+
+/* ───────── placing a part: Airframe's handles, on the assembled design ───────── */
+// Edit physical properties puts the exploded view back together and gives the part Edit's handles (arrows move along
+// an axis, squares within a plane, rings turn it), with its fields in the list. Done, another row or Esc ends it.
+function benchPhys(id) {
+  const c = id != null ? compById(id) : null;
+  if (!c || !bench.on) { benchPhysEnd(); if (typeof renderComputers === 'function') renderComputers(true); return; }
+  bench.phys = c.id; edit.sel = c.id; edit.hover = null; edit.refocus = true; bench.dirty = true;
+  bench.zoom = { to: Math.min(0.6, Math.max(0.3, cam.dist)), t0: performance.now() };
+  if (typeof renderComputers === 'function') renderComputers(true);
+  benchBarSync();
+}
+function benchPhysEnd() {
+  if (bench.phys == null) return;
+  if (edit.drag) endDrag();
+  bench.phys = null; edit.sel = null; bench.dirty = true; benchBarSync();
+}

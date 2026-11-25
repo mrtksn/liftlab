@@ -369,10 +369,15 @@ function compAddPick(v){
   const c=mkMass('Electronic part',0.03,0,frameDims()[2]/2+0.008,{mass:0.005,size:[0.03,0.02,0.006]});c.elec=true;c.known=true;cfg.comps.push(c);undoKey='addpart';structural();compFocus({kind:'part',id:c.id});
 }
 // A part's own settings (where it sits, what it weighs, its shape), as in Airframe.
+// A part's physical properties (where it sits, how it's turned, its mass and size), behind a button: it puts the view
+// back together and gives the part Airframe's handles, its fields under them.
 function partEditor(c,title){
   if(!c||typeof compCard!=='function')return el('span');
-  openSet.add(c.id);
-  return el('section',{class:'cpart'},el('h3',{text:title||'On the airframe'}),compCard(c));
+  const on=bench.on&&bench.phys===c.id,P=c.pos.map(v=>(v*1000).toFixed(0)).join(', ');
+  const btn=UI.button({class:'btn'+(on?' primary':''),'data-phys':c.id,text:on?'Done':'Edit physical properties…',title:on?'Back to the exploded view':'Place it on the assembled design with handles, and edit its mass and size',onclick:()=>{if(on)benchPhys(null);else{bench.want=true;benchSync();benchPhys(c.id);}}});
+  const box=el('section',{class:'cpart'},el('h3',{text:title||'On the airframe'}),el('div',{class:'cpart-head'},el('span',{class:'computer-meta',text:gramsOf(c)+' · at ('+P+') mm'}),btn));
+  if(on){openSet.add(c.id);box.append(el('p',{class:'hint',text:'Drag the arrows or squares in the view to move it, the rings to turn it (Shift: fine steps). Its fields are below.'}),compCard(c));}
+  return box;
 }
 function renderPartDetail(box,C,id){
   const c=compById(id);if(!c){detClose();return;}detTitle(c.name);

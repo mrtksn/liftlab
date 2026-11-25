@@ -31,7 +31,7 @@ try{
     close(Number(document.getElementById('battery-physics-heatCapacity-n').value),900*battery.mass,1e-2);
     undoStep();battery=cfg.comps.find(c=>c.type==='mass'&&c.battery);close(battery.mass,oldMass);close(battCfg().capacity,oldCapacity);
     redoStep();battery=cfg.comps.find(c=>c.type==='mass'&&c.battery);close(battery.mass,oldMass*2);
-    compFocus({kind:'power',id:battery.id});editNumber(`f-${battery.id}-mass`,.25);   // (a battery's own part is in Computers → Power)assert(battery.batteryAutoMass===false && !document.getElementById(`physics-${battery.id}-auto`).checked,'Manual battery override missing');
+    compFocus({kind:'power',id:battery.id});benchPhys(battery.id);editNumber(`f-${battery.id}-mass`,.25);   // (a battery's own part is in Computers → Power)assert(battery.batteryAutoMass===false && !document.getElementById(`physics-${battery.id}-auto`).checked,'Manual battery override missing');
     editNumber('batt-capacity',oldCapacity);close(battery.mass,.25);passed.push('Capacity/weight, undo/redo and manual battery override');
     await settle('quadx');compFocus(null);UI_PANELS.editor.select('air');let c=actuators()[0];const unchanged=designSnap();openSet.add(c.id);renderComps();assert(designSnap()===unchanged,'Inspecting motor changed design');
     const select=document.getElementById(`physics-${c.id}-kind`);select.value='brushless';select.dispatchEvent(new Event('change',{bubbles:true}));

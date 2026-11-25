@@ -1416,3 +1416,4 @@ html.phone .part-import-panel,html.phone .world-panel.animation-panel{top:auto;m
 .bench-wire{translate:-50% -130%;font-family:var(--f-mono);font-size:var(--text-xs);color:var(--ink);background:var(--panel);border:1px solid var(--pd-c);padding:1px var(--space-6);border-radius:var(--radius-control)}
 .view.benching #liveBar{display:none}
 .view.benching .onboard-cam{display:none}
+.cpart-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-8);flex-wrap:wrap}

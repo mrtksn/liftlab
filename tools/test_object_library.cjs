@@ -52,7 +52,7 @@ try{
  await page.locator('#partImportAdd').click();await page.waitForFunction(()=>!partImport.active);
  let r=await page.evaluate(()=>{const c=cfg.comps.find(c=>c.model);return {battery:isBattery(c),fileId:c.model.fileId,mass:c.mass,drag:c.dragCd,points:c.points.length,collision:c.model.collision,shape:fleetShapesCurrent().boxes.some(b=>b.mesh&&b.part===c)};});assert(r.battery&&r.fileId===assetId&&r.mass===.31&&r.drag===1.7&&r.points===2&&r.collision==='mesh'&&r.shape);
  const original=await page.evaluate(()=>designSnap());
- await page.evaluate(()=>compFocus({kind:'power',id:cfg.comps.find(c=>c.model).id}));   // (a battery is in Computers → Power)
+ await page.evaluate(()=>{const id=cfg.comps.find(c=>c.model).id;compFocus({kind:'power',id});benchPhys(id);});   // (a battery is in Computers → Power, its part behind Edit physical properties)
  await page.locator('#objectEditCopy-'+await page.evaluate(()=>cfg.comps.find(c=>c.model).id)).click();await page.waitForFunction(()=>partImport.draft&&!partImport.busy);await page.locator('#partImportMass').fill('9');await page.locator('#partImportMass').dispatchEvent('change');await page.locator('#partImportCancel').click();assert.strictEqual(await page.evaluate(()=>designSnap()),original,'Canceled edits mutated the drone');
  // The copy editor preserves mounting relationships and commits only on Save.
  const copyId=await page.evaluate(()=>cfg.comps.find(c=>c.model).id);

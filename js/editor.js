@@ -277,7 +277,7 @@ function showDragReadout(c) {
 function editPointerDown(e) {
   if (worldEditOn()) return worldPointerDown(e);   // (the world's objects: world-edit.js)
   if (!editMode || e.button !== 0) return false;
-  if (bench.on) { edit.down = { x: e.clientX, y: e.clientY }; return false; }
+  if (bench.on) { if (bench.phys != null) { const h = pickHandle(e); if (h && startDrag(h, e)) return true; } edit.down = { x: e.clientX, y: e.clientY }; return false; }
   if (partImport.active || partEditPick) { edit.down = { x: e.clientX, y: e.clientY }; return false; }
   const h = pickHandle(e);
   if (h && startDrag(h, e)) return true;
@@ -287,7 +287,11 @@ function editPointerDown(e) {
 function editPointerMove(e, orbiting) {
   if (worldEditOn()) return worldPointerMove(e, orbiting);
   if (!editMode) return false;
-  if (bench.on) return benchPointerMove(e, orbiting);
+  if (bench.on) {
+    if (edit.drag) { if (e.pointerId === edit.drag.pointerId) dragTo(e); return true; }
+    if (bench.phys != null && !orbiting && pickHandle(e)) { vpEl.style.cursor = 'grab'; $('#pickTip').hidden = true; return false; }
+    return benchPointerMove(e, orbiting);
+  }
   if (partImport.active || partEditPick) return false;
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)dragTo(e); return true; }
   if (orbiting) { setHover(null); return false; }
@@ -305,6 +309,7 @@ function editPointerMove(e, orbiting) {
 function editPointerUp(e) {
   if (worldEditOn()) return worldPointerUp(e);
   if (!editMode) return false;
+  if (bench.on && edit.drag) { if (e.pointerId === edit.drag.pointerId) endDrag(); return true; }
   if (bench.on) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) benchClick(e); edit.down = null; return false; }
   if (partImport.active) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partImportPick(e); edit.down = null; return true; }
   if (partEditPick) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partPickSurface(e); edit.down = null; return true; }
@@ -319,7 +324,7 @@ function updateEditView() {
   partPhysicalView();
   if (!gizmo || worldEditView()) return;
   if (partImport.active) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
-  if (!editMode || bench.on) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }
+  if (!editMode || (bench.on && (bench.phys == null || bench.ex > 0.02))) { gizmo.visible = travelG.visible = hoverBox.visible = selBox.visible = false; return; }   // (the bench: only while a part is placed, once it's back together)
   if (edit.sel != null && !compById(edit.sel)) selectComp(null);
   const c = compById(edit.sel), g = c && pickGroups.get(c.id);
   selBox.visible = !!g; if (g) boxOf(g, selBox.box);
