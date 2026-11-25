@@ -263,7 +263,7 @@ function rebuildDrone() {
   droneShown = cargo.rev + ':' + (typeof editMode !== 'undefined' && editMode);
   const comps = viewComps();
   disposeGroup(drone); parts = new Map(); pickGroups = new Map(); jointGroups = new Map(); rangeVis = new Map();
-  { const d = frameDims(), fm = new THREE.Mesh(frameWing() ? airfoilGeo(d[0], d[1], d[2]) : new THREE.BoxGeometry(...d), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); drone.add(fm); }   // the hub, or the body as a wing
+  { const d = frameDims(), fm = new THREE.Mesh(frameWing() ? airfoilGeo(d[0], d[1], d[2]) : new THREE.BoxGeometry(...d), mats.frame); fm.setRotationFromMatrix(m4of(frameRot())); fm.userData.frame = true; drone.add(fm); }   // the hub, or the body as a wing
   {   // the front: a red arrow on the hub (red as the X axis), pointing forward
     const d = frameDims(), hx = d[0] / 2, top = (frameWing() ? d[2] * 0.6 : d[2] / 2) + 0.002, L = Math.max(0.05, hx * 0.9), w = Math.min(0.03, Math.max(0.016, d[1] * 0.18));
     const sh = new THREE.Shape(); sh.moveTo(hx + 0.03, 0); sh.lineTo(hx + 0.03 - L, w); sh.lineTo(hx + 0.03 - L * 0.62, 0); sh.lineTo(hx + 0.03 - L, -w); sh.closePath();

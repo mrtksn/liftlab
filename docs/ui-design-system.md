@@ -83,7 +83,7 @@ World view (no selected drone) hides both drone sidebars and expands the canvas.
 
 ## Design sidebar
 
-Airframe holds the name, design actions and the airframe's parts (the electronics are in Computers); Tune holds body, steering, battery, controller tuning and flight physics. Keep existing field IDs and controller bindings when moving controls between tabs. Native design dialogs provide Save as (new copy), file import/export and saved-library management. The Add a part dialog groups the palette; after choosing a kind it closes before the existing attachment menu opens. Component editors are an accordion; attachment-tree folding is independent. The sticky design-history toolbar belongs to the sidebar and hides on Ground/AI. The viewport HUD/edit bar is unchanged.
+Airframe holds the name, design actions and the airframe's parts (the electronics are in Computers), the frame first as a card like a part (shape, size, mass, centre of mass and attachment points; a click on the frame in Edit opens it); Tune holds body, steering, battery, controller tuning and flight physics. Keep existing field IDs and controller bindings when moving controls between tabs. Native design dialogs provide Save as (new copy), file import/export and saved-library management. The Add a part dialog groups the palette; after choosing a kind it closes before the existing attachment menu opens. Component editors are an accordion; attachment-tree folding is independent. The sticky design-history toolbar belongs to the sidebar and hides on Ground/AI. The viewport HUD/edit bar is unchanged.
 
 ## Computers sidebar and the 3D bench
 

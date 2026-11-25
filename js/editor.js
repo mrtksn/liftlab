@@ -193,6 +193,7 @@ function pickComp(e) {
   rayFrom(e);
   for (const h of raycaster.intersectObject(drone, true)) {
     if (!solidVisible(h.object)) continue;
+    if (h.object.userData.frame) return 'frame';   // (the frame: its card in the parts list)
     let o = h.object; while (o && o.userData.compId == null && o !== drone) o = o.parent;
     return o && o.userData.compId != null ? o.userData.compId : null;
   }
@@ -297,10 +298,11 @@ function editPointerMove(e, orbiting) {
   if (orbiting) { setHover(null); return false; }
   const h = pickHandle(e);
   if (h) { vpEl.style.cursor = 'grab'; setHover(null); return false; }
-  const id = pickComp(e); setHover(id);
+  const id = pickComp(e); setHover(id === 'frame' ? null : id);
   vpEl.style.cursor = id != null ? 'pointer' : '';
   if (id != null) {
-    const c = compById(id), tip = $('#pickTip'), r = $('.view').getBoundingClientRect();
+    const c = id === 'frame' ? { name: 'Frame', type: 'frame' } : compById(id), tip = $('#pickTip'), r = $('.view').getBoundingClientRect();
+    if (id === 'frame') { tip.textContent = 'Frame · ' + frameSummary() + ' · click to edit'; tip.hidden = false; tip.style.left = (e.clientX - r.left + 14) + 'px'; tip.style.top = (e.clientY - r.top + 12) + 'px'; return false; }
     tip.textContent = `${c.name} · ${tagOf(c)}` + (c.type === 'motor' ? ` · ${c.push ? 'pushes' : 'pulls'} · ${c.spin > 0 ? 'CCW' : 'CW'}` : ''); tip.hidden = false;
     tip.style.left = (e.clientX - r.left + 14) + 'px'; tip.style.top = (e.clientY - r.top + 12) + 'px';
   }
@@ -314,7 +316,11 @@ function editPointerUp(e) {
   if (partImport.active) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partImportPick(e); edit.down = null; return true; }
   if (partEditPick) { if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) partPickSurface(e); edit.down = null; return true; }
   if (edit.drag) { if(e.pointerId===edit.drag.pointerId)endDrag(); return true; }
-  if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) { edit.refocus = true; selectComp(pickComp(e)); }   // a click (not a drag) centres the view on what it picks
+  if (edit.down && Math.hypot(e.clientX - edit.down.x, e.clientY - edit.down.y) < 5) {   // a click (not a drag) centres the view on what it picks
+    const id = pickComp(e);
+    if (id === 'frame') { selectComp(null); openSet.clear(); openSet.add('frame'); renderComps(); $('#frameHead')?.scrollIntoView({ block: 'nearest' }); }   // the frame: open its card
+    else { edit.refocus = true; selectComp(id); }
+  }
   edit.down = null; return false;
 }
 

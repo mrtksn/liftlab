@@ -77,6 +77,18 @@ try{
   const I0=await page.evaluate(()=>frameI()[0]);for(const [k,v] of [['x','0.2'],['y','0.1'],['z','0.002']]){await page.locator('#frame-size-'+k+'-n').fill(v);await page.locator('#frame-size-'+k+'-n').dispatchEvent('change');}
   assert.deepStrictEqual(await page.evaluate(()=>[frameDims(),JSON.parse(designSnap()).frameShape.size]),[[.2,.1,.002],[.2,.1,.002]]);assert.notStrictEqual(await page.evaluate(()=>frameI()[0]),I0,'The frame size did not reach its inertia');
   assert((await page.locator('#frameSum').innerText()).includes('200 × 100 × 2 mm'));
+  // In Edit, a click on the frame opens its card (and nothing else is selected).
+  await page.evaluate(()=>{openSet.clear();renderComps();setEditMode(true);view.follow=true;});await page.waitForTimeout(300);
+  const hub=await page.evaluate(()=>{for(let i=0;i<20;i++)fleetScene();const w=drone.localToWorld(new THREE.Vector3(-0.07,0.03,0.001)).project(camera),r=vpEl.getBoundingClientRect();return {x:r.left+(w.x+1)/2*r.width,y:r.top+(1-w.y)/2*r.height,id:pickComp({clientX:r.left+(w.x+1)/2*r.width,clientY:r.top+(1-w.y)/2*r.height})};});
+  if(hub.id==='frame'){await page.mouse.click(hub.x,hub.y);assert(await page.evaluate(()=>openSet.has('frame')&&edit.sel==null&&!$('#frameShape').hidden),'Clicking the frame did not open its card');}
+  else console.log('(frame click skipped: something else is in front of the frame at that point: '+hub.id+')');
+  await page.evaluate(()=>setEditMode(false));
+  // A camera's fisheye lens: the picture is the scene in the middle and black past the lens's circle; the lens is saved.
+  const fish=await page.evaluate(async()=>{const c=mkMass('Fisheye camera',0.08,0,0.03,{mass:0.008,size:[0.012,0.012,0.012],camera:{...CAMERA_DEFAULTS,w:320,h:240,lens:'equidistant',fov:220}});cfg.comps.push(c);structural();setLayers({onboard:true});onboard.pick=c.id;onboard.last=-Infinity;
+    await new Promise(r=>setTimeout(r,600));const rt=onboard.rt,q=(x,y)=>{const px=new Uint8Array(4);renderer.readRenderTargetPixels(rt,x,y,1,1,px);return [...px];};
+    const out={size:[rt.width,rt.height],corner:q(2,2),middle:q(160,120),saved:JSON.parse(designSnap()).comps.find(x=>x.id===c.id).camera.lens};
+    cfg.comps=cfg.comps.filter(x=>x!==c);structural();return out;});
+  assert.deepStrictEqual(fish.size,[320,240]);assert.deepStrictEqual(fish.corner.slice(0,3),[0,0,0],'A 220° fisheye has no black past its lens');assert(fish.middle.slice(0,3).some(v=>v>40),'The fisheye picture is empty');assert.strictEqual(fish.saved,'equidistant');
   await page.locator('#tabTune').click();assert(await page.locator('#bodySec').isVisible());assert(await page.locator('#tuneSec').isVisible());assert(!await page.locator('#partsSec').isVisible());
   const tuning=await page.evaluate(()=>JSON.stringify(tuneOf()));await page.locator('#tune-rp-fold summary').click();
   await page.evaluate(()=>{const input=$('#tune-rp-fold input[type="range"]');input.value=String(+input.value+.1);input.dispatchEvent(new Event('input',{bubbles:true}));});

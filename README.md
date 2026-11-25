@@ -411,7 +411,9 @@ A design is the airframe: frame mass, every part, the steering mode, its flight 
 - **Flight:** trail, estimate, target, onboard camera.
 - **Scene:** ground grid, readouts, legend.
 
-**Onboard camera.** Any rigid mass can carry a camera: in its part card, **It carries a camera** sets its field of view, picture size, frame rate and where it looks (along the part's forward axis, tilted up or down and panned). The selected drone's camera picture shows top right of the view, at the camera's own resolution and frame rate in simulated time, without the force arrows and markers. **⇄** steps through the drone's cameras, **×** (or Show → Onboard camera) hides it. Lens distortion, exposure, motion blur, compression and the video link's delay are not simulated.
+**Frame.** The first card in Airframe's parts is the frame: a box (a hub, or a plate the parts are fixed to) with its size X/Y/Z and mass, or a wing; its centre of mass and attachment points. Its size sets its inertia, the corners it lands on, its collisions and the rotors' wash on it. Click the frame in Edit to open it.
+
+**Onboard camera.** Any rigid mass can carry a camera: in its part card, **It carries a camera** sets its lens (normal, or a fisheye: equidistant, equisolid or stereographic, up to 240° across with black past the lens circle), field of view, picture size, frame rate and where it looks (along the part's forward axis, tilted up or down and panned). The selected drone's camera picture shows top right of the view, at the camera's own resolution and frame rate in simulated time, without the force arrows and markers. **⇄** steps through the drone's cameras, **×** (or Show → Onboard camera) hides it. Lens distortion, exposure, motion blur, compression and the video link's delay are not simulated.
 
 Presets switch everything back to the defaults, everything on, or just the drone. The button counts how many switches differ from the defaults, the legend lists only what's shown, and your choice is kept in this browser.
 
