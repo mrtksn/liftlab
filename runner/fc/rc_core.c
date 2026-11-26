@@ -140,3 +140,25 @@ void rc_unpack(rc_input *in, const float *p, int n, double t) {
     for (int i = 0; i < 6; i++) in->cmd_v[i] = p[k + i];
   }
 }
+
+int rc_who_step(rc_who *W, int want_nav, int pos_ok, float dt, nav_state *N, const char **msg) {
+  *msg = 0;
+  if (!W->started) { W->started = 1; W->sticks = 1; W->good = W->bad = 0; }
+  if (pos_ok) { W->good += dt; W->bad = 0; } else { W->bad += dt; W->good = 0; }
+  if (!W->sticks && (!want_nav || W->bad >= 0.3f)) {
+    W->sticks = 1;
+    if (want_nav) *msg = "position lost: the sticks fly it (they lean it; the throttle's middle holds the height)";
+  } else if (W->sticks && want_nav && W->good >= 1.0f) {
+    W->sticks = 0; for (int i = 0; i < 3; i++) N->iPos[i] = 0;
+    *msg = "position hold: holding here (the sticks move it)";
+  }
+  return W->sticks;
+}
+
+void rc_who_sp(rc_pilot *P, const nav_out *o, int armed, nav_sp *sp) {
+  sp->fly = armed;
+  if (!armed) return;
+  for (int i = 0; i < 3; i++) { sp->target[i] = o->p[i]; sp->vref[i] = 0; }
+  if (sp->target[2] < BOX_ZLO) sp->target[2] = BOX_ZLO;
+  if (P) { for (int i = 0; i < 3; i++) { P->target[i] = sp->target[i]; P->vref[i] = 0; } P->have_target = 1; }
+}

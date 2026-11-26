@@ -39,12 +39,14 @@ jobs:
         run: sh tools/test_hardware_tuning.sh
       - run: node tools/test_wasm_meter.js
       - run: python3 tools/sync_driver_presets.py --check
-      - name: Optical flow from the downward camera, and its calibration against the gyro
+      - name: Optical flow from the downward camera, its calibration, and who flies it (navigation or sticks)
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner/fc runner/fc/test_flow.c runner/fc/flow_core.c -lm -o /tmp/test-flow
           /tmp/test-flow
           cc -Wall -Wextra -Werror -fsanitize=undefined runner/pi/test_flow_in.c runner/pi/flow_in.c -lm -o /tmp/test-flow-in
           /tmp/test-flow-in
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_who.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-who
+          /tmp/test-who
       - name: Sensor driver register tests
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined tools/test_accel_readout.c -lm -o /tmp/test-accel-readout

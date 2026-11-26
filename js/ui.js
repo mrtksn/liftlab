@@ -665,6 +665,7 @@ function renderEst() {
   if (!has('mag')) chip('No compass: heading drifts', 'warn');
   const fs = est.flowState;
   if (fs === 'tracking') chip('Optical flow tracking', 'good', 'sensor');
+  else if (fs === 'tracking, above the rangefinder') chip('Optical flow tracking: above the rangefinder, on the barometer\'s height', 'good', 'sensor');
   else if (fs === 'range only') chip('Optical flow: nothing to track (texture or light)', 'warn', 'sensor');
   else if (fs === 'out of range') chip('Optical flow: out of rangefinder range', 'warn', 'sensor');
   for (const c of sensorsOf('tof')) {

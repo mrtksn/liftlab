@@ -5,7 +5,7 @@ const DEVICE_PROFILES = {
   baro: { auto: { label: 'Auto-detect BMP180 / BMP280 / BME280', id: 0, addresses: [0,0x77,0x76] }, bmp280: { label: 'BMP280 / BME280', id: 1, addresses: [0x76,0x77] }, bmp180: { label: 'BMP180 / BMP085', id: 2, addresses: [0x77] } },
   mag: { none: { label: 'No hardware driver', id: -1, addresses: [0] }, hmc: { label: 'HMC5883L', id: 1, addresses: [0x1e] } },
   fix: { nmea: { label: 'NMEA GPS → Pi serial port', id: 0, addresses: [] } },
-  flow: { sim: { label: 'Simulation only (no hardware driver)', id: -1, addresses: [] } },
+  flow: { sim: { label: 'Simulation only (no hardware driver)', id: -1, addresses: [] }, picam: { label: 'Pi camera looking down (dfb_flow)', id: 1, addresses: [] } },
   tof: { tof250: { label: 'TOF250', id: 1, addresses: [0x52, ...Array.from({length:112},(_,i)=>i+8).filter(a=>a!==0x52)] } },
 };
 const I2C_SENSOR_KINDS = ['imu', 'baro', 'mag', 'tof'];
@@ -443,7 +443,13 @@ function hardwarePlan(C, comps, b) {
         if (!tofBoardSupported(b)) errors.push(c.name + ': assign TOF250 to a Raspberry Pi or the flight-core ESP32');
       } else if (I2C_SENSOR_KINDS.includes(c.kind) && b.id !== core?.id) errors.push(c.name + ': this sensor driver runs on the flight-core board');
       if(c.kind==='fix' && (ESP_PROFILES[b.kind] || !b.tasks.includes('nav'))) errors.push(c.name+': real NMEA GPS needs the navigation Pi');
-      if (c.kind === 'flow') warnings.push(c.name + ': optical-flow hardware driver is not implemented');
+      if (c.kind === 'flow' && p.driver !== 'picam') warnings.push(c.name + ': simulation only: choose Pi camera for a camera on the navigation\'s Pi');
+      if (c.kind === 'flow' && p.driver === 'picam') {
+        if (!b.kind.startsWith('pi') || !b.tasks.includes('nav')) errors.push(c.name + ': the Pi camera\'s flow (dfb_flow) runs on the Pi with the navigation');
+        const r = Number(p.radPx ?? 0.004), f = Number(p.fps ?? 30);
+        if (!(r > 0.0002 && r < 0.05)) errors.push(c.name + ': lens: radians per pixel 0.0002 to 0.05 (flowcal measures it)');
+        if (!(f >= 5 && f <= 90)) errors.push(c.name + ': frames a second: 5 to 90');
+      }
       if (c.kind === 'mag' && p.driver === 'none') warnings.push(c.name + ': simulated compass only; choose HMC5883L for hardware');
       if(c.kind==='mag' && p.driver!=='none') { for(const [key,dflt] of [['bias','0,0,0'],['scale','1,1,1']]) { const v=String(p[key]||dflt).split(',').map(Number);if(v.length!==3 || v.some(n=>!Number.isFinite(n) || (key==='scale' && (n<0.01 || n>100)))) errors.push(c.name+': invalid compass '+key); } }
       if (c.kind === 'imu' && p.driver === 'lis') warnings.push(c.name + ': LIS3DH has no gyro and cannot arm for flight');

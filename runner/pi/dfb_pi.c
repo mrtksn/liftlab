@@ -441,7 +441,7 @@ static const char *bench_said(const float *b, int n) {
 static void stick_line(const char *s, int angle_mode, int radio_has_it, int radio_armed, int n_mot, char (*names)[16], float *c, double *ct, float *bench, int *bench_n, double t, int fc_flying, char *reply, size_t rn) {
   float a[5] = { 0, 0, 0, 0, 0 }; int motor = s[0] == 'm', multi = !strncmp(s, "motors", 6);
   const char *arg = s + (multi ? 6 : motor ? 5 : 6); while (*arg == ' ') arg++;
-  if (!angle_mode) { snprintf(reply, rn, "%s: only in angle mode (dfb_pi --no-navigation); here the navigation flies it (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
+  if (!angle_mode) { snprintf(reply, rn, "%s: only while the sticks fly it (the fly switch off, or angle mode); now the navigation holds its position (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
   /* With the radio's channels coming, a motor test still goes while its pilot is disarmed (LiftLab's Motor thrust
    * test, connected: its own channels keep coming); arming takes it back. The sticks stay the radio's. */
   if (radio_has_it && (!motor || radio_armed)) { snprintf(reply, rn, "%s: the radio's pilot has it (its channels come%s); nothing taken from here", motor ? "motor" : "sticks", motor ? ", armed" : ""); return; }
@@ -658,6 +658,8 @@ int main(int argc, char **argv) {
   static char esp_said[160]; double esp_said_t = -1e9;   /* what the ESP32 said last (an event or a report): status shows it */
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
+  static rc_who WHO; int sticks = 1;   /* who flies it (rc_core.h rc_who): the sticks as in angle mode (from the start: a
+                                        * restart in the air passes the radio's sticks on), or the navigation */
   static flow_in FI; flow_in_init(&FI);   /* the downward camera's optical flow: dfb_flow's readings to the command port (flow_in.h) */
   static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
   for (;;) {
@@ -775,7 +777,7 @@ int main(int argc, char **argv) {
             if (!*a) lift_said(&LFT, reply, (int)sizeof reply);
             else if (!strcmp(a, "stop")) { lift_stop(&LFT, "asked to"); lift_said(&LFT, reply, (int)sizeof reply); }
             else if (sscanf(a, "%f %f %f %f", &lb, &lt2, &lr, &ls) < 2) snprintf(reply, sizeof reply, "lifttest BASE TOP [RATE STEP] (e.g. lifttest 0.3 0.85: lift-off only; STEP 0.02: pulses above it too), lifttest stop, or lifttest (how it goes)");
-            else if (!no_nav) snprintf(reply, sizeof reply, "lifttest: only in angle mode (dfb_pi --no-navigation)");
+            else if (!sticks) snprintf(reply, sizeof reply, "lifttest: only while the sticks fly it (the fly switch off)");
             else if (!n_mot) snprintf(reply, sizeof reply, "lifttest: no airframe (--airframe, or Upload design)");
             else if (armed || radio_armed) snprintf(reply, sizeof reply, "lifttest: disarm first");
             else if (!have_learn && !have_super) snprintf(reply, sizeof reply, "lifttest: needs the flight core's telemetry, which comes while the learning or the supervisor runs");
@@ -790,7 +792,7 @@ int main(int argc, char **argv) {
             if (!*a) spin_said(&SPN, reply, (int)sizeof reply);
             else if (!strcmp(a, "stop")) { spin_stop(&SPN, "asked to"); spin_said(&SPN, reply, (int)sizeof reply); }
             else if ((k3 = sscanf(a, "%f %f %f", &sb, &ss, &sh)) < 2) snprintf(reply, sizeof reply, "spintest BASE STEP [HALF] (e.g. spintest 0.3 0.05), spintest stop, or spintest (how it goes)");
-            else if (!no_nav) snprintf(reply, sizeof reply, "spintest: only in angle mode (dfb_pi --no-navigation)");
+            else if (!sticks) snprintf(reply, sizeof reply, "spintest: only while the sticks fly it (the fly switch off)");
             else if (!n_mot) snprintf(reply, sizeof reply, "spintest: no airframe (--airframe, or Upload design) to say which way each motor turns");
             else if (armed || radio_armed) snprintf(reply, sizeof reply, "spintest: disarm first");
             else if (!have_learn && !have_super) snprintf(reply, sizeof reply, "spintest: needs the flight core's telemetry, which comes while the learning or the supervisor runs");
@@ -806,7 +808,7 @@ int main(int argc, char **argv) {
               if (!idle) { spin_stop(&SPN, "another motor or stick command (arming, a throttle, a motor test)"); lift_stop(&LFT, "another motor or stick command (arming, a throttle, a motor test)"); }
             }
             fc_cmd rsc; const int radio_on = radio_here && !rc_stick_cmd(&RCI, t, &rsc);
-            stick_line(s, no_nav, radio_on, radio_on && rsc.arm, n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
+            stick_line(s, sticks, radio_on, radio_on && rsc.arm, n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
           } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
             float hd = P.sp.heading, c = cosf(hd), sn = sinf(hd), spot[3] = { px - (c * hook[0] - sn * hook[1]), py - (sn * hook[0] + c * hook[1]), pz - hook[2] + 0.03f };
             if (!P.fly) snprintf(reply, sizeof reply, "pickup: take off first");
@@ -822,7 +824,7 @@ int main(int argc, char **argv) {
             if (strncmp(s, "status", 6))
               fleet_engage(&FL, 0, &N, &o, "another command");
           }
-          if (!strncmp(s, "status", 6) && no_nav) {           /* angle mode: what the pilot's sticks say, and the ESP32's state (not the navigation's pilot) */
+          if (!strncmp(s, "status", 6) && sticks) {           /* angle mode: what the pilot's sticks say, and the ESP32's state (not the navigation's pilot) */
             fc_cmd sc; int have = radio_here && !rc_stick_cmd(&RCI, t, &sc);
             if (have) snprintf(reply, sizeof reply, "angle mode: sticks arm %s, throttle %.2f, roll %+.2f, pitch %+.2f, yaw %+.2f; the ESP32 %s",
                                sc.arm ? "on" : "off", (double)sc.throttle, (double)sc.roll, (double)sc.pitch, (double)sc.yaw, fc_state_t > 0 ? fc_state_name((int)fc_state) : "not heard yet");
@@ -1008,6 +1010,13 @@ int main(int argc, char **argv) {
       if (have_learn && have_super)
         autotune_guard(&AT, t, P.arm, &P.sp, &o, last_nav,
                        pickup_active(&PKt) || pickup_active(&RP.pk) || FL.engaged || baud < 460800 || !G.fix || t-G.t>2);
+      if (!no_nav) {   /* who flies it: the navigation while the pilot wants it and it knows where it is, else the sticks */
+        const int core_armed = fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE);
+        const int tests = (SPN.phase > SPIN_IDLE && SPN.phase < SPIN_DONE) || (LFT.phase > LIFT_IDLE && LFT.phase < LIFT_DONE) || (t - txt_stick_t < TXT_STICK_S && (txt_bench_n || txt_stick[5] >= 0));
+        const char *wm; sticks = rc_who_step(&WHO, rc_who_wants(&WHO, core_armed, P.fly, tests), o.pos_ok, dt, &N, &wm);   /* (a motor or rope test: the sticks' way) */
+        if (wm) { printf("%s\n", wm); tlm_text(&TS, 4, wm); }
+        if (sticks) rc_who_sp(radio ? &RP : 0, &o, core_armed, &P.sp);
+      }
       int e = nav_step(&N, &in, &P.sp, dt, &o);
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
@@ -1017,8 +1026,8 @@ int main(int argc, char **argv) {
       if (e < 0) { printf("navigation formula failed: stopping commands (the ESP32 lands)\n"); P.fly = 0; }
       else {
         { static int was_landed; if (o.landed && !was_landed) printf("%s\n", N.rc_rth ? "landed by itself (the radio link is lost): disarmed" : "the supervisor landed it: disarmed"); was_landed = o.landed; }
-        if (o.landed && P.arm) { P.arm = P.fly = 0; P.sp.fly = 0; }
-        if (!no_nav && P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
+        if (o.landed && P.arm && !sticks) { P.arm = P.fly = 0; P.sp.fly = 0; }
+        if (!sticks && P.fly && !o.fly && !o.ready) { static double said; if (t - said > 2) { printf("waiting for the position to settle before taking off\n"); said = t; } }
         if (!radio && !pickup_active(&PKt) && !FL.engaged) for (int k = 0; k < 3; k++) P.sp.target[k] += P.sp.vref[k] * dt;   /* the target moves at the commanded velocity (the radio's pilot moves its own) */
         last_sp = P.sp;
         /* nothing to step on (no attitude in this frame): in the air no new command, the ESP32 flies on the last one */
@@ -1027,7 +1036,7 @@ int main(int argc, char **argv) {
         int core_flying = fc_state == FC_ARMED || fc_state == FC_FAILSAFE;
         if (!in_control && (!core_flying || (radio && RCI.frames))) in_control = 1;
         if (!in_control) { static int said; if (!said) { said = 1; printf("the drone is flying and this program just started: not commanding it until the radio's channels or a command come (its failsafe lands it meanwhile)\n"); } }
-        else if (no_nav) {}                                         /* (angle mode: the sticks go on their own beat, below) */
+        else if (sticks) {}                                         /* (the sticks fly it: they go on their own beat, below) */
         else if (!(e > 0 && o.fly)) {
           float c[12] = { (float)P.arm, 0, 0, 0, o.fly ? 1.0f : 0.0f, -1, 0, 1, o.acc[0], o.acc[1], o.acc[2], o.heading };
           uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
@@ -1077,7 +1086,7 @@ int main(int argc, char **argv) {
     int flying = (fc_state == FC_ARMED || fc_state == FC_FAILSAFE) && fc_state_t > 0 && t - fc_state_t < 150;
     /* Angle mode: the sticks as they are, 50 times a second while the channels come (not on the ESP32's NAV frames:
      * it sends those only while guided commands come). No announcing: a guided command, disarmed, would disarm it. */
-    if (no_nav) {
+    if (sticks) {
       static double next_stick; fc_cmd sc;
       int radio_sticks = radio_here && !rc_stick_cmd(&RCI, t, &sc);
       /* the rope spin test: its throttles, as a motor test (the radio's pilot arming ends it) */
@@ -1098,16 +1107,20 @@ int main(int argc, char **argv) {
       int text_sticks = !radio_sticks && (spn || t - txt_stick_t < TXT_STICK_S);
       if (t >= next_stick && (radio_sticks || text_sticks)) {   /* (neither: nothing goes, and the ESP32's failsafe stands) */
         next_stick = t + 0.02;
-        float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
-        if (text_sticks) memcpy(c, txt_stick, sizeof c);
+        float c[12] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */
+        if (text_sticks) memcpy(c, txt_stick, sizeof(float) * 7);
+        /* (with the navigation on board, the 12-float form, not guided: the ESP32 keeps sending what the estimate
+         * steps on, so it knows when the position is back; angle mode keeps the 7-float one) */
+        const uint32_t clen = no_nav ? 28 : 48;
         uint8_t fr[96]; uint32_t len = text_sticks && spn ? rn_link_frame(fr, sizeof fr, RN_LINK_BENCH_TEST, (uint8_t *)spo, (uint32_t)spn * 4)
                                      : text_sticks && txt_bench_n ? rn_link_frame(fr, sizeof fr, RN_LINK_BENCH_TEST, (uint8_t *)txt_bench, (uint32_t)txt_bench_n * 4)   /* (several motors: their own frame) */
-                                                                  : rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
+                                                                  : rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, clen);
         link_raw(link, fr, len);
         last_send = t;
       }
     }
-    else if (t - last_send > 0.1 && t - last_nav > 0.1 && !flying && (fc_state_t > 0 || t - t_start > 2)) {
+    if (!no_nav && t - last_send > 0.1 && (sticks || t - last_nav > 0.1) && !flying && (fc_state_t > 0 || t - t_start > 2)) {   /* (nothing else sent: announced, disarmed; while the
+                                                                     * sticks have it, renewed, so the ESP32 keeps sending what the navigation steps on) */
       float c[12] = { 0, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0 };
       uint8_t fr[96]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_CMD, (uint8_t *)c, sizeof c);
       link_raw(link, fr, len);

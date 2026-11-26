@@ -67,7 +67,7 @@ function agentSetHardware(a){
   for(const change of a.parts||[]){
     agentFields(change,{id:{type:['integer','string']},fields:{type:'object'}},'part change');
     const c=partOf(change.id);if(seen.has(c.id))throw new Error('Duplicate part change '+c.id);seen.add(c.id);
-    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(I2C_SENSOR_KINDS.includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='imu'?['level','levelYaw','powerPin','powerLevel']:[]),...(c.kind==='fix'?['port']:[])]:[];
+    const keys=c.type==='motor'?['board','pin','driver','maxDuty']:c.type==='joint'?['board','pin','center','usPerRad']:c.type==='latch'?['board','pin','driver']:c.type==='sensor'?['board','driver',...(I2C_SENSOR_KINDS.includes(c.kind)?['address']:[]),...(c.kind==='mag'?['bias','scale']:[]),...(c.kind==='imu'?['level','levelYaw','powerPin','powerLevel']:[]),...(c.kind==='fix'?['port']:[]),...(c.kind==='flow'?['radPx','mirror','fps']:[])]:[];
     agentFields(change.fields,Object.fromEntries(keys.map(k=>[k,AGENT_PART_FIELDS[k]])),c.name);
     const patch=agentClone(change.fields),saved=C.wiring.parts[c.id]||{};
     if(Object.hasOwn(patch,'board')){

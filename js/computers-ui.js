@@ -320,7 +320,7 @@ function renderComputerList(C){
   const sens=comps.filter(c=>c.type==='sensor');
   const SHORT={imu:'IMU',mag:'Mag',baro:'Baro',fix:'GPS',flow:'Flow',tof:'ToF'};
   $('#computerSensors').replaceChildren(...sens.map(c=>{const b=hardwareOwner(C,c),p=hardwarePart(C,c,comps),i2c=I2C_SENSOR_KINDS.includes(c.kind);
-    const how=p.driver==='none'||c.kind==='flow'?'simulated only':i2c?'I²C '+(p.address?'0x'+p.address.toString(16):'auto'):c.kind==='fix'?'serial '+(p.port||'/dev/ttyUSB0'):'';
+    const how=c.kind==='flow'?(p.driver==='picam'?'Pi camera':'simulated only'):p.driver==='none'?'simulated only':i2c?'I²C '+(p.address?'0x'+p.address.toString(16):'auto'):c.kind==='fix'?'serial '+(p.port||'/dev/ttyUSB0'):'';
     return crow({kind:'device',id:c.id},{'data-device':c.id},SHORT[c.kind]||tagOf(c),'tag-sensor',c.name,[b?b.name:'no board',how].filter(Boolean).join(' · '),b?'':'empty');}));
   $('#computerSensorsSec').hidden=!sens.length;count('computerSensorsSec',sens.length);
   // other electronics
@@ -642,7 +642,7 @@ function renderDetailInto(view,box,setTitle,close){
     const own=m=>m.includes(c.name),P=b&&boardWiringPlan(b);
     put(box,dissues([...errs,...(P?P.errors.filter(own):[])],P?P.warnings.filter(own):[]),
       dfacts(['Board',b?b.name:'none',b?'':'bad'],
-        out?['Signal',b&&p.pin>=0?pinShort(C,b,p.pin):'no pin',b&&p.pin>=0?'':'bad']:i2c?['I²C',(p.address?'0x'+p.address.toString(16):'auto address')]:c.kind==='fix'?['Port',p.port||'/dev/ttyUSB0']:['Bus','simulation only'],
+        out?['Signal',b&&p.pin>=0?pinShort(C,b,p.pin):'no pin',b&&p.pin>=0?'':'bad']:i2c?['I²C',(p.address?'0x'+p.address.toString(16):'auto address')]:c.kind==='fix'?['Port',p.port||'/dev/ttyUSB0']:c.kind==='flow'&&p.driver==='picam'?['Camera','CSI (dfb_flow)']:['Bus','simulation only'],
         i2c&&b&&['Pins','SDA '+pinShort(C,b,bus.sda).replace('GPIO ','')+' · SCL '+pinShort(C,b,bus.scl).replace('GPIO ','')],
         out?['Driver',c.type==='motor'?(p.driver==='brushed'?'MOSFET':'PWM ESC'):c.type==='joint'?'PWM servo':p.driver==='pwm'?'PWM servo':'digital']:drv&&['Driver',drv.label.replace(/ \(.*/,'')]),
       dsec('Connection',conn));

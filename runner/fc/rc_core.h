@@ -94,4 +94,22 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
 int rc_pack(const rc_input *in, double t, float *out);
 void rc_unpack(rc_input *in, const float *p, int n, double t);
 
+/* Who flies it, on a board with the navigation: one flight program, two ways. The navigation (position hold: the
+ * sticks move where it is to be; arm, fly, hold and home as ever) whenever it knows where it is (nav_out.pos_ok);
+ * otherwise the sticks, as in angle mode (they lean it and turn it, the throttle's middle holds the height; arming
+ * wants the throttle at the bottom). Position lost for 0.3 s hands it to the sticks; back for 1 s, the navigation holds
+ * where it is then. Something that needs the sticks' way (a motor or rope test, disarmed) asks for them: want_nav 0.
+ * While the sticks fly it, the navigation's set point follows the drone (rc_who_sp), so it neither lands nor winds
+ * up its integral, and takes over from where the drone is. In the air, the sticks give it back only while the fly
+ * switch is on (with it off, the navigation would land it): rc_who_wants. */
+typedef struct { int sticks, started; float bad, good; } rc_who;
+/* want_nav for rc_who_step: armed: the flight core is; fly: the pilot's fly switch (or text takeoff); test: a motor or
+ * rope test wants the sticks' way */
+static inline int rc_who_wants(const rc_who *W, int armed, int fly, int test) { return !test && (!armed || fly || !W->sticks); }
+/* A step: 1 while the sticks fly it. msg: what changed, or 0. N: its integral is cleared on a handover to it. */
+int rc_who_step(rc_who *W, int want_nav, int pos_ok, float dt, nav_state *N, const char **msg);
+/* While the sticks fly it: the navigation's set point is where the drone is (o, its last output), flying while armed;
+ * the radio's pilot (P, or 0) keeps that target, so a handover holds there. */
+void rc_who_sp(rc_pilot *P, const nav_out *o, int armed, nav_sp *sp);
+
 #endif

@@ -197,7 +197,15 @@ function senseAndEstimate(dt) {
   if (drv.fix && S.t - drv.fix.ts > 1) drv.fix = null;   // a fix that stopped coming
   const flow = ready('flow')[0];
   est.flowState = sensorsOf('flow').length ? 'none' : null;
-  if (flow) { const L = sens.get(flow.id).latest; drv.flow = L.range > 0 ? { c: flow, flow: L.flow, range: L.range, q: L.q, ts: sens.get(flow.id).ts } : null; est.flowState = !(L.range > 0) ? 'out of range' : L.q > 0 ? 'tracking' : 'range only'; }
+  if (flow) {
+    // as dfb_pi feeds the navigation: the range from a downward rangefinder (TOF250) on the camera's board when there
+    // is one, else the flow sensor's own; out of its reach (-1) the flow still counts (the navigation scales it by the
+    // height it fused); a frame below quality 0.2 gives the height only
+    const L = sens.get(flow.id).latest, tof = ready('tof').find(c => wiredTo(c) === wiredTo(flow));
+    const range = tof ? sens.get(tof.id).latest.range : L.range, q = L.q >= 0.2 ? L.q : 0;
+    drv.flow = range > 0 || q > 0 ? { c: flow, flow: L.flow, range: range > 0 ? range : -1, q, ts: sens.get(flow.id).ts } : null;
+    est.flowState = !(range > 0) ? (q > 0 ? 'tracking, above the rangefinder' : 'out of range') : q > 0 ? 'tracking' : 'range only';
+  }
   else drv.flow = null;
 }
 function sensorsDone() { for (const rt of sens.values()) rt.fresh = false; }

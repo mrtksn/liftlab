@@ -155,17 +155,17 @@ With a downward rangefinder beside the camera (`dfb_pi --range tof250:/dev/i2c-1
 the navigation takes both as its optical-flow reference: the flow for the speed over the ground, the rangefinder for
 the height above it. Its estimate fuses the height: near the ground the rangefinder leads and the barometer's offset is
 learned from it; above the rangefinder's reach (2.5 m) the barometer carries on from that offset, and the flow is
-scaled by the fused height. `liftlab send flight height` shows the three side by side. The navigation only steps
-while it flies the drone (the ESP32 sends what it steps on to guided commands), so for position hold run `dfb_pi`
-without `--no-navigation`, with a nav config (`drone.dnc`) whose design has the **Optical flow** part on the Pi's
-Navigation task, mounted as `flowcal` found. A second program beside the angle-mode one keeps both at hand:
+scaled by the fused height. `liftlab send flight height` shows the three side by side.
 
-    [hold]
-    command = bin/dfb_pi --nav drone.flow.dnc --airframe drone.dfa --pi drone.dlc --radio wifi,sta --bind liftlab --range tof250:/dev/i2c-1:0x52
-    workdir = design
-    boot = no
-    conflicts = flight
-
-(and `conflicts = hold` in `[flight]`): `liftlab start hold` stops the angle-mode program, `liftlab start flight` goes back.
+One flight program flies it both ways (`dfb_pi` without `--no-navigation`, the design's Navigation task on the Pi with
+the **Optical flow** part on it, Pi camera driver, mounted as `flowcal` found). Whenever the navigation knows where it
+is (the flow's speed, or a GPS, in the last 0.3 s) it holds its position: the sticks move it, the fly switch takes off
+and lands, hold and home as ever. When it doesn't (too dark, a plain floor, the camera stopped) it hands the drone to
+the sticks as in angle mode: they lean it and turn it, the throttle's middle holds the height on the barometer. With
+the position back for a second it takes over again where the drone is (in the air, only while the fly switch is on:
+with it off it would land it). Each handover is said (`position lost: the sticks fly it`, `position hold: holding
+here`), in the log and down the radio. The motor and rope tests take the sticks' way while they run, disarmed.
+LiftLab's install guide (Computers → the Pi → Install) gives both programs' commands: `flight` with `--range`, and
+`flow` with the camera's settings.
 
 Starting and stopping use `sudo` (Raspberry Pi OS gives the first user it without a password); looking needs none.

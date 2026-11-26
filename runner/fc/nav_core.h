@@ -56,6 +56,8 @@ typedef struct {
   int have_home;
   int ready;                             /* the estimate has settled on its references: it may take off */
   int landed;                            /* the supervisor had it land, and it is down: it stays on the ground */
+  int pos_ok;                            /* it knows where it is across the ground: a horizontal reference (the flow's
+                                          * speed, the GPS) spoke in the last 0.3 s. Without one the estimate drifts */
 } nav_out;
 
 typedef struct {
@@ -69,6 +71,7 @@ typedef struct {
   float pa[3]; int have_pa;              /* the estimate as it is (not from home): in the GPS frame once GPS is heard (fleet.h) */
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
+  float t_noref;                         /* how long since a horizontal reference spoke (nav_out.pos_ok) */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
   int sup_mode; float lim_speed, lim_accel, lim_lean;
   int rc_rth;                            /* the pilot's radio link is lost in flight: it flies home and lands (rc_core.h) */

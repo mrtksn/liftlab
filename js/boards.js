@@ -755,11 +755,12 @@ function boardsControl(dt) {
       brt.gpsTs = fix.ts; const lat = 41 + fix.p[0] / 6371000 * R2D, lon = 29 - fix.p[1] / (6371000 * Math.cos(41 * D2R)) * R2D;
       nav.tlm_gps(lat, lon, 100 + fix.p[2], Math.hypot(fix.v[0], fix.v[1]), (Math.atan2(-fix.v[1], fix.v[0]) * R2D + 360) % 360, 12, brt.t);
     }
+    if (tw) nav.who_core(brt.fcState === 1 || brt.fcState === 2 ? 1 : 0);   // (the flight core armed, as dfb_pi has it from the ESP32)
     const err = tw ? nav.nav_tick_radio(brt.t) : nav.nav_tick();
-    const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 7).subarray(41);
+    const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 8).subarray(41);
     brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err };
     if (tw) {
-      brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5 };
+      brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5, sticks: o[21] > 0.5 };   // (sticks: the radio's sticks fly it, as angle mode: rc_who)
       if (o[20] > 0.5) { const m = cstr(nav, nav.rc_msg_ptr()); if (m.startsWith('pickup')) cargoLog(`${navB.name}: ${m}`, 'board'); else rnEvent(`${navB.name}: ${m}`, 'warn'); }
       gsSyncTarget();
       const lr = nav.rc_learn_req(); if (lr) { const lname = Object.keys(LN_CMD).find(k => LN_CMD[k] === lr); if (lname) { boardsLearnCmd(lname); rnEvent(`${navB.name}: the radio asked the learning to ${lname === 'calibrate' ? 'calibrate' : lname}`, ''); } }   // (on the Pi, dfb_pi passes it on in-process)
@@ -780,7 +781,8 @@ function boardsControl(dt) {
     if (S.steps % 400 === 0 || err) brt.navWhy = cstr(nav, nav.nav_why_ptr());
     // the command it sends the flight core (as dfb_pi.c does): arm, fly, the acceleration and heading
     const armNav = brt.navOut.landed ? 0 : tw ? (brt.navOut.radio.arm ? 1 : 0) : brt.pilot.arm;   // the supervisor landed it: it disarms
-    if (!err && T) fcSend({ arm: armNav, throttle: brt.navOut.fly ? 1 : 0, guided: 1, acc: brt.navOut.acc, heading: brt.navOut.heading }, linkDelay(navB, coreB));
+    if (tw && brt.navOut.radio.sticks) {}                           // the sticks fly it (position lost, or the fly switch off): radio_stick below
+    else if (!err && T) fcSend({ arm: armNav, throttle: brt.navOut.fly ? 1 : 0, guided: 1, acc: brt.navOut.acc, heading: brt.navOut.heading }, linkDelay(navB, coreB));
     else if (!T) fcSend({ arm: 0, throttle: 0, guided: 1, acc: [0, 0, 0], heading: 0 }, linkDelay(navB, coreB));   // announcing itself, disarmed
   }
   // Without navigation: the pilot's sticks, 50 times a second (a radio, or fly.py over USB).
@@ -926,7 +928,7 @@ function radioTick(dt, tlmB, tw, coreB, navB, droneOff = false) {
     if (navB && navB.id !== tlmB.id) sendFrame(tlmB, navB, 'rc', frOut(tw, tw.rc_pack(brt.t)));
     const cgB = boardOf('cargo');                                    // the latches' board takes the LATCH commands from these too
     if (cgB && cgB.id !== tlmB.id && (!navB || cgB.id !== navB.id)) sendFrame(tlmB, cgB, 'rc', frOut(tw, tw.rc_pack(brt.t)));
-    if (!navB && coreB && !tw.radio_stick(brt.t)) {                 // angle mode: the sticks, while the channels come
+    if ((!navB || (brt.navOut && brt.navOut.radio && brt.navOut.radio.sticks)) && coreB && !tw.radio_stick(brt.t)) {   // angle mode, or the navigation's board says the sticks fly it: the sticks, while the channels come
       const c = new Float32Array(tw.memory.buffer, tw.cmd_ptr(), 5);
       fcSend({ arm: c[0], roll: c[1], pitch: c[2], yaw: c[3], throttle: c[4] }, linkDelay(tlmB, coreB));
     }

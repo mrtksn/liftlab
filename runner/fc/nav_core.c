@@ -111,6 +111,9 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   /* ready to take off: the estimate has run a moment and stands still (it does, on the ground) */
   if (N->t_est > 1.0f && fabsf(N->v[0]) < 0.3f && fabsf(N->v[1]) < 0.3f && fabsf(N->v[2]) < 0.3f) N->t_still += dt; else N->t_still = 0;
   out->ready = N->t_still > 0.5f || N->have_home;
+  /* where it is across the ground: known while a horizontal reference speaks (the flow's speed, or the GPS) */
+  N->t_noref = (flow_has_v || have_fix) ? 0 : N->t_noref + dt;
+  out->pos_ok = N->t_noref < 0.3f;
   k = 0;
   for (int i = 0; i < 9; i++) b[k++] = R[i];
   for (int i = 0; i < 3; i++) b[k++] = in->acc[i];

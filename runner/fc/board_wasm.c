@@ -69,9 +69,12 @@ static float cmd[12];                /* arm roll pitch yaw throttle test_motor t
 /* nio: in q[4] w[3] acc[3] have_att | have_baro alt age | have_fix p[3] v[3] age | have_flow flow[2] range q age |
  *      target[3] vref[3] heading fly | dt   →   out acc[3] heading fly p[3] v[3] have_home ready landed */
 #define NIO_IN 41
-static float nio[NIO_IN + 14 + 7];
+static float nio[NIO_IN + 14 + 8];
+static rc_who WHO;                               /* who flies it, with the radio: the navigation or the sticks (rc_core.h) */
+static int who_core_armed;                       /* the flight core armed (or in its failsafe), as its telemetry says: who_core */
 
 #define EXPORT(n) __attribute__((export_name(n)))
+EXPORT("who_core") void who_core(int armed) { who_core_armed = armed; }   /* the flight core armed (its failsafe too), from its telemetry */
 EXPORT("img_ptr") uint8_t *img_ptr(void) { return img; }
 EXPORT("img_cap") uint32_t img_cap(void) { return IMG_CAP; }
 EXPORT("blob_ptr") uint8_t *blob_ptr(void) { return blob; }
@@ -608,7 +611,8 @@ static int nav_run(nav_sp *sp_radio);
 EXPORT("nav_tick") int nav_tick(void) { return nav_run(0); }
 EXPORT("nav_test_target") int nav_test_target_(int axis, float offset) { return nav_test_target(&N, axis, offset); }
 /* A navigation step on the radio's set point; nio's set point is not used. Then nio's outputs, and after them: the
- * target (from home) x y z, heading, armed by the radio, the radio link up, a new message (rc_msg_ptr). */
+ * target (from home) x y z, heading, armed by the radio, the radio link up, a new message (rc_msg_ptr), and whether the
+ * sticks fly it (rc_who: position lost, or the fly switch off; then the board sends radio_stick, as in angle mode). */
 EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
   nav_sp sp; float dt = nio[36];                 /* (the step size, as nav_run reads nio) */
   sp.heading = RP.heading;
@@ -618,11 +622,15 @@ EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
   if (fleet_was && !RP.mis_on) fleet_engage(&FL, 0, &N, &last_o, RP.mis_why);
   if (RP.fleet_req) { fleet_engage(&FL, RP.fleet_req == 1, &N, &last_o, "the pilot's radio"); RP.fleet_req = 0; }
   if (FL.said && !RP.said) { FL.said = 0; for (int i = 0; i < 64; i++) RP.msg[i] = FL.msg[i]; RP.said = 1; }
+  const char *wm; int sticks = rc_who_step(&WHO, rc_who_wants(&WHO, who_core_armed, RP.fly, 0), last_o.pos_ok, dt, &N, &wm);
+  if (wm && !RP.said) { int i = 0; for (; wm[i] && i < 63; i++) RP.msg[i] = wm[i]; RP.msg[i] = 0; RP.said = 1; }
+  if (sticks) rc_who_sp(&RP, &last_o, who_core_armed, &sp);
   if (RP.said) { RP.said = 0; tlm_text(&TS, 4, RP.msg); nio[NIO_IN + 14 + 6] = 1; } else nio[NIO_IN + 14 + 6] = 0;
   int e = nav_run(&sp);
   float *p = nio + NIO_IN + 14;
   for (int i = 0; i < 3; i++) *p++ = sp.target[i];
   *p++ = sp.heading; *p++ = (float)arm; *p++ = (float)rc_link_ok(&RCI, t);
+  nio[NIO_IN + 14 + 7] = (float)sticks;
   return e;
 }
 static int nav_run(nav_sp *sp_radio) {
