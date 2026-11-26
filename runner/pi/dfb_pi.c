@@ -973,7 +973,13 @@ int main(int argc, char **argv) {
         }
       }
       if (G.fix && t - G.t < 1.0) { in.have_fix = 1; memcpy(in.fix_p, G.p, sizeof in.fix_p); memcpy(in.fix_v, G.v, sizeof in.fix_v); in.fix_age = (float)(t - G.t) + 0.1f; last_fix_t = G.t; }
-      float dt = last_nav > 0 ? (float)(t - last_nav) : 0.01f; last_nav = t; if (dt > 0.1f) dt = 0.1f;
+      float dt = last_nav > 0 ? (float)(t - last_nav) : 0.01f; last_nav = t;
+      {   /* the step's time from the flight core's own clock (the frame's t): how far apart its samples are, not when this
+           * busy Pi got to read them (late, or two at once); this computer's clock when that one jumps (a restart) */
+        static float fc_t = -1; float dfc = fc_t >= 0 ? v[0] - fc_t : -1; fc_t = v[0];
+        if (dfc > 0 && dfc <= 0.1f) dt = dfc;
+      }
+      if (dt > 0.1f) dt = 0.1f;
       /* landing: sink at 0.5 m/s; on the ground (height near home and not sinking any more), idle and disarm */
       if (P.landing && P.fly) { P.sp.vref[2] = -0.5f; P.sp.target[2] = o.p[2] - 0.3f; if (o.p[2] < 0.15f && fabsf(o.v[2]) < 0.1f) { P.fly = 0; P.landing = 0; P.arm = 0; P.sp.fly = 0; printf("landed\n"); } }
       P.sp.fly = P.fly;
@@ -1016,6 +1022,10 @@ int main(int argc, char **argv) {
         const char *wm; sticks = rc_who_step(&WHO, rc_who_wants(&WHO, core_armed, P.fly, tests), o.pos_ok, dt, &N, &wm);   /* (a motor or rope test: the sticks' way) */
         if (wm) { printf("%s\n", wm); tlm_text(&TS, 4, wm); }
         if (sticks) rc_who_sp(radio ? &RP : 0, &o, core_armed, &P.sp);
+      }
+      if (have_learn) {   /* flying home or landing by itself (the radio lost, the supervisor): no calibration (learn_core.h) */
+        const int was = LS.cal; learn_nav_own(&LS, N.rc_rth || N.sup_mode >= 2 || N.fly_land);
+        if (was && !LS.cal) printf("learning: %s\n", LS.msg);
       }
       int e = nav_step(&N, &in, &P.sp, dt, &o);
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */

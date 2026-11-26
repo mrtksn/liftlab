@@ -68,6 +68,7 @@ typedef struct {
   int prior_desc, fly_frozen;            /* the prior is the description; flying on flyB while a calibration runs */
   int external_load, external_was;                    /* simulator: a cable is under tension; actuator-only identification waits */
   int use_learned, keep, hold_servos, hold_pulses, then_cal;
+  int nav_own;                           /* the navigation flies home or lands by itself (learn_nav_own): no calibration */
   /* B is the estimator, flyB the accepted model. Probe a frozen candidate on fresh ordinary-flight data. */
   float probe[6][LN_IN], previous[6][LN_IN], transient[3][LN_IN], nuisance[3][LN_IN];
   float gram[LN_IN][LN_IN], adapt_t, adapt_conf;
@@ -116,6 +117,11 @@ int learn_model_frame(learn_state *L, float *out);
 enum { LN_CMD_CALIBRATE = 1, LN_CMD_STOP, LN_CMD_USE_DESC, LN_CMD_USE_LEARNED, LN_CMD_KEEP_ON, LN_CMD_KEEP_OFF, LN_CMD_THROW,
   LN_CMD_HOLD_PULSES_ON, LN_CMD_HOLD_PULSES_OFF, LN_CMD_THEN_CAL_ON, LN_CMD_THEN_CAL_OFF };
 int learn_command(learn_state *L, int cmd);
+/* The navigation flies home or lands by itself (the radio link lost, the supervisor, the fly switch off in the air):
+ * a calibration running stops, and none starts until it flies for the pilot again. Its test moves would shake the
+ * way home, and its fits take the companion's time from the navigation (a second on a Pi Zero, when the flight core
+ * gets no command and goes to its failsafe). Call it on every navigation step. */
+void learn_nav_own(learn_state *L, int own);
 /* For the screen: a few numbers (see learn_core.c learn_status) and the message. */
 int learn_status(const learn_state *L, float *out);
 /* The throw plan's length in pulses and its rough duration [s] (to say how high to throw it). */

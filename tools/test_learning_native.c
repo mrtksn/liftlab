@@ -75,6 +75,12 @@ int main(void) {
   assert(!L.cal && L.accepted && L.use_learned && L.keep && !L.updated);
   L.external_load = 0; L.FA.t += .005; cable_n = fc_ltel(&L.FA, cable_tel); learn_ltel(&L, cable_tel, cable_n);
   assert(!L.external_was && strstr(L.msg, "Cable slack"));
+  /* Flying home or landing by itself (the radio lost, the supervisor): a calibration stops, and none starts until it
+   * flies for the pilot again. */
+  setup(); assert(!learn_command(&L, LN_CMD_CALIBRATE) && L.cal);
+  learn_nav_own(&L, 1); assert(!L.cal && L.model_dirty && strstr(L.msg, "Calibration stopped: the drone flies home"));
+  assert(learn_command(&L, LN_CMD_CALIBRATE) == -1 && !L.cal);
+  learn_nav_own(&L, 0); assert(!learn_command(&L, LN_CMD_CALIBRATE) && L.cal);
   fc_state F = { 0 }; F.A.n_motors = 4; float exc[12] = { 3, 1, 1, 255, 4, 0, 0, 0, 0, 0, 1, 1 };
   assert(!fc_exc(&F, exc, 12) && F.exc_mode == 3 && F.exc_angle < 0.07f && !F.exc_hold_m && !F.exc_hold_s);
   exc[10] = 3; assert(fc_exc(&F, exc, 12) == -1);

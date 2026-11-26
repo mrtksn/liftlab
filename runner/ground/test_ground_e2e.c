@@ -6,7 +6,7 @@
  * It drives dfb_ground over UDP as a script would ("press arm", then "press fly", "goto", "press fwd", "calibrate",
  * "status"), and checks the drone takes off, goes there, follows the stick, starts the learning's calibration from
  * the radio, that the telemetry comes back to the command module, and that when the radio goes quiet the drone flies
- * home and lands by itself, and the command module raises its alarm.
+ * home and lands by itself (the calibration, still running then, stops), and the command module raises its alarm.
  *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_e2e test_ground_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_e2e */
 #define _DEFAULT_SOURCE
@@ -69,7 +69,7 @@ static int lines(int fd, char *buf, int *n, const char *tag, void (*on)(const ch
   return got;
 }
 static int learn_line, cal_line, lost_line, landed_line, alarm_line, prog_line;
-static void on_pi(const char *s) { if (strstr(s, "learning command 1")) learn_line = 1; if (strstr(s, "calibrating")) cal_line = 1; if (strstr(s, "radio link lost: flying home")) lost_line = 1; if (strstr(s, "landed by itself")) landed_line = 1; }
+static void on_pi(const char *s) { if (strstr(s, "learning command 1")) learn_line = 1; if (strstr(s, "Calibration stopped: the drone flies home")) cal_line = 1; if (strstr(s, "radio link lost: flying home")) lost_line = 1; if (strstr(s, "landed by itself")) landed_line = 1; }
 static void on_gnd(const char *s) { if (strstr(s, "ALARM: no telemetry")) alarm_line = 1; if (strstr(s, "drone: ")) prog_line++; }
 
 int main(void) {
@@ -93,7 +93,7 @@ int main(void) {
   int radio = 1, cmds_up = 0, tlm_down = 0; char pbuf[8192], gbuf[8192]; int pn = 0, gn = 0;
   double armed_at = 0, goto_at = 0, fwd_at = 0, cal_at = 0, quiet_at = 0; float x0 = 0, x1 = 0; char status[600] = "";
   int ok_takeoff = 0, ok_goto = 0;
-  while (now_s() - t0 < 85) {
+  while (now_s() - t0 < 95) {
     double el = now_s() - t0;
     lines(pi_out, pbuf, &pn, "pi", on_pi); lines(gnd_out, gbuf, &gn, "ground", on_gnd);
     { char r[600]; struct sockaddr_in f; socklen_t fl = sizeof f; ssize_t n = recvfrom(udp, r, sizeof r - 1, 0, (struct sockaddr *)&f, &fl); if (n > 0) { r[n] = 0; if (strstr(r, "uplink")) snprintf(status, sizeof status, "%s", r); } }
@@ -146,7 +146,7 @@ int main(void) {
     if (fwd_at && el < fwd_at + 2) { static double nf; if (el >= nf) { nf = el + 0.05; say("press fwd"); } }
     if (fwd_at && !cal_at && el > fwd_at + 5) { x1 = (float)B.p[0]; say("status"); say("calibrate"); cal_at = el; }
     if (cal_at && !quiet_at && el > cal_at + 5) { quiet_at = el; radio = 0; printf("  the radio goes quiet at (%.2f %.2f %.2f)\n", B.p[0], B.p[1], B.p[2]); }
-    if (quiet_at && el > quiet_at + 22) break;
+    if (quiet_at && el > quiet_at + 22 && (F.state == FC_DISARMED || el > quiet_at + 32)) break;   /* (landed and disarmed by itself first: a slow machine takes longer) */
   }
   kill(gnd, SIGTERM); kill(pi, SIGTERM); usleep(300000);
   lines(pi_out, pbuf, &pn, "pi", on_pi); lines(gnd_out, gbuf, &gn, "ground", on_gnd);

@@ -610,7 +610,7 @@ static void recover_check(learn_state *L) {                          /* upright 
   if (L->calm_t <= 0.5f) return;
   SAY_MORE(" Caught itself %.1f s after release (thrown to about %.1f m, lowest point on the way down %.1f m).", (double)L->thr_t, (double)L->zmax, (double)L->zmin);
   L->thr = LN_THR_NONE;
-  if (L->use_learned && L->then_cal) { char keep[sizeof L->msg]; memcpy(keep, L->msg, sizeof keep); start_calibration(L, 1); memcpy(L->msg, keep, sizeof keep); SAY_MORE(" Now refining it with a hover calibration…"); }
+  if (L->use_learned && L->then_cal && !L->nav_own) { char keep[sizeof L->msg]; memcpy(keep, L->msg, sizeof keep); start_calibration(L, 1); memcpy(L->msg, keep, sizeof keep); SAY_MORE(" Now refining it with a hover calibration…"); }
   else SAY_MORE(" Still learning in flight.");
 }
 
@@ -708,6 +708,11 @@ int learn_model_frame(learn_state *L, float *out) {
   return k;
 }
 
+void learn_nav_own(learn_state *L, int own) {
+  L->nav_own = !!own;
+  if (own && L->cal) { end_calibration(L); SAY("Calibration stopped: the drone flies home or lands by itself. Keeping the accepted flight model."); }
+}
+
 int learn_command(learn_state *L, int cmd) {
   int flying = L->flags & 1;
   switch (cmd) {
@@ -716,6 +721,7 @@ int learn_command(learn_state *L, int cmd) {
       if (!L->n) return -1;
       if (L->thr && L->thr != LN_THR_RECOVER) { SAY("It can calibrate once it has caught itself."); return -1; }
       if (!flying) { SAY("It calibrates while hovering: take off first."); return -1; }
+      if (L->nav_own) { SAY("It calibrates while hovering, not while it flies home or lands by itself."); return -1; }
       start_calibration(L, 0); return 0;
     case LN_CMD_STOP: if (L->cal) { end_calibration(L); SAY("Calibration stopped. Keeping the accepted flight model."); } return 0;
     case LN_CMD_USE_DESC:

@@ -650,6 +650,7 @@ static int nav_run(nav_sp *sp_radio) {
   if (sp_radio) sp = *sp_radio;
   else if (pickup_active(&PK)) { if (!sp.fly) pickup_cancel(&PK, "not flying"); else pickup_step(&PK, &last_o, nav_clock, dt, &sp); }
   else fleet_sp(&FL, &sp);                       /* (without a radio: the simulator's pilot; engaged, the program's target) */
+  learn_nav_own(&LS, N.rc_rth || N.sup_mode >= 2 || N.fly_land);   /* (flying home or landing by itself: no calibration) */
   int e = nav_step(&N, &in, &sp, dt, &o);
   fleet_step(&FL, &N, &o, nav_clock);
   last_o = o; last_sp = sp; have_nav_out = 1;

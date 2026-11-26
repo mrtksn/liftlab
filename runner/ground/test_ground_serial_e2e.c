@@ -82,7 +82,7 @@ static int refuses(const char *prog, char *const argv[], const char *want) {
 
 static int learn_line, cal_line, lost_line, landed_line, alarm_line, prog_line, pi_peer_line, pi_bad_line, gnd_bad_line, pi_radio_lines;
 static void on_pi(const char *s) {
-  learn_line |= strstr(s, "learning command 1") != 0; cal_line |= strstr(s, "calibrating") != 0; lost_line |= strstr(s, "radio link lost: flying home") != 0;
+  learn_line |= strstr(s, "learning command 1") != 0; cal_line |= strstr(s, "Calibration stopped: the drone flies home") != 0;   /* (it runs until the link goes, then stops)*/ lost_line |= strstr(s, "radio link lost: flying home") != 0;
   landed_line |= strstr(s, "landed by itself") != 0; pi_peer_line += strstr(s, "a serial line (serial,") != 0;
   pi_bad_line += strstr(s, "fail the binding phrase") != 0; pi_radio_lines += !strncmp(s, "radio: ", 7);
 }
