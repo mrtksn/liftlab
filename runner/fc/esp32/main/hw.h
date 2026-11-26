@@ -6,7 +6,7 @@
 #include "fc_core.h"
 #include "radio_link.h"
 
-#define HW_VERSION 19
+#define HW_VERSION 20
 typedef struct {
   uint32_t version;
   int8_t motor_pin[FC_MAX_MOTORS];   /* −1: not wired */
@@ -104,6 +104,12 @@ typedef struct {
   int8_t imu_pwr_pin;
   int8_t imu_pwr_on;            /* the level that powers it: 1 or 0 */
   int8_t imu_pwr_pad[2];
+  /* Appended in v20 (v19 blobs migrate uncalibrated): the IMU's calibration in its own axes, as LiftLab's Tune →
+   * Sensor calibration measures it from still poses: acceleration = (raw − acc_bias) ∘ acc_scale [m/s², a gain an
+   * axis]; gyro_bias [rad/s] is the gyro's offset when the drone moves at power-up (still, it's measured afresh).
+   * acc_bias 0 and acc_scale 1 (the defaults): not calibrated, and the gain that reads 1 g lying still is measured
+   * at power-up instead (flight.c). */
+  float acc_bias[3], acc_scale[3], gyro_bias[3];
 } hw_config;
 
 void hw_defaults(hw_config *c);
@@ -157,6 +163,10 @@ void hw_gyro_calibrate(const float bias[3]);
  * alone, drifting. hw_acc_gain is the gain now. */
 void hw_acc_calibrate(float k);
 float hw_acc_gain(void);
+/* 1 when the wiring has the IMU's calibration (acc_bias, acc_scale: hw_config). */
+int hw_acc_calibrated(void);
+/* A reading from hw_imu_read back as the chip gave it (its axes, before calibration, gain and gyro offset). */
+void hw_imu_uncal(const fc_imu *m, float acc[3], float gyro[3]);
 /* The IMU stopped answering (or none was found at the start): resets the I2C bus (clocking out a chip that holds
  * SDA) and sets the IMU up again, its registers rewritten, else the chip reset (100 ms), else looked for again.
  * 0 when it answers again; msg says what was done or what's wrong. From the sensor task only. */

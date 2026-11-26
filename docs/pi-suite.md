@@ -87,7 +87,7 @@ liftlab send flight sticks off
 ```
 
 The screen also shows what the ESP32 said last (why it won't arm, for one), and **SAFETY OFF** while it is.
-`safety on|off`, `level`, `level none` and `esp32 LINE` (any settings line: `show`, `level=boot`, `save` ...) go to the
+`safety on|off`, `level`, `level none`, `imucal` (one pose for Tune → Sensor calibration) and `esp32 LINE` (any settings line: `show`, `level=boot`, `save` ...) go to the
 ESP32 the same way; its answer shows in `status` and the log.
 
 The same text commands come up the radio from LiftLab's drone card (its buttons and its command line: `RC_CMD_TEXT`,

@@ -57,6 +57,12 @@ assert.ok(settings.includes('level=boot'));   // (the default: as it sits at pow
   W.wiring.parts[5].powerPin=15;assert.ok(plan().errors.some(e=>/GPIO 15/.test(e)),'the I²C SDA pin: used twice');
   W.wiring.parts[5].powerPin=99;assert.ok(plan().errors.some(e=>/power switch/.test(e)),'no such GPIO');
   W.wiring.parts[5].powerPin=-1;assert.ok(A.hardwareSettings(plan()).includes('imu_power=-1'),'cleared: says so, for a board that had one');}
+// the IMU's calibration (acc_bias=, acc_scale=, gyro_bias=, wiring version 20): no lines until measured (older firmware), then all three
+{const W=JSON.parse(JSON.stringify(C));const plan=()=>A.hardwarePlan(W,parts,W.boards[0]);
+  assert.ok(!A.hardwareSettings(plan()).some(l=>/^(acc_|gyro_bias)/.test(l)),'not calibrated: no calibration lines');
+  W.wiring.parts[5].cal={accBias:[0.12,-0.2,-1.08],accScale:[1.02,0.97,1.004],gyroBias:[-0.0576,-0.0101,0.0173],fitted:true,at:0};
+  {const q=plan(),L=A.hardwareSettings(q);assert.equal(q.errors.length,0,q.errors.join());assert.ok(L.includes('acc_bias=0.12,-0.2,-1.08')&&L.includes('acc_scale=1.02,0.97,1.004')&&L.includes('gyro_bias=-0.0576,-0.0101,0.0173'),L.join(' '));}
+  W.wiring.parts[5].cal.accScale=[1,1,2];{const q=plan();assert.ok(q.errors.some(e=>/calibration/.test(e)));assert.ok(!A.hardwareSettings(q).some(l=>l.startsWith('acc_')),'out of range: not written');}}
 {const W=JSON.parse(JSON.stringify(C));vm.runInContext('this.esc={ESC_PRESETS,escPresetOf,escDutyPct}',ctx);const E=ctx.esc;
   assert.equal(E.escPresetOf(A.hardwarePlan(W,parts,W.boards[0]).bus),'custom');   // (a design's old defaults: no preset)
   const {label,note,...toy}=E.ESC_PRESETS.toyStop;void label;void note;W.wiring.boards[1]={...W.wiring.boards[1],...toy};

@@ -717,9 +717,9 @@ int main(int argc, char **argv) {
               else { fleet_engage(&FL, a[1] == 'n', &N, &o, "asked"); FL.said = 0; snprintf(reply, sizeof reply, "%s", FL.msg[0] ? FL.msg : "fleet program off"); in_control = 1; }
             } else snprintf(reply, sizeof reply, "fleet program: %s; %s; target %.1f %.1f %.1f; publishes %d values; messages %u sent, %u in; %u runs, %u failed",
                             have_fleet ? "in the program" : "none", FL.engaged ? "flying it" : "not flying it", FL.go_p[0], FL.go_p[1], FL.go_p[2], FL.npub, (unsigned)FL.sent, (unsigned)FL.got, (unsigned)FL.calls, (unsigned)FL.fails);
-          } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || (!strncmp(s, "level", 5) && (!s[5] || s[5] == ' '))) {
+          } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || !strcmp(s, "imucal") || (!strncmp(s, "level", 5) && (!s[5] || s[5] == ' '))) {
             /* a settings line to the ESP32 (esp32 LINE: show, level=boot, save, reboot ...; the shortcuts as they are:
-             * safety, level, level none, level R,P[,Y], level yaw Y):
+             * safety, level, level none, level R,P[,Y], level yaw Y, imucal):
              * its answer comes as a report, in the log and in status (the ESP32 said: ...) */
             const char *line = !strncmp(s, "esp32 ", 6) ? s + 6 : s; uint8_t fr[192];
             uint32_t len = strlen(line) < 127 ? rn_link_frame(fr, sizeof fr, RN_LINK_SETTING, (const uint8_t *)line, (uint32_t)strlen(line)) : 0;

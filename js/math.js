@@ -182,7 +182,9 @@ function axisAngleR(n, a) {
   return [c + x * x * C, x * y * C - z * s, x * z * C + y * s, y * x * C + z * s, c + y * y * C, y * z * C - x * s, z * x * C - y * s, z * y * C + x * s, c + z * z * C];
 }
 function eulerFromR(R) { // inverse of eulerR: [roll, pitch, yaw] in degrees
-  return [Math.atan2(R[7], R[8]) * R2D, Math.asin(clamp(-R[6], -1, 1)) * R2D, Math.atan2(R[3], R[0]) * R2D];
+  const p = Math.asin(clamp(-R[6], -1, 1)) * R2D;
+  if (Math.abs(R[6]) > 0.99999) return [0, p, Math.atan2(-R[1], R[4]) * R2D];   // (pitched straight up or down: roll and yaw turn about the same axis; it's all yaw)
+  return [Math.atan2(R[7], R[8]) * R2D, p, Math.atan2(R[3], R[0]) * R2D];
 }
 
 const eye = n => Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));

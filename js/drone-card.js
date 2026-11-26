@@ -74,7 +74,7 @@ function cardTextRoute(line) {
   if (!r) return { to: '', what: 'this design has no radio' };
   if (BOARD_KINDS[r.kind].mcu) return { to: r.name, what: 'a settings line' };
   const known = CARD_CMDS.find(c => c.cmd === w);
-  if (/^(esp32|level|safety)$/.test(word)) return { to: cardCoreName(), via: r.name, what: known ? known.what : word === 'esp32' ? 'a settings line, passed on' : '' };
+  if (/^(esp32|level|safety|imucal)$/.test(word)) return { to: cardCoreName(), via: r.name, what: known ? known.what : word === 'esp32' ? 'a settings line, passed on' : '' };
   if (/^(wiring|airframe)$/.test(word)) return { to: cardCoreName(), via: r.name, what: `the Pi's ${word === 'wiring' ? 'wiring.txt' : 'drone.dfa'}, sent on` };
   return { to: r.name, what: known ? known.what : '' };
 }

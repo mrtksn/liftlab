@@ -137,10 +137,13 @@ int fc_airframe_load(fc_state *F, const uint8_t *blob, uint32_t len) {
   uint32_t crc; memcpy(&crc, blob + len - 4, 4);
   if (rn_crc32(blob, len - 4) != crc) { fc_say(F, "airframe: checksum mismatch"); return -1; }
   rd r = { blob, len - 4, 0, 0 };
-  if (rd_u(&r) != FC_AIRFRAME_MAGIC || rd_u(&r) != 1) { fc_say(F, "airframe: not an airframe file"); return -1; }
+  /* version 2 adds the IMU's position after its mount; version 1 (an IMU at the centre of mass) still loads */
+  uint32_t magic = rd_u(&r), ver = rd_u(&r);
+  if (magic != FC_AIRFRAME_MAGIC || ver < 1 || ver > 2) { fc_say(F, "airframe: not an airframe file"); return -1; }
   A.n_motors = (int)rd_u(&r); A.n_joints = (int)rd_u(&r); A.mode = (int)rd_u(&r);
   if (A.n_motors < 1 || A.n_motors > FC_MAX_MOTORS || A.n_joints < 0 || A.n_joints > FC_MAX_JOINTS || A.mode < 0 || A.mode > 2) { fc_say(F, "airframe: %d motors, %d joints: too many for this firmware", A.n_motors, A.n_joints); return -1; }
   A.m = rd_f(&r); rd_fs(&r, A.J, 9); rd_fs(&r, A.Jinv, 9); rd_fs(&r, A.axis, 3); rd_fs(&r, A.imu_R, 9);
+  if (ver >= 2) rd_fs(&r, A.imu_pos, 3);
   A.allowance = rd_f(&r); A.efficiency = rd_f(&r); A.servo_move = rd_f(&r); A.horizon = rd_f(&r); A.lean_max = rd_f(&r); A.mix_share = rd_f(&r);
   for (int j = 0; j < A.n_joints; j++) {
     fc_joint *J = &A.jnt[j]; rd_name(&r, J->name); J->steer = (int)rd_u(&r);
@@ -418,6 +421,22 @@ static void start_descent(fc_state *F) {
   if (!F->have_alt) F->iAz = fminf(F->iAz, F->t - F->calm_t < 30 ? F->iAz_calm : 0);
 }
 
+/* An IMU off the centre of mass also reads its own turning about it: ω×(ω×r) + α×r (a 10 cm arm at 5 rad/s is
+ * 2.5 m/s²). Taken away, the accelerometer reads as at the centre of mass, where the estimator, the thrust trim and
+ * the learning take it to be. α is the gyro's change, low-passed (~30 Hz: the raw difference is mostly noise), from
+ * nothing again when the attitude starts again. */
+static void lever_arm(fc_state *F, const float g[3], float a[3], float dt) {
+  const float *r = F->A.imu_pos, h = dt + F->imu_gap;   /* (since the last reading: a missed one or two between) */
+  if (F->att_t == 0 || !(h > 0)) { memcpy(F->g_prev, g, 3 * sizeof *g); memset(F->alpha_f, 0, sizeof F->alpha_f); }
+  else for (int i = 0; i < 3; i++) { F->alpha_f[i] += ((g[i] - F->g_prev[i]) / h - F->alpha_f[i]) * fminf(1, h * 188.5f); F->g_prev[i] = g[i]; }
+  if (r[0] == 0 && r[1] == 0 && r[2] == 0) return;
+  const float *al = F->alpha_f;
+  float wr[3] = { g[1] * r[2] - g[2] * r[1], g[2] * r[0] - g[0] * r[2], g[0] * r[1] - g[1] * r[0] };   /* ω×r */
+  a[0] -= g[1] * wr[2] - g[2] * wr[1] + al[1] * r[2] - al[2] * r[1];
+  a[1] -= g[2] * wr[0] - g[0] * wr[2] + al[2] * r[0] - al[0] * r[2];
+  a[2] -= g[0] * wr[1] - g[1] * wr[0] + al[0] * r[1] - al[1] * r[0];
+}
+
 /* One step; returns 0, or −1 when a formula failed (the outputs are then not to be used). */
 static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o) {
   const fc_airframe *A = &F->A; pk p; float r[8];
@@ -438,6 +457,7 @@ static int step(fc_state *F, const fc_imu *imu, float dt, float vbatt, fc_out *o
   if (imu->have_gyro) {
     if (F->level_dirty) level_update(F);
     float g[3], a[3]; m3v(g, F->imu_M, imu->gyro); m3v(a, F->imu_M, imu->acc);
+    memcpy(F->fb_imu, a, sizeof a); lever_arm(F, g, a, dt);
     memcpy(F->fb, a, sizeof a); memcpy(F->gb, g, sizeof g); F->have_imu = 1;
     int hm = imu->have_mag && fin(imu->mag[0]) && fin(imu->mag[1]) && fin(imu->mag[2]);
     p.n = 0; p_v(&p, g, 3); p_v(&p, a, 3); p_f(&p, (float)hm); p_v(&p, hm ? imu->mag : (float[3]){ 0, 0, 0 }, 3); p_f(&p, dt);
@@ -669,12 +689,12 @@ static void ltel_add(fc_state *F, const fc_out *o, float dt) {
   for (int k = 0; k < 3; k++) F->lt_alpha[k] += alpha[k];
   if (F->open_loop && F->sub_n < FC_SUB) {             /* open loop: every step, for the throw's fit */
     float *s = F->sub[F->sub_n++]; int k = 0; s[k++] = dt;
-    for (int i = 0; i < 3; i++) s[k++] = F->fb[i];
+    for (int i = 0; i < 3; i++) s[k++] = F->fb_imu[i];
     for (int i = 0; i < 3; i++) s[k++] = F->gb[i];
     for (int i = 0; i < F->A.n_motors; i++) s[k++] = F->lt_vprev[i];   /* the thrusts it has been flying on (this step's take effect next) */
   }
   memcpy(F->lt_vprev, F->v, sizeof F->lt_vprev);
-  if (F->have_imu) for (int k = 0; k < 3; k++) { F->lt_f[k] += F->fb[k]; F->lt_w[k] += F->gb[k]; }
+  if (F->have_imu) for (int k = 0; k < 3; k++) { F->lt_f[k] += F->fb_imu[k]; F->lt_w[k] += F->gb[k]; }
   for (int i = 0; i < F->A.n_motors; i++) { F->lt_u[i] += o->motor[i]; F->lt_v[i] += F->v[i]; }
   for (int j = 0; j < F->A.n_joints; j++) F->lt_tc[j] += o->servo[j];
   F->lt_n++;

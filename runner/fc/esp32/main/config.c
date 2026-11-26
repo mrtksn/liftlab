@@ -22,6 +22,7 @@ void hw_defaults(hw_config *c) {
   c->sda = LB_SDA; c->scl = LB_SCL;
   c->batt_pin = -1; c->batt_divider = 11.0f; c->batt2_pin = -1; c->batt2_divider = 11.0f;
   c->imu_pwr_pin = -1; c->imu_pwr_on = 1;
+  for (int i = 0; i < 3; i++) c->acc_scale[i] = 1;
   c->pmon_chip = 0; c->pmon_addr = 0x40; for (int i = 0; i < 3; i++) c->pmon_shunt[i] = 0.1f;
   c->rate_hz = LB_RATE; c->telem_hz = 20; c->vref = 16.0f; c->link_baud = 921600;
   c->mag_driver = -1; for (int i=0;i<3;i++) { c->mag_matrix[4*i]=1; c->mag_scale[i]=1; }
@@ -143,6 +144,7 @@ int hw_check(const hw_config *c, char *err, int errn) {
   }
   for(int i=0;i<3;i++) if(!isfinite(c->mag_bias[i]) || !isfinite(c->mag_scale[i]) || c->mag_scale[i]<0.01f || c->mag_scale[i]>100) { snprintf(err,errn,"invalid compass calibration"); return -1; }
   for(int i=0;i<9;i++) if(!isfinite(c->mag_matrix[i]) || fabsf(c->mag_matrix[i])>1.001f) { snprintf(err,errn,"invalid compass rotation");return -1; }
+  for (int i = 0; i < 3; i++) if (!isfinite(c->acc_bias[i]) || fabsf(c->acc_bias[i]) > 4 || !(c->acc_scale[i] > 0.7f && c->acc_scale[i] < 1.4f) || !isfinite(c->gyro_bias[i]) || fabsf(c->gyro_bias[i]) > 0.35f) { snprintf(err, errn, "invalid IMU calibration (acc_bias, acc_scale, gyro_bias)"); return -1; }
   for(int i=0;i<3;i++) for(int j=0;j<3;j++) { float dot=0;for(int k=0;k<3;k++) dot+=c->mag_matrix[3*i+k]*c->mag_matrix[3*j+k]; if(fabsf(dot-(i==j?1:0))>0.01f) { snprintf(err,errn,"compass matrix must be orthonormal");return -1; } }
   { rlink_cfg L; int k = c->radio_kind;
     if (k == RLINK_ELRS ? rlink_make(&L, k, c->elrs_rate, c->elrs_ratio) : k == RLINK_ESPNOW ? rlink_make(&L, k, c->radio_channel, c->radio_opt)
@@ -285,6 +287,11 @@ static int hw_set1(hw_config *c, const char *line, char *err, int errn) {
     if(n!=2 || v[0]!=(int)v[0] || v[0]<-1 || v[0]>3 || v[1]!=(int)v[1] || (v[1]!=0 && (v[1]<8 || v[1]>119))) { snprintf(err,errn,"sensor=driver,address (-1 off,0 auto,1/2 named,3 custom)");return -1; }
     int8_t *d=!strcmp(key,"imu")?&c->imu_driver:!strcmp(key,"baro")?&c->baro_driver:&c->mag_driver;
     uint8_t *a=!strcmp(key,"imu")?&c->imu_addr:!strcmp(key,"baro")?&c->baro_addr:&c->mag_addr; *d=(int8_t)v[0];*a=(uint8_t)v[1];
+  } else if (!strcmp(key, "acc_bias") || !strcmp(key, "acc_scale") || !strcmp(key, "gyro_bias")) {   /* the IMU's calibration (hw.h) */
+    const int sc = !strcmp(key, "acc_scale"), gy = !strcmp(key, "gyro_bias"); const float lim = sc ? 0 : gy ? 0.35f : 4.0f;
+    int ok = n == 3; for (int i = 0; ok && i < 3; i++) ok = isfinite(v[i]) && (sc ? v[i] > 0.7f && v[i] < 1.4f : fabsf(v[i]) <= lim);
+    if (!ok) { snprintf(err, errn, "%s=X,Y,Z in the IMU's axes: %s", key, sc ? "a gain each, 0.7 to 1.4 (1: none)" : gy ? "rad/s, at most 0.35 (20 °/s)" : "m/s², at most 4"); return -1; }
+    memcpy(sc ? c->acc_scale : gy ? c->gyro_bias : c->acc_bias, v, 3 * sizeof(float));
   } else if (!strcmp(key,"mag_matrix") || !strcmp(key,"mag_bias") || !strcmp(key,"mag_scale")) {
     int want=!strcmp(key,"mag_matrix")?9:3; if(n!=want) { snprintf(err,errn,"expected %d compass values",want);return -1; }
     float *out=want==9?c->mag_matrix:!strcmp(key,"mag_bias")?c->mag_bias:c->mag_scale;memcpy(out,v,(size_t)want*sizeof(float));
@@ -375,6 +382,8 @@ void hw_describe(const hw_config *c, char *out, int n) {
       c->sda,c->scl,c->batt_pin,(double)c->batt_divider,(double)c->vref,c->rate_hz,c->telem_hz,(long)c->link_baud,c->crsf_rx,c->crsf_tx,rl);
   APP(" tof=%d", c->tof_addr ? c->tof_addr : -1);
   if (c->imu_pwr_pin >= 0) APP(" imu_power=%d,%d", c->imu_pwr_pin, c->imu_pwr_on); else APP(" imu_power=-1");
+  APP(" acc_bias=%.4g,%.4g,%.4g acc_scale=%.5g,%.5g,%.5g gyro_bias=%.4g,%.4g,%.4g", (double)c->acc_bias[0], (double)c->acc_bias[1], (double)c->acc_bias[2],
+      (double)c->acc_scale[0], (double)c->acc_scale[1], (double)c->acc_scale[2], (double)c->gyro_bias[0], (double)c->gyro_bias[1], (double)c->gyro_bias[2]);
   if (c->pmon_chip) { APP(" pmon=%d,%d", c->pmon_chip, c->pmon_addr); for (int ch = 0; ch < lb_ina_channels(c->pmon_chip); ch++) APP(",%d,%.4g", c->pmon_use[ch], (double)c->pmon_shunt[ch]); }
   else APP(" pmon=-1");
   if (c->batt2_pin >= 0) APP(" battery2=%d,%.1f", c->batt2_pin, (double)c->batt2_divider); else APP(" battery2=-1");

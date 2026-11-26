@@ -319,16 +319,27 @@ int hw_pmon_poll(int64_t now, float volts[3], float amps[3]) {
   step++; next = now + 3000; return 0;
 }
 
+/* A reading as the chip gives it (its axes, SI units), then calibrated: the accelerometer by its calibration (acc_bias,
+ * acc_scale) and the gain measured at power-up (acc_gain: 1 when calibrated), the gyro less its offset. */
 static int imu_read_raw(fc_imu *m);
 int hw_imu_read(fc_imu *m) {
   const int e = imu_read_raw(m);
-  if (!e) for (int i = 0; i < 3; i++) m->acc[i] *= acc_gain;
-  return e;
+  if (e) return e;
+  for (int i = 0; i < 3; i++) m->acc[i] = (m->acc[i] - sensor_config.acc_bias[i]) * sensor_config.acc_scale[i] * acc_gain;
+  if (m->have_gyro) for (int i = 0; i < 3; i++) m->gyro[i] -= gyro_bias[i];
+  return 0;
+}
+void hw_imu_uncal(const fc_imu *m, float acc[3], float gyro[3]) {
+  for (int i = 0; i < 3; i++) { acc[i] = m->acc[i] / (sensor_config.acc_scale[i] * acc_gain) + sensor_config.acc_bias[i]; gyro[i] = m->gyro[i] + gyro_bias[i]; }
+}
+int hw_acc_calibrated(void) {
+  for (int i = 0; i < 3; i++) if (sensor_config.acc_bias[i] != 0 || sensor_config.acc_scale[i] != 1) return 1;
+  return 0;
 }
 static int imu_read_raw(fc_imu *m) {
   uint8_t b[14];
   m->have_gyro = 0;
-  if(custom_imu) { int e=custom_imu_read(m);if(!e && m->have_gyro) for(int i=0;i<3;i++) m->gyro[i]-=gyro_bias[i];return e; }
+  if(custom_imu) return custom_imu_read(m);
   if (imu_kind == 1) {
     if (rd(imu_dev, 0x3B, b, 14)) return -1;
     /* A reading that can't be one: all zeros (the chip reset itself after a dip and sleeps: the accelerometer reads
@@ -341,7 +352,7 @@ static int imu_read_raw(fc_imu *m) {
     const float ka = 8 * G / 32768.0f, kg = 2000.0f * (float)M_PI / 180.0f / 32768.0f;
     for (int i = 0; i < 3; i++) {
       m->acc[i] = (float)(int16_t)(b[2 * i] << 8 | b[2 * i + 1]) * ka;
-      m->gyro[i] = (float)(int16_t)(b[8 + 2 * i] << 8 | b[9 + 2 * i]) * kg - gyro_bias[i];
+      m->gyro[i] = (float)(int16_t)(b[8 + 2 * i] << 8 | b[9 + 2 * i]) * kg;
     }
     m->have_gyro = 1; return 0;
   }

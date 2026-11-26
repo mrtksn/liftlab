@@ -790,6 +790,15 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .tune-key.def::before{border-top:1.5px dashed var(--muted)}
 .tune-read{font-family:var(--f-mono);font-size:var(--text-xs)}
 .tune-verdict{margin:0}
+/* Tune → Sensor calibration: the poses, each with its Measure button */
+.scal-poses{list-style:none;margin:var(--space-8) 0;padding:0;display:grid;gap:var(--space-8)}
+.scal-pose{border:1px solid var(--line);border-radius:var(--radius-control);padding:var(--space-8)}
+.scal-pose.is-done{border-color:var(--good)}
+.scal-pose-h{display:flex;align-items:center;gap:var(--space-8)}
+.scal-pose-h small{color:var(--muted);flex:1}
+.scal-pose .hint{margin:var(--space-4) 0 0}
+.scal-got{font-family:var(--f-mono);font-size:var(--text-xs)}
+.scal-result p{margin:var(--space-4) 0}
 .tune-raw{display:grid;grid-template-columns:minmax(64px,auto) repeat(3,minmax(0,1fr));gap:var(--space-4) var(--space-5);align-items:center;margin-top:var(--space-8)}
 .tune-raw-h{font-size:var(--text-xs);color:var(--muted);text-align:center}
 .tune-raw-k{font-size:var(--text-xs);color:var(--muted);white-space:nowrap}

@@ -156,6 +156,8 @@ The learning runs at 200 Hz, on each telemetry frame. Between frames the flight 
 
 While a calibration runs, the controller keeps flying on the model it had when the calibration started, and switches only when the calibration decides.
 
+**Sensor calibration** in Tune measures the IMU's real mount (its heading too) and its accelerometer's offset and gain on every axis from seven still poses taken on the connected drone (`imucal`), and keeps them: the mount on the IMU part, the numbers as `acc_bias=`, `acc_scale=`, `gyro_bias=`, Level as the mount. Then a drone started on a rope or a slope still knows which way is up. Details: [Sensor calibration](docs/hardware-wiring.md#sensor-calibration).
+
 **Measured autotune** in Tune adds PID tuning after calibration. Small frequency sweeps measure attitude response from synchronized command/gyro telemetry, then propose response, damping and integral settings. Apply & verify flies provisional gains and repeats the tests before saving one undoable edit. Verified attitude tuning unlocks horizontal position-hold tuning. Initial support is the simulator, fixed motors, tilt mode and the standard control formulas; shared position gains are tested horizontally, not independently on the vertical axis. Details and checks: [Airframe learning and measured tuning](docs/learning-tuning.md).
 
 Earlier simulator measurements, before the covariance and validation changes, found calibration times of 11–25 s on stock presets, with 91–99% rotation and 69–98% force fits against 45–95% and 53–94% for the description. Those figures need remeasurement under the current validation. The main-lifter layout was an exception: its hover already wandered in a slowly growing circle without learning, and the motor tests pushed it over.
@@ -997,9 +999,12 @@ The tuning has its own checks:
 - **The airframe** comes from the simulator. **Export for the flight controller** saves a `.dfa` file with:
   - the controller's model: mass and inertia (or the learned table, when it flies on that), and each motor's effect per full thrust as terms of its joints' angles;
   - the servos' ranges and speeds, and the throttle curves;
-  - the allocation preferences and the IMU's mount.
+  - the allocation preferences and the IMU's mount;
+  - where the IMU sits from the centre of mass, when that's more than 5 mm.
   
   Nothing about the layout is hard-coded in the firmware.
+
+  An IMU off the centre of mass also reads its own turning about it, ω×(ω×r) + α×r: 2.5 m/s² for one 10 cm out at 5 rad/s. The flight core takes that away before it uses the accelerometer (attitude, thrust trim, vertical speed, the learning's data). For α it uses the gyro's change, low-passed at about 30 Hz. The position is in the file's version 2 (`'DFBA'`, 2, …, `imu_R`, `imu_pos`, …), which older firmware refuses. So a design whose IMU sits within 5 mm of the centre still exports as version 1, and any firmware takes it.
 - **Angle mode.** The sticks set the lean, from a level hover up to 35°, and the turn rate. The throttle stick is centred at 0.5:
   - **with a barometer** (BMP180/BMP280/BME280), it sets the climb or sink speed, up to 2 m/s, and the middle holds the height;
   - **without one**, it sets vertical acceleration, and the middle keeps the vertical speed.

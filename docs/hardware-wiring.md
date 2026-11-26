@@ -53,7 +53,8 @@ The IMU's card has **Level**: which way up the flight controller takes as level.
   slightly tilted is trimmed out; start it on a level surface. If it was moving, there is no trim and it says so.
   The same still second sets the accelerometer's gain so that it reads exactly 1 g. A cheap card can read 0.9 g, and
   the attitude estimate trusts its "up" only within 5% of 1 g, so without that gain it would follow the gyro alone
-  and drift. `level` measures the gain again. A card started while moving keeps a gain of 1 until then.
+  and drift. `level` measures the gain again. A card started while moving keeps a gain of 1 until then. A
+  calibrated card (below) uses its calibration instead.
 - **The mount as set in Airframe** (`level=off`): no trim. A sensor fitted tilted shows as a tilt.
 - **A fixed trim** (`level=ROLL,PITCH`, degrees: roll −180…180, pitch −90…90, at most 170° from straight up): what a
   level drone reads. Use it to start on a slope, where "as it sits" would be wrong. Measure it once on level ground:
@@ -72,6 +73,35 @@ so it is level again within a second.
 a reboot; `level R,P[,Y]` sets a trim and `level yaw Y` the yaw alone, until a reboot; `level none` drops the trim.
 The ESP32's `show` lists the trim in use. Needs flight firmware with wiring version 16 for `level_yaw` and trims
 over 45° (14 for the rest).
+
+### Sensor calibration
+
+Everything above is measured again at each power-up from however the drone happens to sit, and none of it is kept:
+start it on a rope or a slope and it doesn't know which way is up. **Tune → Sensor calibration** measures the IMU
+once and keeps it, from still poses, props off, connected to the drone:
+
+1. **Level, right way up** and **Nose up** (30° or more): the board's whole mount, from which way gravity points in
+   each. Level gives the body's up in the board's axes; nose up adds forward. The heading is included, which gravity
+   alone can't give.
+2. **Nose down**, **Left side down**, **Right side down**, **Upside down**: every axis up and down, so the
+   accelerometer's offset and gain on each axis come out of a fit that makes every pose read exactly 1 g. A cheap
+   MPU card can be 0.1 g off on one axis: 0.90 g face up, 1.135 g face down.
+3. **Level again**: six poses fit six numbers exactly whatever they read, so a seventh shows a pose that moved. It
+   must also agree with the first level pose, which the mount rests on.
+
+Each **Measure** sends `imucal` up the radio. The flight controller averages a second of the IMU as the chip reads
+it (its axes, before any calibration) and answers `imucal AX AY AZ GX GY GZ`: mm/s² and 0.1 mrad/s, whole numbers,
+to fit one radio message. It refuses with `imucal: moving …` if the drone didn't hold still, and `disarm first` while
+armed. Without all six side poses, only the mount and one gain for all three axes are measured.
+
+**Apply** keeps it in the design:
+- the mount on the IMU part, so the airframe's `imu_R` and the 3D view have the board as it really sits;
+- `acc_bias=X,Y,Z` (m/s²), `acc_scale=X,Y,Z` and `gyro_bias=X,Y,Z` (rad/s) on the IMU card, in the board's axes.
+  The gyro's offset is still measured at power-up when it's still; the saved one is for a start while moving.
+- **Level** set to the mount (`level=off`) and `level_yaw` to 0, so how it sits at power-up no longer matters.
+
+**Upload design** (or Install) puts it on the drone. The IMU card shows the calibration and can clear it. Needs flight
+firmware with wiring version 20.
 
 ### When the IMU stops answering
 

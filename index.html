@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=638c08bd57">
+<link rel="stylesheet" href="css/style.css?v=c81925015e">
 </head>
 <body>
 <div class="app">
@@ -121,6 +121,10 @@
         <h2>Tuning <small id="tuneState"></small></h2>
         <p class="hint">How firmly the flight controller steers. Response is how quickly a loop gets where it's asked, damping how much it overshoots, the integral how quickly it trims out a steady push (an off-centre weight, wind). Part of the design; a change flies at once, after the boards check it and fly it in the background for a second.</p>
         <div id="tuneLoops"></div>
+        <details class="fold" id="sensorCalFold">
+          <summary><span>Sensor calibration</span><small id="sensorCalSum"></small></summary>
+          <div id="sensorCal"></div>
+        </details>
         <details class="fold" id="autotuneFold">
           <summary><span>Measured autotune</span><small>calibrate → measure → verify</small></summary>
           <p class="hint">After an airframe calibration, small frequency sweeps measure the drone's response. Attitude comes first, then position hold. Keep the controls released; Stop cancels a test. Currently for fixed-motor aircraft in tilt mode in the simulator.</p>
@@ -639,7 +643,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="js/ui-components.js?v=7bee7a1164"></script>
 <script src="js/ui-shell.js?v=2cb6cfffcf"></script>
-<script src="js/math.js?v=0a111ef564"></script>
+<script src="js/math.js?v=daaa4c7227"></script>
 <script src="js/sources.js?v=3211fb8610"></script>
 <script src="js/terrain.js?v=9a7a6e8f3d"></script>
 <script src="js/laws.js?v=c46932ac6f"></script>
@@ -673,20 +677,22 @@
 <script src="js/cargo-ui.js?v=5679bc1b99"></script>
 <script src="js/flight-physics-ui.js?v=bbbc19b5d4"></script>
 <script src="js/health-ui.js?v=7a38ec2b34"></script>
-<script src="js/tuning-ui.js?v=c313a25da8"></script>
+<script src="js/tuning-ui.js?v=a90100869f"></script>
+<script src="js/sensor-cal.js?v=12cd5607a5"></script>
+<script src="js/sensor-cal-ui.js?v=8544a07768"></script>
 <script src="js/autotune.js?v=ab42d73944"></script>
 <script src="js/designs.js?v=d4557d0384"></script>
 <script src="js/share.js?v=626dfa369f"></script>
 <script src="js/board-hardware.js?v=e559b18bd8"></script>
-<script src="js/hardware.js?v=62301714d5"></script>
+<script src="js/hardware.js?v=4f2b301c16"></script>
 <script src="js/driver-presets.js?v=ed1dfcae66"></script>
 <script src="js/board-pinouts.js?v=78ac0bf7c1"></script>
-<script src="js/hardware-ui.js?v=e1cbb85a38"></script>
+<script src="js/hardware-ui.js?v=6f78550f28"></script>
 <script src="js/install-ui.js?v=22de83b1a8"></script>
 <script src="js/editor.js?v=4a23ccaabf"></script>
 <script src="js/bench3d.js?v=0abe843902"></script>
-<script src="js/fc-export.js?v=8d72da5f52"></script>
-<script src="js/board-wasm.js?v=99d766878f"></script>
+<script src="js/fc-export.js?v=f9cb82cf6c"></script>
+<script src="js/board-wasm.js?v=8ba0550516"></script>
 <script src="js/crsf.js?v=004ad7fe81"></script>
 <script src="js/link.js?v=924573b83b"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
@@ -701,7 +707,7 @@
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=6d00ad1810"></script>
 <script src="js/live.js?v=6f175c9171"></script>
-<script src="js/drone-card.js?v=8609c2cc03"></script>
+<script src="js/drone-card.js?v=7f51da8aad"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
 <script src="js/gs-ui.js?v=0721b57512"></script>
 <script src="js/agent.js?v=df7f044dda"></script>

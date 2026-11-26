@@ -109,6 +109,22 @@ static void start(const uint8_t *blob, uint32_t len) {
   memset(&B, 0, sizeof B); B.q[0] = 1;
   memset(&C, 0, sizeof C); C.test_motor = -1; link_up = 1; have_gyro = 1; baro = 1; tcmd = 0; vbatt_in = 0;
 }
+/* src's airframe with the IMU mounted square (imu_R = I), as version 1, or 2 with the IMU at pos: as fc-export.js writes them */
+static uint32_t with_imu(const uint8_t *src, uint32_t len, int ver, const float pos[3], uint8_t *out) {
+  const uint32_t at = 4 * (5 + 1 + 9 + 9 + 3 + 9), one = 1065353216u /* 1.0f */, v = (uint32_t)ver;   /* just after imu_R */
+  memcpy(out, src, at); memcpy(out + 4, &v, 4);
+  for (int k = 0; k < 9; k++) { uint32_t x = k % 4 ? 0 : one; memcpy(out + at - 36 + 4 * k, &x, 4); }
+  uint32_t n = at; if (ver >= 2) { memcpy(out + n, pos, 12); n += 12; }
+  memcpy(out + n, src + at, len - 4 - at); n += len - 4 - at;
+  uint32_t crc = rn_crc32(out, n); memcpy(out + n, &crc, 4); return n + 4;
+}
+/* the IMU sees gyro w (body axes) and reads acc, disarmed, for n steps of 1 ms */
+static void imu_steps(int n, const float w[3], const float acc[3]) {
+  for (int k = 0; k < n; k++) {
+    fc_imu m; memset(&m, 0, sizeof m); memcpy(m.gyro, w, 12); memcpy(m.acc, acc, 12); m.have_gyro = 1;
+    rn_host_tick(&H, 0.001f); fc_step(&F, &m, 0.001f, 0, &O);
+  }
+}
 static float max_motor(void) { float m = 0; for (int i = 0; i < F.A.n_motors; i++) if (O.motor[i] > m) m = O.motor[i]; return m; }
 
 int main(int argc, char **argv) {
@@ -123,6 +139,37 @@ int main(int argc, char **argv) {
   { uint8_t bad[8192]; memcpy(bad, quad, lq); bad[40] ^= 1; fc_state G = F; CHECK(fc_airframe_load(&G, bad, lq) < 0, "a flipped bit is refused: %s", G.why); }
   { fc_state G = F; CHECK(fc_airframe_load(&G, quad, lq - 8) < 0, "a cut-off file is refused: %s", G.why); }
   { fc_state G = F; CHECK(fc_airframe_load(&G, rn_builtin_img, 400) < 0, "a program is not an airframe: %s", G.why); }
+
+  printf("the IMU off the centre of mass (version 2)\n");
+  { static uint8_t v1[8192], v2[8192]; const float pos[3] = { 0.125f, 0, 0 }, none[3] = { 0, 0, 0 };
+    uint32_t l1 = with_imu(quad, lq, 1, none, v1), l2 = with_imu(quad, lq, 2, pos, v2);
+    start(v1, l1); fc_airframe A1 = F.A;
+    CHECK(F.A.imu_pos[0] == 0 && F.A.imu_pos[1] == 0 && F.A.imu_pos[2] == 0, "version 1: the IMU at the centre of mass");
+    start(v2, l2);
+    CHECK(F.A.imu_pos[0] == 0.125f && F.A.imu_pos[1] == 0 && F.A.imu_pos[2] == 0 && F.A.n_motors == 4 && F.A.m == A1.m &&
+          !memcmp(F.A.mot, A1.mot, sizeof A1.mot), "version 2 loads, the IMU 12.5 cm forward: %s", F.why);
+    { fc_state G = F; CHECK(fc_airframe_load(&G, v2, l2 - 4) < 0, "a cut-off version 2 is refused: %s", G.why); }
+    { static uint8_t b[8192]; memcpy(b, v1, l1); b[4] = 2; uint32_t c = rn_crc32(b, l1 - 4); memcpy(b + l1 - 4, &c, 4);
+      fc_state G = F; CHECK(fc_airframe_load(&G, b, l1) < 0, "version 2 without the position is refused: %s", G.why); }
+    { static uint8_t b[8192]; memcpy(b, v1, l1); b[4] = 3; uint32_t c = rn_crc32(b, l1 - 4); memcpy(b + l1 - 4, &c, 4);
+      fc_state G = F; CHECK(fc_airframe_load(&G, b, l1) < 0, "version 3 is refused: %s", G.why); }
+    /* level, yawing steadily at 4 rad/s: 12.5 cm out it reads 2 m/s² toward the middle as well as gravity */
+    const float w[3] = { 0, 0, 4 }, acc[3] = { -2, 0, 9.81f };
+    start(v2, l2); imu_steps(50, w, acc);
+    CHECK(F.fb[0] == 0 && F.fb[1] == 0 && F.fb[2] == 9.81f, "a steady spin reads 1 g at the centre of mass (%g, %g, %g)", F.fb[0], F.fb[1], F.fb[2]);
+    CHECK(F.fb_imu[0] == -2 && F.fb_imu[2] == 9.81f, "the learning's stream still has it as read (it takes the lever arm out itself)");
+    start(v1, l1); imu_steps(50, w, acc);
+    CHECK(F.fb[0] == -2 && F.fb[1] == 0 && F.fb[2] == 9.81f, "version 1 takes the reading as it is (%g, %g, %g)", F.fb[0], F.fb[1], F.fb[2]);
+    /* spinning up at 20 rad/s²: the tangential 2.5 m/s² goes too, once the filtered gyro change has caught up */
+    start(v2, l2); float e = 0;
+    for (int k = 0; k <= 300; k++) {
+      float wz = 20 * 0.001f * k, a[3] = { -wz * wz * 0.125f, 20 * 0.125f, 9.81f }, ww[3] = { 0, 0, wz };
+      imu_steps(1, ww, a); if (k > 100) e = fmaxf(e, fabsf(F.fb[0]) + fabsf(F.fb[1]) + fabsf(F.fb[2] - 9.81f));
+    }
+    CHECK(e < 1e-3f, "spinning up, it reads 1 g at the centre of mass (off by %.1e m/s²)", (double)e);
+    /* and the IMU there flies as well as at the middle */
+    start(v2, l2); fly(1); C.arm = 1; fly(0.2); C.throttle = 0.5f; fly(5);
+    CHECK(F.state == FC_ARMED && tilt_deg(&B) < 1.5, "version 2 flies (%.2f°): %s", tilt_deg(&B), F.why); }
 
   printf("arming\n");
   start(quad, lq); fly(0.3);

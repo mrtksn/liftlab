@@ -68,6 +68,7 @@ typedef struct {
   int n_motors, n_joints, mode;          /* mode: 0 tilt body, 1 mixed, 2 stay level */
   float m, J[9], Jinv[9], axis[3];       /* the model the controller computes with, and the nominal thrust axis */
   float imu_R[9];                        /* IMU → body rotation */
+  float imu_pos[3];                      /* the IMU from the centre of mass, body axes [m] (version 1 files: 0) */
   float allowance, efficiency, servo_move, horizon;   /* allocation preferences */
   float lean_max;                        /* most lean [deg] */
   float mix_share;                       /* mixed steering: the servos' share of the sideways force */
@@ -178,7 +179,10 @@ typedef struct {
   /* what goes to the learning and the supervisor (LTEL): sums since the last frame */
   float lt_f[3], lt_w[3], lt_u[FC_MAX_MOTORS], lt_v[FC_MAX_MOTORS], lt_tc[FC_MAX_JOINTS]; int lt_n;
   float lt_alpha[3], test_alpha[3];      /* commanded angular acceleration, averaged with the LTEL gyro */
-  float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes */
+  float fb[3], gb[3]; int have_imu;      /* this step's accelerometer and gyro, body axes (fb: as at the centre of mass) */
+  float fb_imu[3];                       /* the accelerometer as read where the IMU is, body axes: for LTEL and the throw's
+                                          * samples, since the learning and the supervisor take the lever arm out themselves */
+  float g_prev[3], alpha_f[3];           /* the gyro last step, its change [rad/s²] low-passed: the IMU's lever arm */
   bus *bus; int bt[7];                   /* the board's data bus, if it has one (fc_bus_attach), and this code's topics on it */
   /* Level (fc_level_*): which way is up when the drone sits level, beyond the airframe's IMU mount (imu_R): a sensor
    * fitted tilted, or stood on its edge. imu_M = Rz(yaw) · trim · imu_R turns the IMU's readings into body axes: the

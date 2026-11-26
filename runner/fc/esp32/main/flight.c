@@ -26,6 +26,7 @@
  * A fresh board drives no pin: no motors or servos until the wiring (motors=, servos=) is set, saved and rebooted.
  * "version" says the build (firmware COMMIT CHIP flight, as firmware/manifest.json records it); "scan" lists every
  * address that answers on the sensors' I2C bus (disarmed); "accel" reports a fresh acceleration sample in sensor axes;
+ * "imucal" one still pose for the IMU's calibration: a second's average as the chip reads it (LiftLab's Tune does the rest);
  * "power" what the power monitor (pmon=) reads on each channel: volts, amps, the charge used since power-up.
  * Which radio (settings, as all the others: over the link, save, reboot; "show" lists them, the secrets masked):
  *   radio=elrs,250,4      an ExpressLRS (or Crossfire) receiver on a second UART, crsf=RX,TX (CRSF at 420000 baud);
@@ -203,19 +204,25 @@ static int gyro_offset(float acc[3]) {
     if (var < 3e-4) {
       char t[120]; hw_gyro_calibrate(b); snprintf(t, sizeof t, "gyro offset measured: %.2f %.2f %.2f °/s", b[0] * 57.3, b[1] * 57.3, b[2] * 57.3); post(t);
       for (int i = 0; i < 3; i++) acc[i] = (float)(sa[i] / n);
-      acc_one_g(acc, t, sizeof t); post(t);
+      if (!hw_acc_calibrated()) { acc_one_g(acc, t, sizeof t); post(t); }   /* (calibrated: its own numbers) */
       return 1;
     }
     post(tries < 4 ? "the drone is moving: measuring the gyro offset again" : "the drone kept moving: flying without a measured gyro offset (the estimator learns it)");
   }
   return 0;
 }
+/* Not measured (it was moving): the gyro's offset from the calibration (gyro_bias=), if it has one. */
+static void gyro_offset_saved(void) {
+  if (!HW.gyro_bias[0] && !HW.gyro_bias[1] && !HW.gyro_bias[2]) return;
+  hw_gyro_calibrate(HW.gyro_bias); post("gyro offset: the calibrated one (gyro_bias=)");
+}
 static volatile int imu_recoveries;   /* times the IMU came back (the status line says) */
 static void sensor_task(void *arg) {
   int period = 1000 / HW.rate_hz; if (period < 1) period = 1; int level_done = 0;
   if (SENS.imu == 1 || SENS.imu == 3) {
     float acc[3];
-    if (gyro_offset(acc) && HW.level_mode == 0) { float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1; }   /* (level=boot: as it sits now is level) */
+    const int still = gyro_offset(acc); if (!still) gyro_offset_saved();
+    if (still && HW.level_mode == 0) { float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1; }   /* (level=boot: as it sits now is level) */
   }
   if (HW.level_mode == 2) level_ask(2, (float[4]){ HW.level_deg[0], HW.level_deg[1], HW.level_yaw, 0 });
   else if (!level_done && HW.level_yaw != 0) level_ask(4, (float[4]){ HW.level_yaw, 0, 0, 0 });
@@ -238,8 +245,9 @@ static void sensor_task(void *arg) {
       if (back) {
         imu_recoveries++; post(t); fail_ms = 0; next_try_ms = 10; tries = 0;
         float acc[3];   /* found only now: its offset, if it's on the ground */
-        if (!was && (SENS.imu == 1 || SENS.imu == 3) && F.state == FC_DISARMED && gyro_offset(acc) && HW.level_mode == 0 && !level_done) {
-          float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1;
+        if (!was && (SENS.imu == 1 || SENS.imu == 3) && F.state == FC_DISARMED) {
+          if (!gyro_offset(acc)) gyro_offset_saved();
+          else if (HW.level_mode == 0 && !level_done) { float g[4] = { acc[0], acc[1], acc[2], HW.level_yaw }; level_ask(1, g); level_done = 1; }
         }
         last = xTaskGetTickCount();
       } else {
@@ -476,8 +484,8 @@ static void setting(const char *line) {
     snprintf(s,sizeof s,"sensor profiles: imu=%d,%u baro=%d,%u mag=%d,%u",HW.imu_driver,HW.imu_addr,HW.baro_driver,HW.baro_addr,HW.mag_driver,HW.mag_addr);report(s);
     if (memcmp(&HW, &HW_next, sizeof HW)) { strcpy(s, "after a reboot: "); hw_describe(&HW_next, s + 16, sizeof s - 16); report(s); }
     strcpy(s, "radio: "); esp_radio_status(RADIO_IO, s + 7, sizeof s - 7); report(s);   /* (the packet link's counts: read as they are, a count may be a step behind) */
-    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); accelerometer gain %.3f; safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
-             (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", (double)hw_acc_gain(), F.safety_off ? "OFF" : "on");
+    snprintf(s, sizeof s, "IMU: %s; barometer: %s; compass: %s; %s; flying program slot %d; level trim roll %.1f° pitch %.1f° yaw %.0f° (%s); accelerometer %s %.3f; safety %s", SENS.imu ? SENS.imu_name : "none", SENS.baro ? SENS.baro_name : "none", SENS.mag ? SENS.mag_name : "none", F.have_airframe ? F.why : "no airframe", H.act,
+             (double)F.level_deg[0], (double)F.level_deg[1], (double)F.level_deg[2], F.level_kind == 1 ? "measured" : F.level_kind == 2 ? "set" : "none", hw_acc_calibrated() ? "calibrated (acc_bias, acc_scale), gain" : "gain", (double)hw_acc_gain(), F.safety_off ? "OFF" : "on");
     report(s);
     if (imu_recoveries) { snprintf(s, sizeof s, "IMU set up again %d times since start (it stopped answering: check its wiring and supply)", imu_recoveries); report(s); }
     return;
@@ -519,8 +527,28 @@ static void setting(const char *line) {
     if (n < 30) { report("level: no IMU readings"); return; }
     if (sg / n > 0.05 * 0.05) { report("level: it's moving; keep it still and try again"); return; }
     float g[4] = { (float)(sa[0] / n), (float)(sa[1] / n), (float)(sa[2] / n), NAN };
-    acc_one_g(g, s, sizeof s); report(s); level_ask(1, g);
+    if (!hw_acc_calibrated()) { acc_one_g(g, s, sizeof s); report(s); }
+    level_ask(1, g);
     report("level: measured; the trim follows (until a reboot: level=boot measures it at every start)"); return;
+  }
+  if (!strcmp(line, "imucal")) {                      /* one still pose for the IMU's calibration (LiftLab's Tune) */
+    /* A second's average as the chip reads it (its axes, before calibration and the gyro's offset), and whether it
+     * held still: "imucal AX AY AZ GX GY GZ", acceleration in mm/s², rotation in 0.1 mrad/s (whole numbers: the
+     * answer fits one radio message). LiftLab works out the mount, offsets and gains from several poses. */
+    double sa[3] = { 0 }, sg[3] = { 0 }, qa = 0, qg = 0; int n = 0; uint32_t seen = 0;
+    for (int k = 0; k < 200; k++) {
+      fc_imu m; uint32_t sq; int ok; portENTER_CRITICAL(&imu_mux); m = imu_now; sq = imu_seq; ok = imu_ok; portEXIT_CRITICAL(&imu_mux);
+      if (ok && sq != seen && m.have_gyro) {
+        float a[3], w[3]; seen = sq; hw_imu_uncal(&m, a, w);
+        for (int i = 0; i < 3; i++) { sa[i] += a[i]; sg[i] += w[i]; qa += (double)a[i] * a[i]; qg += (double)w[i] * w[i]; } n++;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (n < 60) { report("imucal: no IMU readings"); return; }
+    double va = qa / n, vg = qg / n; for (int i = 0; i < 3; i++) { sa[i] /= n; sg[i] /= n; va -= sa[i] * sa[i]; vg -= sg[i] * sg[i]; }
+    if (va > 0.15 * 0.15 || vg > 0.03 * 0.03) { report("imucal: moving: keep it still and measure again"); return; }
+    snprintf(s, sizeof s, "imucal %ld %ld %ld %ld %ld %ld", lround(sa[0] * 1000), lround(sa[1] * 1000), lround(sa[2] * 1000), lround(sg[0] * 1e4), lround(sg[1] * 1e4), lround(sg[2] * 1e4));
+    report(s); return;
   }
   if (!strcmp(line, "accel")) {
     accel_readout sample;

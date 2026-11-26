@@ -186,14 +186,15 @@ EXPORT("fc_command") void command(void) {
   fc_cmd c = { (int)cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], (int)cmd[5], cmd[6], cmd[7] > 0.5f, { cmd[8], cmd[9], cmd[10] }, cmd[11] };
   fc_command(&F, &c);
 }
-/* The accelerometer over the last half second, and whether it stood still meanwhile (the gyro): what `level` takes. */
-static float acc_avg[3], gyro_ms; static double still_t;
+/* The accelerometer over the last half second, and whether it stood still meanwhile (the gyro): what `level` takes.
+ * The gyro's average too, for imucal. */
+static float acc_avg[3], gyro_avg[3], gyro_ms; static double still_t;
 EXPORT("fc_tick") void fc_tick(void) {
   fc_imu m = { { io[0], io[1], io[2] }, { io[3], io[4], io[5] }, io[6] > 0.5f, io[9], io[10] > 0.5f, { io[11], io[12], io[13] }, io[14] > 0.5f };
   float dt = io[7];
   if (m.have_gyro && dt > 0) {
     float k = dt / 0.5f > 1 ? 1 : dt / 0.5f, g2 = m.gyro[0] * m.gyro[0] + m.gyro[1] * m.gyro[1] + m.gyro[2] * m.gyro[2];
-    for (int i = 0; i < 3; i++) acc_avg[i] += (m.acc[i] - acc_avg[i]) * k;
+    for (int i = 0; i < 3; i++) { acc_avg[i] += (m.acc[i] - acc_avg[i]) * k; gyro_avg[i] += (m.gyro[i] - gyro_avg[i]) * k; }
     gyro_ms += (g2 - gyro_ms) * k; still_t = gyro_ms < 0.05f * 0.05f ? still_t + dt : 0;
   }
   fc_out o;
@@ -209,6 +210,17 @@ EXPORT("fc_tick") void fc_tick(void) {
 /* A text command for the flight core (fc_text.h), in txt: its answer in txt; 1 if it was one, 0 if not. */
 EXPORT("fc_text") int fc_text_(void) {
   char line[RC_TEXT + 1]; int i = 0; for (; i < RC_TEXT && txt[i]; i++) line[i] = txt[i]; line[i] = 0;
+  /* imucal, as the ESP32's (flight.c): one still pose for the IMU's calibration, the readings as delivered (the
+   * simulated chip's axes and errors): acceleration in mm/s², rotation in 0.1 mrad/s */
+  { static const char w[] = "imucal"; int k = 0; while (w[k] && line[k] == w[k]) k++;
+    if (!w[k] && !line[k]) {
+      if (F.state != FC_DISARMED) fc_fmt(txt, 200, "imucal: disarm it first");
+      else if (!(still_t > 0 || acc_avg[2] != 0)) fc_fmt(txt, 200, "imucal: no IMU readings");
+      else if (!(still_t > 0.5)) fc_fmt(txt, 200, "imucal: moving: keep it still and measure again");
+      else { int v[6]; for (int j = 0; j < 3; j++) { float a = acc_avg[j] * 1000, g = gyro_avg[j] * 1e4f; v[j] = (int)(a + (a < 0 ? -0.5f : 0.5f)); v[3 + j] = (int)(g + (g < 0 ? -0.5f : 0.5f)); }
+        fc_fmt(txt, 200, "imucal %d %d %d %d %d %d", v[0], v[1], v[2], v[3], v[4], v[5]); }
+      return 1;
+    } }
   return fc_text(&F, line, still_t > 0 || acc_avg[2] != 0 ? acc_avg : 0, still_t > 0.5, txt, 200);
 }
 /* The learning task: the airframe in blob, the config in lcfg. */

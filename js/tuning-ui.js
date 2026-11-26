@@ -38,6 +38,7 @@ function buildTuning() {
     tuneUi.loops.set(L.id, { L, f, chart, verdict, note, sum, fold });
   }
   buildTuneRaw();
+  if (typeof renderSensorCal === 'function') renderSensorCal();
   refreshTuning();
 }
 // The numbers the formulas get, per axis.
