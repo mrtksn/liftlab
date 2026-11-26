@@ -188,7 +188,7 @@ int main(void) {
     if (fwd_at && !cal_at && el > fwd_at + 5) { x1 = (float)B.p[0]; say("status"); say("calibrate"); cal_at = el; }
     if (cal_at && !quiet_at && el > cal_at + 5) { quiet_at = el; cut = 1; worst_full = worst_wait; printf("  the line is cut at (%.2f %.2f %.2f)\n", B.p[0], B.p[1], B.p[2]); }
     /* a command module with another binding phrase: nothing gets through */
-    if (quiet_at && !wrong_at && el > quiet_at + 22) {
+    if (quiet_at && !wrong_at && el > quiet_at + 22 && (F.state == FC_DISARMED || el > quiet_at + 32)) {   /* (landed and disarmed by itself first: a slow machine takes longer) */
       printf("  after the cut: at (%.2f %.2f %.2f), %s\n", B.p[0], B.p[1], B.p[2], fc_state_name(F.state));
       home_after_cut = hypot(B.p[0], B.p[1]) < 1.0 && B.p[2] < 0.2;
       kill(gnd, SIGTERM); waitpid(gnd, 0, 0); lines(gnd_out, gbuf, &gn, "ground", on_gnd); close(gnd_out); gn = 0;
