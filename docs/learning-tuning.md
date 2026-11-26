@@ -23,6 +23,34 @@ The RLS transient terms participate in the entire covariance matrix, including c
 terms. Numerical regression checks compare this with an independent information-matrix implementation and
 the JavaScript and native compiled runners.
 
+## Scale thrust test
+
+Tune → Motor thrust (`js/thrust-test.js`, `js/thrust-test-ui.js`) measures what each motor really lifts, on the
+ground, so a drone that can't hover yet still gets a model of its motors. Props on, the drone taped to a kitchen
+scale; the motors-off reading is the zero, then each motor alone at 20–100% throttle (the highest is a setting).
+A motor test sends the throttle straight to the ESC, so a reading at throttle u and pack voltage V is fitted as
+T = Tmax·((1 − k)·e + k·e²) with e = u·V/Vref (least squares; readings under 1 g, an ESC's dead band, are left out).
+A fit that misses its readings by more than 8% of Tmax, or bends outside −0.3…1.3, is flagged.
+
+Apply writes `thrustTest` on each motor (readings, Tmax at Vref, bend, the fitted coefficient). A fixed brushless or
+brushed motor gets the prop thrust coefficient (`propPhysics.ct`) that makes `FlightPhysics.equilibrium` give the
+readings; a generic motor gets `tmax`. A motor with a measured prop table keeps its table. While the card still
+holds what was fitted (`motorMeasured`), `curveHat` tells the flight controller the measured bend and the simulator
+drops that motor's hidden thrust spread. Editing the card's coefficient, thrust or table, or the pack's cell count,
+retires the record. The drone needs Upload design for the new airframe.
+
+On the drone the page sends `motors 0 0.5 0 0` every 0.25 s; dfb_pi turns it into RN_LINK_BENCH_TEST frames for
+0.5 s after each, renewals of the same line say nothing back. The test also goes while the radio's channels come,
+as long as their arm switch is off (LiftLab connected sends its channels all the time); arming takes the sticks
+back and ends it. The ESP32's motor test is disarmed-only and lapses on its own command timeout. The simulator holds
+the drone still on its scale (`simBenchHold`), runs the same flight-core motor test (`simBenchSet`), and reads the
+scale from the rotors' still-air thrust once the throttle has run half a simulated second. The ground tests can't
+see the props' extra inflow in flight, ground effect or the pack's sag under a full hover load.
+
+`node tools/test_thrust_test.js` checks the fit, the physical coefficient and the refusals;
+`test_ground_angle_e2e` (in `tools/test_radio_e2e.sh`) checks the motor test through dfb_pi with the radio's
+channels coming.
+
 ## Simulator autotune workflow
 
 1. Take off, release the controls and run an airframe calibration under Control → Learning.

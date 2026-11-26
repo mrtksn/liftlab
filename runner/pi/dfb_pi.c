@@ -401,6 +401,9 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
  *   motor N THROTTLE                       a motor test, disarmed: motor N (1, 2, ... in the airframe's order)
  *   motors T1 T2 ...                       several at once, each at its own throttle (0 still, idle the flight core's
  *                                          idle), as RN_LINK_BENCH_TEST; motors join and leave as the line changes
+ *                                          (the same line again within the half second: renewed, no answer)
+ *   motor tests also go while the radio's channels come with its arm switch off (LiftLab connected: Tune →
+ *   Motor thrust); arming ends them. The sticks stay the radio's while its channels come.
  *   motor off, sticks 0 0                  disarmed, nothing spinning (a test needs this between two motors)
  *   sticks off                             stop sending */
 /* The ESP32's power monitor (RN_LINK_POWER: per channel what it watches, volts, amps, mAh) as text: "power: motors'
@@ -421,11 +424,14 @@ static const char *bench_said(const float *b, int n) {
   for (int i = 0; i < n && k < sizeof o; i++) if (b[i] > 0) k += (size_t)snprintf(o + k, sizeof o - k, "%s%d at %.2f", k ? ", " : "", i + 1, (double)b[i]);
   return o;
 }
-static void stick_line(const char *s, int angle_mode, int radio_has_it, int n_mot, char (*names)[16], float *c, double *ct, float *bench, int *bench_n, double t, int fc_flying, char *reply, size_t rn) {
+#define TXT_STICK_S 0.5                    /* text sticks and motor tests last this long after the last line [s] */
+static void stick_line(const char *s, int angle_mode, int radio_has_it, int radio_armed, int n_mot, char (*names)[16], float *c, double *ct, float *bench, int *bench_n, double t, int fc_flying, char *reply, size_t rn) {
   float a[5] = { 0, 0, 0, 0, 0 }; int motor = s[0] == 'm', multi = !strncmp(s, "motors", 6);
   const char *arg = s + (multi ? 6 : motor ? 5 : 6); while (*arg == ' ') arg++;
   if (!angle_mode) { snprintf(reply, rn, "%s: only in angle mode (dfb_pi --no-navigation); here the navigation flies it (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
-  if (radio_has_it) { snprintf(reply, rn, "%s: the radio's pilot has it (its channels come); nothing taken from here", motor ? "motor" : "sticks"); return; }
+  /* With the radio's channels coming, a motor test still goes while its pilot is disarmed (LiftLab's Motor thrust
+   * test, connected: its own channels keep coming); arming takes it back. The sticks stay the radio's. */
+  if (radio_has_it && (!motor || radio_armed)) { snprintf(reply, rn, "%s: the radio's pilot has it (its channels come%s); nothing taken from here", motor ? "motor" : "sticks", motor ? ", armed" : ""); return; }
   if (!strcmp(arg, "off") && !motor) { *ct = -1e9; *bench_n = 0; snprintf(reply, rn, "sticks: off, nothing sent (the ESP32's failsafe: disarmed on the ground, else it lands)"); return; }
   if (multi) {
     float b[FC_MAX_MOTORS] = { 0 }; int n = 0, any = 0, used = 0; char tok[16]; const char *p = arg;
@@ -440,9 +446,11 @@ static void stick_line(const char *s, int angle_mode, int radio_has_it, int n_mo
       }
     }
     if (any && fc_flying) { snprintf(reply, rn, "motors: not while it's armed (a test disarms it); disarm first"); return; }
+    const int again = any && *bench_n == n && t - *ct < TXT_STICK_S && !memcmp(bench, b, sizeof(float) * (size_t)n);   /* (the same test renewed: no answer) */
     float z[7] = { 0, 0, 0, 0, 0, -1, 0 }; memcpy(c, z, sizeof z); *ct = t;
     if (!any) { *bench_n = 0; snprintf(reply, rn, "motor test: off"); return; }
     memcpy(bench, b, sizeof b); *bench_n = n;
+    if (again) { reply[0] = 0; return; }
     snprintf(reply, rn, "motor test: %s (idle is %.2f)", bench_said(b, n), (double)FC_IDLE);
     return;
   }
@@ -626,7 +634,7 @@ int main(int argc, char **argv) {
   double last_nav = 0, last_send = 0, last_fix_t = 0, last_want = 0, fc_state_t = 0, t_start = now_s(); float fc_state = 0;
   /* Angle mode's sticks from a text command (`sticks`, `motor`: the control panel, a test): the 7 floats of a pilot's
    * command, good for TXT_STICK_S from when they came; the radio's channels win while they come. */
-  static float txt_stick[7]; double txt_stick_t = -1e9; const double TXT_STICK_S = 0.5;
+  static float txt_stick[7]; double txt_stick_t = -1e9;
   static float txt_bench[FC_MAX_MOTORS]; int txt_bench_n = 0;   /* `motors`: several at once, sent instead of the sticks */
   static float tl[36]; double tl_t = -1e9;          /* the ESP32's last telemetry (RN_LINK_TELEM, flight.c) */
   static float pw[12]; double pw_t = -1e9;          /* its power monitor's (RN_LINK_POWER) */
@@ -730,7 +738,8 @@ int main(int argc, char **argv) {
             else if (len) { link_raw(link, fr, len); snprintf(reply, sizeof reply, "to the ESP32: %s (its answer: status, or the log)", line); }
             else snprintf(reply, sizeof reply, "esp32 LINE: a settings line of at most 126 characters");
           } else if ((!strncmp(s, "sticks", 6) && (!s[6] || s[6] == ' ')) || (!strncmp(s, "motor", 5) && (!s[5] || s[5] == ' ')) || (!strncmp(s, "motors", 6) && (!s[6] || s[6] == ' '))) {
-            stick_line(s, no_nav, radio_here && rc_link_ok(&RCI, t), n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
+            fc_cmd rsc; const int radio_on = radio_here && !rc_stick_cmd(&RCI, t, &rsc);
+            stick_line(s, no_nav, radio_on, radio_on && rsc.arm, n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
           } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
             float hd = P.sp.heading, c = cosf(hd), sn = sinf(hd), spot[3] = { px - (c * hook[0] - sn * hook[1]), py - (sn * hook[0] + c * hook[1]), pz - hook[2] + 0.03f };
             if (!P.fly) snprintf(reply, sizeof reply, "pickup: take off first");
@@ -988,7 +997,10 @@ int main(int argc, char **argv) {
      * it sends those only while guided commands come). No announcing: a guided command, disarmed, would disarm it. */
     if (no_nav) {
       static double next_stick; fc_cmd sc;
-      int radio_sticks = radio_here && !rc_stick_cmd(&RCI, t, &sc), text_sticks = !radio_sticks && t - txt_stick_t < TXT_STICK_S;
+      int radio_sticks = radio_here && !rc_stick_cmd(&RCI, t, &sc);
+      const int text_test = t - txt_stick_t < TXT_STICK_S && (txt_bench_n || txt_stick[5] >= 0);   /* a motor test from text */
+      if (radio_sticks && !sc.arm && text_test) radio_sticks = 0;        /* (the radio's pilot disarmed: the test goes; arming ends it) */
+      int text_sticks = !radio_sticks && t - txt_stick_t < TXT_STICK_S;
       if (t >= next_stick && (radio_sticks || text_sticks)) {   /* (neither: nothing goes, and the ESP32's failsafe stands) */
         next_stick = t + 0.02;
         float c[7] = { sc.arm ? 1.0f : 0.0f, sc.roll, sc.pitch, sc.yaw, sc.throttle, -1, 0 };   /* (the pilot's command: fly.py's, not guided) */

@@ -18,6 +18,16 @@ function flightMotor(c) {
   if (!mp || mp.refVoltage !== designVref()) { mp = FlightPhysics.motor(c, designVref()); flightMotorCache.set(c, mp); }
   return mp;
 }
+// A motor measured on a scale (Tune → Motor thrust, thrust-test-ui.js): its record while the card still says what the
+// test fitted (the prop thrust coefficient of a fixed motor, the thrust of a generic one, at the same reference
+// voltage); null once the card has been changed since, or never measured. The record's bend is what the flight
+// controller is told, and the simulator takes the card as this very motor (no hidden spread in its thrust).
+function motorMeasured(c) {
+  const m = c && c.thrustTest; if (!m || !(m.tmax > 0) || m.vref !== designVref() || c.propPhysics?.rows) return null;
+  const kind = c.motorPhysics?.kind;
+  if (kind === 'brushless' || kind === 'brushed') return m.ct != null && c.propPhysics?.ct === m.ct ? m : null;
+  return m.ct == null && Math.abs((c.tmax || 0) - m.tmax) < 1e-9 ? m : null;
+}
 function flightPrepare() {
   flightMotorCache = new WeakMap();
   FlightPhysics.batteryMass(cfg.comps, battCfg(), typeof packSpec === 'function' ? c => packSpec(computers(), c, cfg.comps) : null);

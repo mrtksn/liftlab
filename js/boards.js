@@ -263,7 +263,7 @@ function boardsStart() {
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.mqttRng = null; brt.mqttLast = {}; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; brt.textN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
-  brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
+  brt.bench = null; brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false, manual: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
@@ -569,6 +569,23 @@ function boardsReadViews(now) {
 /* ───────── each control step (1 kHz) ───────── */
 const io = w => new Float32Array(w.memory.buffer, w.io_ptr(), 15 + 12 + 8 + 19);
 const IO_OUT = 15, IO_STATE = 15 + 12 + 8;
+// The simulator's motor test (Tune → Motor thrust): motor i at throttle u, straight to its ESC, as dfb_pi's "motor N T"
+// does on the drone; it lasts half a second of simulated time unless asked again. Only on the ground and disarmed.
+// '' when it's on (or stopped: i < 0), else why not.
+function simBenchSet(i, u) {
+  if (!brt.ready || !brt.inst.size) return 'the flight computers aren\'t running';
+  if (i < 0) { if (brt.bench) { brt.bench = null; brt.benchEnd = true; } return ''; }
+  if (!brt.bench && !brt.benchHold && (brt.fcState === 1 || brt.fcState === 2 || brt.pilot.phase !== 'ground' && brt.pilot.phase !== 'arming' && brt.pilot.phase !== 'armed')) return 'it\'s flying: land it (or reset it, R) first';
+  if (!brt.bench && !brt.benchHold && S.v && Math.hypot(...S.v) > 0.3) return 'it\'s moving: wait until it sits still on the ground';
+  const u1 = clamp(u, 0, 1), same = brt.bench && brt.bench.i === i && Math.abs(brt.bench.u - u1) < 1e-6;
+  brt.bench = { i, u: u1, until: brt.t + 0.5, since: same ? brt.bench.since : brt.t }; return '';
+}
+// The scale set up for a test (Tune → Motor thrust open with the motors-off reading taken): the pilot stays on the
+// ground, disarmed, between the motors' tests too. Off: it flies as before.
+function simBenchHold(on) { brt.benchHold = !!on; if (!on) simBenchSet(-1, 0); }
+// How long the motor test has run as it is now [simulated s] (−1: none), so a reading waits for the motor to settle.
+const simBenchAge = () => brt.bench ? brt.t - brt.bench.since : -1;
+const simBenchLive = () => brt.bench && brt.t <= brt.bench.until ? brt.bench : (brt.bench && (brt.bench = null, brt.benchEnd = true), null);
 function fcSend(cmd, delay) { brt.toCore.push({ at: brt.t + delay, cmd }); }
 // World force [N], body torque about the believed rigid CoG [N m]. The known flag gives the
 // simulator ideal knowledge of cable support; it is not a new physical tension sensor/transport.
@@ -611,7 +628,9 @@ function boardsControl(dt) {
     brt.hadCableLoad = !!pend.size;
   }
   throwHandTick(dt);
-  autoPilot(dt, !!navB);
+  const bench = simBenchLive();
+  if (bench || brt.benchHold) { const P = brt.pilot; P.arm = 0; P.fly = 0; P.thr = 0; P.phase = 'ground'; P.t = 0; }   // (a motor test, or the scale set up for one: the pilot waits, disarmed)
+  else autoPilot(dt, !!navB);
   for (const b of computers().boards) { const w = brt.inst.get(b.id); if (w && needsProgram(b)) w.host_tick(dt); }   // the loaders' steps, on every board
   if (typeof peerStep === 'function') peerStep();                    // (the other drones: what its peer end sends, what reached it)
   deliverFrames();
@@ -623,8 +642,15 @@ function boardsControl(dt) {
   // The flight core: commands that have arrived, then a step on the newest IMU sample.
   while (brt.toCore.length && brt.toCore[0].at <= brt.t + 1e-9) {
     const c = brt.toCore.shift().cmd;
+    if (bench) continue;                                               // (a motor test has the flight core: the others wait)
     new Float32Array(W.memory.buffer, W.cmd_ptr(), 12).set([c.arm, c.roll || 0, c.pitch || 0, c.yaw || 0, c.throttle || 0, -1, 0, c.guided ? 1 : 0, ...(c.acc || [0, 0, 0]), c.heading || 0]);
     W.fc_command();
+  }
+  if (bench || brt.benchEnd) {                                         // the motor test as a command (dfb_pi's motor N T): disarmed, one motor
+    const cmdv = new Float32Array(W.memory.buffer, W.cmd_ptr(), 12);
+    if (bench && brt.benchSent != null && brt.benchSent !== bench.i) { cmdv.set([0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0]); W.fc_command(); }   // (another motor: the test off first, as on the drone)
+    cmdv.set([0, 0, 0, 0, 0, bench ? bench.i : -1, bench ? bench.u : 0, 0, 0, 0, 0, 0]);
+    W.fc_command(); brt.benchEnd = false; brt.benchSent = bench ? bench.i : null;
   }
   const drv = est.drv || {};
   brt.coreElapsed += dt;

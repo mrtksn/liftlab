@@ -114,9 +114,11 @@ const envr = { ...DEFAULT_ENVIRONMENT };   // texture and light matter to optica
 // (a few percent, its own every time, fixed by its id and the world's parts seed). The controller and supervisor aren't told.
 let spreadCache = new Map();
 function spreadOf(c) {
-  const k = envr.spread ?? 1, hit = spreadCache.get(c.id); if (hit && hit.k === k && hit.seed === worldSeeds.parts) return hit;
+  const k = envr.spread ?? 1, meas = typeof motorMeasured === 'function' && !!motorMeasured(c), hit = spreadCache.get(c.id); if (hit && hit.k === k && hit.seed === worldSeeds.parts && hit.meas === meas) return hit;
   const R = mulberry32(seedHash(worldSeeds.parts, c.id)), n = () => clamp(Math.sqrt(-2 * Math.log(R() + 1e-12)) * Math.cos(2 * Math.PI * R()), -2.5, 2.5);
-  const sp = { k, seed: worldSeeds.parts, kT: 1 + 0.03 * k * n(), kQ: 1 + 0.05 * k * n(), J: 1 + 0.1 * k * n() }; spreadCache.set(c.id, sp); return sp;
+  const sp = { k, seed: worldSeeds.parts, meas, kT: 1 + 0.03 * k * n(), kQ: 1 + 0.05 * k * n(), J: 1 + 0.1 * k * n() };
+  if (meas) sp.kT = 1;   // measured on a scale: the card is this motor's thrust (its drag and spin-up still differ)
+  spreadCache.set(c.id, sp); return sp;
 }
 
 /* ───────── state ───────── */
@@ -144,6 +146,13 @@ function mountDir(c) { const t = c.tilt * D2R, a = c.az * D2R; return [Math.sin(
 function actDir(c) { const m = mountDir(c); return c.push ? [-m[0], -m[1], -m[2]] : m; }   // thrust axis at rest
 const spinOf = c => c.push ? -c.spin : c.spin;   // spin about the thrust axis, the way rotorWrench takes it
 function rotorNow(c, ang = angleTrue) { const P = poseOf(c, ang); return { p: P.p, d: m3v(P.R, actDir(c)) }; }   // where a rotor is and points
+// What a kitchen scale under the simulated drone reads [g], to the gram (its last digit wobbles): the weight less the
+// motors' lift (the right way up on the scale; Tune → Motor thrust takes the change from the motors-off reading).
+function simScaleGrams() {
+  const R = qmat(S.q); let up = 0;
+  for (const c of actuators()) { const st = act.get(c.id); if (st && st.T > 0) up += st.T * m3v(R, rotorNow(c).d)[2]; }
+  return Math.round(Math.max(0, truth.m * G - up) / G * 1000 + (Math.random() - 0.5) * 1.2);
+}
 function wrenchCol(pos, d, spin, kappa, cog) { const w = run('rotorWrench', d, sub(pos, cog), 1, spin, kappa); return [w.F[0], w.F[1], w.F[2], w.tau[0], w.tau[1], w.tau[2]]; }
 const scl6 = (c, s) => c.map(x => x * s);
 
@@ -615,9 +624,13 @@ function dynamics(dt) {
   const sol = mbSolve(K, fext, tauJ);
   const al = top3(sol.a0), acl = add(bot3(sol.a0), crs(S.w, m3v(RT, S.v)));   // spatial → ordinary acceleration of the hub
   S.acc = m3v(R, acl); S.wdot = al;
-  S.v = add(S.v, scl(S.acc, dt)); S.p = add(S.p, scl(S.v, dt));
-  S.w = add(S.w, scl(al, dt));
-  const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
+  if (typeof brt !== 'undefined' && brt.benchHold && !S.crashed) {   // taped down on the scale for a motor test (Tune → Motor thrust): it stays put
+    S.acc = [0, 0, 0]; S.wdot = [0, 0, 0]; S.v = [0, 0, 0]; S.w = [0, 0, 0];
+  } else {
+    S.v = add(S.v, scl(S.acc, dt)); S.p = add(S.p, scl(S.v, dt));
+    S.w = add(S.w, scl(al, dt));
+    const dq = qmul(S.q, [0, S.w[0], S.w[1], S.w[2]]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
+  }
   for (let i = 1; i < N; i++) {
     const st = jst.get(MB.bodies[i].j.id); if (!st) continue;
     st.acc = sol.qdd[i]; st.rate = (st.rate || 0) + st.acc * dt; st.th += st.rate * dt;

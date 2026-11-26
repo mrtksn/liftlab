@@ -797,6 +797,16 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .scal-pose-h{display:flex;align-items:center;gap:var(--space-8)}
 .scal-pose-h small{color:var(--muted);flex:1}
 .scal-pose .hint{margin:var(--space-4) 0 0}
+.tt-setup{display:flex;flex-wrap:wrap;align-items:end;gap:var(--space-8);margin:var(--space-8) 0}
+.tt-setup .field{display:grid;gap:var(--space-4);margin:0}
+.tt-setup .field span{font-size:.85em;color:var(--muted)}
+.tt-motors{list-style:none;margin:var(--space-8) 0;padding:0;display:grid;gap:var(--space-8)}
+.tt-motor{border:1px solid var(--line);border-radius:var(--radius-control);padding:var(--space-8)}
+.tt-motor.is-done{border-color:var(--good)}
+.tt-motor.is-on{border-color:var(--warn)}
+.tt-motor .hint{margin:var(--space-4) 0 0}
+.tt-now{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-8);margin-top:var(--space-8)}
+.tt-now span{flex:1 1 100%}
 .scal-got{font-family:var(--f-mono);font-size:var(--text-xs)}
 .scal-result p{margin:var(--space-4) 0}
 /* the guide's card over the 3D view: what to do now, how it's going */

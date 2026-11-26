@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=e53343c870">
+<link rel="stylesheet" href="css/style.css?v=c5d0e4fda9">
 </head>
 <body>
 <div class="app">
@@ -124,6 +124,10 @@
         <details class="fold" id="sensorCalFold">
           <summary><span>Sensor calibration</span><small id="sensorCalSum"></small></summary>
           <div id="sensorCal"></div>
+        </details>
+        <details class="fold" id="thrustTestFold">
+          <summary><span>Motor thrust</span><small id="thrustTestSum"></small></summary>
+          <div id="thrustTest"></div>
         </details>
         <details class="fold" id="autotuneFold">
           <summary><span>Measured autotune</span><small>calibrate → measure → verify</small></summary>
@@ -657,9 +661,9 @@
 <script src="js/rn-wasm.js?v=aebadbb7c3"></script>
 <script src="js/rn-bridge.js?v=e89e4956ec"></script>
 <script src="js/flight-physics.js?v=48d2728312"></script>
-<script src="js/sim.js?v=ae7700267f"></script>
+<script src="js/sim.js?v=d00ee7c5ab"></script>
 <script src="js/tuning.js?v=113a9c04af"></script>
-<script src="js/flight-model.js?v=15c1032fa2"></script>
+<script src="js/flight-model.js?v=9d5b543275"></script>
 <script src="js/joints.js?v=8479511f02"></script>
 <script src="js/part-geometry.js?v=86dd552d12"></script>
 <script src="js/multibody.js?v=39780e2134"></script>
@@ -667,7 +671,7 @@
 <script src="js/sensors.js?v=cd76680d3f"></script>
 <script src="js/health.js?v=cbf60f2e4c"></script>
 <script src="js/design-stats.js?v=900c9535f9"></script>
-<script src="js/learn.js?v=4139e0373b"></script>
+<script src="js/learn.js?v=4467cad222"></script>
 <script src="js/view3d.js?v=3a3096fdae"></script>
 <script src="js/onboard-cam.js?v=b6a3400574"></script>
 <script src="js/pilot.js?v=12b8fd8abe"></script>
@@ -681,6 +685,8 @@
 <script src="js/sensor-cal.js?v=380b790783"></script>
 <script src="js/sensor-cal-ui.js?v=1e4ddb707c"></script>
 <script src="js/sensor-cal-guide.js?v=46bc4099c5"></script>
+<script src="js/thrust-test.js?v=24bc7452da"></script>
+<script src="js/thrust-test-ui.js?v=f6db01236d"></script>
 <script src="js/autotune.js?v=ab42d73944"></script>
 <script src="js/designs.js?v=d4557d0384"></script>
 <script src="js/share.js?v=626dfa369f"></script>
@@ -701,7 +707,7 @@
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
 <script src="js/peer-air.js?v=82475d500b"></script>
-<script src="js/boards.js?v=f577fda137"></script>
+<script src="js/boards.js?v=9391278a4b"></script>
 <script src="js/programs.js?v=66a0fde1e7"></script>
 <script src="js/wasm-meter.js?v=3e6eded09b"></script>
 <script src="js/apps.js?v=93c0cbb01e"></script>

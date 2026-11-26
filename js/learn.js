@@ -72,7 +72,7 @@ const flyingLearned = () => !!(learn.view && learn.view.useLearned);
 // What the description says about the actuators' responses (the tests' results go to the flight core directly).
 const believedThrust = (u, k) => (1 - k) * u + k * u * u;
 const BEND_PRIOR = 0.7;   // a typical brushless prop curve (thrust grows faster than throttle); pitch control is close to linear
-const curveHat = c => c.pitch === 'collective' ? 0 : BEND_PRIOR;
+const curveHat = c => c.pitch === 'collective' ? 0 : typeof motorMeasured === 'function' && motorMeasured(c) ? motorMeasured(c).bend : BEND_PRIOR;   // (measured on a scale: its own)
 const motorLagHat = () => 0.035;
 function servoModelHat(j) { const v = learn.view, k = joints().indexOf(j), r = v && v.joints[k]; return r && r.measured ? { rate: r.rate, lag: r.lag } : { rate: j.rate * D2R, lag: 0 }; }
 function resetLearning() { buildIndex(); learn.view = null; learn.msg = ''; }

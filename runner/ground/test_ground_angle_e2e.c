@@ -6,6 +6,8 @@
  * and the pitch and throttle sticks reach it as sent (the keys rest the throttle at its middle, so the flight core
  * refuses to arm: "throttle stick not at the bottom", its own rule; LiftLab's page sends the bottom until Take off), that dfb_pi says it is in angle mode and never waits for a
  * position, and that when the command module stops, the commands stop and the ESP32 falls back on its failsafe.
+ * Before arming, with the command module's channels coming (disarmed), a motor test sent to dfb_pi as text ("motors 0 0.3
+ * 0 0", LiftLab's Motor thrust test) still reaches the ESP32 (RN_LINK_BENCH_TEST), and arming ends it.
  *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_angle_e2e test_ground_angle_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_angle_e2e */
 #define _DEFAULT_SOURCE
@@ -40,6 +42,7 @@ static void step_ms(void) {                                    /* the plant and 
 }
 static int udp; static struct sockaddr_in to;
 static void say(const char *s) { sendto(udp, s, strlen(s), 0, (struct sockaddr *)&to, sizeof to); }
+static void sayto(int port, const char *s) { struct sockaddr_in a = to; a.sin_port = htons((uint16_t)port); sendto(udp, s, strlen(s), 0, (struct sockaddr *)&a, sizeof a); }
 static pid_t spawn(const char *prog, char *const argv[], int *out_fd) {
   int p[2]; if (pipe(p)) return -1;
   pid_t pid = fork();
@@ -78,6 +81,7 @@ int main(void) {
   double t0 = now_s(), next = t0, armed_at = 0, fwd_at = 0, up_at = 0, stop_at = 0, last_cmd = 0;
   char pbuf[4096], gbuf[4096]; int pn = 0, gn = 0;
   double guided_t = -10; long arm_flaps = 0;                                         /* when a guided command last came: NAV frames go for 1 s after (as flight.c) */
+  long n_bench = 0, n_bench_bad = 0, bench_after_arm = 0, n28_before_bench = -1; float bench_m2 = 0;
   long n28 = 0, n48 = 0, armed_cmds = 0; float pitch_max = 0, thr_rest = -1, thr_up = 0; int refused_thr = 0;
   while (now_s() - t0 < 22) {
     double el = now_s() - t0;
@@ -86,6 +90,12 @@ int main(void) {
     uint8_t rx[1024]; ssize_t n = read(lm, rx, sizeof rx);
     for (ssize_t i = 0; i < n; i++) {
       int type = rn_link_feed(&L, rx[i]);
+      if (type == RN_LINK_BENCH_TEST) {                            /* the motor test: motor 2 at 0.3, the others still */
+        float b[FC_MAX_MOTORS] = { 0 }; memcpy(b, L.buf, L.len < sizeof b ? L.len : sizeof b);
+        n_bench++; if (b[1] > bench_m2) bench_m2 = b[1]; if (b[0] != 0 || b[2] != 0) n_bench_bad++;
+        if (armed_at && el > armed_at + 0.7) bench_after_arm++;
+        continue;
+      }
       if (type != RN_LINK_CMD) continue;
       if (L.len == 48) { n48++; guided_t = el; continue; }
       if (L.len != 28) continue;
@@ -103,6 +113,8 @@ int main(void) {
     for (int k = 0; k < 10; k++) step_ms();
     float nb[16] = { (float)F.t, (float)F.state, F.q[0], F.q[1], F.q[2], F.q[3], F.w[0], F.w[1], F.w[2], (float)acc_b[0], (float)acc_b[1], (float)acc_b[2], F.alt_e, (float)F.have_alt, (float)F.att_ok, 0 };
     if (el - guided_t < 1.0) send_frame(lm, RN_LINK_NAV, nb, 64);   /* (as the ESP32: only while the Pi's navigation flies it) */
+    /* the motor test, as LiftLab's Motor thrust test sends it: renewed every 0.2 s, to dfb_pi's command port */
+    if (el > 1.5 && el < 2.6) { static double nb2; if (n28_before_bench < 0) n28_before_bench = n28; if (el >= nb2) { nb2 = el + 0.2; sayto(PI_CMD_PORT, "motors 0 0.3 0 0"); } }
     /* the pilot's script */
     if (el > 3 && !armed_at) { say("press arm"); armed_at = el; }
     if (armed_at && !fwd_at && el > armed_at + 3) fwd_at = el;
@@ -113,11 +125,13 @@ int main(void) {
     if (stop_at && el > stop_at + 5) break;
   }
   kill(pi, SIGTERM); usleep(300000); lines(pi_out, pbuf, &pn, "pi");
+  printf("  motor test with the radio's channels coming (%ld before it): %ld frames, motor 2 at %.2f, %ld with another motor on, %ld after arming\n", n28_before_bench, n_bench, (double)bench_m2, n_bench_bad, bench_after_arm);
   printf("  commands: %ld angle (%ld armed), %ld guided; throttle at rest %.2f, pressing up %.2f; pitch pressing forward %.2f; last command %.1f s after the stop; ESP32 now %s; it refused to arm on the middle throttle %d; the arm switch flapped %ld times\n",
          n28, armed_cmds, n48, thr_rest, thr_up, pitch_max, last_cmd - stop_at, fc_state_name(F.state), refused_thr, arm_flaps);
   int ok = angle_line && !wait_line && n28 > 300 && n48 == 0 && armed_cmds > 100 && refused_thr && F.state == FC_DISARMED && arm_flaps == 0
         && thr_rest > 0.45f && thr_rest < 0.55f && thr_up > 0.8f && pitch_max > 0.5f
-        && last_cmd < stop_at + 1.5;
+        && last_cmd < stop_at + 1.5
+        && n28_before_bench > 20 && n_bench > 20 && bench_m2 > 0.29f && bench_m2 < 0.31f && n_bench_bad == 0 && bench_after_arm == 0;
   printf(ok ? "angle mode on the Pi end-to-end: ok\n" : "angle mode on the Pi end-to-end: FAIL\n");
   return ok ? 0 : 1;
 }
