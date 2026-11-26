@@ -28,6 +28,17 @@ function motorMeasured(c) {
   if (kind === 'brushless' || kind === 'brushed') return m.ct != null && c.propPhysics?.ct === m.ct ? m : null;
   return m.ct == null && Math.abs((c.tmax || 0) - m.tmax) < 1e-9 ? m : null;
 }
+// How quickly a motor's thrust follows its throttle near hover: the time constant [s] of its speed, its rotor's
+// inertia over the damping of the motor's back-EMF and the prop's drag at the speed that gives thrust T [N]
+// (each motor's share of the weight when T is left out). A collective-pitch rotor answers through its pitch servo.
+function motorSpinUp(c, T) {
+  if (c.pitch === 'collective') return 0.02;
+  const mp = flightMotor(c), n = Math.max(1, actuators().length);
+  const Th = T > 0 ? T : (typeof model !== 'undefined' && model && model.m ? model.m : cfg.frame.mass) * G / n;
+  const share = clamp(Th / Math.max(1e-6, mp.ratedThrust), 0.05, 1), Om = mp.Om * Math.sqrt(share);
+  const kQ = mp.table ? mp.ratedQ / (mp.Om * mp.Om) : mp.kQ;
+  return clamp(mp.J / (mp.Ke * mp.Ke / mp.R + 2 * kQ * Om), 0.003, 0.5);
+}
 function flightPrepare() {
   flightMotorCache = new WeakMap();
   FlightPhysics.batteryMass(cfg.comps, battCfg(), typeof packSpec === 'function' ? c => packSpec(computers(), c, cfg.comps) : null);

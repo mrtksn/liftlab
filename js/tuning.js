@@ -46,11 +46,12 @@ function tuneWithFeel(t, loop, axes, feel) {
 }
 
 /* ───────── what to expect: a small-step prediction ───────── */
-// The motors' thrust lag the prediction uses: the slowest motor's spin-up time on its card (a collective-pitch
-// rotor answers through its pitch servo instead: about 20 ms).
+// The motors' thrust lag the prediction uses: the slowest motor's spin-up time near hover, from its physical model
+// (motorSpinUp: the rotor's inertia against the motor's and the prop's damping; a collective-pitch rotor answers
+// through its pitch servo instead, about 20 ms).
 function tuneMotorLag() {
   const m = cfg.comps.filter(c => c.type === 'motor');
-  return m.length ? Math.max(...m.map(c => c.pitch === 'collective' ? 0.02 : Math.max(0.005, c.tau || 0.03))) : 0.03;
+  return m.length ? Math.max(...m.map(c => typeof motorSpinUp === 'function' ? motorSpinUp(c) : c.pitch === 'collective' ? 0.02 : Math.max(0.005, c.tau || 0.03))) : 0.03;
 }
 // One attitude axis as the controller sees it: a pure inertia (J divided out), the motors' first-order lag and a
 // control step of delay, flown by kR, kW, kI toward a reference. Position: the drone accelerates by leaning, so

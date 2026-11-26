@@ -51,6 +51,28 @@ see the props' extra inflow in flight, ground effect or the pack's sag under a f
 `test_ground_angle_e2e` (in `tools/test_radio_e2e.sh`) checks the motor test through dfb_pi with the radio's
 channels coming.
 
+## Gains from the motors
+
+Tune → Gains from the motors (`js/tune-suggest.js`, `js/tune-suggest-ui.js`) rates and suggests attitude gains with
+no flight data. Each axis is the measured-autotune plant `strength·e^(−s·delay)/(s²(1+s·lag))` (`atPlant`,
+`atMargins`). lag: the slowest motor's `motorSpinUp` near hover (flight-model.js; also the Tune step prediction's
+lag now, instead of the card's `tau`); delay: 12 ms assumed (a loop step, the ESC pulse, the MPU-6050's 98 Hz
+filter); strength: 0.85–1.15 when every motor is `motorMeasured`, else 0.7–1.5.
+
+Limits: phase margin ≥ 30° at strength 1 with peak ≤ 1.35 and sensitivity ≤ 2.5, ≥ 20° at the range's ends, the
+integral inside `atMargins`' bound. Gains within them are kept (never sped up). Otherwise the quickest response
+(0.025 Hz steps, damping 0.8–1.1, integral at most the current one and 0.8 /s, lowered to 0.5/0.3/0.15/0 where
+needed) inside them. Roll and pitch also have a floor, `firmHz`: kR ≥ α/15°, α the push of one motor lifting 6%
+(2% measured) more than its share at its lever over the inertia; below it the suggestion is the firm one with
+the most margin, marked as a compromise. The rating of each option includes the tilt that push causes.
+
+The simulator checks (toy-drone preset): lag predicted 24 ms, step-measured 29 ms; with rotor inertia ×3.3,
+80 ms against 85 ms. On those slow motors the defaults (rated 9°/5° at the assumed 12 ms) fly at 1.7° RMS after
+take-off, the suggestion (0.88 Hz, 30°/24°) at 5.4° RMS with an 18° peak; 0.4–0.6 Hz with the integral tips over
+at lift-off (which is what the floor is for). The simulator's own delay is about 2 ms and its motors match their
+cards, so it can't show the failure the margins guard against; a real drone that overshoots and diverges has
+less margin than its model. `node tools/test_tune_suggest.js` checks the ratings, the suggestions and the floor.
+
 ## Simulator autotune workflow
 
 1. Take off, release the controls and run an airframe calibration under Control → Learning.
