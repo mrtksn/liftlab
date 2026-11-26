@@ -779,7 +779,12 @@ int main(int argc, char **argv) {
               if (!spin_start(&SPN, n_mot, mot_yaw, sb, ss, sh, t)) printf("spin test: started at %.2f, step %.2f, half period %.2f s\n", (double)sb, (double)ss, (double)sh);
               spin_said(&SPN, reply, (int)sizeof reply); }
           } else if ((!strncmp(s, "sticks", 6) && (!s[6] || s[6] == ' ')) || (!strncmp(s, "motor", 5) && (!s[5] || s[5] == ' ')) || (!strncmp(s, "motors", 6) && (!s[6] || s[6] == ' '))) {
-            spin_stop(&SPN, "another motor or stick command"); lift_stop(&LFT, "another motor or stick command");
+            {   /* a rope test stops for a real takeover: arming, a throttle, a motor test; not for idle sticks (disarmed,
+                 * throttle at the bottom: the Pi panel's control screen sends them 20 times a second while it's open) */
+              int sa = 1; float sth = 1; const char *sp = s + 6; while (*sp == ' ') sp++;
+              const int idle = !strncmp(s, "sticks", 6) && (!strcmp(sp, "off") || (sscanf(sp, "%d %f", &sa, &sth) == 2 && !sa && sth < 0.05f));
+              if (!idle) { spin_stop(&SPN, "another motor or stick command (arming, a throttle, a motor test)"); lift_stop(&LFT, "another motor or stick command (arming, a throttle, a motor test)"); }
+            }
             fc_cmd rsc; const int radio_on = radio_here && !rc_stick_cmd(&RCI, t, &rsc);
             stick_line(s, no_nav, radio_on, radio_on && rsc.arm, n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
           } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
