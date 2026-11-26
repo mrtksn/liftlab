@@ -199,6 +199,13 @@ EXPORT("spin_ltel") void spin_ltel_(int n, double t) { spin_ltel(&SPN, fr, n, t)
 EXPORT("spin_stop") void spin_stop_(void) { spin_stop(&SPN, "asked to"); }
 EXPORT("spin_phase") int spin_phase(void) { return SPN.phase; }
 EXPORT("spin_text") char *spin_text_(void) { spin_said(&SPN, spin_text, (int)sizeof spin_text); return spin_text; }
+static lift_state LFT; static char lift_text[300];
+EXPORT("lift_start") int lift_start_(int n, float base, float top, float rate, float step, double t) { return lift_start(&LFT, n, base, top, rate, step, t); }
+EXPORT("lift_tick") int lift_tick_(double t) { return lift_tick(&LFT, t, fr); }
+EXPORT("lift_ltel") void lift_ltel_(int n, double t) { lift_ltel(&LFT, fr, n, t); }
+EXPORT("lift_stop") void lift_stop_(void) { lift_stop(&LFT, "asked to"); }
+EXPORT("lift_phase") int lift_phase(void) { return LFT.phase; }
+EXPORT("lift_text") char *lift_text_(void) { lift_said(&LFT, lift_text, (int)sizeof lift_text); return lift_text; }
 EXPORT("spin_result") int spin_result(void) { fr[0] = SPN.delay; fr[1] = SPN.lag; fr[2] = SPN.gain; fr[3] = SPN.r2; fr[4] = (float)SPN.ok; fr[5] = SPN.peak_rate; fr[6] = SPN.spring; fr[7] = SPN.drag; fr[8] = SPN.kick; return 9; }
 EXPORT("fc_command") void command(void) {
   fc_cmd c = { (int)cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], (int)cmd[5], cmd[6], cmd[7] > 0.5f, { cmd[8], cmd[9], cmd[10] }, cmd[11] };

@@ -93,7 +93,7 @@ insufficient motor headroom, or stale/mismatched telemetry also stops it. Calibr
 commands and other pilot commands cancel tuning first. Rejection in poor GPS/noisy
 conditions is expected; limits are not relaxed to manufacture a recommendation.
 
-## Rope spin test
+## Rope hang: spin and lift tests
 
 With the drone hanging on a rope, disarmed, in angle mode (`dfb_pi --no-navigation`):
 
@@ -102,8 +102,16 @@ python3 runner/pi/control.py 192.168.2.127 'spintest 0.3 0.05'
 python3 runner/pi/control.py 192.168.2.127 spintest
 ```
 
-The base throttle must stay below lift (the rope holds the weight); about 8 s later `spintest` gives the delay
-and spin-up. LiftLab's Tune → Rope spin test does the same over the radio and keeps the result in the design.
+The base throttle must stay below lift (the rope holds the weight); about 6 s later `spintest` gives the delay
+and spin-up. The lift test then finds the throttle that lifts it off the rope and reads short pulses above it:
+
+```sh
+python3 runner/pi/control.py 192.168.2.127 'lifttest 0.3 0.9'
+python3 runner/pi/control.py 192.168.2.127 lifttest
+```
+
+LiftLab's Tune → Rope hang does both over the radio, compares them with the motor model and keeps the results in the
+design.
 
 ## Gains, persistence and limits
 

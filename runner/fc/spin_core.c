@@ -6,6 +6,7 @@ void *memset(void *d, int c, size_t n);
 #define fabsf(x) __builtin_fabsf(x)
 #define fabs(x) __builtin_fabs(x)
 #define sqrt(x) __builtin_sqrt(x)
+#define sqrtf(x) __builtin_sqrtf(x)
 #else
 #include <math.h>
 #include <string.h>
@@ -182,4 +183,89 @@ void spin_said(const spin_state *S, char *out, int cap) {
     return;
   }
   fc_fmt(out, cap, "%s", S->msg);
+}
+
+/* ───────── the rope lift test (spin_core.h) ───────── */
+#define LIFT_PULSE_S 0.25      /* [s] each pulse */
+#define LIFT_REST_S 1.5        /* [s] at base after lift-off and between pulses */
+#define LIFT_OVER 1.04f        /* the accelerometer this far over its reading at rest: lifted off */
+#define LIFT_RISE 0.08f        /* [m] or the height this far up */
+#define LIFT_MAX_RISE 0.4f     /* [m] higher: stop */
+void lift_init(lift_state *L) { memset(L, 0, sizeof *L); }
+static int lift_running(const lift_state *L) { return L->phase >= LIFT_SETTLE && L->phase <= LIFT_PULSE; }
+int lift_start(lift_state *L, int n, float base, float top, float rate, float step, double t) {
+  if (lift_running(L)) { fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: already running"); return -1; }
+  if (n < 1 || n > FC_MAX_MOTORS || !(base >= 0.05f && base <= 0.7f) || !(top > base && top <= 1) || !(rate >= 0.005f && rate <= 0.2f) || !(step >= 0.01f && step <= 0.2f)) {
+    fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: base 0.05 to 0.7, top above it up to 1, rate 0.005 to 0.2 a second, step 0.01 to 0.2"); L->phase = LIFT_FAILED; return -1;
+  }
+  lift_init(L);
+  L->n = n; L->base = base; L->top = top; L->rate = rate; L->step = step; L->u = base;
+  L->phase = LIFT_SETTLE; L->t0 = L->ph_t = L->last_ltel = t;
+  fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: settling at %.2f", (double)base);
+  return 0;
+}
+void lift_stop(lift_state *L, const char *why) {
+  if (lift_running(L)) { L->phase = L->lift_u > 0 && L->np ? LIFT_DONE : LIFT_FAILED; L->ok = L->phase == LIFT_DONE; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: stopped: %s", why); }
+}
+int lift_tick(lift_state *L, double t, float *out) {
+  if (!lift_running(L)) return 0;
+  if (t - L->last_ltel > SPIN_LTEL_GAP && t - L->t0 > SPIN_LTEL_GAP) { lift_stop(L, L->have_ltel ? "the flight core's telemetry stopped" : "no telemetry from the flight core (is the learning or the supervisor on?)"); return 0; }
+  const double dt = t - L->ph_t;
+  if (L->phase == LIFT_SETTLE && dt >= SPIN_SETTLE_S) {
+    if (L->n0 < 20) { lift_stop(L, "too little telemetry at rest"); return 0; }
+    L->g_rest = (float)(L->f0 / L->n0); L->alt_rest = (float)(L->a0 / L->n0);
+    L->phase = LIFT_RAMP; L->ph_t = t; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: rising from %.2f", (double)L->base);
+  }
+  if (L->phase == LIFT_RAMP) {
+    L->u = L->base + L->rate * (float)(t - L->ph_t);
+    if (L->u >= L->top) { L->phase = LIFT_DONE; L->ok = 0; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: it didn't lift off up to %.2f", (double)L->top); return 0; }
+  }
+  if (L->phase == LIFT_REST && t - L->ph_t >= LIFT_REST_S) {
+    float u = L->lift_u + (float)(L->k + 1) * L->step;
+    if (L->k >= LIFT_PULSES || u > L->top) {
+      L->phase = LIFT_DONE; L->ok = 1;
+      fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: lifted off at %.3f on %.2f V, %d pulses", (double)L->lift_u, (double)L->lift_v, L->np);
+      return 0;
+    }
+    L->phase = LIFT_PULSE; L->ph_t = t; L->u = u; L->ps = 0; L->pn = 0; L->pvs = 0;
+    fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: pulse %d at %.2f", L->k + 1, (double)u);
+  }
+  if (L->phase == LIFT_PULSE && t - L->ph_t >= LIFT_PULSE_S) {
+    if (L->pn > 0) { L->pu[L->np] = L->u; L->pf[L->np] = (float)(L->ps / L->pn); L->pv[L->np] = L->pvs / (float)L->pn; L->np++; }
+    L->k++; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base;
+  }
+  for (int i = 0; i < L->n; i++) out[i] = L->u;
+  return L->n;
+}
+void lift_ltel(lift_state *L, const float *lt, int n, double t) {
+  if (!lift_running(L) || n < 19) return;
+  L->have_ltel = 1; L->last_ltel = t;
+  int st = (int)lt[1];
+  if (st == FC_ARMED || st == FC_FAILSAFE) { lift_stop(L, "it was armed"); return; }
+  if (fabsf(lt[12]) > SPIN_MAX_YAW) { lift_stop(L, "turning too fast"); return; }
+  if (fabsf(lt[10]) > SPIN_MAX_TILT || fabsf(lt[11]) > SPIN_MAX_TILT) { lift_stop(L, "swinging or tipping"); return; }
+  const float fm = sqrtf(lt[7] * lt[7] + lt[8] * lt[8] + lt[9] * lt[9]), alt = lt[14], have_alt = lt[16] > 0.5f, v = lt[13];
+  int nm = (int)lt[17]; float um = 0; for (int i = 0; i < nm && 19 + i < n; i++) um += lt[19 + i]; um = nm ? um / (float)nm : 0;
+  if (L->phase == LIFT_SETTLE) { L->f0 += fm; L->a0 += have_alt ? alt : 0; L->n0++; return; }
+  const float rise = have_alt ? alt - L->alt_rest : 0;
+  if (rise > L->climb) L->climb = rise;
+  if (rise > LIFT_MAX_RISE) { L->u = L->base; lift_stop(L, "it rose 40 cm: a lower step or top"); return; }
+  if (L->phase == LIFT_RAMP && st == FC_TESTING) {
+    if (fm > LIFT_OVER * L->g_rest) L->over++; else L->over = 0;
+    if (L->over >= 3 || rise > LIFT_RISE) {
+      L->lift_u = um; L->lift_v = v; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base; L->k = 0;
+      fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: lifted off at %.3f", (double)um);
+    }
+  }
+  /* a pulse: its second half (the motors have spun up), the accelerometer against its reading at rest */
+  if (L->phase == LIFT_PULSE && st == FC_TESTING && t - L->ph_t >= LIFT_PULSE_S * 0.5) { L->ps += fm / L->g_rest; L->pvs += v; L->pn++; }
+}
+void lift_said(const lift_state *L, char *out, int cap) {
+  if (L->phase == LIFT_IDLE) { fc_fmt(out, cap, "lifttest: idle (lifttest BASE TOP [RATE STEP], e.g. lifttest 0.3 0.85)"); return; }
+  if ((L->phase == LIFT_DONE || L->phase == LIFT_FAILED) && L->lift_u > 0) {
+    fc_fmt(out, cap, "%s; result %.3f %.2f %d", L->msg, (double)L->lift_u, (double)L->lift_v, L->np);
+    for (int i = 0; i < L->np; i++) fc_fmt_add(out, cap, " %.3f %.3f %.2f", (double)L->pu[i], (double)L->pf[i], (double)L->pv[i]);
+    return;
+  }
+  fc_fmt(out, cap, "%s", L->msg);
 }

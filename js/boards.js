@@ -593,15 +593,29 @@ function simSpinStart(base, step, half) {
   if (!brt.ready || !brt.inst.size) return 'the flight computers aren\'t running';
   const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id);
   if (!w) return 'needs the flight core\'s telemetry, which goes to the learning or the supervisor (Computers tab)';
-  if (brt.spin) return 'it\'s running already';
+  if (brt.spin) return 'a rope test is running already';
   if (brt.fcState === 1 || brt.fcState === 2) return 'it\'s flying: land it (or reset it, R) first';
   const yaw = fcAirframe().motors.map(m => m.cols[0][5]);
   simBenchHold('rope'); frIn(w, yaw);
   if (w.spin_start(yaw.length, base, step, half, brt.t)) { simBenchHold(false); return cstr(w, w.spin_text(), 300).replace(/^spintest:\s*/, ''); }
-  brt.spin = { w, board: b };
+  brt.spin = { w, board: b, kind: 'spin' };
   return '';
 }
-function simSpinStop() { if (brt.spin) brt.spin.w.spin_stop(); }
+function simSpinStop() { if (brt.spin) { if (brt.spin.kind === 'lift') brt.spin.w.lift_stop(); else brt.spin.w.spin_stop(); } }
+// The rope lift test (spin_core.c's lift_*): every motor rising together from base until it lifts off the rope, then
+// short pulses above that. '' when started, else why not.
+function simLiftStart(base, top, rate, step) {
+  if (!brt.ready || !brt.inst.size) return 'the flight computers aren\'t running';
+  const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id);
+  if (!w) return 'needs the flight core\'s telemetry, which goes to the learning or the supervisor (Computers tab)';
+  if (brt.spin) return 'a rope test is running already';
+  if (brt.fcState === 1 || brt.fcState === 2) return 'it\'s flying: land it (or reset it, R) first';
+  simBenchHold('rope');
+  if (w.lift_start(actuators().length, base, top, rate, step, brt.t)) { simBenchHold(false); return cstr(w, w.lift_text(), 300).replace(/^lifttest:\s*/, ''); }
+  brt.spin = { w, board: b, kind: 'lift' };
+  return '';
+}
+function simLiftStatus() { const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id); return w ? { phase: w.lift_phase(), text: cstr(w, w.lift_text(), 300) } : null; }
 // How it goes: { phase (spin_core.h), text, result: { delay, lag, gain, r2, ok, peak } once fitted }, or null.
 function simSpinStatus() {
   const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id); if (!w) return null;
@@ -652,9 +666,9 @@ function boardsControl(dt) {
   }
   throwHandTick(dt);
   if (brt.spin) {                                                     // the rope spin test: its throttles, as a motor test of every motor
-    const sw = brt.spin.w, n = sw.spin_tick(brt.t);
+    const sw = brt.spin.w, lift = brt.spin.kind === 'lift', n = lift ? sw.lift_tick(brt.t) : sw.spin_tick(brt.t), ph = lift ? sw.lift_phase() : sw.spin_phase();
     if (n) brt.bench = { vals: Array.from(frOut(sw, n)), until: brt.t + 0.5, since: brt.bench && brt.bench.vals ? brt.bench.since : brt.t };
-    else if (sw.spin_phase() !== 1 && sw.spin_phase() !== 2 && sw.spin_phase() !== 3) { brt.spin = null; simBenchHold(false); }   // (done: off the rope, it flies as before)
+    else if (lift ? ph < 1 || ph > 4 : ph < 1 || ph > 3) { brt.spin = null; simBenchHold(false); }   // (done: off the rope, it flies as before)
   }
   const bench = simBenchLive();
   if (bench || brt.benchHold) { const P = brt.pilot; P.arm = 0; P.fly = 0; P.thr = 0; P.phase = 'ground'; P.t = 0; }   // (a motor test, or the scale set up for one: the pilot waits, disarmed)
@@ -710,7 +724,7 @@ function boardsControl(dt) {
     if (learnB && typeof atBusy === 'function' && atBusy() && brt.autotune.loop === 'att') sendFrame(coreB, learnB, 'tunealpha', frOut(W, W.fc_tuning_sample()));
     if (learnB) sendFrame(coreB, learnB, 'ltel', d);
     if (superB && (!learnB || superB.id !== learnB.id)) sendFrame(coreB, superB, 'ltel', d);   // (on one board, one frame serves both)
-    if (brt.spin) { frIn(brt.spin.w, d); brt.spin.w.spin_ltel(d.length, brt.t); }   // (the rope spin test, on the same board as the learning)
+    if (brt.spin) { frIn(brt.spin.w, d); if (brt.spin.kind === 'lift') brt.spin.w.lift_ltel(d.length, brt.t); else brt.spin.w.spin_ltel(d.length, brt.t); }   // (the rope tests, on the same board as the learning)
   }
   if (superB && brt.t >= brt.nextHealth) { brt.nextHealth = brt.t + 0.1; const sw = brt.inst.get(superB.id), h = healthReadings(); if (sw) { frIn(sw, h); sw.super_health(h.length); } }
   deliverFrames();

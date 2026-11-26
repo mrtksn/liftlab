@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=c5d0e4fda9">
+<link rel="stylesheet" href="css/style.css?v=4f66c532f0">
 </head>
 <body>
 <div class="app">
@@ -126,8 +126,12 @@
           <div id="tuneSuggest"></div>
         </details>
         <details class="fold" id="spinTestFold">
-          <summary><span>Rope spin test</span><small id="spinTestSum"></small></summary>
+          <summary><span>Rope hang</span><small id="spinTestSum"></small></summary>
+          <p class="hint">With the drone hanging on a rope, disarmed, props on: tests that measure the motors without flying. Keep the rope clear of the props.</p>
+          <h3 class="tune-sub">Spin test: how quickly the motors answer</h3>
           <div id="spinTest"></div>
+          <h3 class="tune-sub">Lift test: how much they lift</h3>
+          <div id="ropeLift"></div>
         </details>
         <details class="fold" id="sensorCalFold">
           <summary><span>Sensor calibration</span><small id="sensorCalSum"></small></summary>
@@ -669,7 +673,7 @@
 <script src="js/rn-wasm.js?v=aebadbb7c3"></script>
 <script src="js/rn-bridge.js?v=e89e4956ec"></script>
 <script src="js/flight-physics.js?v=48d2728312"></script>
-<script src="js/sim.js?v=15a8417078"></script>
+<script src="js/sim.js?v=1d81bac941"></script>
 <script src="js/tuning.js?v=2a223090a5"></script>
 <script src="js/flight-model.js?v=a5c119c991"></script>
 <script src="js/joints.js?v=8479511f02"></script>
@@ -698,7 +702,7 @@
 <script src="js/autotune.js?v=ab42d73944"></script>
 <script src="js/tune-suggest.js?v=b2cb19b471"></script>
 <script src="js/tune-suggest-ui.js?v=44e7714fea"></script>
-<script src="js/spin-test-ui.js?v=ec72b49164"></script>
+<script src="js/spin-test-ui.js?v=16cb73f73f"></script>
 <script src="js/designs.js?v=328f828d43"></script>
 <script src="js/share.js?v=626dfa369f"></script>
 <script src="js/board-hardware.js?v=e559b18bd8"></script>
@@ -710,7 +714,7 @@
 <script src="js/editor.js?v=4a23ccaabf"></script>
 <script src="js/bench3d.js?v=0abe843902"></script>
 <script src="js/fc-export.js?v=f9cb82cf6c"></script>
-<script src="js/board-wasm.js?v=55346a76cf"></script>
+<script src="js/board-wasm.js?v=748e76a96c"></script>
 <script src="js/crsf.js?v=004ad7fe81"></script>
 <script src="js/link.js?v=924573b83b"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
@@ -718,7 +722,7 @@
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
 <script src="js/peer-air.js?v=82475d500b"></script>
-<script src="js/boards.js?v=353e38affb"></script>
+<script src="js/boards.js?v=74f3b6c867"></script>
 <script src="js/programs.js?v=66a0fde1e7"></script>
 <script src="js/wasm-meter.js?v=3e6eded09b"></script>
 <script src="js/apps.js?v=93c0cbb01e"></script>

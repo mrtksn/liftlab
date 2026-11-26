@@ -47,4 +47,33 @@ void spin_stop(spin_state *S, const char *why);
 int spin_fit(spin_state *S);
 /* What it says now (a line for the radio): "spintest: ..." */
 void spin_said(const spin_state *S, char *out, int cap);
+
+/* The rope lift test: how much the motors lift, with the drone hanging on the rope. While the rope is taut the
+ * accelerometer reads 1 g whatever the motors do (the rope takes the difference); once their thrust passes the
+ * weight the drone rises and the accelerometer reads thrust over mass. So: every motor at the same throttle, from
+ * base, rising slowly (rate per second) until it lifts off the rope (the accelerometer 4% over its reading at rest,
+ * or the height 8 cm up): that throttle holds the weight. Back to base at once; then short pulses (a quarter second) at
+ * lift-off + step, + 2 step, ... (up to top), resting at base between: each reads thrust = mass × the accelerometer.
+ * It stops when armed, swinging, turning, 40 cm up, or the telemetry stops. */
+#define LIFT_PULSES 3
+enum { LIFT_IDLE, LIFT_SETTLE, LIFT_RAMP, LIFT_REST, LIFT_PULSE, LIFT_DONE, LIFT_FAILED };
+typedef struct {
+  int phase, n, k, have_ltel, over;
+  float base, top, rate, step, u;                 /* u: the throttle asked now */
+  double t0, ph_t, last_ltel;
+  double f0, a0; int n0;                          /* at rest: the accelerometer's reading [m/s²] and the height, summed */
+  float alt_rest, g_rest, v_sum; int v_n;         /* their means; the pack's voltage while it lifted */
+  float lift_u, lift_v;                           /* lift-off: the throttle (as the flight core sent it), the voltage */
+  float pu[LIFT_PULSES], pf[LIFT_PULSES], pv[LIFT_PULSES]; int np;   /* each pulse: throttle, thrust / weight, voltage */
+  double ps; int pn; float pvs;                   /* the pulse being read: sum of the accelerometer's ratio, count, volts */
+  float climb;                                    /* the most it rose [m] */
+  int ok; char msg[200];
+} lift_state;
+void lift_init(lift_state *L);
+int lift_start(lift_state *L, int n, float base, float top, float rate, float step, double t);
+int lift_tick(lift_state *L, double t, float *out);
+void lift_ltel(lift_state *L, const float *lt, int n, double t);
+void lift_stop(lift_state *L, const char *why);
+/* "lifttest: ...; result LIFT_U VOLTS NP U1 F1 V1 U2 F2 V2 ..." (F: thrust / weight, V: the pack's volts) once it lifted. */
+void lift_said(const lift_state *L, char *out, int cap);
 #endif

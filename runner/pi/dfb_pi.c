@@ -328,6 +328,7 @@ static int file_put(const char *name, const uint8_t *b, uint32_t n, char *why, i
  * the drone), set where the airframe is loaded. */
 static float mot_yaw[FC_MAX_MOTORS];
 static spin_state SPN;
+static lift_state LFT;                           /* the rope lift test (spin_core.h) */
 static void mot_yaw_from(const fc_airframe *A) { for (int i = 0; i < A->n_motors && i < FC_MAX_MOTORS; i++) mot_yaw[i] = A->mot[i].cols[0][5]; }
 /* One of these commands: 1 (reply filled), or 0. armed: the ESP32 says it's armed. */
 static int design_line(const char *s, int link, int armed, const char *af_path, int *n_mot, char mot_name[][16], double t, char *reply, int rn) {
@@ -413,7 +414,9 @@ static void tuning_send(void *ctx, uint8_t type, const float *p, int n) {
  *   motor off, sticks 0 0                  disarmed, nothing spinning (a test needs this between two motors)
  *   sticks off                             stop sending
  *   spintest BASE STEP [HALF], spintest stop, spintest     the rope spin test (spin_core.h), disarmed: how quickly
- *                                          the motors answer; spintest alone says how it goes, and its result */
+ *                                          the motors answer; spintest alone says how it goes, and its result
+ *   lifttest BASE TOP [RATE STEP], lifttest stop, lifttest the rope lift test: the throttle that lifts it off the
+ *                                          rope, then short pulses above it, each read as thrust over weight */
 /* The ESP32's power monitor (RN_LINK_POWER: per channel what it watches, volts, amps, mAh) as text: "power: motors'
  * pack 3.95 V 2.10 A 120 mAh, second pack 3.88 V 0.62 A 40 mAh" (the channels in use). */
 static void power_said(const float *pw, char *out, size_t n) {
@@ -745,6 +748,21 @@ int main(int argc, char **argv) {
             if (len && !strcmp(line, "reboot") && fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE)) snprintf(reply, sizeof reply, "esp32 reboot: disarm first");
             else if (len) { link_raw(link, fr, len); snprintf(reply, sizeof reply, "to the ESP32: %s (its answer: status, or the log)", line); }
             else snprintf(reply, sizeof reply, "esp32 LINE: a settings line of at most 126 characters");
+          } else if (!strncmp(s, "lifttest", 8) && (!s[8] || s[8] == ' ')) {   /* the rope lift test (spin_core.h) */
+            const char *a = s + 8; while (*a == ' ') a++; float lb, lt2, lr = 0.04f, ls = 0.04f;
+            fc_cmd rsc; const int radio_armed = radio_here && !rc_stick_cmd(&RCI, t, &rsc) && rsc.arm;
+            const int armed = fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE);
+            if (!*a) lift_said(&LFT, reply, (int)sizeof reply);
+            else if (!strcmp(a, "stop")) { lift_stop(&LFT, "asked to"); lift_said(&LFT, reply, (int)sizeof reply); }
+            else if (sscanf(a, "%f %f %f %f", &lb, &lt2, &lr, &ls) < 2) snprintf(reply, sizeof reply, "lifttest BASE TOP [RATE STEP] (e.g. lifttest 0.3 0.85), lifttest stop, or lifttest (how it goes)");
+            else if (!no_nav) snprintf(reply, sizeof reply, "lifttest: only in angle mode (dfb_pi --no-navigation)");
+            else if (!n_mot) snprintf(reply, sizeof reply, "lifttest: no airframe (--airframe, or Upload design)");
+            else if (armed || radio_armed) snprintf(reply, sizeof reply, "lifttest: disarm first");
+            else if (!have_learn && !have_super) snprintf(reply, sizeof reply, "lifttest: needs the flight core's telemetry, which comes while the learning or the supervisor runs");
+            else if (SPN.phase == SPIN_SETTLE || SPN.phase == SPIN_STEP || SPN.phase == SPIN_END) snprintf(reply, sizeof reply, "lifttest: the spin test is running");
+            else { txt_bench_n = 0; txt_stick_t = -1e9;
+              if (!lift_start(&LFT, n_mot, lb, lt2, lr, ls, t)) printf("lift test: started at %.2f, top %.2f, %.3f a second, step %.2f\n", (double)lb, (double)lt2, (double)lr, (double)ls);
+              lift_said(&LFT, reply, (int)sizeof reply); }
           } else if (!strncmp(s, "spintest", 8) && (!s[8] || s[8] == ' ')) {   /* the rope spin test (spin_core.h) */
             const char *a = s + 8; while (*a == ' ') a++; float sb, ss, sh = 0.25f; int k3;
             fc_cmd rsc; const int radio_armed = radio_here && !rc_stick_cmd(&RCI, t, &rsc) && rsc.arm;
@@ -756,11 +774,12 @@ int main(int argc, char **argv) {
             else if (!n_mot) snprintf(reply, sizeof reply, "spintest: no airframe (--airframe, or Upload design) to say which way each motor turns");
             else if (armed || radio_armed) snprintf(reply, sizeof reply, "spintest: disarm first");
             else if (!have_learn && !have_super) snprintf(reply, sizeof reply, "spintest: needs the flight core's telemetry, which comes while the learning or the supervisor runs");
+            else if (LFT.phase >= LIFT_SETTLE && LFT.phase <= LIFT_PULSE) snprintf(reply, sizeof reply, "spintest: the lift test is running");
             else { txt_bench_n = 0; txt_stick_t = -1e9;
               if (!spin_start(&SPN, n_mot, mot_yaw, sb, ss, sh, t)) printf("spin test: started at %.2f, step %.2f, half period %.2f s\n", (double)sb, (double)ss, (double)sh);
               spin_said(&SPN, reply, (int)sizeof reply); }
           } else if ((!strncmp(s, "sticks", 6) && (!s[6] || s[6] == ' ')) || (!strncmp(s, "motor", 5) && (!s[5] || s[5] == ' ')) || (!strncmp(s, "motors", 6) && (!s[6] || s[6] == ' '))) {
-            spin_stop(&SPN, "another motor or stick command");
+            spin_stop(&SPN, "another motor or stick command"); lift_stop(&LFT, "another motor or stick command");
             fc_cmd rsc; const int radio_on = radio_here && !rc_stick_cmd(&RCI, t, &rsc);
             stick_line(s, no_nav, radio_on, radio_on && rsc.arm, n_mot, n_mot ? mot_name : 0, txt_stick, &txt_stick_t, txt_bench, &txt_bench_n, t, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), reply, sizeof reply);
           } else if (sscanf(s, "pickup %f %f %f %d", &px, &py, &pz, &pl) >= 3) {
@@ -843,9 +862,10 @@ int main(int argc, char **argv) {
         if (type == RN_LINK_TELEM) { memcpy(tl, L.buf, sizeof tl); tl_t = t; }
       } /* the flight core's state */
       if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len % 4 == 0 && L.len / 4 <= AT_LTEL_MAX &&
-          (SPN.phase == SPIN_SETTLE || SPN.phase == SPIN_STEP || SPN.phase == SPIN_END)) {   /* the rope spin test's samples */
+          ((SPN.phase == SPIN_SETTLE || SPN.phase == SPIN_STEP || SPN.phase == SPIN_END) || (LFT.phase >= LIFT_SETTLE && LFT.phase <= LIFT_PULSE))) {   /* the rope tests' samples */
         static float sl[AT_LTEL_MAX]; int total = (int)(L.len / 4); memcpy(sl, L.buf, L.len);
         spin_ltel(&SPN, sl, total - (type == RN_LINK_TUNE_LTEL ? AT_TAIL : 0), t);
+        lift_ltel(&LFT, sl, total - (type == RN_LINK_TUNE_LTEL ? AT_TAIL : 0), t);
       }
       if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) &&
           (have_learn || have_super)) { /* the learning and the supervisor, on every frame */
@@ -1029,8 +1049,10 @@ int main(int argc, char **argv) {
       /* the rope spin test: its throttles, as a motor test (the radio's pilot arming ends it) */
       static float spo[FC_MAX_MOTORS]; static int spin_was;
       int spn = spin_tick(&SPN, t, spo);
-      if (spn && radio_sticks && sc.arm) { spin_stop(&SPN, "the radio's pilot armed"); spn = 0; }
+      if (!spn) spn = lift_tick(&LFT, t, spo);                       /* (or the lift test's: one at a time) */
+      if (spn && radio_sticks && sc.arm) { spin_stop(&SPN, "the radio's pilot armed"); lift_stop(&LFT, "the radio's pilot armed"); spn = 0; }
       if (spin_was != SPN.phase) { if (SPN.phase == SPIN_DONE || SPN.phase == SPIN_FAILED) { char said[300]; spin_said(&SPN, said, (int)sizeof said); printf("spin test: %s\n", said); } spin_was = SPN.phase; }
+      { static int lift_was; if (lift_was != LFT.phase) { if (LFT.phase == LIFT_DONE || LFT.phase == LIFT_FAILED) { char said[300]; lift_said(&LFT, said, (int)sizeof said); printf("lift test: %s\n", said); } lift_was = LFT.phase; } }
       const int text_test = spn || (t - txt_stick_t < TXT_STICK_S && (txt_bench_n || txt_stick[5] >= 0));   /* a motor test from text */
       if (radio_sticks && !sc.arm && text_test) radio_sticks = 0;        /* (the radio's pilot disarmed: the test goes; arming ends it) */
       int text_sticks = !radio_sticks && (spn || t - txt_stick_t < TXT_STICK_S);

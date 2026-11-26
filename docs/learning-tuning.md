@@ -75,7 +75,7 @@ less margin than its model. `node tools/test_tune_suggest.js` checks the ratings
 
 ## Rope spin test
 
-Tune → Rope spin test (`runner/fc/spin_core.c`, `js/spin-test-ui.js`). The drone hangs on a rope, free to turn
+Tune → Rope hang → Spin test (`runner/fc/spin_core.c`, `js/spin-test-ui.js`). The drone hangs on a rope, free to turn
 in yaw; disarmed, the flight core's motor test runs every motor at `base`, then steps each motor by `±step`
 signed by its yaw column in the airframe (`cols[0][5]`), in the doublet +T, −2T, +2T, −2T, +2T, −2T, +2T, −T
 (T = `half`, 0.25 s by default), between 1.5 s of settling and 0.9 s after.
@@ -101,6 +101,30 @@ radio's pilot arming stop it. The simulator runs the same C on the learning's bo
 drone as on a rope (`simBenchHold('rope')`: yaw from the rotors' torques alone, a weak twist and drag) and lets go
 when it ends. `runner/fc/test_spin.c` (CI and `runner/test.sh`) fits made-up ropes with delays of 3–25 ms,
 spin-ups of 28–140 ms and kicks of 0–6 through a link with 3–25 ms of varying, in-order delay.
+
+## Rope lift test
+
+Tune → Rope hang → Lift test (`spin_core.c` `lift_*`, `js/spin-test-ui.js`). Disarmed, every motor at the same
+throttle: 1.5 s at `base` (the accelerometer's magnitude and the height averaged: the reading at rest), then rising
+at `rate` per second until the accelerometer reads 4% over its rest value for three telemetry frames or the height
+is 8 cm up: lift-off, at the throttle the flight core sent then. 1.5 s back at `base`, then up to three pulses of
+0.25 s at lift-off + k·`step` (k = 1, 2, 3, not over `top`), 1.5 s at `base` between; each pulse's second half is
+averaged as thrust/weight = |f|/|f_rest| with the pack's voltage. While the rope is taut |f| is the rest value
+whatever the thrust, so only thrust over the weight is measured. Stops: armed, roll/pitch rate over 3 rad/s, yaw
+over 8 rad/s, 40 cm up, the telemetry gone.
+
+LiftLab compares each pulse's thrust (the design's mass × g × ratio) with what the flight controller believes the
+motors give at that throttle and voltage (`tmax`, `curveHat`, e = u·V/Vref): their mean ratio is the strength. The
+hover throttle is lift-off backed down 4% along the model's local curve. Apply fits each motor's card to its share
+of the pulses and of lift-off (≈ 1.04 × weight), as the scale test does (`ThrustTest.fitPhysics` for a fixed motor,
+`tmax` × the ratio for a generic one; a prop table stays), keeping the current bend, and records `thrustTest` with
+`source: 'rope'`, so `motorMeasured` holds and Gains from the motors narrows the strength range.
+
+dfb_pi: `lifttest BASE TOP [RATE STEP]` (defaults 0.04 a second, 0.04), `lifttest`, `lifttest stop`; the same
+conditions as `spintest`, one rope test at a time; its result line is
+`... ; result LIFT_U VOLTS NP U1 F1 V1 U2 F2 V2 ...`. The simulator's rope (`simBenchHold('rope')`) holds the drone
+level and lets it rise: the rotors' force against its weight, caught at the height it hung from; the sensors read
+that motion. `runner/fc/test_spin.c` checks lift-off and the pulses on made-up drones hovering at 45–68%.
 
 ## Simulator autotune workflow
 

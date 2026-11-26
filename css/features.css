@@ -807,6 +807,7 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .tt-motor .hint{margin:var(--space-4) 0 0}
 .tt-now{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-8);margin-top:var(--space-8)}
 .tt-now span{flex:1 1 100%}
+.tune-sub{font-size:var(--text-sm,0.95rem);margin:var(--space-14,14px) 0 var(--space-4)}
 .scal-got{font-family:var(--f-mono);font-size:var(--text-xs)}
 .scal-result p{margin:var(--space-4) 0}
 /* the guide's card over the 3D view: what to do now, how it's going */

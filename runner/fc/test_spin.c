@@ -94,6 +94,36 @@ int main(void) {
   /* refusals */
   { spin_init(&S); const float same[4] = { 1, 1, 1, 1 }; CHECK(spin_start(&S, 4, same, 0.3f, 0.05f, 0.25f, 0) && strstr(S.msg, "both ways"), "all one way: refused"); }
   { spin_init(&S); const float yaw[4] = { 1, -1, 1, -1 }; CHECK(spin_start(&S, 4, yaw, 0.3f, 0.5f, 0.25f, 0), "a step too big: refused"); }
+  /* the lift test: a drone on a rope that hovers at uh, its thrust ∝ u^1.6 after a 40 ms spin-up; the rope holds it
+   * at z = 0 (it can't go lower); the barometer 3 cm noisy */
+  for (int c = 0; c < 3; c++) {
+    const double uh = c == 0 ? 0.55 : c == 1 ? 0.45 : 0.68, m = 0.29, g = 9.81, lagT = 0.04;
+    lift_state L; lift_init(&L);
+    CHECK(!lift_start(&L, 4, 0.3f, 0.95f, 0.04f, 0.04f, 0), "lift test starts");
+    double T = 0, z = 0, vz = 0, fsum = 0, asum = 0, usum = 0; int na = 0; float applied = 0;
+    struct { double at; float u; } q[64]; int qn = 0;
+    for (int ms = 0; ms < 30000 && (L.phase != LIFT_DONE && L.phase != LIFT_FAILED); ms++) {
+      double t = ms * 0.001; float o[FC_MAX_MOTORS]; int k = lift_tick(&L, t, o);
+      if (k && qn < 64) { q[qn].at = t + 0.01; q[qn].u = o[0]; qn++; }
+      while (qn && q[0].at <= t) { applied = q[0].u; memmove(q, q + 1, sizeof q[0] * (size_t)--qn); }
+      if (!k) applied = 0;
+      double Tt = m * g * pow(applied / uh, 1.6); T += (Tt - T) * 0.001 / lagT;
+      double a = T / m - g; if (z <= 0 && a < 0) { a = 0; vz = 0; z = 0; }
+      vz += a * 0.001; z += vz * 0.001; if (z < 0) { z = 0; vz = 0; }
+      double f = a + g; fsum += f; asum += z; usum += applied; na++;
+      if (na == 5) {
+        float lt[30] = { 0 }; lt[0] = (float)t; lt[1] = FC_TESTING; lt[9] = (float)(fsum / na * 1.003 + 0.02 * rnd()); lt[13] = 3.9f;
+        lt[14] = (float)(asum / na + 0.03 * rnd()); lt[16] = 1; lt[17] = 4; for (int i = 0; i < 4; i++) lt[19 + i] = (float)(usum / na);
+        lift_ltel(&L, lt, 27, t + 0.01); fsum = asum = usum = 0; na = 0;
+      }
+    }
+    char said[300]; lift_said(&L, said, sizeof said); printf("  %s\n", said);
+    CHECK(L.ok && fabs(L.lift_u - uh) < 0.03, "hovers at %.2f: lifted off at %.3f", uh, L.lift_u);
+    int good = L.np >= 2; for (int i = 0; i < L.np; i++) { double want = pow(L.pu[i] / uh, 1.6); if (fabs(L.pf[i] / want - 1) > 0.04) good = 0; }
+    CHECK(good, "each pulse reads its thrust over the weight within 4%% (%d pulses)", L.np);
+    CHECK(L.climb < 0.4f, "it rose at most %.2f m", (double)L.climb);
+  }
+  { lift_state L; lift_init(&L); CHECK(lift_start(&L, 4, 0.3f, 0.2f, 0.04f, 0.04f, 0), "lift: a top below the base is refused"); }
   printf(fails ? "rope spin test: %d FAILED\n" : "rope spin test: ok\n", fails);
   return fails ? 1 : 0;
 }
