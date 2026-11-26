@@ -21,9 +21,13 @@ static int gyro_at(const flow_in *FI, double x, float w[3]) {
   return 0;
 }
 
-/* a reading against the gyro at each delay: the gyro averaged over the frame interval it covers */
+/* a reading against the gyro at each delay: the gyro averaged over the frame interval it covers. Only while it turns
+ * (FLOW_CAL_MIN_TURN): held still, a reading says nothing about the lens, and long still spells would only add the
+ * camera's noise to the fit (choosing readings by the gyro alone doesn't bias the fit) */
+#define FLOW_CAL_MIN_TURN 0.25f
 static void accumulate(flow_in *FI, const flow_reading *r) {
   float wm[FLOW_LAGS][2];
+  { float w0[3]; if (!gyro_at(FI, r->t - r->dt * 0.5, w0) || hypotf(w0[0], w0[1]) < FLOW_CAL_MIN_TURN) return; }
   for (int l = 0; l < FLOW_LAGS; l++) {
     double lag = (l - FLOW_LAGS / 2) * FLOW_LAG_STEP; float s[2] = { 0, 0 };
     for (int j = 0; j < 3; j++) { float w[3]; if (!gyro_at(FI, r->t + lag - r->dt * (1 + 2 * j) / 6.0, w)) return; s[0] += w[0] / 3; s[1] += w[1] / 3; }
@@ -84,7 +88,7 @@ static int cal_said(const flow_in *FI, char *reply, int rn) {
     double res = S[7] - (a[0][0] * S[3] + a[0][1] * S[4] + a[1][0] * S[5] + a[1][1] * S[6]), r2 = 1 - res / S[7];
     if (r2 > bestr2) { bestr2 = r2; best = l; memcpy(A, a, sizeof A); }
   }
-  int k = snprintf(reply, (size_t)rn, "flowcal: %s; %ld readings with the gyro, fastest turn %.1f rad/s", FI->cal_on ? "collecting (rock it: roll and pitch, the camera over the same spot)" : "stopped", FI->cal_n, (double)FI->cal_wmax);
+  int k = snprintf(reply, (size_t)rn, "flowcal: %s; %ld readings while it turned, fastest turn %.1f rad/s", FI->cal_on ? "collecting (rock it: roll and pitch, the camera over the same spot)" : "stopped", FI->cal_n, (double)FI->cal_wmax);
   if (best < 0 || k >= rn) return 1;
   const double *S = FI->S[best]; double n = S[8];
   double lx = S[0] / n, ly = S[2] / n;                               /* how much it turned about each axis (mean square) */
@@ -96,8 +100,8 @@ static int cal_said(const flow_in *FI, char *reply, int rn) {
   k += snprintf(reply + k, (size_t)(rn - k), "; best fit with the gyro taken %.0f ms %s: R² %.2f; the picture moves %.2f× the turn%s, turned %+.0f° about the camera's axis against the body, skew %.2f",
                 fabs((best - FLOW_LAGS / 2) * FLOW_LAG_STEP * 1e3), best >= FLOW_LAGS / 2 ? "later" : "earlier", bestr2, s, mirrored ? ", MIRRORED" : "", psi, skew);
   if (k >= rn) return 1;
-  if (sqrt(lx) < 0.3 || sqrt(ly) < 0.3 || n < 150) k += snprintf(reply + k, (size_t)(rn - k), "; not enough yet: rock it more about both axes (%.2f and %.2f rad/s rms, want 0.3+; %.0f readings, want 150+)", sqrt(lx), sqrt(ly), n);
-  else if (bestr2 < 0.8) k += snprintf(reply + k, (size_t)(rn - k), "; a poor fit: keep the camera over one spot as you rock it, over a textured floor in good light");
+  if (sqrt(lx) < 0.3 || sqrt(ly) < 0.3 || n < 150) k += snprintf(reply + k, (size_t)(rn - k), "; not enough yet: rock it more about both axes (%.2f and %.2f rad/s rms while turning, want 0.3+; %.0f readings, want 150+)", sqrt(lx), sqrt(ly), n);
+  else if (bestr2 < 0.8) k += snprintf(reply + k, (size_t)(rn - k), "; a poor fit: off the rope, held half a metre or more above a textured floor in good light, turned about the camera itself (moving the camera sideways, a swing on a rope, adds to what the picture shows); then flowcal start again");
   else if (FI->rad_px > 0) k += snprintf(reply + k, (size_t)(rn - k), "; for dfb_flow: --rad-px %.5f%s, and the design's flow camera turned %+.0f° about its axis", FI->rad_px / s, mirrored ? " and toggle --mirror" : "", psi);
   return 1;
 }
@@ -113,7 +117,7 @@ int flow_in_command(flow_in *FI, const char *s, double t, char *reply, int rn) {
   if (strncmp(s, "flowcal", 7) || (s[7] && s[7] != ' ')) return 0;
   const char *a = s + 7; while (*a == ' ') a++;
   if (!strcmp(a, "start")) { memset(FI->S, 0, sizeof FI->S); FI->cal_n = 0; FI->cal_wmax = 0; FI->pn = 0; FI->cal_on = 1;
-    snprintf(reply, (size_t)rn, "flowcal: collecting; rock it by hand, motors off: roll and pitch, a few times each way, the camera staying over one spot of a textured floor; then flowcal"); return 1; }
+    snprintf(reply, (size_t)rn, "flowcal: collecting; rock it by hand, motors off: roll and pitch, a few times each way, the camera staying over one spot of a textured floor (off the rope, half a metre up or more); then flowcal"); return 1; }
   if (!strcmp(a, "stop")) FI->cal_on = 0;
   else if (*a) { snprintf(reply, (size_t)rn, "flowcal start | stop, or flowcal (the fit so far)"); return 1; }
   return cal_said(FI, reply, rn);

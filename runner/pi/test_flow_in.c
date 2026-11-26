@@ -52,6 +52,11 @@ int main(void) {
   static flow_in FI; flow_in_init(&FI); char reply[1000];
   CHECK(flow_in_command(&FI, "flow", 0, reply, sizeof reply) && strstr(reply, "no readings"), "flow with nothing: %s", reply);
   CHECK(!flow_in_command(&FI, "flowers", 0, reply, sizeof reply) && !flow_in_reading(&FI, "fly", 0), "other commands left alone");
+  {   /* held still: the readings don't count (they say nothing about the lens) */
+    flow_in_command(&FI, "flowcal start", 0, reply, sizeof reply); float w0[3] = { 0.02f, -0.01f, 0 }; char line[200];
+    for (int i = 0; i < 300; i++) { double t = i * 0.01; flow_in_gyro(&FI, t, w0); if (i % 2) { snprintf(line, sizeof line, "flow %.4f 0.0200 0.01 -0.02 0.9", t - 0.03); flow_in_reading(&FI, line, t); } }
+    CHECK(FI.cal_n == 0, "still readings counted: %ld", FI.cal_n);
+  }
   run(1.0f, 0, 0, 0.020, "a camera as the design has it, 20 ms late:", 0);
   run(1.3f, 1, 90, 0.040, "a lens 1.3× off, mirrored, turned 90°, 40 ms late:", 0);
   run(0.8f, 0, -45, 0.000, "a lens 0.8×, turned −45°, on time:", 0);
