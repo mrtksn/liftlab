@@ -90,6 +90,7 @@
 #include "radio_serial.h"
 #include "radio_udp.h"
 #include "rn_link.h"
+#include "flow_in.h"
 #include "spin_core.h"
 #include "super_core.h"
 #include "tlm_crsf.h"
@@ -652,6 +653,7 @@ int main(int argc, char **argv) {
   static char esp_said[160]; double esp_said_t = -1e9;   /* what the ESP32 said last (an event or a report): status shows it */
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
+  static flow_in FI; flow_in_init(&FI);   /* the downward camera's optical flow: dfb_flow's readings to the command port (flow_in.h) */
   static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
   for (;;) {
     struct pollfd pf[5] = { { link_publish ? link_mq.fd : link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
@@ -704,9 +706,11 @@ int main(int argc, char **argv) {
       char *s = buf, *nl;
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
+        if (k == 3 && flow_in_reading(&FI, s, t)) { s = nl + 1; continue; }   /* a reading from the camera (dfb_flow): taken, no answer */
         if (*s) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
+          if (!design) design = flow_in_command(&FI, s, t, reply, (int)sizeof reply);   /* flow, flowcal: the camera's (no pilot's command) */
           if (!design && strncmp(s, "autotune", 8) && strcmp(s, "status") && strcmp(s, "learning") &&
               strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet") && strcmp(s, "power"))
             autotune_stop(&AT, "stopped: another pilot/learning command; "
@@ -941,6 +945,7 @@ int main(int argc, char **argv) {
       nav_in in; memset(&in, 0, sizeof in);
       memcpy(in.q, v + 2, 16); memcpy(in.w, v + 6, 12); memcpy(in.acc, v + 9, 12); in.have_att = v[14] > 0.5f;
       in.have_baro = v[13] > 0.5f; in.baro_alt = v[12]; in.baro_age = 0.005f;
+      if (in.have_att) flow_in_gyro(&FI, t, in.w);                     /* (the camera's flow is calibrated against it: flowcal) */
       if (G.fix && t - G.t < 1.0) { in.have_fix = 1; memcpy(in.fix_p, G.p, sizeof in.fix_p); memcpy(in.fix_v, G.v, sizeof in.fix_v); in.fix_age = (float)(t - G.t) + 0.1f; last_fix_t = G.t; }
       float dt = last_nav > 0 ? (float)(t - last_nav) : 0.01f; last_nav = t; if (dt > 0.1f) dt = 0.1f;
       /* landing: sink at 0.5 m/s; on the ground (height near home and not sinking any more), idle and disarm */
@@ -1056,8 +1061,14 @@ int main(int argc, char **argv) {
       int spn = spin_tick(&SPN, t, spo);
       if (!spn) spn = lift_tick(&LFT, t, spo);                       /* (or the lift test's: one at a time) */
       if (spn && radio_sticks && sc.arm) { spin_stop(&SPN, "the radio's pilot armed"); lift_stop(&LFT, "the radio's pilot armed"); spn = 0; }
-      if (spin_was != SPN.phase) { if (SPN.phase == SPIN_DONE || SPN.phase == SPIN_FAILED) { char said[300]; spin_said(&SPN, said, (int)sizeof said); printf("spin test: %s\n", said); } spin_was = SPN.phase; }
-      { static int lift_was; if (lift_was != LFT.phase) { if (LFT.phase == LIFT_DONE || LFT.phase == LIFT_FAILED) { char said[300]; lift_said(&LFT, said, (int)sizeof said); printf("lift test: %s\n", said); } lift_was = LFT.phase; } }
+      if (spin_was != SPN.phase) { if (SPN.phase == SPIN_DONE || SPN.phase == SPIN_FAILED) { char said[300]; spin_said(&SPN, said, (int)sizeof said); printf("spin test: %s\n", said);
+          FILE *cf = fopen("rope-spin.csv", "w");                     /* (its samples, beside the design, to look at later) */
+          if (cf) { fprintf(cf, "# %s\nt,differential_throttle,yaw_rate\n", said); for (int i = 0; i < SPN.ns; i++) fprintf(cf, "%.4f,%.4f,%.4f\n", (double)SPN.st[i], (double)SPN.sd[i], (double)SPN.sw[i]); fclose(cf); printf("spin test: its samples in rope-spin.csv\n"); } }
+        spin_was = SPN.phase; }
+      { static int lift_was; if (lift_was != LFT.phase) { if (LFT.phase == LIFT_DONE || LFT.phase == LIFT_FAILED) { char said[300]; lift_said(&LFT, said, (int)sizeof said); printf("lift test: %s\n", said);
+          FILE *cf = fopen("rope-lift.csv", "w");
+          if (cf) { fprintf(cf, "# %s\nt,throttle,acc_x,acc_y,acc_z,height,phase\n", said); for (int i = 0; i < LFT.ns; i++) fprintf(cf, "%.4f,%.4f,%.3f,%.3f,%.3f,%.3f,%d\n", (double)LFT.st[i], (double)LFT.su[i], (double)LFT.sf[i][0], (double)LFT.sf[i][1], (double)LFT.sf[i][2], (double)LFT.sa[i], (int)LFT.sp[i]); fclose(cf); printf("lift test: its samples in rope-lift.csv\n"); } }
+        lift_was = LFT.phase; } }
       const int text_test = spn || (t - txt_stick_t < TXT_STICK_S && (txt_bench_n || txt_stick[5] >= 0));   /* a motor test from text */
       if (radio_sticks && !sc.arm && text_test) radio_sticks = 0;        /* (the radio's pilot disarmed: the test goes; arming ends it) */
       int text_sticks = !radio_sticks && (spn || t - txt_stick_t < TXT_STICK_S);

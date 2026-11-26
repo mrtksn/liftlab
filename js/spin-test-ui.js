@@ -17,12 +17,24 @@ function sptParse(text) {
   const phase = /settling|stepping/.test(s) ? 'run' : /\bdone\b/.test(s) ? 'done' : /stopped|needs|disarm|only in|no airframe|already|base 0\.05/.test(s) ? 'failed' : 'idle';
   return { phase, text: s.replace(/^spintest:\s*/, '').replace(/;\s*result .*$/, ''), result };
 }
-// The drone's newest "spintest:" line since n0 (live), or the simulator's.
+// The drone's newest answer that starts with prefix since n0, whole: the radio carries a long answer in pieces of
+// 56 characters, each its own message (gs.log, newest first), so the pieces after it (newer, within a second, not
+// another answer) are joined back on.
+function ropeAnswer(prefix, n0) {
+  const k = Math.max(0, Math.min(gs.log.length, (gs.nmsg || 0) - n0)), log = gs.log.slice(0, k);
+  const j = log.findIndex(m => String(m.text || '').trim().startsWith(prefix)); if (j < 0) return null;
+  let text = String(log[j].text).trim();
+  for (let i = j - 1; i >= 0; i--) {
+    const t = String(log[i].text || '').trim();
+    if (/^(spintest|lifttest|motor|motors|sticks|esp32|learning|status|angle mode|power|file|airframe|wiring)\b/.test(t) || Math.abs((log[i].t ?? 0) - (log[j].t ?? 0)) > 1.5) break;
+    text += ' ' + t;
+  }
+  return text;
+}
+// The drone's newest "spintest:" answer since n0 (live), or the simulator's.
 function sptRead(n0) {
   if (sptWhere() === 'sim') { const st = simSpinStatus(); return st ? sptParse(st.text) : null; }
-  const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0);
-  for (const m of gs.log.slice(0, Math.max(0, k))) { const p = sptParse(m.text); if (p) return p; }
-  return null;
+  const a = ropeAnswer('spintest:', n0); return a ? sptParse(a) : null;
 }
 function sptPoll() {
   if (spt.phase !== 'run') { clearInterval(spt.timer); spt.timer = 0; return; }
@@ -121,9 +133,7 @@ function rltParse(text) {
 }
 function rltRead(n0) {
   if (sptWhere() === 'sim') { const st = simLiftStatus(); return st ? rltParse(st.text) : null; }
-  const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0);
-  for (const m of gs.log.slice(0, Math.max(0, k))) { const p = rltParse(m.text); if (p) return p; }
-  return null;
+  const a = ropeAnswer('lifttest:', n0); return a ? rltParse(a) : null;
 }
 function rltPoll() {
   if (rlt.phase !== 'run') { clearInterval(rlt.timer); rlt.timer = 0; return; }
@@ -151,7 +161,7 @@ const rltBelieved = (u, V) => actuators().reduce((t, c) => { const e = u * (V > 
 // over it, a little late). { pts: [{ u, V, T, model }], ratio: measured / believed, hoverU, hoverModel }.
 function rltAnalyse(r) {
   const m = (model && model.m) || cfg.frame.mass, W = m * G, V = r.volts;
-  const pts = r.pulses.map(p => ({ u: p.u, V: p.V || V, T: p.f * W, model: rltBelieved(p.u, p.V || V) }));
+  const pts = r.pulses.filter(p => p.f >= 1.03).map(p => ({ u: p.u, V: p.V || V, T: p.f * W, model: rltBelieved(p.u, p.V || V) }));   // (a pulse that didn't lift it read 1 g: the rope held it)
   if (!pts.length) return null;
   const ratio = pts.reduce((a, p) => a + p.T / p.model, 0) / pts.length;
   // hover: lift-off is a little over the weight (it triggers at 4% over): back down along thrust ∝ u^k, k from the

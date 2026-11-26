@@ -137,7 +137,7 @@ static int fit_kick = 1;   /* (0: the model without the kick) */
 static double regress(int lo, int hi, double *g, double *r, double *k, double *c) {
   const float *c5[5] = { fa, fx, fth, fw, 0 }; const float s5[5] = { 1, 1, -1, -1, 1 }; double co[5];
   double e = fit_kick ? lsq(5, c5, s5, lo, hi, co) : 1e30;
-  if (fit_kick && e < 1e30 && co[0] + co[1] > 0 && co[0] >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }
+  if (fit_kick && e < 1e30 && fabs(co[0] + co[1]) > 1e-9 && co[0] / (co[0] + co[1]) >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }   /* (the kick the same way as the gain) */
   const float *c4[4] = { fx, fth, fw, 0 }; const float s4[4] = { 1, -1, -1, 1 };
   e = lsq(4, c4, s4, lo, hi, co);
   *g = co[0]; *r = 0; *k = co[1]; *c = co[2];
@@ -149,14 +149,14 @@ static int spin_search(const spin_state *S, int lo, int hi, double *best, double
   *best = 1e30; *bd = *bl = 0;
   for (double d = 0; d <= 0.0801; d += 0.004) for (double l = 0.005; l <= 0.3; l *= 1.2) {
     model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
-    if (e < *best && gg > 0) { *best = e; *bd = d; *bl = l; }
+    if (e < *best && gg != 0) { *best = e; *bd = d; *bl = l; }
   }
   if (*best >= 1e30) return -1;
   const double cd = *bd, cl = *bl;
   for (double d = cd - 0.004; d <= cd + 0.0041; d += 0.001) for (double l = cl / 1.2; l <= cl * 1.21; l *= 1.04) {
     if (d < 0) continue;
     model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
-    if (e <= *best && gg > 0) { *best = e; *bd = d; *bl = l; }
+    if (e <= *best && gg != 0) { *best = e; *bd = d; *bl = l; }
   }
   return 0;
 }
@@ -181,7 +181,9 @@ int spin_fit(spin_state *S) {
   model_x(S, bd, bl); regress(lo, hi, &g, &r, &k, &c); fit_kick = 1;
   S->delay = (float)bd; S->lag = (float)bl; S->gain = (float)g; S->kick = (float)r; S->spring = (float)k; S->drag = (float)c;
   S->r2 = sst > 0 ? (float)(1 - best / sst) : 0;
-  const char *why = S->r2 < 0.6f ? "the fit is poor (a bigger step, or a steadier rope)" : bl < 0.0055 || bl > 0.29 ? "the spin-up is at the edge of what it tries" : bd > 0.079 ? "the delay is at the edge of what it tries" : 0;
+  /* turning the other way than the airframe's spin directions say: the gain comes out negative */
+  const char *why = S->r2 >= 0.6f && g < 0 ? "it turned the other way than the airframe's spin directions say (each motor's direction, or the IMU's heading)" :
+                    S->r2 < 0.6f ? "the fit is poor (a bigger step, or a steadier rope)" : bl < 0.0055 || bl > 0.29 ? "the spin-up is at the edge of what it tries" : bd > 0.079 ? "the delay is at the edge of what it tries" : 0;
   S->ok = !why;
   if (why) fc_fmt(S->msg, (int)sizeof S->msg, "spintest: done, but %s: delay %d ms, spin-up %d ms, fit %.2f", why, (int)(bd * 1000 + 0.5), (int)(bl * 1000 + 0.5), (double)S->r2);
   else fc_fmt(S->msg, (int)sizeof S->msg, "spintest: done: delay %d ms, spin-up %d ms, yaw %.1f rad/s2 per unit, fit %.2f", (int)(bd * 1000 + 0.5), (int)(bl * 1000 + 0.5), (double)g, (double)S->r2);
@@ -204,6 +206,7 @@ void spin_said(const spin_state *S, char *out, int cap) {
 #define LIFT_OVER 1.04f        /* the accelerometer this far over its reading at rest: lifted off */
 #define LIFT_RISE 0.08f        /* [m] or the height this far up */
 #define LIFT_MAX_RISE 0.4f     /* [m] higher: stop */
+#define LIFT_AVG 40            /* frames the accelerometer is averaged over for lift-off (0.2 s) */
 void lift_init(lift_state *L) { memset(L, 0, sizeof *L); }
 static int lift_running(const lift_state *L) { return L->phase >= LIFT_SETTLE && L->phase <= LIFT_PULSE; }
 int lift_start(lift_state *L, int n, float base, float top, float rate, float step, double t) {
@@ -226,7 +229,10 @@ int lift_tick(lift_state *L, double t, float *out) {
   const double dt = t - L->ph_t;
   if (L->phase == LIFT_SETTLE && dt >= SPIN_SETTLE_S) {
     if (L->n0 < 20) { lift_stop(L, "too little telemetry at rest"); return 0; }
-    L->g_rest = (float)(L->f0 / L->n0); L->alt_rest = (float)(L->a0 / L->n0);
+    const double ux = L->fr[0] / L->n0, uy = L->fr[1] / L->n0, uz = L->fr[2] / L->n0, gn = sqrt(ux * ux + uy * uy + uz * uz);
+    if (!(gn > 1)) { lift_stop(L, "the accelerometer reads nothing at rest"); return 0; }
+    L->up[0] = (float)(ux / gn); L->up[1] = (float)(uy / gn); L->up[2] = (float)(uz / gn);
+    L->g_rest = (float)gn; L->alt_rest = (float)(L->a0 / L->n0);
     L->phase = LIFT_RAMP; L->ph_t = t; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: rising from %.2f", (double)L->base);
   }
   if (L->phase == LIFT_RAMP) {
@@ -236,8 +242,10 @@ int lift_tick(lift_state *L, double t, float *out) {
   if (L->phase == LIFT_REST && t - L->ph_t >= LIFT_REST_S) {
     float u = L->lift_u + (float)(L->k + 1) * L->step;
     if (L->k >= LIFT_PULSES || u > L->top) {
-      L->phase = LIFT_DONE; L->ok = 1;
-      fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: lifted off at %.3f on %.2f V, %d pulses", (double)L->lift_u, (double)L->lift_v, L->np);
+      float top = 0; for (int i = 0; i < L->np; i++) if (L->pf[i] > top) top = L->pf[i];
+      L->phase = LIFT_DONE; L->ok = top >= LIFT_OVER;
+      if (L->ok) fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: lifted off at %.3f on %.2f V, %d pulses", (double)L->lift_u, (double)L->lift_v, L->np);
+      else fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done, but no pulse lifted it (a false lift-off at %.3f?): a bigger step", (double)L->lift_u);
       return 0;
     }
     L->phase = LIFT_PULSE; L->ph_t = t; L->u = u; L->ps = 0; L->pn = 0; L->pvs = 0;
@@ -257,15 +265,23 @@ void lift_ltel(lift_state *L, const float *lt, int n, double t) {
   if (st == FC_ARMED || st == FC_FAILSAFE) { lift_stop(L, "it was armed"); return; }
   if (fabsf(lt[12]) > SPIN_MAX_YAW) { lift_stop(L, "turning too fast"); return; }
   if (fabsf(lt[10]) > SPIN_MAX_TILT || fabsf(lt[11]) > SPIN_MAX_TILT) { lift_stop(L, "swinging or tipping"); return; }
-  const float fm = sqrtf(lt[7] * lt[7] + lt[8] * lt[8] + lt[9] * lt[9]), alt = lt[14], have_alt = lt[16] > 0.5f, v = lt[13];
+  const float fx = lt[7], fy = lt[8], fz = lt[9], alt = lt[14], have_alt = lt[16] > 0.5f, v = lt[13];
   int nm = (int)lt[17]; float um = 0; for (int i = 0; i < nm && 19 + i < n; i++) um += lt[19 + i]; um = nm ? um / (float)nm : 0;
-  if (L->phase == LIFT_SETTLE) { L->f0 += fm; L->a0 += have_alt ? alt : 0; L->n0++; return; }
+  if (L->ns < SPIN_MAX) { int k = L->ns++; L->st[k] = (float)(t - L->t0); L->su[k] = um; L->sf[k][0] = fx; L->sf[k][1] = fy; L->sf[k][2] = fz; L->sa[k] = alt; L->sp[k] = (float)L->phase; }
+  if (L->phase == LIFT_SETTLE) { L->fr[0] += fx; L->fr[1] += fy; L->fr[2] += fz; L->a0 += have_alt ? alt : 0; L->n0++; return; }
+  /* the accelerometer along its direction at rest (an average of a vibrating vector's length reads high; along a
+   * fixed direction the vibration averages out) */
+  const float fm = (fx * L->up[0] + fy * L->up[1] + fz * L->up[2]);
   const float rise = have_alt ? alt - L->alt_rest : 0;
   if (rise > L->climb) L->climb = rise;
   if (rise > LIFT_MAX_RISE) { L->u = L->base; lift_stop(L, "it rose 40 cm: a lower step or top"); return; }
   if (L->phase == LIFT_RAMP && st == FC_TESTING) {
-    if (fm > LIFT_OVER * L->g_rest) L->over++; else L->over = 0;
-    if (L->over >= 3 || rise > LIFT_RISE) {
+    /* the last LIFT_AVG frames' mean (the motors shake the accelerometer: one frame says little), over the
+     * threshold for 10 frames in a row */
+    L->ring[L->ri % LIFT_AVG] = fm; L->ri++;
+    float mean = 0; const int nr = L->ri < LIFT_AVG ? L->ri : LIFT_AVG; for (int i = 0; i < nr; i++) mean += L->ring[i]; mean /= (float)nr;
+    if (nr == LIFT_AVG && mean > LIFT_OVER * L->g_rest) L->over++; else L->over = 0;
+    if (L->over >= 10 || rise > LIFT_RISE) {
       L->lift_u = um; L->lift_v = v; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base; L->k = 0;
       fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: lifted off at %.3f", (double)um);
     }

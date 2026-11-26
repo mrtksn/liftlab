@@ -51,7 +51,7 @@ void spin_said(const spin_state *S, char *out, int cap);
 /* The rope lift test: how much the motors lift, with the drone hanging on the rope. While the rope is taut the
  * accelerometer reads 1 g whatever the motors do (the rope takes the difference); once their thrust passes the
  * weight the drone rises and the accelerometer reads thrust over mass. So: every motor at the same throttle, from
- * base, rising slowly (rate per second) until it lifts off the rope (the accelerometer 4% over its reading at rest,
+ * base, rising slowly (rate per second) until it lifts off the rope (the accelerometer along its direction at rest, averaged over 0.2 s, 4% over its reading then for 50 ms,
  * or the height 8 cm up): that throttle holds the weight. Back to base at once; then short pulses (a quarter second) at
  * lift-off + step, + 2 step, ... (up to top), resting at base between: each reads thrust = mass × the accelerometer.
  * It stops when armed, swinging, turning, 40 cm up, or the telemetry stops. */
@@ -61,12 +61,15 @@ typedef struct {
   int phase, n, k, have_ltel, over;
   float base, top, rate, step, u;                 /* u: the throttle asked now */
   double t0, ph_t, last_ltel;
-  double f0, a0; int n0;                          /* at rest: the accelerometer's reading [m/s²] and the height, summed */
+  double fr[3], a0; int n0;                       /* at rest: the accelerometer's reading [m/s²] and the height, summed */
+  float up[3];                                    /* the accelerometer's direction at rest (unit) */
   float alt_rest, g_rest, v_sum; int v_n;         /* their means; the pack's voltage while it lifted */
   float lift_u, lift_v;                           /* lift-off: the throttle (as the flight core sent it), the voltage */
   float pu[LIFT_PULSES], pf[LIFT_PULSES], pv[LIFT_PULSES]; int np;   /* each pulse: throttle, thrust / weight, voltage */
   double ps; int pn; float pvs;                   /* the pulse being read: sum of the accelerometer's ratio, count, volts */
   float climb;                                    /* the most it rose [m] */
+  int ns; float st[SPIN_MAX], su[SPIN_MAX], sf[SPIN_MAX][3], sa[SPIN_MAX], sp[SPIN_MAX];   /* every frame: time, throttle, accelerometer, height, phase */
+  float ring[40]; int ri;                         /* the accelerometer's last frames while rising (lift-off: their mean) */
   int ok; char msg[200];
 } lift_state;
 void lift_init(lift_state *L);

@@ -88,6 +88,9 @@ int main(void) {
     CHECK(fabs(th) < 0.6, "the rope ends near where it started (%.2f rad)", th);
     CHECK(strstr(said, "result ") != 0, "the result line has its numbers");
   }
+  /* the airframe's spin directions the other way round (or the IMU turned): it says so */
+  { plant P = { 0.01, 0.05, -60, 0.4, 0.3, 0.02, 0, 0, 0 }; run(&S, &P, 0.3f, 0.05f, &stopped);
+    CHECK(!S.ok && S.gain < 0 && strstr(S.msg, "the other way") && fabs(S.lag - 0.05) < 0.008, "turning the other way: said (%s)", S.msg); }
   /* stops: armed partway; turning too fast; no telemetry at all */
   { plant P = { 0.01, 0.05, 60, 0.4, 0.3, 0.02, 2500, 0, 0 }; run(&S, &P, 0.3f, 0.05f, &stopped); CHECK(stopped && strstr(S.msg, "armed"), "armed: stopped (%s)", S.msg); }
   { plant P = { 0.01, 0.05, 900, 0.0, 0.0, 0.02, 0, 0, 0 }; run(&S, &P, 0.3f, 0.2f, &stopped); CHECK(stopped && strstr(S.msg, "too fast"), "too fast: stopped (%s)", S.msg); }
@@ -114,7 +117,10 @@ int main(void) {
       vz += a * 0.001; z += vz * 0.001; if (z < 0) { z = 0; vz = 0; }
       double f = a + g; fsum += f; asum += z; usum += applied; na++;
       if (na == 5) {
-        float lt[30] = { 0 }; lt[0] = (float)t; lt[1] = FC_TESTING; lt[9] = (float)(fsum / na * 1.003 + 0.02 * rnd()); lt[13] = 3.9f;
+        /* (the motors shake it: the accelerometer's 5 ms averages scatter, more the faster they spin) */
+        const double shake = 2.0 * applied / 0.5;
+        float lt[30] = { 0 }; lt[0] = (float)t; lt[1] = FC_TESTING; lt[9] = (float)(fsum / na * 1.003 + 0.02 * rnd() + shake * rnd()); lt[13] = 3.9f;
+        lt[7] = (float)(shake * 2 * rnd()); lt[8] = (float)(shake * 2 * rnd());
         lt[14] = (float)(asum / na + 0.03 * rnd()); lt[16] = 1; lt[17] = 4; for (int i = 0; i < 4; i++) lt[19 + i] = (float)(usum / na);
         lift_ltel(&L, lt, 27, t + 0.01); fsum = asum = usum = 0; na = 0;
       }
