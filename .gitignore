@@ -13,6 +13,7 @@ runner/fc/board.wasm
 runner/pi/pi_nav
 runner/pi/test_pi_nav
 runner/pi/dfb_pi
+runner/pi/dfb_flow
 runner/pi/test_dfb_pi
 runner/pi/test_pi_sticks_e2e
 runner/fc/esp32/build/

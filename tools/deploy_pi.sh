@@ -13,7 +13,7 @@ if [ "$2" != "--no-build" ]; then sh tools/build_pi_cross.sh; fi
 TARX=; if tar --version 2>/dev/null | grep -q bsdtar; then TARX="--no-mac-metadata --no-xattrs"; fi
 git ls-files -z -c -o --exclude-standard runner | COPYFILE_DISABLE=1 xargs -0 tar $TARX -c -f - | ssh "$HOST" 'mkdir -p ~/liftlab/src.new && tar -x -f - -C ~/liftlab/src.new && rm -rf ~/liftlab/src.old && { [ ! -d ~/liftlab/src/runner ] || mv ~/liftlab/src ~/liftlab/src.old; } && mv ~/liftlab/src.new ~/liftlab/src && rm -rf ~/liftlab/src.old'
 if [ "$2" != "--no-build" ]; then
-  scp -q runner/pi/dfb_pi "$HOST":liftlab/src/runner/pi/dfb_pi
-  ssh "$HOST" 'mkdir -p ~/liftlab/bin && cp ~/liftlab/src/runner/pi/dfb_pi ~/liftlab/bin/dfb_pi.new && mv ~/liftlab/bin/dfb_pi.new ~/liftlab/bin/dfb_pi'
+  scp -q runner/pi/dfb_pi runner/pi/dfb_flow "$HOST":liftlab/src/runner/pi/
+  ssh "$HOST" 'mkdir -p ~/liftlab/bin && for p in dfb_pi dfb_flow; do cp ~/liftlab/src/runner/pi/$p ~/liftlab/bin/$p.new && mv ~/liftlab/bin/$p.new ~/liftlab/bin/$p; done'
 fi
 ssh "$HOST" 'sh ~/liftlab/src/runner/pi/suite/install.sh && for p in $(liftlab status --json | python3 -c "import json,sys; print(\" \".join(p[\"name\"] for p in json.load(sys.stdin)[\"programs\"] if p[\"state\"] == \"active\"))"); do liftlab restart "$p"; done; liftlab status'

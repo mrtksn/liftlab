@@ -141,4 +141,14 @@ The **monitor** program (`liftlab watch`, at boot) checks every 10 s and writes 
 under-voltage, a program that stopped, the flight controller not heard, Wi-Fi getting weak, and when each clears.
 `liftlab logs monitor` shows what happened, after a flight too.
 
+The **flow** program (`dfb_flow`, not at boot; commented out in `liftlab.conf.example`) is the downward camera's
+optical flow. It reads the camera raw (V4L2, no ISP or libcamera: a Pi Zero can't spare the CPU), 30 frames a second,
+a 256 px patch from the middle binned to 64 px, and sends one `flow ...` reading a frame to `dfb_pi`'s command port,
+which keeps them (`liftlab send flight flow`: how many, how good, the latest). Run it niced (`nice -n 10`) so the
+flight program comes first. Before the readings mean anything, calibrate the lens against the gyro: motors off,
+`liftlab send flight flowcal start`, rock the drone by hand (roll and pitch, the camera over one spot of a textured
+floor, in good light) for about 40 s, then `liftlab send flight flowcal`: it gives `dfb_flow`'s `--rad-px`, whether
+the picture is mirrored (`--mirror`), how the camera is turned against the body, and the camera's delay against the
+gyro. (The readings don't reach the navigation's position estimate yet.)
+
 Starting and stopping use `sudo` (Raspberry Pi OS gives the first user it without a password); looking needs none.

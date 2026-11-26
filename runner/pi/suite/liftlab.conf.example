@@ -32,3 +32,8 @@ boot = yes
 # restart = on-failure
 # probe = tcp 8766
 # conflicts = flight
+
+# [flow]
+# description = the downward camera's optical flow, to flight's command port (dfb_pi: flow, flowcal)
+# command = nice -n 10 bin/dfb_flow --send 127.0.0.1:14560 --rad-px 0.0040
+# boot = no

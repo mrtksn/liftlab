@@ -30,6 +30,10 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_file_rx" fc/test_file_rx.c fc/file_rx.c fc/
 "$T/test_file_rx"
 cc -O2 -Wall -Wextra -I. -o "$T/test_spin" fc/test_spin.c fc/spin_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_spin"
+cc -O2 -Wall -Wextra -I. -o "$T/test_flow" fc/test_flow.c fc/flow_core.c -lm
+"$T/test_flow"
+cc -O2 -Wall -Wextra -o "$T/test_flow_in" pi/test_flow_in.c pi/flow_in.c -lm
+"$T/test_flow_in"
 cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_nav" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_cargo" fc/test_cargo.c fc/cargo_core.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm

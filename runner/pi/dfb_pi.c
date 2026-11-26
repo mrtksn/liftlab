@@ -868,7 +868,7 @@ int main(int argc, char **argv) {
           ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len >= 8)) {
         memcpy(&fc_state, L.buf + 4, 4);
         fc_state_t = t;
-        if (type == RN_LINK_TELEM) { memcpy(tl, L.buf, sizeof tl); tl_t = t; }
+        if (type == RN_LINK_TELEM) { memcpy(tl, L.buf, sizeof tl); tl_t = t; flow_in_gyro_telem(&FI, t, tl + 5); }   /* (its body rates: the flow's gyro when no NAV frames come) */
       } /* the flight core's state */
       if ((type == RN_LINK_LTEL || type == RN_LINK_TUNE_LTEL) && L.len % 4 == 0 && L.len / 4 <= AT_LTEL_MAX &&
           ((SPN.phase == SPIN_SETTLE || SPN.phase == SPIN_STEP || SPN.phase == SPIN_END) || (LFT.phase >= LIFT_SETTLE && LFT.phase <= LIFT_PULSE))) {   /* the rope tests' samples */

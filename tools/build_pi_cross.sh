@@ -11,4 +11,4 @@ CC="zig cc -target arm-linux-gnueabihf.${PI_GLIBC:-2.36} -mcpu=${PI_CPU:-arm1176
 export CC
 sh pi/build.sh
 sh ground/build.sh
-file pi/dfb_pi ground/dfb_ground 2>/dev/null | sed 's/, with debug_info.*//'
+file pi/dfb_pi pi/dfb_flow ground/dfb_ground 2>/dev/null | sed 's/, with debug_info.*//'
