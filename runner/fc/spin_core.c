@@ -16,6 +16,7 @@ void *memset(void *d, int c, size_t n);
 #define SPIN_LTEL_GAP 0.3      /* no telemetry for this long: stop */
 #define SPIN_MAX_YAW 8.0f      /* [rad/s] turning faster: stop (the step is too big for this rope) */
 #define SPIN_MAX_TILT 3.0f     /* [rad/s] rolling or pitching faster: stop (it swings into something) */
+#define SPIN_GRACE 1.0        /* [s] the swing check waits this long: the motors starting jolt it on the rope */
 #define SPIN_SEG 8             /* doublet segments: +T, then 6 of ∓2T, then ±T */
 #define SPIN_H 0.0005          /* [s] the fit's own step */
 
@@ -79,7 +80,7 @@ void spin_ltel(spin_state *S, const float *lt, int n, double t) {
   if (st == FC_ARMED || st == FC_FAILSAFE) { spin_stop(S, "it was armed"); return; }
   float wx = lt[10], wy = lt[11], wz = lt[12];
   if (fabsf(wz) > SPIN_MAX_YAW) { spin_stop(S, "turning too fast: a smaller step"); return; }
-  if (fabsf(wx) > SPIN_MAX_TILT || fabsf(wy) > SPIN_MAX_TILT) { spin_stop(S, "swinging: steady the rope"); return; }
+  if ((fabsf(wx) > SPIN_MAX_TILT || fabsf(wy) > SPIN_MAX_TILT) && t - S->t0 > SPIN_GRACE) { spin_stop(S, "swinging: steady the rope"); return; }   /* (not the jolt as the motors start) */
   if (fabsf(wz) > S->peak_rate) S->peak_rate = fabsf(wz);
   if (S->ns >= SPIN_MAX) return;
   /* the differential throttle: each motor's change from the base, signed by its yaw, averaged over the motors */
@@ -281,7 +282,7 @@ void lift_ltel(lift_state *L, const float *lt, int n, double t) {
   int st = (int)lt[1];
   if (st == FC_ARMED || st == FC_FAILSAFE) { lift_stop(L, "it was armed"); return; }
   if (fabsf(lt[12]) > SPIN_MAX_YAW) { lift_stop(L, "turning too fast"); return; }
-  if (fabsf(lt[10]) > SPIN_MAX_TILT || fabsf(lt[11]) > SPIN_MAX_TILT) { lift_stop(L, "swinging or tipping"); return; }
+  if ((fabsf(lt[10]) > SPIN_MAX_TILT || fabsf(lt[11]) > SPIN_MAX_TILT) && t - L->t0 > SPIN_GRACE) { lift_stop(L, "swinging or tipping"); return; }
   const float fx = lt[7], fy = lt[8], fz = lt[9], alt = lt[14], have_alt = lt[16] > 0.5f, v = lt[13];
   int nm = (int)lt[17]; float um = 0; for (int i = 0; i < nm && 19 + i < n; i++) um += lt[19 + i]; um = nm ? um / (float)nm : 0;
   if (L->ns < SPIN_MAX) { int k = L->ns++; L->st[k] = (float)(t - L->t0); L->su[k] = um; L->sf[k][0] = fx; L->sf[k][1] = fy; L->sf[k][2] = fz; L->sa[k] = alt; L->sp[k] = (float)L->phase; }
