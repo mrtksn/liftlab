@@ -11,7 +11,9 @@
 /* ───────── undo / redo ───────── */
 let undoKey = null;   // set by edited(): repeated edits to one field within a moment are one step
 let undo = { stack: [], i: -1, lastKey: null, lastT: 0, restoring: false };
-const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, environment: flightEnvironment(), computers: computers(), laws: lawSet(), tuning: tuneOf(), programs: programs(), apps: apps() });
+const designOf = () => ({ frame: cfg.frame.mass, frameShape: frameShapeOf(), comps: cfg.comps, mode, battery: cfg.battery, environment: flightEnvironment(), computers: computers(), laws: lawSet(), tuning: tuneOf(), motorTiming: motorTimingFix(cfg.motorTiming), programs: programs(), apps: apps() });
+// The motors' measured timing (Tune → Rope spin test): spin-up and delay [s], or null.
+function motorTimingFix(m) { return m && m.lag > 0 && m.lag < 1 && m.delay >= 0 && m.delay < 0.5 ? { lag: +m.lag, delay: +m.delay, measured: m.measured && typeof m.measured === 'object' ? { ...m.measured } : null, at: +m.at || 0 } : null; }
 const designSnap = () => JSON.stringify(designOf());
 
 // Called from save() after every change. Records a step when the design itself changed.
@@ -43,6 +45,7 @@ function restoreSnap(s) {
     if (d.laws) setLaws(d.laws, true);
     if (JSON.stringify(fixPrograms(d.programs)) !== JSON.stringify(programs())) { cfg.programs = fixPrograms(d.programs); restart = true; }   // (programs: the boards start again with them)
     if (JSON.stringify(fixApps(d.apps)) !== JSON.stringify(apps())) { cfg.apps = fixApps(d.apps); restart = true; }   // (and apps)
+    if (JSON.stringify(motorTimingFix(d.motorTiming)) !== JSON.stringify(motorTimingFix(cfg.motorTiming))) { cfg.motorTiming = motorTimingFix(d.motorTiming) || undefined; if (typeof refreshTuning === 'function') refreshTuning(); }
     if (!tuneSame(d.tuning, tuneOf())) { cfg.tuning = tuneFix(d.tuning); if (typeof refreshTuning === 'function') refreshTuning(); if (!restart) rnRestage(30); }
     setMode(d.mode, false); frameMassField.refresh(); renderFrameShape(); structural();
     if (typeof renderBattery === 'function') renderBattery();
@@ -143,6 +146,7 @@ function applyDesign(d) {
   if (d.computers) cfg.computers = fixComputers(computersWithRadio(d.computers));   // (a design saved before boards keeps the ones you have)
   if (d.laws) setLaws(d.laws);   // its formulas (a design saved before formulas were part of it keeps the ones you have)
   cfg.tuning = tuneFix(d.tuning);   // its gains (one saved before tuning was part of it flew on the defaults)
+  cfg.motorTiming = motorTimingFix(d.motorTiming) || undefined;   // its motors' measured timing (Rope spin test), if any
   cfg.programs = fixPrograms(d.programs);   // its programs (none in a design saved before they existed)
   cfg.apps = fixApps(d.apps);   // its apps (likewise)
   if (typeof syncFlightUi === 'function') setTimeout(syncFlightUi);
@@ -176,7 +180,7 @@ async function exportDesign(rec) {
 }
 function readDesignFile(text) {   // a design file, or a design copied from the page's own storage
   const o = JSON.parse(text);
-  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode, battery: o.cfg.battery, computers: o.cfg.computers, environment: o.cfg.environment, laws: o.laws, tuning: o.cfg.tuning, programs: o.cfg.programs, apps: o.cfg.apps } : o;
+  const d = o.format === FILE_FORMAT ? o.design : o.cfg ? { frame: o.cfg.frame && o.cfg.frame.mass, frameShape: o.cfg.frame, comps: o.cfg.comps, mode: o.mode, battery: o.cfg.battery, computers: o.cfg.computers, environment: o.cfg.environment, laws: o.laws, tuning: o.cfg.tuning, motorTiming: o.cfg.motorTiming, programs: o.cfg.programs, apps: o.cfg.apps } : o;
   if (!d || !Array.isArray(d.comps) || !d.comps.every(c => c && typeof c.type === 'string' && Array.isArray(c.pos))) throw new Error('not a design');
   for (const c of d.comps) validatePartGeometry(c);
   if (d.frameShape) validatePartGeometry(d.frameShape);
@@ -191,6 +195,7 @@ function readDesignFile(text) {   // a design file, or a design copied from the 
   if (d.environment && typeof d.environment === 'object') keep.environment = d.environment;
   if (d.computers && Array.isArray(d.computers.boards)) keep.computers = d.computers;
   if (d.tuning && typeof d.tuning === 'object') keep.tuning = tuneFix(d.tuning);
+  if (motorTimingFix(d.motorTiming)) keep.motorTiming = motorTimingFix(d.motorTiming);
   if (Array.isArray(d.programs)) keep.programs = fixPrograms(d.programs);
   if (Array.isArray(d.apps)) keep.apps = fixApps(d.apps);
   if (d.laws && typeof d.laws === 'object') keep.laws = Object.fromEntries(Object.entries(d.laws).filter(([k, v]) => typeof v === 'string' && LAWS[k]));

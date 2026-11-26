@@ -5,15 +5,15 @@
 // however strong the motors really turn out to be. Apply sets them as the design's tuning (one undo step); they fly
 // at once in the simulator, and reach the drone with its program (Computers → Install, Send this design).
 
-const tsg = { lag: null, delay: 0.012 };   // lag: null = the motors' model; delay [s]: assumed
+const tsg = { lag: null, delay: null };   // typed: lag and delay [s]; null = measured on the rope (cfg.motorTiming), else the motors' model and 12 ms
 const TSG_LOOPS = [{ id: 'rp', label: 'Roll & pitch', axes: [0, 1] }, { id: 'yaw', label: 'Yaw', axes: [2] }];
 
 // The model the suggestion is for: { lag, lagFrom, delay, measured, strengths }.
 function tsgModel() {
   const ms = actuators(), lags = ms.map(c => ({ c, lag: motorSpinUp(c) })), slow = lags.reduce((a, b) => b.lag > a.lag ? b : a, lags[0] || { lag: 0.03 });
   const measured = ms.length > 0 && ms.every(c => motorMeasured(c));
-  const lag = tsg.lag ?? slow.lag, spread = measured ? 0.02 : 0.06, alpha = tsgPush(spread);
-  return { lag, lagFrom: tsg.lag == null ? (slow.c ? slow.c.name : '') : 'typed', delay: tsg.delay, measured, strengths: TuneSuggest.strengthsFor(measured),
+  const mt = cfg.motorTiming, lag = tsg.lag ?? (mt ? mt.lag : slow.lag), delay = tsg.delay ?? (mt ? mt.delay : 0.012), spread = measured ? 0.02 : 0.06, alpha = tsgPush(spread);
+  return { lag, lagFrom: tsg.lag == null ? (mt ? 'rope' : slow.c ? slow.c.name : '') : 'typed', delay, delayFrom: tsg.delay == null ? (mt ? 'rope' : 'assumed') : 'typed', measured, strengths: TuneSuggest.strengthsFor(measured),
     spread, alpha, firm: { rp: TuneSuggest.firmHz(alpha) } };
 }
 // The steady push [rad/s²] of one motor lifting spread (a fraction) more than the model says, hovering: its share of
@@ -48,10 +48,10 @@ function renderTuneSuggest(msg = '') {
   box.append(el('div', { class: 'tt-setup' },
     el('label', { class: 'field' }, el('span', { text: 'Motor spin-up (ms)' }), lagIn),
     el('label', { class: 'field' }, el('span', { text: 'ESC + loop delay (ms)' }), delIn),
-    tsg.lag != null ? UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'tsg-lag-reset', text: 'From the motors', onclick: () => { tsg.lag = null; renderTuneSuggest(); } }) : null));
+    tsg.lag != null || tsg.delay != null ? UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'tsg-lag-reset', text: cfg.motorTiming ? 'As measured' : 'From the motors', onclick: () => { tsg.lag = null; tsg.delay = null; renderTuneSuggest(); } }) : null));
   box.append(el('p', { class: 'hint', text: [
-    tsg.lag == null ? `Spin-up: the slowest motor near hover (${m.lagFrom}), from its physical model (KV, resistance, rotor inertia, prop).` : 'Spin-up: as typed.',
-    'Delay: a control step, the ESC\'s pulse and the gyro\'s filter, assumed.',
+    m.lagFrom === 'typed' ? 'Spin-up: as typed.' : m.lagFrom === 'rope' ? 'Spin-up: measured on the rope (Rope spin test).' : `Spin-up: the slowest motor near hover (${m.lagFrom}), from its physical model (KV, resistance, rotor inertia, prop); the Rope spin test measures it.`,
+    m.delayFrom === 'typed' ? 'Delay: as typed.' : m.delayFrom === 'rope' ? 'Delay: measured on the rope, and a control step.' : 'Delay: a control step, the ESC\'s pulse and the gyro\'s filter, assumed (the Rope spin test measures it).',
     m.measured ? `Strength: measured on the scale, so known within ${Math.round((1 - m.strengths[0]) * 100)}%.` : `Strength: only described on the motor cards, so the real motors may be anywhere from ${m.strengths[0]}× to ${m.strengths[2]}× as strong; the gains must keep a margin across all of it (Motor thrust measures it).`,
     m.firm.rp ? `Roll and pitch must also be firm enough (${m.firm.rp.toFixed(2)} Hz or more) to hold a motor lifting ${Math.round(m.spread * 100)}% more than the others within 15° until the integral trims it.` : '',
   ].join(' ') }));

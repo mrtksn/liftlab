@@ -24,6 +24,7 @@
  * Built by fc/build_wasm.sh. */
 #include "fc_core.h"
 #include "nav_core.h"
+#include "spin_core.h"
 #include "super_core.h"
 #include "tlm_sources.h"
 #include "tlm_crsf.h"
@@ -182,6 +183,23 @@ EXPORT("host_phase") int host_phase(void) { return H.phase + 10 * H.act; }
 /* Advance the host's loading steps: once per step of the board's fastest task. */
 EXPORT("host_tick") void host_tick(float dt) { rn_host_tick(&H, dt); }
 
+/* A motor test of several motors at once, each at its own throttle (fr: n values), as dfb_pi's RN_LINK_BENCH_TEST:
+ * disarmed only, while it keeps coming. n 0: the test off. */
+EXPORT("fc_bench") void fc_bench(int n) {
+  fc_cmd c = { 0 }; c.test_motor = n > 0 ? 0 : -1; c.test_multi = n > 0;
+  for (int i = 0; i < n && i < FC_MAX_MOTORS; i++) c.test_values[i] = fr[i];
+  fc_command(&F, &c);
+}
+/* The rope spin test (spin_core.h), on the board that runs the learning (the Pi's, as dfb_pi's): start (fr: each
+ * motor's yaw effect), each step's throttles out (fr), the flight core's LTEL in (fr), what it says (spin_text). */
+static spin_state SPN; static char spin_text[300];
+EXPORT("spin_start") int spin_start_(int n, float base, float step, float half, double t) { return spin_start(&SPN, n, fr, base, step, half, t); }
+EXPORT("spin_tick") int spin_tick_(double t) { return spin_tick(&SPN, t, fr); }
+EXPORT("spin_ltel") void spin_ltel_(int n, double t) { spin_ltel(&SPN, fr, n, t); }
+EXPORT("spin_stop") void spin_stop_(void) { spin_stop(&SPN, "asked to"); }
+EXPORT("spin_phase") int spin_phase(void) { return SPN.phase; }
+EXPORT("spin_text") char *spin_text_(void) { spin_said(&SPN, spin_text, (int)sizeof spin_text); return spin_text; }
+EXPORT("spin_result") int spin_result(void) { fr[0] = SPN.delay; fr[1] = SPN.lag; fr[2] = SPN.gain; fr[3] = SPN.r2; fr[4] = (float)SPN.ok; fr[5] = SPN.peak_rate; fr[6] = SPN.spring; fr[7] = SPN.drag; fr[8] = SPN.kick; return 9; }
 EXPORT("fc_command") void command(void) {
   fc_cmd c = { (int)cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], (int)cmd[5], cmd[6], cmd[7] > 0.5f, { cmd[8], cmd[9], cmd[10] }, cmd[11] };
   fc_command(&F, &c);

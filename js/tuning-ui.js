@@ -124,5 +124,6 @@ function refreshTuning() {
     verdict.className = 'ui-status tune-verdict' + (v.tone ? ' ' + v.tone : ''); setText(verdict, (v.tone === 'bad' ? '⚠ ' : v.tone === 'warn' ? '△ ' : '') + v.text);
   }
   if (typeof renderTuneSuggest === 'function') renderTuneSuggest();
+  if (typeof renderSpinTest === 'function') renderSpinTest();
 }
 $('#tuneReset').addEventListener('click', () => setTuning(tuneDefaults(), 'reset'));

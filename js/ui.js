@@ -879,7 +879,7 @@ function loadPreset(key) { const p = PRESETS[key].build(); cfg.frame.mass = p.fr
     if (PRESETS[key].cargoTask) C.boards.find(b => b.tasks.includes('core')).tasks.push('cargo');
     cfg.computers = fixComputers(C); brt.sig = null; syncFlightUi();
   }
-  setLaws({}); cfg.tuning = tuneDefaults(); cfg.programs = []; cfg.apps = [];   // (and the formulas and gains as they come, no programs or apps)
+  setLaws({}); cfg.tuning = tuneDefaults(); cfg.programs = []; cfg.apps = []; delete cfg.motorTiming;   // (and the formulas and gains as they come, no programs, apps or measured motor timing)
   designLoaded(null, ''); designs.preset = key; afterLoad();
   if (PRESETS[key].blank && typeof setEditMode === 'function') setEditMode(true);   // a bare frame: straight to building
 }

@@ -263,7 +263,7 @@ function boardsStart() {
   brt.ready = false; brt.toCore = []; brt.toNav = []; brt.q = []; brt.mqttRng = null; brt.mqttLast = {}; brt.tel = null; brt.navOut = null; brt.navReady = false; brt.home = null; brt.baroTs = null;
   brt.coreElapsed = 0; brt.t = 0; brt.nextTel = 0; brt.nextNav = 0.005; brt.nextStick = 0; brt.nextLtel = 0; brt.nextHealth = 0; brt.nextView = 0;
   brt.nextRadio = 0; brt.nextPub = 0; brt.nextPack = 0; brt.nextRc = 0; brt.nextGnd = 0; brt.nextGsRead = 0; brt.nextCargo = 0; brt.cargoN = 0; brt.textN = 0; gsSet.x = null; gsSet.pending = null; radioReset();
-  brt.bench = null; brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
+  brt.bench = null; brt.spin = null; brt.fcState = 0; brt.fcWhy = ''; brt.navWhy = ''; brt.out = null; brt.pickup = 0; brt.err = ''; brt.superView = null; brt.learnErr = ''; brt.superLogSeq = 0; brt.modelSig = '';
   Object.assign(brt.pilot, { arm: 0, fly: 0, thr: 0, phase: 'ground', t: 0, downT: 0, flat: false, manual: false });
   learn.view = null; learn.msg = '';
   if (!brt.module) { boardsLoad(); brt.err = brt.err || 'starting the flight computers…'; return; }
@@ -582,10 +582,33 @@ function simBenchSet(i, u) {
 }
 // The scale set up for a test (Tune → Motor thrust open with the motors-off reading taken): the pilot stays on the
 // ground, disarmed, between the motors' tests too. Off: it flies as before.
-function simBenchHold(on) { brt.benchHold = !!on; if (!on) simBenchSet(-1, 0); }
+function simBenchHold(on) { brt.benchHold = on === 'rope' ? 'rope' : !!on; if (!on) simBenchSet(-1, 0); }
 // How long the motor test has run as it is now [simulated s] (−1: none), so a reading waits for the motor to settle.
 const simBenchAge = () => brt.bench ? brt.t - brt.bench.since : -1;
 const simBenchLive = () => brt.bench && brt.t <= brt.bench.until ? brt.bench : (brt.bench && (brt.bench = null, brt.benchEnd = true), null);
+// The rope spin test in the simulator (Tune → Rope spin test; spin_core.c on the learning's board, as dfb_pi runs it):
+// the drone held as on a rope (free to turn, nothing else: simBenchHold('rope')), every motor at base and the two
+// spin directions stepped against each other. '' when started, else why not.
+function simSpinStart(base, step, half) {
+  if (!brt.ready || !brt.inst.size) return 'the flight computers aren\'t running';
+  const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id);
+  if (!w) return 'needs the flight core\'s telemetry, which goes to the learning or the supervisor (Computers tab)';
+  if (brt.spin) return 'it\'s running already';
+  if (brt.fcState === 1 || brt.fcState === 2) return 'it\'s flying: land it (or reset it, R) first';
+  const yaw = fcAirframe().motors.map(m => m.cols[0][5]);
+  simBenchHold('rope'); frIn(w, yaw);
+  if (w.spin_start(yaw.length, base, step, half, brt.t)) { simBenchHold(false); return cstr(w, w.spin_text(), 300).replace(/^spintest:\s*/, ''); }
+  brt.spin = { w, board: b };
+  return '';
+}
+function simSpinStop() { if (brt.spin) brt.spin.w.spin_stop(); }
+// How it goes: { phase (spin_core.h), text, result: { delay, lag, gain, r2, ok, peak } once fitted }, or null.
+function simSpinStatus() {
+  const b = boardOf('learn') || boardOf('super'), w = b && brt.inst.get(b.id); if (!w) return null;
+  const phase = w.spin_phase(), text = cstr(w, w.spin_text(), 300); let result = null;
+  if (phase === 4 || phase === 5) { const r = frOut(w, w.spin_result()); if (r[1] > 0) result = { delay: r[0], lag: r[1], gain: r[2], r2: r[3], ok: !!r[4], peak: r[5] }; }
+  return { phase, text, result };
+}
 function fcSend(cmd, delay) { brt.toCore.push({ at: brt.t + delay, cmd }); }
 // World force [N], body torque about the believed rigid CoG [N m]. The known flag gives the
 // simulator ideal knowledge of cable support; it is not a new physical tension sensor/transport.
@@ -628,6 +651,11 @@ function boardsControl(dt) {
     brt.hadCableLoad = !!pend.size;
   }
   throwHandTick(dt);
+  if (brt.spin) {                                                     // the rope spin test: its throttles, as a motor test of every motor
+    const sw = brt.spin.w, n = sw.spin_tick(brt.t);
+    if (n) brt.bench = { vals: Array.from(frOut(sw, n)), until: brt.t + 0.5, since: brt.bench && brt.bench.vals ? brt.bench.since : brt.t };
+    else if (sw.spin_phase() !== 1 && sw.spin_phase() !== 2 && sw.spin_phase() !== 3) { brt.spin = null; simBenchHold(false); }   // (done: off the rope, it flies as before)
+  }
   const bench = simBenchLive();
   if (bench || brt.benchHold) { const P = brt.pilot; P.arm = 0; P.fly = 0; P.thr = 0; P.phase = 'ground'; P.t = 0; }   // (a motor test, or the scale set up for one: the pilot waits, disarmed)
   else autoPilot(dt, !!navB);
@@ -648,9 +676,11 @@ function boardsControl(dt) {
   }
   if (bench || brt.benchEnd) {                                         // the motor test as a command (dfb_pi's motor N T): disarmed, one motor
     const cmdv = new Float32Array(W.memory.buffer, W.cmd_ptr(), 12);
-    if (bench && brt.benchSent != null && brt.benchSent !== bench.i) { cmdv.set([0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0]); W.fc_command(); }   // (another motor: the test off first, as on the drone)
-    cmdv.set([0, 0, 0, 0, 0, bench ? bench.i : -1, bench ? bench.u : 0, 0, 0, 0, 0, 0]);
-    W.fc_command(); brt.benchEnd = false; brt.benchSent = bench ? bench.i : null;
+    const key = bench ? (bench.vals ? 'all' : bench.i) : null;
+    if (bench && brt.benchSent != null && brt.benchSent !== key) { cmdv.set([0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0]); W.fc_command(); }   // (another motor: the test off first, as on the drone)
+    if (bench && bench.vals) { frIn(W, bench.vals); W.fc_bench(bench.vals.length); }   // (every motor at its own: RN_LINK_BENCH_TEST)
+    else { cmdv.set([0, 0, 0, 0, 0, bench ? bench.i : -1, bench ? bench.u : 0, 0, 0, 0, 0, 0]); W.fc_command(); }
+    brt.benchEnd = false; brt.benchSent = key;
   }
   const drv = est.drv || {};
   brt.coreElapsed += dt;
@@ -680,6 +710,7 @@ function boardsControl(dt) {
     if (learnB && typeof atBusy === 'function' && atBusy() && brt.autotune.loop === 'att') sendFrame(coreB, learnB, 'tunealpha', frOut(W, W.fc_tuning_sample()));
     if (learnB) sendFrame(coreB, learnB, 'ltel', d);
     if (superB && (!learnB || superB.id !== learnB.id)) sendFrame(coreB, superB, 'ltel', d);   // (on one board, one frame serves both)
+    if (brt.spin) { frIn(brt.spin.w, d); brt.spin.w.spin_ltel(d.length, brt.t); }   // (the rope spin test, on the same board as the learning)
   }
   if (superB && brt.t >= brt.nextHealth) { brt.nextHealth = brt.t + 0.1; const sw = brt.inst.get(superB.id), h = healthReadings(); if (sw) { frIn(sw, h); sw.super_health(h.length); } }
   deliverFrames();

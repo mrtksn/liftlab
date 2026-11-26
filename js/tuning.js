@@ -50,6 +50,7 @@ function tuneWithFeel(t, loop, axes, feel) {
 // (motorSpinUp: the rotor's inertia against the motor's and the prop's damping; a collective-pitch rotor answers
 // through its pitch servo instead, about 20 ms).
 function tuneMotorLag() {
+  if (cfg.motorTiming && cfg.motorTiming.lag > 0) return cfg.motorTiming.lag;   // (measured on the rope: Rope spin test)
   const m = cfg.comps.filter(c => c.type === 'motor');
   return m.length ? Math.max(...m.map(c => typeof motorSpinUp === 'function' ? motorSpinUp(c) : c.pitch === 'collective' ? 0.02 : Math.max(0.005, c.tau || 0.03))) : 0.03;
 }

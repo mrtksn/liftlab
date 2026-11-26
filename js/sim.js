@@ -462,7 +462,7 @@ function dynamics(dt) {
   const fext = MB.bodies.map(() => [0, 0, 0, 0, 0, 0]);
   // Every load also adds to the torque about the centre of mass (frame axes), for the view: gravity adds nothing
   // there, so it is what the rotors, the air, cables and the ground do to the drone's attitude.
-  const cgF = truth.c; let tqNet = [0, 0, 0];
+  const cgF = truth.c; let tqNet = [0, 0, 0], tqRotors = [0, 0, 0];
   const push = (b, F, P) => { fext[b] = add6v(fext[b], mbForce(K, b, F, P)); tqNet = add(tqNet, crs(sub(P, cgF), F)); };   // force F (frame axes) at P
   const pushT = (b, T) => { fext[b] = add6v(fext[b], mbTorque(K, b, T)); tqNet = add(tqNet, T); };
   const toWorld = P => add(S.p, m3v(R, P)), velW = (b, P) => m3v(R, mbPointVel(K, b, P));
@@ -522,6 +522,7 @@ function dynamics(dt) {
     ro.tqReact = rw.tau;                                                               // (the reaction alone: r = 0 above)
     ro.st.tqR = ro.st.tqR ? add(ro.st.tqR, scl(sub(rw.tau, ro.st.tqR), Math.min(1, dt / 0.1))) : rw.tau.slice();   // smoothed, for the view
     push(ro.b, add(rw.F, ro.ae.H), ro.p);
+    tqRotors = add(tqRotors, add(rw.tau, crs(sub(ro.p, cgF), add(rw.F, ro.ae.H))));   // (the rotors' own torque: what turns it on a rope)
     const h = isCollective(ro.c) ? [0, 0, 0] : scl(ro.d, spinOf(ro.c) * ro.J * ro.Om);   // the spinning prop's angular momentum (flapping blades don't pass it on)
     pushT(ro.b, sub(rw.tau, crs(mbOmega(K, ro.b), h)));                              // turning it takes a gyroscopic torque
   }
@@ -624,8 +625,12 @@ function dynamics(dt) {
   const sol = mbSolve(K, fext, tauJ);
   const al = top3(sol.a0), acl = add(bot3(sol.a0), crs(S.w, m3v(RT, S.v)));   // spatial → ordinary acceleration of the hub
   S.acc = m3v(R, acl); S.wdot = al;
-  if (typeof brt !== 'undefined' && brt.benchHold && !S.crashed) {   // taped down on the scale for a motor test (Tune → Motor thrust): it stays put
-    S.acc = [0, 0, 0]; S.wdot = [0, 0, 0]; S.v = [0, 0, 0]; S.w = [0, 0, 0];
+  if (typeof brt !== 'undefined' && brt.benchHold === 'rope' && !S.crashed) {   // hanging on a rope (Tune → Rope spin test): free to turn, the rope twisting back a little
+    const ROPE_K = 0.4, ROPE_C = 0.15, wz = S.w[2] + (tqRotors[2] / truth.J[8] - ROPE_K * (S.ropeYaw || 0) - ROPE_C * S.w[2]) * dt;   // (the rotors' torque alone: nothing touches the ground)
+    S.acc = [0, 0, 0]; S.wdot = [0, 0, (wz - S.w[2]) / dt]; S.v = [0, 0, 0]; S.w = [0, 0, wz]; S.ropeYaw = (S.ropeYaw || 0) + wz * dt;
+    const dq = qmul(S.q, [0, 0, 0, wz]); S.q = qnorm(S.q.map((x, i) => x + 0.5 * dq[i] * dt));
+  } else if (typeof brt !== 'undefined' && brt.benchHold && !S.crashed) {   // taped down on the scale for a motor test (Tune → Motor thrust): it stays put
+    S.acc = [0, 0, 0]; S.wdot = [0, 0, 0]; S.v = [0, 0, 0]; S.w = [0, 0, 0]; S.ropeYaw = 0;
   } else {
     S.v = add(S.v, scl(S.acc, dt)); S.p = add(S.p, scl(S.v, dt));
     S.w = add(S.w, scl(al, dt));

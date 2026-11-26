@@ -73,6 +73,35 @@ at lift-off (which is what the floor is for). The simulator's own delay is about
 cards, so it can't show the failure the margins guard against; a real drone that overshoots and diverges has
 less margin than its model. `node tools/test_tune_suggest.js` checks the ratings, the suggestions and the floor.
 
+## Rope spin test
+
+Tune → Rope spin test (`runner/fc/spin_core.c`, `js/spin-test-ui.js`). The drone hangs on a rope, free to turn
+in yaw; disarmed, the flight core's motor test runs every motor at `base`, then steps each motor by `±step`
+signed by its yaw column in the airframe (`cols[0][5]`), in the doublet +T, −2T, +2T, −2T, +2T, −2T, +2T, −T
+(T = `half`, 0.25 s by default), between 1.5 s of settling and 0.9 s after.
+
+The samples are the flight core's LTEL frames (time, state, gyro, each motor's averaged throttle), timed by the
+flight core's own clock; frames older than the last are dropped. The differential throttle
+D = mean of sign·(u − base) and the yaw rate ω are fitted as
+ω̇ = p·D(t − d) + q·x − k·θ − c·ω + b, x = D(t − d) through 1/(1 + τs), every signal averaged over the
+telemetry windows and smoothed alike. For each (d, τ) on a grid (d 0–80 ms, τ 5–300 ms, coarse then fine) the
+five coefficients are least squares; the best residual wins. g = p + q is the yaw acceleration per unit of
+differential throttle and r = p/g the kick: a voltage-driven brushless motor's reaction torque jumps with its
+current when the throttle steps, then settles to the drag at the new speed, with the same pole τ as its thrust
+(the simulator's toy motors: r ≈ 6–9). r is kept ≥ 0 (a negative kick would stand in for delay). The fit is
+kept when it explains at least 60% of ω̇ and τ, d aren't at the grid's edge. Apply stores
+`cfg.motorTiming = { lag: τ, delay: d + 1 ms }` (the flight core's own step, which the test can't see) in the
+design (undo, files, library); Gains from the motors and `tuneMotorLag` use it until it's forgotten.
+
+dfb_pi: `spintest BASE STEP [HALF]` starts it (angle mode, an airframe, disarmed, the learning or supervisor
+running so the ESP32 sends LTEL; the radio's channels may come while their arm switch is off), sending
+RN_LINK_BENCH_TEST every 20 ms; `spintest` says how it goes and, at the end,
+`... ; result DELAY_MS LAG_MS GAIN R2 OK PEAK KICK`; `spintest stop`, any motor or stick text command, or the
+radio's pilot arming stop it. The simulator runs the same C on the learning's board (`simSpinStart`), holds the
+drone as on a rope (`simBenchHold('rope')`: yaw from the rotors' torques alone, a weak twist and drag) and lets go
+when it ends. `runner/fc/test_spin.c` (CI and `runner/test.sh`) fits made-up ropes with delays of 3–25 ms,
+spin-ups of 28–140 ms and kicks of 0–6 through a link with 3–25 ms of varying, in-order delay.
+
 ## Simulator autotune workflow
 
 1. Take off, release the controls and run an airframe calibration under Control → Learning.
