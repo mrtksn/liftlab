@@ -133,14 +133,32 @@ static double lsq(int m, const float *const *cols, const float *sign, int lo, in
 }
 /* ω̇ = p·a + q·x − k·θ − c·ω + b on the middle samples: the residual, the gain g = p + q, the kick r = p / g (never
  * below 0: a reaction torque doesn't jump backwards; if the fit wants it there, the kick is left out). */
+static int fit_kick = 1;   /* (0: the model without the kick) */
 static double regress(int lo, int hi, double *g, double *r, double *k, double *c) {
   const float *c5[5] = { fa, fx, fth, fw, 0 }; const float s5[5] = { 1, 1, -1, -1, 1 }; double co[5];
-  double e = lsq(5, c5, s5, lo, hi, co);
-  if (e < 1e30 && co[0] + co[1] > 0 && co[0] >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }
+  double e = fit_kick ? lsq(5, c5, s5, lo, hi, co) : 1e30;
+  if (fit_kick && e < 1e30 && co[0] + co[1] > 0 && co[0] >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }
   const float *c4[4] = { fx, fth, fw, 0 }; const float s4[4] = { 1, -1, -1, 1 };
   e = lsq(4, c4, s4, lo, hi, co);
   *g = co[0]; *r = 0; *k = co[1]; *c = co[2];
   return e;
+}
+/* The grid search for (delay, lag): coarse (delay 0–80 ms by 4, lag 5–300 ms by ×1.2), then fine around the best
+ * (by 1 ms and ×1.04). 0 with the best residual, delay and lag; −1 if nothing fits. */
+static int spin_search(const spin_state *S, int lo, int hi, double *best, double *bd, double *bl) {
+  *best = 1e30; *bd = *bl = 0;
+  for (double d = 0; d <= 0.0801; d += 0.004) for (double l = 0.005; l <= 0.3; l *= 1.2) {
+    model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
+    if (e < *best && gg > 0) { *best = e; *bd = d; *bl = l; }
+  }
+  if (*best >= 1e30) return -1;
+  const double cd = *bd, cl = *bl;
+  for (double d = cd - 0.004; d <= cd + 0.0041; d += 0.001) for (double l = cl / 1.2; l <= cl * 1.21; l *= 1.04) {
+    if (d < 0) continue;
+    model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
+    if (e <= *best && gg > 0) { *best = e; *bd = d; *bl = l; }
+  }
+  return 0;
 }
 int spin_fit(spin_state *S) {
   int n = S->ns; S->ok = 0;
@@ -152,20 +170,15 @@ int spin_fit(spin_state *S) {
   const int lo = 4, hi = n - 4;
   double sst = 0, mean = 0; for (int i = lo; i < hi; i++) mean += fwd[i]; mean /= (hi - lo);
   for (int i = lo; i < hi; i++) sst += (fwd[i] - mean) * (fwd[i] - mean);
-  double best = 1e30, bd = 0, bl = 0, g = 0, r = 0, k = 0, c = 0;
-  /* coarse: delay 0–80 ms by 4, lag 5–300 ms by ×1.2; then fine around the best: by 1 ms and ×1.04 */
-  for (double d = 0; d <= 0.0801; d += 0.004) for (double l = 0.005; l <= 0.3; l *= 1.2) {
-    model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
-    if (e < best && gg > 0) { best = e; bd = d; bl = l; }
-  }
-  if (best >= 1e30) { fc_fmt(S->msg, (int)sizeof S->msg, "spintest: no fit: did it turn at all?"); return -1; }
-  double cd = bd, cl = bl;
-  for (double d = cd - 0.004; d <= cd + 0.0041; d += 0.001) for (double l = cl / 1.2; l <= cl * 1.21; l *= 1.04) {
-    if (d < 0) continue;
-    model_x(S, d, l); double gg, rr, kk, cc, e = regress(lo, hi, &gg, &rr, &kk, &cc);
-    if (e <= best && gg > 0) { best = e; bd = d; bl = l; }
-  }
-  model_x(S, bd, bl); regress(lo, hi, &g, &r, &k, &c);
+  /* With the kick and without it; the kick is kept only if it leaves at least 10% less unexplained (with noise, a
+   * small kick can stand in for a few milliseconds of delay: the simpler model is the safer one then) */
+  double bk, dk, lk, b0, d0, l0;
+  fit_kick = 1; if (spin_search(S, lo, hi, &bk, &dk, &lk)) { fc_fmt(S->msg, (int)sizeof S->msg, "spintest: no fit: did it turn at all?"); return -1; }
+  fit_kick = 0; if (spin_search(S, lo, hi, &b0, &d0, &l0)) b0 = 1e30;
+  const int kick = !(b0 < 1e30) || bk < 0.9 * b0;
+  double best = kick ? bk : b0, bd = kick ? dk : d0, bl = kick ? lk : l0, g = 0, r = 0, k = 0, c = 0;
+  fit_kick = kick;
+  model_x(S, bd, bl); regress(lo, hi, &g, &r, &k, &c); fit_kick = 1;
   S->delay = (float)bd; S->lag = (float)bl; S->gain = (float)g; S->kick = (float)r; S->spring = (float)k; S->drag = (float)c;
   S->r2 = sst > 0 ? (float)(1 - best / sst) : 0;
   const char *why = S->r2 < 0.6f ? "the fit is poor (a bigger step, or a steadier rope)" : bl < 0.0055 || bl > 0.29 ? "the spin-up is at the edge of what it tries" : bd > 0.079 ? "the delay is at the edge of what it tries" : 0;
