@@ -80,16 +80,23 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   float b[64]; int k = 0, e;
 
   /* the references, each corrected for where its sensor sits */
-  int have_baro = in->have_baro && fin(in->baro_alt), have_fix = in->have_fix, have_flow = in->have_flow && in->range > 0;
+  int have_baro = in->have_baro && fin(in->baro_alt), have_fix = in->have_fix, have_range = in->have_flow && in->range > 0;
   float baro_alt = 0, fix_p[3] = { 0 }, fix_v[3] = { 0 }, flow_h = 0, flow_v[2] = { 0 }; int flow_has_v = 0;
+  /* the flow without its rangefinder (above its reach): still a velocity, scaled by the height the estimate fused, from
+   * the rangefinder while it saw the ground and the barometer since (its offset learned then); only once the
+   * rangefinder has been heard, so that height is above the ground and not the barometer's own zero */
+  float Rs[9], range = in->range; m3m(Rs, R, C->flow_R);                  /* camera → world */
+  int range_fused = in->have_flow && !have_range && in->flow_q > 0 && fin(in->flow[0]) && fin(in->flow[1]) && (N->seen & 4) && N->have_pa && N->pa[2] > 0.3f;
+  if (range_fused) range = N->pa[2] / (Rs[8] > 0.5f ? Rs[8] : 0.5f);    /* (along the camera's axis, tilted) */
+  int have_flow = have_range || range_fused;
   if (have_baro) { float r[3]; m3v(r, R, C->baro_pos); baro_alt = in->baro_alt - r[2]; }
   if (have_fix) {
     float r[3], wr[3], vw[3]; m3v(r, R, C->fix_pos); cross(wr, in->w, C->fix_pos); m3v(vw, R, wr);
     for (int i = 0; i < 3; i++) { fix_p[i] = in->fix_p[i] - r[i]; fix_v[i] = in->fix_v[i] - vw[i]; }
   }
   if (have_flow) {
-    float ws[3], Rs[9], o[3]; m3tv(ws, C->flow_R, in->w); m3m(Rs, R, C->flow_R);   /* gyro in the camera's axes; camera → world */
-    k = 0; b[k++] = in->flow[0]; b[k++] = in->flow[1]; b[k++] = in->range; for (int i = 0; i < 3; i++) b[k++] = ws[i]; for (int i = 0; i < 9; i++) b[k++] = Rs[i];
+    float ws[3], o[3]; m3tv(ws, C->flow_R, in->w);                           /* gyro in the camera's axes */
+    k = 0; b[k++] = in->flow[0]; b[k++] = in->flow[1]; b[k++] = range; for (int i = 0; i < 3; i++) b[k++] = ws[i]; for (int i = 0; i < 9; i++) b[k++] = Rs[i];
     if ((e = call(N, N->f_fv, b, o))) return -1;
     float r[3]; m3v(r, R, C->flow_pos); flow_h = o[2] - r[2];
     if (in->flow_q > 0) { float wr[3], vw[3]; cross(wr, in->w, C->flow_pos); m3v(vw, R, wr); flow_v[0] = o[0] - vw[0]; flow_v[1] = o[1] - vw[1]; flow_has_v = 1; }
@@ -97,7 +104,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
 
   /* where it is: the estimator starts once every reference fitted has spoken (or after 3 s with what there is),
    * so it begins from them rather than from zero */
-  N->seen |= (have_baro ? 1 : 0) | (have_fix ? 2 : 0) | (have_flow ? 4 : 0);
+  N->seen |= (have_baro ? 1 : 0) | (have_fix ? 2 : 0) | (have_range ? 4 : 0);
   N->t_wait += dt;
   if (!N->t_est && (N->seen & C->refs) != C->refs && N->t_wait < 3) return 0;
   N->t_est += dt;
@@ -109,7 +116,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   for (int i = 0; i < 3; i++) b[k++] = in->acc[i];
   b[k++] = (float)have_baro; b[k++] = in->baro_age; b[k++] = baro_alt;
   b[k++] = (float)have_fix; b[k++] = in->fix_age; for (int i = 0; i < 3; i++) b[k++] = fix_p[i]; for (int i = 0; i < 3; i++) b[k++] = fix_v[i];
-  b[k++] = (float)have_flow; b[k++] = in->flow_age; b[k++] = (float)have_flow; b[k++] = flow_h; b[k++] = (float)flow_has_v; b[k++] = flow_v[0]; b[k++] = flow_v[1];
+  b[k++] = (float)have_flow; b[k++] = in->flow_age; b[k++] = (float)have_range; b[k++] = flow_h;   /* (a height only from the rangefinder itself) */ b[k++] = (float)flow_has_v; b[k++] = flow_v[0]; b[k++] = flow_v[1];
   b[k++] = C->m; b[k++] = dt;
   float pv[6];
   if ((e = call(N, N->f_pe, b, pv))) return -1;

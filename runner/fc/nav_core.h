@@ -38,7 +38,8 @@ typedef struct {
   int have_att;
   int have_baro; float baro_alt, baro_age;
   int have_fix; float fix_p[3], fix_v[3], fix_age;               /* GPS: position [m] in its own frame, velocity [m/s] */
-  int have_flow; float flow[2], range, flow_q, flow_age;          /* flow [rad/s], range [m], tracking quality 0–1 */
+  int have_flow; float flow[2], range, flow_q, flow_age;          /* flow [rad/s], range [m] (≤ 0: out of its reach: the
+                                                                  * fused height scales the flow), tracking quality 0–1 */
 } nav_in;
 
 typedef struct {

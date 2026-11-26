@@ -76,7 +76,7 @@ typedef struct { double at; nav_in m; } tq_t;
 static cq_t cq[QN]; static int cq_n; static tq_t tq[QN]; static int tq_n;
 static double DELAY = 0.006;
 
-static body B; static fc_out O; static nav_sp SP; static int use_fix = 1, use_flow = 0, link_on = 1;
+static body B; static fc_out O; static nav_sp SP; static int use_fix = 1, use_flow = 0, link_on = 1; static double range_max = 1e9;   /* the rangefinder's reach [m] */
 static long drop_gyro_at = -1; static int drop_att = 0, idle_cmds = 0;   /* a missed IMU sample (that ms); NAV frames without the attitude; commands to idle */
 static nav_out NO;                                                    /* the navigation's last output */
 static nav_in latest; static int have_latest;
@@ -116,7 +116,7 @@ static void fly(double seconds) {
       if (use_flow) {   /* a downward camera on the Pi: flow and range now (and the gyro it removes is the telemetry's) */
         double R[9]; qm(R, B.q); double range = B.p[2] + 0.05; range /= R[8] > 0.3 ? R[8] : 0.3;
         double vs[3]; for (int i = 0; i < 3; i++) vs[i] = R[i] * B.v[0] + R[3 + i] * B.v[1] + R[6 + i] * B.v[2];
-        in.have_flow = 1; in.range = (float)(range + 0.01 * gauss()); in.flow_q = 1; in.flow_age = 0.02f;
+        in.have_flow = 1; in.range = range > range_max ? -1 : (float)(range + 0.01 * gauss()); in.flow_q = 1; in.flow_age = 0.02f;
         in.flow[0] = (float)(B.w[1] - vs[0] / range + 0.05 * gauss()); in.flow[1] = (float)(-B.w[0] - vs[1] / range + 0.05 * gauss());
       }
       if (drop_att > 0) { drop_att--; in.have_att = 0; }
@@ -211,6 +211,15 @@ int main(int argc, char **argv) {
   CHECK(fabs(B.p[2] - 1.2) < 0.25 && herr() < 0.5, "takes off and holds (z %.2f, %.2f m off)", B.p[2], herr());
   SP.target[0] = 2; fly(8);
   CHECK(herr() < 0.5, "moves 2 m on flow alone: %.2f m off", herr());
+  /* a rangefinder that reaches 2.5 m (a TOF250): above it, the barometer (its offset learned from the rangefinder on
+   * the way up) gives the height the flow is scaled by */
+  range_max = 2.5; SP.target[2] = 3.5f; fly(8);
+  CHECK(fabs(B.p[2] - 3.5) < 0.4, "climbs above the rangefinder's reach on the barometer (z %.2f)", B.p[2]);
+  SP.target[0] = 0; fly(10);
+  CHECK(herr() < 0.6 && fabs(B.p[2] - 3.5) < 0.4, "up there, moves 2 m back on flow with the fused height: %.2f m off, z %.2f", herr(), B.p[2]);
+  SP.target[2] = 1.2f; fly(8);
+  CHECK(fabs(B.p[2] - 1.2) < 0.3 && herr() < 0.6, "back down where the rangefinder sees again: z %.2f, %.2f m off", B.p[2], herr());
+  range_max = 1e9;
 
   printf("tilt-rotor quad\n");
   /* (it gets there in 2 s, then wanders around the target by up to about 1.5 m on GPS: judged on the mean distance) */

@@ -91,6 +91,7 @@
 #include "radio_udp.h"
 #include "rn_link.h"
 #include "flow_in.h"
+#include "range_tof250.h"
 #include "spin_core.h"
 #include "super_core.h"
 #include "tlm_crsf.h"
@@ -493,7 +494,7 @@ int main(int argc, char **argv) {
                                      .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
   const char *tuning_path = 0;
   const char *mqtt_id = "liftlab-pi";
-  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0, no_nav = 0;
+  const char *link_dev = "/dev/serial0", *gps_dev = 0, *cfg_path = 0, *af_path = 0, *pi_path = 0, *crsf_dev = 0, *range_spec = 0; int baud = 921600, gps_baud = 9600, port = 14560, no_learn = 0, no_super = 0, no_nav = 0;
   rlink_cfg RL, RL2; rlink_default(&RL); rlink_default(&RL2); int two = 0; const char *dev2 = 0; const char *bind_phrase = 0, *nrf_spi = "/dev/spidev0.0"; int nrf_ce = 25; int radio_port = RLINK_UDP_PORT; const char *latch_spec = 0; int us_closed = 1000, us_open = 2000; float hook[3] = { 0, 0, -0.06f };
   double origin[2] = { 0, 0 }; int have_origin = 0;
   for (int i = 1; i < argc; i++) {
@@ -514,16 +515,20 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--hook")) sscanf(argv[++i], "%f,%f,%f", &hook[0], &hook[1], &hook[2]);
     else if (!strcmp(argv[i], "--fleet-origin")) { if (sscanf(argv[++i], "%lf,%lf", &origin[0], &origin[1]) != 2 || fabs(origin[0]) > 90 || fabs(origin[1]) > 180) { fprintf(stderr, "--fleet-origin LAT,LON: degrees\n"); return 2; } have_origin = 1; }
     else if (!strcmp(argv[i], "--latch")) latch_spec = argv[++i]; else if (!strcmp(argv[i], "--latch-us")) sscanf(argv[++i], "%d,%d", &us_closed, &us_open);
+    else if (!strcmp(argv[i], "--range")) range_spec = argv[++i];
   }
+  static tof250_pi RF;                   /* the downward rangefinder on this Pi's I²C (range_tof250.h), beside the flow camera */
+  if (range_spec && tof250_parse(&RF, range_spec)) { fprintf(stderr, "%s\n", RF.why); return 2; }
   if (!cfg_path) { fprintf(stderr, "usage: dfb_pi --nav drone.dnc [--airframe drone.dfa --pi drone.dlc] [--no-learning] [--no-supervisor] [--no-navigation]\n"
     "              [--link /dev/serial0 | --link mqtt://BROKER[:1883][/PREFIX] [--mqtt-id liftlab-pi]] [--baud 921600] [--gps /dev/ttyUSB0] [--port 14560]\n"
     "              [--crsf /dev/ttyAMA1 --radio elrs,250,4 | --radio wifi,ap,CHANNEL|wifi,sta [--bind PHRASE] [--radio-port 14570]\n"
     "               | --radio serial,BAUD[,half] --radio-dev /dev/ttyAMA1 [--bind PHRASE]\n"
     "               | --radio nrf24,250|1000|2000 [--nrf-spi /dev/spidev0.0] [--nrf-ce 25] [--bind PHRASE]]\n"
     "              [--radio2 KIND,... [--radio2-dev DEV]] (a second link at once, as --radio: both carry; e.g. --radio2 serial,57600,up --radio2-dev /dev/ttyUSB1)\n"
-    "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000] [--fleet-origin LAT,LON]\n"
+    "              [--latch pwm0,gpio17 (or dry) --latch-us 1000,2000] [--fleet-origin LAT,LON] [--range tof250:/dev/i2c-1:0x52]\n"
     "(the pilot's commands go through the navigation, so it always runs; the learning and the supervisor need the airframe and the Pi config;\n"
     "  --no-navigation: angle mode, the radio's sticks straight to the ESP32, for a drone without a position sensor)\n"
+    "--range: a downward rangefinder on this Pi's I2C, beside the flow camera (dfb_flow): the height above the ground\n"
     "radio: an ExpressLRS receiver on a serial port (--crsf), or this Pi's Wi-Fi (--radio wifi,...: UDP; the Pi makes the network\n"
     "  (wifi,ap: hostapd or NetworkManager, on that channel) or joins one (wifi,sta), as the OS is set up; --bind: the same phrase\n"
     "  as the command module's), or a serial line to the command module (--radio serial,BAUD: a laser, fibre, infrared, a radio\n"
@@ -659,6 +664,7 @@ int main(int argc, char **argv) {
     struct pollfd pf[5] = { { link_publish ? link_mq.fd : link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
     poll(pf, 5, 5);
     double t = now_s();
+    tof250_poll(&RF, t);                                             /* (one short I²C transfer at most) */
     flush_link(link);
     if (tx_failed) {
       fprintf(stderr, "flight UART stalled; stopping companion\n");
@@ -711,6 +717,16 @@ int main(int argc, char **argv) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
           if (!design) design = flow_in_command(&FI, s, t, reply, (int)sizeof reply);   /* flow, flowcal: the camera's (no pilot's command) */
+          if (!design && !strcmp(s, "height")) {             /* the height's sources side by side, and what the navigation fused */
+            int kk = 0; char rs[200]; tof250_said(&RF, t, rs, (int)sizeof rs);
+            kk += snprintf(reply + kk, sizeof reply - (size_t)kk, "%s; barometer %s", rs, nav_v[13] > 0.5f && t - last_nav < 1 ? "" : "not heard");
+            if (nav_v[13] > 0.5f && t - last_nav < 1) kk += snprintf(reply + kk, sizeof reply - (size_t)kk, "%.2f m (its own zero)", (double)nav_v[12]);
+            if (t - last_nav < 1 && N.have_pa) snprintf(reply + kk, sizeof reply - (size_t)kk, "; navigation's estimate: %.2f m above %s, rising %+.2f m/s; position %+.2f %+.2f m from %s, speed %+.2f %+.2f m/s; references heard: %s%s%s",
+                                         (double)N.pa[2], N.seen & 4 ? "the ground under it (the rangefinder's)" : "the barometer's zero", (double)o.v[2], (double)(o.have_home ? o.p[0] : N.pa[0]), (double)(o.have_home ? o.p[1] : N.pa[1]), o.have_home ? "home" : "where it started (before takeoff: carry it and watch)", (double)o.v[0], (double)o.v[1],
+                                         N.seen & 1 ? "barometer " : "", N.seen & 2 ? "GPS " : "", N.seen & 4 ? "rangefinder/flow" : "");
+            else snprintf(reply + kk, sizeof reply - (size_t)kk, "; navigation: not stepping (the ESP32 sends what it steps on only while a pilot's sticks come: LiftLab connected, or the panel's control screen)");
+            design = 1;
+          }
           if (!design && strncmp(s, "autotune", 8) && strcmp(s, "status") && strcmp(s, "learning") &&
               strcmp(s, "health") && strcmp(s, "latches") && strcmp(s, "fleet") && strcmp(s, "power"))
             autotune_stop(&AT, "stopped: another pilot/learning command; "
@@ -946,6 +962,14 @@ int main(int argc, char **argv) {
       memcpy(in.q, v + 2, 16); memcpy(in.w, v + 6, 12); memcpy(in.acc, v + 9, 12); in.have_att = v[14] > 0.5f;
       in.have_baro = v[13] > 0.5f; in.baro_alt = v[12]; in.baro_age = 0.005f;
       if (in.have_att) flow_in_gyro(&FI, t, in.w);                     /* (the camera's flow is calibrated against it: flowcal) */
+      {   /* the downward camera's flow (dfb_flow) and its rangefinder (--range): the navigation's flow reference. Without a
+           * range (out of its reach) the flow still counts: the navigation scales it by the height it fused (nav_core.h) */
+        float rg = -1, ra = 0; flow_reading fr; int hr = tof250_latest(&RF, t, 0.3, &rg, &ra), hf = flow_in_latest(&FI, t, 0.1, &fr);
+        if (hr || hf) {
+          in.have_flow = 1; in.range = hr ? rg : -1; in.flow_age = hf ? (float)(t - fr.t) : ra;
+          if (hf && fr.q >= 0.2f) { in.flow[0] = fr.f[0]; in.flow[1] = fr.f[1]; in.flow_q = fr.q; }   /* (a poorer frame: the height only) */
+        }
+      }
       if (G.fix && t - G.t < 1.0) { in.have_fix = 1; memcpy(in.fix_p, G.p, sizeof in.fix_p); memcpy(in.fix_v, G.v, sizeof in.fix_v); in.fix_age = (float)(t - G.t) + 0.1f; last_fix_t = G.t; }
       float dt = last_nav > 0 ? (float)(t - last_nav) : 0.01f; last_nav = t; if (dt > 0.1f) dt = 0.1f;
       /* landing: sink at 0.5 m/s; on the ground (height near home and not sinking any more), idle and disarm */

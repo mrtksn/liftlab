@@ -149,6 +149,23 @@ flight program comes first. Before the readings mean anything, calibrate the len
 `liftlab send flight flowcal start`, rock the drone by hand (roll and pitch, the camera over one spot of a textured
 floor, in good light) for about 40 s, then `liftlab send flight flowcal`: it gives `dfb_flow`'s `--rad-px`, whether
 the picture is mirrored (`--mirror`), how the camera is turned against the body, and the camera's delay against the
-gyro. (The readings don't reach the navigation's position estimate yet.)
+gyro.
+
+With a downward rangefinder beside the camera (`dfb_pi --range tof250:/dev/i2c-1:0x52`, a TOF250 on the Pi's I²C),
+the navigation takes both as its optical-flow reference: the flow for the speed over the ground, the rangefinder for
+the height above it. Its estimate fuses the height: near the ground the rangefinder leads and the barometer's offset is
+learned from it; above the rangefinder's reach (2.5 m) the barometer carries on from that offset, and the flow is
+scaled by the fused height. `liftlab send flight height` shows the three side by side. The navigation only steps
+while it flies the drone (the ESP32 sends what it steps on to guided commands), so for position hold run `dfb_pi`
+without `--no-navigation`, with a nav config (`drone.dnc`) whose design has the **Optical flow** part on the Pi's
+Navigation task, mounted as `flowcal` found. A second program beside the angle-mode one keeps both at hand:
+
+    [hold]
+    command = bin/dfb_pi --nav drone.flow.dnc --airframe drone.dfa --pi drone.dlc --radio wifi,sta --bind liftlab --range tof250:/dev/i2c-1:0x52
+    workdir = design
+    boot = no
+    conflicts = flight
+
+(and `conflicts = hold` in `[flight]`): `liftlab start hold` stops the angle-mode program, `liftlab start flight` goes back.
 
 Starting and stopping use `sudo` (Raspberry Pi OS gives the first user it without a password); looking needs none.
