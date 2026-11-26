@@ -594,7 +594,8 @@ function hardwareSettings(plan, radio=hardwareRadio()) {
   // the IMU board turned about straight up (wiring version 16): only once set, so a design without one still installs on older firmware
   // the IMU's supply on a GPIO (wiring version 19): only once set, so a design without one still installs on older firmware
   if(sensors.imu && Number.isInteger(sensors.imu.powerPin)) lines.push(sensors.imu.powerPin>=0?'imu_power='+sensors.imu.powerPin+(sensors.imu.powerLevel===0?',0':''):'imu_power=-1');
-  if(sensors.imu && Number(sensors.imu.levelYaw)) lines.push('level_yaw='+Number(Number(sensors.imu.levelYaw).toFixed(1)));
+  // (written once the design has it, 0 too: a board keeps the level_yaw it was last given, and calibration sets it to 0)
+  if(sensors.imu && sensors.imu.levelYaw!=null && Number.isFinite(Number(sensors.imu.levelYaw))) lines.push('level_yaw='+Number(Number(sensors.imu.levelYaw).toFixed(1)));
   // the IMU's calibration (wiring version 20; Tune → Sensor calibration): only once measured, so a design without one still installs on older firmware
   if(sensors.imu && sensorCalOk(sensors.imu.cal)) lines.push('acc_bias='+csv(sensors.imu.cal.accBias),'acc_scale='+csv(sensors.imu.cal.accScale),'gyro_bias='+csv(sensors.imu.cal.gyroBias));
   const mag=sensors.mag;if(mag) lines.push('mag_matrix='+csv(mag.matrix),'mag_bias='+csv(String(mag.bias||'0,0,0').split(',')),'mag_scale='+csv(String(mag.scale||'1,1,1').split(',')));

@@ -759,7 +759,8 @@ const WIRING_KEEP = ['link_uart', 'baud'];                           // (dfb_pi'
 // already flies the design's airframe, so wiring and airframe are checked and said, not applied.
 function piText(tw, s) {
   const m = /^file (\S+) (\d+) ([0-9a-fA-F]{1,8})$/.exec(s), have = m && simPiFiles.get(m[1]);
-  if (have && have.length === +m[2] && crc32(have) === parseInt(m[3], 16)) return { say: [`file ${m[1]}: the same is here already`], log: true };
+  // (as dfb_pi.c: a file that ends in its own CRC-32 always has the CRC 2144df1c, so it's always sent again)
+  if (have && have.length === +m[2] && crc32(have) === parseInt(m[3], 16) && parseInt(m[3], 16) !== 0x2144DF1C) return { say: [`file ${m[1]}: the same is here already`], log: true };
   if ((/^file( |$)/.test(s) || s.startsWith('fd ')) && tw.file_line) {
     txtIn(tw, s); const r = tw.file_line(), said = cstr(tw, tw.txt_ptr(), 200);
     if (r === 2) {

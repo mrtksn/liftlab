@@ -50,10 +50,19 @@ function scalApply() {
     ? 'Saved in the design: the IMU\'s mount (Airframe), its offsets and gains, and Level as the mount. Upload design puts it on the drone (its ESP32 restarts).'
     : 'Saved in the design: the IMU\'s mount (Airframe), its offsets and gains, and Level as the mount. The simulator flies it now; on the real drone, Upload design (connected) or Install puts it there.', 'ok');
 }
-function scalUpload() {
+// Upload design (the drone card's: cardUploadStart), with how it goes here too: the card's progress line while it
+// runs, then how it ended. One at a time: the buttons wait while it runs.
+const scalUploading = () => typeof cardUp !== 'undefined' && cardUp.on;
+async function scalUpload() {
+  if (scalUploading()) return;
   const why = typeof cardUploadStart === 'function' ? cardUploadStart() : 'no drone card';
-  scalNote(why || 'Uploading the design: the drone card shows how it goes.', why ? 'bad' : 'ok');
+  if (why) { scalNote(why, 'bad'); scalGSync(); return; }
+  while (scalUploading()) { scal.msg = cardUp.said || 'Uploading the design…'; scal.tone = ''; renderSensorCal(); scalGSync(); await new Promise(r => setTimeout(r, 300)); }
+  const ok = card.msgTone !== 'bad' && card.msgTone !== 'warn';
+  scalNote(card.msg ? (ok ? '✓ ' : '') + card.msg : 'Upload design finished.', ok ? 'ok' : 'bad'); scalGSync();
 }
+// The guide's card shows the section's message while it's done (after Apply, during and after the upload).
+function scalGSync() { if (typeof scalG !== 'undefined' && scalG.done) { scalG.msg = scal.msg; scalG.tone = scal.tone; scalGRender(); } }
 
 function renderSensorCal() {
   const box = $('#sensorCal'); if (!box) return;
@@ -100,7 +109,7 @@ function renderSensorCal() {
   const tools = el('div', { class: 'design-tools' },
     UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-apply', disabled: !r || !!r.error || !r.ok || scal.applied || undefined, text: 'Apply', title: 'Keep the mount, offsets and gains in the design', onclick: scalApply }),
     UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-clear', disabled: !n || !!scal.busy || undefined, text: 'Start over', onclick: () => { scal.poses = {}; scal.applied = false; scalNote(''); if (typeof scalG !== 'undefined' && scalG.done) { scalG.done = false; scalGRender(); } } }));
-  if (scal.applied && where === 'live' && typeof cardRadioPi === 'function' && cardRadioPi()) tools.append(UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-upload', text: 'Upload design', onclick: scalUpload }));
+  if (scal.applied && where === 'live' && typeof cardRadioPi === 'function' && cardRadioPi()) tools.append(UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-upload', disabled: scalUploading() || undefined, text: scalUploading() ? 'Uploading…' : 'Upload design', onclick: scalUpload }));
   box.append(tools);
   if (focus) { const f = box.querySelector(`[data-focus-key="${focus}"]`); if (f && !f.disabled) f.focus(); }
 }

@@ -21,7 +21,8 @@ const scalGReach = () => Math.max(0.08, typeof cReach === 'number' && cReach > 0
 
 // What the 3D view shows while guiding (view3d.js updateScene): { at, q, dist }, or null when not guiding.
 function scalGuideView() {
-  if (!scalG.on) { if (scalG.arrow) scalG.arrow.visible = false; return null; }
+  if (!scalG.on) { if (scalG.arrow) scalG.arrow.visible = false; if (scalG.front) scalG.front.visible = false; return null; }
+  scalGFront();
   const p = scalGPose(), m = p && GUIDE_MOVE[p.id];
   let k = 0;
   if (m && m.axis) {
@@ -72,6 +73,24 @@ function scalGArrow(p, m) {
   scalG.arrow.position.set(...scalG.at); scalG.arrow.rotation.set(0, 0, scalG.yaw);
   const pulse = 0.55 + 0.4 * (0.5 + 0.5 * Math.sin(performance.now() / 260));
   scalG.arrow.traverse(o => { if (o.material) o.material.opacity = pulse; });
+}
+// Which way is the front: an arrow out past the nose, labelled, on the drone itself (it turns with each pose).
+function scalGFront() {
+  if (typeof THREE === 'undefined' || typeof drone === 'undefined') return;
+  if (!scalG.front) {
+    const R = scalGReach(), col = new THREE.Color(tok('--warn') || '#e07a1f'), g = new THREE.Group();
+    const a = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(R * 0.55, 0, 0), R * 0.75, col, R * 0.22, R * 0.13);
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 96;
+    const cx = cv.getContext('2d'); cx.font = '600 58px system-ui, sans-serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.lineWidth = 10; cx.strokeStyle = 'rgba(255,255,255,0.9)'; cx.strokeText('Front', 128, 50); cx.fillStyle = '#' + col.getHexString(); cx.fillText('Front', 128, 50);
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: false, transparent: true }));
+    label.scale.set(R * 0.62, R * 0.23, 1); label.position.set(R * 1.45, 0, R * 0.12);
+    g.add(a, label);
+    g.traverse(o => { if (o.material) { o.material.depthTest = false; o.material.transparent = true; } o.renderOrder = 41; });
+    scalG.front = g;
+  }
+  if (scalG.front.parent !== drone) drone.add(scalG.front);   // (the drone is built again when the design changes)
+  scalG.front.visible = true;
 }
 // The camera for a pose: close, from where the move shows best (it glides there, as the view buttons do).
 function scalGCamera(p) {
@@ -167,9 +186,9 @@ function scalGRender() {
     box.append(el('div', { class: 'scal-guide-step', text: 'Sensor calibration' }), dots, el('h3', { text: 'Done' }),
       el('p', { class: 'ui-status' + (scalG.tone ? ' ' + scalG.tone : ''), role: 'status', text: scalG.msg }));
     const tools = el('div', { class: 'design-tools' });
-    if (r && !r.error && r.ok && !scal.applied) tools.append(UI.button({ class: 'btn sm', type: 'button', text: 'Apply', onclick: () => { scalApply(); scalG.msg = scal.msg; scalG.tone = 'ok'; scalGRender(); } }));
-    if (scal.applied && scalWhere() === 'live' && typeof cardRadioPi === 'function' && cardRadioPi()) tools.append(UI.button({ class: 'btn sm', type: 'button', text: 'Upload design', onclick: () => { scalUpload(); scalG.msg = scal.msg; scalGRender(); } }));
-    tools.append(UI.button({ class: 'btn sm', type: 'button', text: 'Close', onclick: () => { scalG.done = false; scalGRender(); } }));
+    if (r && !r.error && r.ok && !scal.applied) tools.append(UI.button({ class: 'btn sm', type: 'button', text: 'Apply', onclick: () => { scalApply(); scalGSync(); } }));
+    if (scal.applied && scalWhere() === 'live' && typeof cardRadioPi === 'function' && cardRadioPi()) tools.append(UI.button({ class: 'btn sm', type: 'button', disabled: scalUploading() || undefined, text: scalUploading() ? 'Uploading…' : 'Upload design', onclick: scalUpload }));
+    tools.append(UI.button({ class: 'btn sm', type: 'button', text: 'Close', title: scalUploading() ? 'The upload goes on; the drone card shows it' : null, onclick: () => { scalG.done = false; scalGRender(); } }));
     box.append(tools);
   }
 }

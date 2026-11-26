@@ -306,6 +306,9 @@ static uint8_t *file_load(const char *name, uint32_t *n) {
   if (!b || k > FILE_RX_MAX) { free(b); return 0; }
   *n = (uint32_t)k; return b;
 }
+/* The CRC-32 of any data that ends in its own CRC-32 (little-endian, as the design's .dfa, .dnc and .dlc files do):
+ * all such files have it, so for them the size and CRC can't say "the same". */
+#define CRC32_RESIDUE 0x2144DF1Cu
 /* the file's size and CRC-32, if it's here */
 static int file_here(const char *name, uint32_t *size, uint32_t *crc) {
   uint32_t n; uint8_t *b = file_load(name, &n); if (!b) return 0;
@@ -323,7 +326,7 @@ static int file_put(const char *name, const uint8_t *b, uint32_t n, char *why, i
 /* One of these commands: 1 (reply filled), or 0. armed: the ESP32 says it's armed. */
 static int design_line(const char *s, int link, int armed, const char *af_path, int *n_mot, char mot_name[][16], double t, char *reply, int rn) {
   char name[FILE_RX_NAME + 1]; uint32_t size, crc, hs, hc;
-  if (file_rx_begins(s, name, &size, &crc) && file_rx_name_ok(name) && file_here(name, &hs, &hc) && hs == size && hc == crc) {
+  if (file_rx_begins(s, name, &size, &crc) && file_rx_name_ok(name) && file_here(name, &hs, &hc) && hs == size && hc == crc && crc != CRC32_RESIDUE) {
     FRX.active = 0; snprintf(reply, (size_t)rn, "file %s: the same is here already", name); return 1;
   }
   int r = file_rx_line(&FRX, s, reply, rn);
