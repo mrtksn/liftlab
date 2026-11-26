@@ -799,6 +799,19 @@ button.tile:focus-visible{outline:var(--focus-width) solid var(--accent);outline
 .scal-pose .hint{margin:var(--space-4) 0 0}
 .scal-got{font-family:var(--f-mono);font-size:var(--text-xs)}
 .scal-result p{margin:var(--space-4) 0}
+/* the guide's card over the 3D view: what to do now, how it's going */
+.scal-guide{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);width:min(420px,calc(100% - 24px));z-index:26;display:grid;gap:var(--space-4);padding:var(--space-10) var(--space-14);border:1px solid var(--accent);border-radius:var(--radius-card);background:color-mix(in srgb,var(--panel) 94%,transparent);box-shadow:0 6px 24px rgb(0 0 0 / .18)}
+.scal-guide[hidden]{display:none}
+.scal-guide h3{margin:0;font-size:var(--text-lg,1.15rem)}
+.scal-guide-step{font-size:var(--text-xs);color:var(--muted)}
+.scal-guide-how{margin:0;color:var(--ink-2)}
+.scal-guide .ui-status{margin:0;min-height:1.4em}
+.scal-guide .design-tools{margin-top:var(--space-4)}
+.scal-guide-dots{display:flex;gap:6px;list-style:none;margin:0;padding:0}
+.scal-guide-dots li{width:9px;height:9px;border-radius:50%;background:var(--line-strong)}
+.scal-guide-dots li.is-now{background:var(--accent)}
+.scal-guide-dots li.is-done{background:var(--good)}
+@media (prefers-reduced-motion:reduce){.scal-guide{box-shadow:none}}
 .tune-raw{display:grid;grid-template-columns:minmax(64px,auto) repeat(3,minmax(0,1fr));gap:var(--space-4) var(--space-5);align-items:center;margin-top:var(--space-8)}
 .tune-raw-h{font-size:var(--text-xs);color:var(--muted);text-align:center}
 .tune-raw-k{font-size:var(--text-xs);color:var(--muted);white-space:nowrap}

@@ -108,6 +108,26 @@ const SensorCal = (() => {
     };
   }
 
-  return { POSES, MIN_TILT, MAX_RES, parseAnswer, fitAccel, solve };
+  // The guide's check of one reading for a pose, before it's taken: { ok, msg, deg }. Level first takes any still
+  // reading (it's the reference); nose up needs 30° from level; the others, once the mount is known from those two,
+  // must point their way within 45° (upside down 30°, level again 1.8°: the solve wants them within 2°). deg: how
+  // far there is to go (0 when ok).
+  const GUIDE_TILT = 30;
+  function check(poses, id, a) {
+    const p = POSES.find(q => q.id === id); if (!p) return { ok: false, msg: 'no such pose', deg: 0 };
+    if (id === 'flat') return { ok: true, msg: '', deg: 0 };
+    if (!poses.flat) return { ok: false, msg: 'measure Level, right way up first', deg: 0 };
+    const z = unit3(poses.flat.acc), u = unit3(a.acc), fromLevel = Math.acos(Math.max(-1, Math.min(1, dot3(z, u)))) * R2D;
+    if (id === 'nose') return fromLevel >= GUIDE_TILT ? { ok: true, msg: '', deg: 0 } : { ok: false, deg: GUIDE_TILT - fromLevel, msg: `lift the front more: ${fromLevel.toFixed(0)}° now, ${GUIDE_TILT}° or more` };
+    if (id === 'again') return fromLevel <= 1.8 ? { ok: true, msg: '', deg: 0 } : { ok: false, deg: fromLevel, msg: `${fromLevel.toFixed(1)}° from the first level pose: set it down level, as then` };
+    if (!poses.nose) return { ok: false, msg: 'measure Nose up first', deg: 0 };
+    const r = solve({ flat: poses.flat, nose: poses.nose }); if (r.error) return { ok: false, msg: r.error, deg: 0 };
+    const M = r.mount, b = [dot3(M.slice(0, 3), u), dot3(M.slice(3, 6), u), dot3(M.slice(6), u)];   // which way is up, in the body's axes
+    const off = Math.acos(Math.max(-1, Math.min(1, dot3(b, p.up)))) * R2D, lim = id === 'upside' ? 30 : 45;
+    if (off <= lim) return { ok: true, msg: '', deg: 0 };
+    const wrong = dot3(b, p.up) < 0 && id !== 'upside';
+    return { ok: false, deg: off - lim, msg: wrong ? 'the other way round' : `turn it further: ${(off - lim).toFixed(0)}° to go` };
+  }
+  return { POSES, MIN_TILT, MAX_RES, parseAnswer, fitAccel, solve, check };
 })();
 if (typeof module !== 'undefined') module.exports = SensorCal;

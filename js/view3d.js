@@ -72,6 +72,7 @@ function stepCamAnim() {
   const a = cam.anim; if (!a) return;
   const u = clamp((performance.now() - a.t0) / a.dur, 0, 1), k = u * u * (3 - 2 * u);
   cam.az = a.az0 + a.daz * k; cam.el = a.el0 + (a.el1 - a.el0) * k;
+  if (a.dist1 != null) cam.dist = a.dist0 + (a.dist1 - a.dist0) * k;   // (and the distance, when a glide says)
   if (u >= 1) cam.anim = null;
 }
 const Z = new THREE.Vector3(0, 0, 1);
@@ -538,6 +539,9 @@ function updateScene(selected = true) {
   drone.position.set(...hub);
   if (editMode) drone.quaternion.set(0, 0, 0, 1);            // edit in body axes: level, nose along +X
   else drone.quaternion.set(S.q[1], S.q[2], S.q[3], S.q[0]);
+  // Tune → Sensor calibration's guide (sensor-cal-guide.js): the drone held where it was, showing the pose to take
+  const guide = selected && !editMode && typeof scalGuideView === 'function' ? scalGuideView() : null;
+  if (guide) { drone.position.set(...guide.at); drone.quaternion.set(guide.q[1], guide.q[2], guide.q[3], guide.q[0]); }
   const live = !editMode;
   for (const j of joints()) {   // each joint's group turns about its hinge (level and at rest while editing)
     const g = jointGroups.get(j.id); if (g) g.quaternion.setFromAxisAngle(tmpV.set(...jointAxis(j)), editMode ? previewAngle(j) : angleTrue(j));   // editing: at rest, or the preview
@@ -579,9 +583,9 @@ function updateScene(selected = true) {
     if (live) { p.beam.scale.z = L && L.range > 0 ? L.range : c.maxRange; p.beam.computeLineDistances(); }
   }
   cogDot.position.set(...truth.c); modelRing.position.set(...model.c); cogDot.visible = editMode || view.cog; modelRing.visible = cogDot.visible && nrm(sub(truth.c, model.c)) > 0.004;
-  gravArrow.visible = live && view.weight; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
-  const wv = windVec(); windArrow.visible = live && view.wind && envr.wind > 0.05;
-  updateTorque(R, live);
+  gravArrow.visible = live && view.weight && !guide; { const cg = add(S.p, m3v(R, truth.c)); gravArrow.position.set(cg[0], cg[1], cg[2] - 0.02); } gravArrow.setLength(0.06 + truth.m * G * 0.02, 0.035, 0.02);
+  const wv = windVec(); windArrow.visible = live && view.wind && envr.wind > 0.05 && !guide;
+  updateTorque(R, live && !guide);
   if (windArrow.visible) { const u = unit(wv); windArrow.setDirection(new THREE.Vector3(...u)); windArrow.position.set(hub[0] - u[0] * 0.6, hub[1] - u[1] * 0.6, hub[2] + 0.25); windArrow.setLength(0.08 + envr.wind * 0.05, 0.04, 0.025); }
   for (const c of liveComps()) {
     if (c.type !== 'hang') continue; const v = pendVis.get(c.id), st = pend.get(c.id); if (!v || !st) continue;
@@ -589,19 +593,19 @@ function updateScene(selected = true) {
     const aw = add(S.p, m3v(R, posNow(c))); const pos = v.line.geometry.attributes.position;
     pos.setXYZ(0, ...aw); pos.setXYZ(1, ...st.p); pos.needsUpdate = true; v.line.geometry.computeBoundingSphere(); v.ball.position.set(...st.p);
   }
-  updateCargoVis(live); updateAeroVis(R, live);
-  ghost.visible = live && view.est; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
-  headArrow.visible = live && view.heading && !S.crashed;
+  updateCargoVis(live); updateAeroVis(R, live && !guide);
+  ghost.visible = live && view.est && !guide; if (ghost.visible) { ghost.position.set(...est.p); ghost.quaternion.set(est.q[1], est.q[2], est.q[3], est.q[0]); }
+  headArrow.visible = live && view.heading && !S.crashed && !guide;
   if (headArrow.visible) {   // with navigation the keys move along the heading it holds; without (angle mode) they lean the body: its own heading
     const yaw = hasTask('nav') ? setpoint.yaw * D2R : droneYaw(), s = Math.max(0.12, cReach * 0.85);
     headArrow.position.set(...hub); headArrow.rotation.set(0, 0, yaw); headArrow.scale.set(s, s, 1);   // level, at the drone's height, whatever its tilt
   }
-  spMarker.visible = live && view.target; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
-  trailLine.visible = live && view.trail;
+  spMarker.visible = live && view.target && !guide; spMarker.position.set(setpoint.x, setpoint.y, setpoint.z); spMarker.children[1].scale.z = setpoint.z;
+  trailLine.visible = live && view.trail && !guide;
   if (view.trail && trail.length > 1) { trailLine.geometry.dispose(); trailLine.geometry = new THREE.BufferGeometry().setFromPoints(trail.map(p => new THREE.Vector3(...p))); }
   if (!selected && partImport.active && partImport.context==='world' && partImport.draft) {cam.target.set(...partImport.draft.pos);updateCamera();return;}
   if (!selected) return;
-  let tgt = view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
+  let tgt = guide ? new THREE.Vector3(...guide.at) : view.follow || editMode ? new THREE.Vector3(...hub) : new THREE.Vector3(setpoint.x, setpoint.y, setpoint.z);
   const selC = editMode && !partImport.active && compById(edit.sel);
   if (partImport.active && partImport.draft) tgt = drone.localToWorld(new THREE.Vector3(...scl(partImport.draft.pos, .5)));
   if (selC) {   // editing: orbit round the selected part; with the servo panel open, keep it clear of the panel
@@ -614,8 +618,9 @@ function updateScene(selected = true) {
     tgt = drone.localToWorld(new THREE.Vector3(...edit.focusLocal)).add(edit.focusShift);
   } else if (editMode) edit.focusId = null;
   if (typeof bench !== 'undefined' && bench.on && editMode) { try { const bt = benchFrame(hub); if (bt) tgt = bt; } catch (e) { console.error(e); bench.on = false; } }
-  cam.target.lerp(tgt.add(cam.pan), view.follow ? 0.12 : 0.06);
-  if (view.chase && live) {  // swing the camera behind the target heading
+  cam.target.lerp(guide ? tgt : tgt.add(cam.pan), view.follow || guide ? 0.12 : 0.06);
+  if (guide && guide.dist) cam.dist += (guide.dist - cam.dist) * 0.08;   // (the guide frames the drone close up)
+  if (view.chase && live && !guide) {  // swing the camera behind the target heading
     let d = setpoint.yaw * D2R + Math.PI - cam.az; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.az += d * 0.06;
   }

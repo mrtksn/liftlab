@@ -89,6 +89,14 @@ once and keeps it, from still poses, props off, connected to the drone:
 3. **Level again**: six poses fit six numbers exactly whatever they read, so a seventh shows a pose that moved. It
    must also agree with the first level pose, which the mount rests on.
 
+**Guided calibration** leads through them in the 3D view. The drone is held where it was (only the picture stops;
+the simulation or the real drone carries on), the camera comes close and turns to where the move shows best, and the
+drone acts out each pose with an arrow for the way it turns. Meanwhile it asks the drone about once a second and says
+what's wrong as it goes ("lift the front more: 18° now", "hold it still", "the other way round"). A pose is taken
+once two readings in a row are still, point its way (nose up 30° from level; the sides within 45° of their way, from
+the mount the first two give; upside down within 30°; level again within 1.8° of the first) and agree within 2°.
+Then it goes on to the next. Back, Skip (for the optional ones) and Stop are on its card; at the end, Apply.
+
 Each **Measure** sends `imucal` up the radio. The flight controller averages a second of the IMU as the chip reads
 it (its axes, before any calibration) and answers `imucal AX AY AZ GX GY GZ`: mm/s² and 0.1 mrad/s, whole numbers,
 to fit one radio message. It refuses with `imucal: moving …` if the drone didn't hold still, and `disarm first` while

@@ -13,20 +13,24 @@ const scalWhere = () => typeof liveOn === 'function' && liveOn() ? (live.state =
 const scalResult = () => scal.poses.flat && scal.poses.nose ? SensorCal.solve(scal.poses) : null;
 const scalNote = (msg, tone = '') => { scal.msg = msg; scal.tone = tone; renderSensorCal(); };
 
-// One pose: send imucal, wait for the answer (wall time: a paused simulator answers nothing, and says so by timing out).
-async function scalMeasure(id) {
-  if (scal.busy) return;
-  const why = cardTextOut('imucal');
-  if (why) { scalNote(why, 'bad'); return; }
-  const n0 = gs.nmsg || 0, t0 = performance.now(); scal.busy = id; scal.applied = false; scalNote('Measuring: keep it still…');
-  let a = null;
-  while (!a && performance.now() - t0 < 8000) {
+// Ask the drone for one pose: send imucal, wait for its answer (wall time: a paused simulator answers nothing).
+// The pose, { error } (the drone's refusal), { why } (not sent), or null (no answer).
+async function scalAsk() {
+  const why = cardTextOut('imucal'); if (why) return { why };
+  const n0 = gs.nmsg || 0, t0 = performance.now();
+  while (performance.now() - t0 < 8000) {
     await new Promise(r => setTimeout(r, 80));
     const k = Math.min(gs.log.length, (gs.nmsg || 0) - n0);
-    for (const m of gs.log.slice(0, Math.max(0, k)).reverse()) { a = SensorCal.parseAnswer(m.text); if (a) break; }
+    for (const m of gs.log.slice(0, Math.max(0, k)).reverse()) { const a = SensorCal.parseAnswer(m.text); if (a) return a; }
   }
-  scal.busy = '';
+  return null;
+}
+async function scalMeasure(id) {
+  if (scal.busy) return;
+  scal.busy = id; scal.applied = false; scalNote('Measuring: keep it still…');
+  const a = await scalAsk(); scal.busy = '';
   if (!a) { scalNote(scalWhere() === 'sim' ? 'No answer: is the simulation running (not paused)?' : 'No answer from the drone: is the link up, and its firmware new enough for imucal?', 'bad'); return; }
+  if (a.why) { scalNote(a.why, 'bad'); return; }
   if (a.error) { scalNote(`${SensorCal.POSES.find(p => p.id === id).label}: ${a.error}`, 'bad'); return; }
   scal.poses[id] = a;
   const next = SensorCal.POSES.find(p => !scal.poses[p.id]);
@@ -61,12 +65,18 @@ function renderSensorCal() {
   box.append(el('p', { class: 'hint', text: 'Measures which way the IMU board really sits (its mount, the heading too) and its accelerometer\'s offset and gain on every axis, from a few still poses. Props off. Hold each pose still for a second while it measures.' }));
   if (!c) { box.append(el('p', { class: 'hint warn', text: 'This design has no IMU (add one in Airframe).' })); return; }
   box.append(el('p', { class: 'hint' + (where === 'down' ? ' warn' : ''), text: where === 'live' ? 'Connected to the real drone: the poses are its IMU\'s.' : where === 'down' ? 'Not connected to the drone yet (Ground tab).' : 'In the simulator the drone sits level on the ground, so only the level poses can be measured here. Connect to the real drone (Ground tab) to calibrate it.' }));
+  const guiding = typeof scalG !== 'undefined' && scalG.on;
+  box.append(el('div', { class: 'design-tools' }, guiding
+    ? UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-guide', text: 'Stop the guide', onclick: scalGStop })
+    : UI.button({ class: 'btn sm primary', type: 'button', 'data-focus-key': 'scal-guide', disabled: !!scal.busy || where === 'down' || undefined, text: 'Guided calibration',
+      title: 'The 3D view shows each pose; the drone is asked as you go, and each pose is taken once it\'s right and still', onclick: scalGuideStart })),
+    el('p', { class: 'hint', text: guiding ? 'Guiding: follow the drone in the 3D view.' : 'Or measure the poses one by one:' }));
   const list = el('ol', { class: 'scal-poses' });
   for (const p of SensorCal.POSES) {
     const got = scal.poses[p.id], busy = scal.busy === p.id;
     const g = got ? Math.hypot(...got.acc) / G : 0;
     const btn = UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-' + p.id, disabled: !!scal.busy || where === 'down' || undefined,
-      text: busy ? 'Measuring…' : got ? 'Again' : 'Measure', onclick: () => scalMeasure(p.id) });
+      text: busy ? 'Measuring…' : guiding && SensorCal.POSES[scalG.i] === p ? 'Guiding…' : got ? 'Again' : 'Measure', onclick: () => scalMeasure(p.id) });
     list.append(el('li', { class: 'scal-pose' + (got ? ' is-done' : '') },
       el('div', { class: 'scal-pose-h' }, el('b', { text: p.label }), el('small', { text: p.need ? 'needed' : p.id === 'again' ? 'checks the others' : 'for the offsets and gains' }), btn),
       el('p', { class: 'hint', text: p.how }),
@@ -89,7 +99,7 @@ function renderSensorCal() {
   }
   const tools = el('div', { class: 'design-tools' },
     UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-apply', disabled: !r || !!r.error || !r.ok || scal.applied || undefined, text: 'Apply', title: 'Keep the mount, offsets and gains in the design', onclick: scalApply }),
-    UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-clear', disabled: !n || !!scal.busy || undefined, text: 'Start over', onclick: () => { scal.poses = {}; scal.applied = false; scalNote(''); } }));
+    UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-clear', disabled: !n || !!scal.busy || undefined, text: 'Start over', onclick: () => { scal.poses = {}; scal.applied = false; scalNote(''); if (typeof scalG !== 'undefined' && scalG.done) { scalG.done = false; scalGRender(); } } }));
   if (scal.applied && where === 'live' && typeof cardRadioPi === 'function' && cardRadioPi()) tools.append(UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'scal-upload', text: 'Upload design', onclick: scalUpload }));
   box.append(tools);
   if (focus) { const f = box.querySelector(`[data-focus-key="${focus}"]`); if (f && !f.disabled) f.focus(); }

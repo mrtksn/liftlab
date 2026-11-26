@@ -59,9 +59,20 @@ for (const R of [eulerR(0, 90, 40), eulerR(0, -90, -120)]) { const e = eulerFrom
   P.flat.acc = P.flat.acc.map(x => x * 1.1); const r = C.solve(P); assert(!r.error && !r.ok, `a moved pose isn't ok: ${r.error || r.worst.err}`);
   const Q = poses(mount, [0, 0, 0], [1, 1, 1], [0, 0, 0]); Q.again = { acc: mul(T(mount), unit([0.1, 0, 1]).map(x => x * G)), gyro: [0, 0, 0] };
   assert(/level poses differ/.test(C.solve(Q).error)); }
+// The guide's check: level takes anything still; nose up wants 30°; the others their own way, from the mount so far.
+{ const mount = eulerR(178, -4, 93), P = poses(mount, [0.12, -0.2, -1.08], [1.02, 0.97, 1.004], [0, 0, 0]);
+  const at = (u, bias = [0.12, -0.2, -1.08]) => ({ acc: mul(T(mount), unit(u).map(x => x * G)).map((x, i) => x + bias[i]), gyro: [0, 0, 0] });
+  assert(C.check({}, 'flat', P.flat).ok && !C.check({}, 'nose', P.nose).ok);
+  const f = { flat: P.flat }, slight = C.check(f, 'nose', at([0.3, 0, 1]));
+  assert(!slight.ok && /lift the front more: 1\d°/.test(slight.msg), slight.msg);
+  assert(C.check(f, 'nose', P.nose).ok);
+  const fn = { flat: P.flat, nose: P.nose };
+  assert(C.check(fn, 'tail', P.tail).ok && C.check(fn, 'left', P.left).ok && C.check(fn, 'right', P.right).ok && C.check(fn, 'upside', P.upside).ok);
+  assert(/other way/.test(C.check(fn, 'left', P.right).msg) && /further/.test(C.check(fn, 'upside', P.left).msg));
+  assert(!C.check(fn, 'tail', at([-0.3, 0, 1])).ok && C.check(fn, 'again', P.flat).ok && !C.check(fn, 'again', at([0.1, 0, 1])).ok); }
 // The drone's answers.
 assert.strictEqual(JSON.stringify(C.parseAnswer('esp32: imucal -675 -1915 8612 -571 -101 173')), JSON.stringify({ acc: [-0.675, -1.915, 8.612], gyro: [-0.0571, -0.0101, 0.0173] }));
 assert.strictEqual(JSON.stringify(C.parseAnswer('imucal: moving: keep it still and measure again')), JSON.stringify({ error: 'moving: keep it still and measure again' }));
 assert.strictEqual(C.parseAnswer('to the ESP32: imucal (its answer: status, or the log)'), null);
 assert.strictEqual(C.parseAnswer('esp32: disarm first').error, 'disarm it first');
-console.log('Sensor calibration tests passed: mount face down, turned, on its edge and level within 0.5°, offsets within 2 mg, gains, the gyro offset, eulerFromR round trips, two poses alone, refusals, a pose that moved, the two level poses, the drone\'s answers.');
+console.log('Sensor calibration tests passed: mount face down, turned, on its edge and level within 0.5°, offsets within 2 mg, gains, the gyro offset, eulerFromR round trips, two poses alone, refusals, a pose that moved, the two level poses, the guide\'s check, the drone\'s answers.');
