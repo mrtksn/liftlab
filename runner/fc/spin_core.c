@@ -90,7 +90,8 @@ void spin_ltel(spin_state *S, const float *lt, int n, double t) {
 }
 
 /* ───────── the fit ───────── */
-static float fx[SPIN_MAX], fw[SPIN_MAX], fth[SPIN_MAX], fwd[SPIN_MAX], tmp[SPIN_MAX];
+static float fx[SPIN_MAX], fw[SPIN_MAX], fth[SPIN_MAX], tmp[SPIN_MAX];
+static float ia[SPIN_MAX], ix[SPIN_MAX], ith[SPIN_MAX], ft[SPIN_MAX];   /* the integrated fit: ∫a, ∫x, ∫θ, time */
 /* a zero-phase smoother (three-point average, twice), the same for every signal so their relation holds */
 static void avg3(const float *a, float *o, int n) { for (int i = 0; i < n; i++) { int l = i > 0 ? i - 1 : i, r = i < n - 1 ? i + 1 : i; o[i] = (a[l] + a[i] + a[r]) / 3.0f; } }
 static void smooth(const float *a, float *o, int n) { static float mid[SPIN_MAX]; avg3(a, mid, n); avg3(mid, o, n); }
@@ -112,13 +113,16 @@ static void model_x(const spin_state *S, double delay, double lag) {
     tmp[i] = cnt ? (float)(acc / cnt) : (float)x; ta[i] = cnt ? (float)(acca / cnt) : 0; acc = acca = 0; cnt = 0;
   }
   smooth(tmp, fx, n); smooth(ta, fa, n);
+  ia[0] = ix[0] = 0;                                              /* (and their integrals, for the fit on ω itself) */
+  for (int i = 1; i < n; i++) { const double dt = S->st[i] - S->st[i - 1]; ia[i] = ia[i - 1] + (float)(0.5 * (fa[i] + fa[i - 1]) * dt); ix[i] = ix[i - 1] + (float)(0.5 * (fx[i] + fx[i - 1]) * dt); }
 }
-/* Least squares on m regressors (cols) for fwd over lo..hi: the coefficients into co, the residual back. */
-static double lsq(int m, const float *const *cols, const float *sign, int lo, int hi, double *co) {
-  double M[5][6] = { { 0 } };
+/* Least squares on m regressors (cols; 0: a constant) for y over lo..hi: the coefficients into co, the residual back. */
+#define SPIN_COLS 6
+static double lsq(int m, const float *const *cols, const float *sign, const float *y, int lo, int hi, double *co) {
+  double M[SPIN_COLS][SPIN_COLS + 1] = { { 0 } };
   for (int i = lo; i < hi; i++) {
-    double v[5]; for (int p = 0; p < m; p++) v[p] = cols[p] ? sign[p] * cols[p][i] : 1;
-    for (int p = 0; p < m; p++) { for (int q = 0; q < m; q++) M[p][q] += v[p] * v[q]; M[p][m] += v[p] * fwd[i]; }
+    double v[SPIN_COLS]; for (int p = 0; p < m; p++) v[p] = cols[p] ? sign[p] * cols[p][i] : 1;
+    for (int p = 0; p < m; p++) { for (int q = 0; q < m; q++) M[p][q] += v[p] * v[q]; M[p][m] += v[p] * y[i]; }
   }
   for (int a = 0; a < m; a++) {                                   /* (Gauss, partial pivoting) */
     int pv = a; for (int b = a + 1; b < m; b++) if (fabs(M[b][a]) > fabs(M[pv][a])) pv = b;
@@ -128,18 +132,20 @@ static double lsq(int m, const float *const *cols, const float *sign, int lo, in
   }
   for (int a = 0; a < m; a++) co[a] = M[a][m] / M[a][a];
   double e = 0;
-  for (int i = lo; i < hi; i++) { double d = fwd[i]; for (int p = 0; p < m; p++) d -= co[p] * (cols[p] ? sign[p] * cols[p][i] : 1); e += d * d; }
+  for (int i = lo; i < hi; i++) { double d = y[i]; for (int p = 0; p < m; p++) d -= co[p] * (cols[p] ? sign[p] * cols[p][i] : 1); e += d * d; }
   return e;
 }
-/* ω̇ = p·a + q·x − k·θ − c·ω + b on the middle samples: the residual, the gain g = p + q, the kick r = p / g (never
- * below 0: a reaction torque doesn't jump backwards; if the fit wants it there, the kick is left out). */
+/* The yaw rate itself, ω = p·∫a + q·∫x − k·∫θ − c·θ + b·t + ω₀ (the rate of change integrated: the gyro's noise isn't
+ * differentiated, and b, a steady torque, takes up motors that don't quite cancel at the base throttle): the residual,
+ * the gain g = p + q, the kick r = p / g (never against the gain: a reaction torque doesn't jump backwards; if the
+ * fit wants it there, the kick is left out). */
 static int fit_kick = 1;   /* (0: the model without the kick) */
 static double regress(int lo, int hi, double *g, double *r, double *k, double *c) {
-  const float *c5[5] = { fa, fx, fth, fw, 0 }; const float s5[5] = { 1, 1, -1, -1, 1 }; double co[5];
-  double e = fit_kick ? lsq(5, c5, s5, lo, hi, co) : 1e30;
-  if (fit_kick && e < 1e30 && fabs(co[0] + co[1]) > 1e-9 && co[0] / (co[0] + co[1]) >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }   /* (the kick the same way as the gain) */
-  const float *c4[4] = { fx, fth, fw, 0 }; const float s4[4] = { 1, -1, -1, 1 };
-  e = lsq(4, c4, s4, lo, hi, co);
+  const float *c6[6] = { ia, ix, ith, fth, ft, 0 }; const float s6[6] = { 1, 1, -1, -1, 1, 1 }; double co[6];
+  double e = fit_kick ? lsq(6, c6, s6, fw, lo, hi, co) : 1e30;
+  if (fit_kick && e < 1e30 && fabs(co[0] + co[1]) > 1e-9 && co[0] / (co[0] + co[1]) >= 0) { *g = co[0] + co[1]; *r = co[0] / *g; *k = co[2]; *c = co[3]; return e; }
+  const float *c5[5] = { ix, ith, fth, ft, 0 }; const float s5[5] = { 1, -1, -1, 1, 1 };
+  e = lsq(5, c5, s5, fw, lo, hi, co);
   *g = co[0]; *r = 0; *k = co[1]; *c = co[2];
   return e;
 }
@@ -163,19 +169,19 @@ static int spin_search(const spin_state *S, int lo, int hi, double *best, double
 int spin_fit(spin_state *S) {
   int n = S->ns; S->ok = 0;
   if (n < 200) { fc_fmt(S->msg, (int)sizeof S->msg, "spintest: too few samples (%d): was the telemetry coming?", n); return -1; }
-  /* the yaw rate, smoothed; its rate of change; the angle turned (from the rate) */
+  /* the yaw rate (lightly smoothed), the angle turned and its integral, the time */
   smooth(S->sw, fw, n);
-  for (int i = 0; i < n; i++) { int l = i > 0 ? i - 1 : i, r = i < n - 1 ? i + 1 : i; double dt = S->st[r] - S->st[l]; fwd[i] = dt > 0 ? (float)((fw[r] - fw[l]) / dt) : 0; }
-  { double th = 0; tmp[0] = 0; for (int i = 1; i < n; i++) { th += 0.5 * (S->sw[i] + S->sw[i - 1]) * (S->st[i] - S->st[i - 1]); tmp[i] = (float)th; } smooth(tmp, fth, n); }
+  fth[0] = ith[0] = 0; ft[0] = 0;
+  for (int i = 1; i < n; i++) { const double dt = S->st[i] - S->st[i - 1]; fth[i] = fth[i - 1] + (float)(0.5 * (S->sw[i] + S->sw[i - 1]) * dt); ith[i] = ith[i - 1] + (float)(0.5 * (fth[i] + fth[i - 1]) * dt); ft[i] = S->st[i] - S->st[0]; }
   const int lo = 4, hi = n - 4;
-  double sst = 0, mean = 0; for (int i = lo; i < hi; i++) mean += fwd[i]; mean /= (hi - lo);
-  for (int i = lo; i < hi; i++) sst += (fwd[i] - mean) * (fwd[i] - mean);
-  /* With the kick and without it; the kick is kept only if it leaves at least 10% less unexplained (with noise, a
+  /* what's left to explain once a steady torque, the rope and the air have had their go: the fit is graded on that */
+  double sst; { const float *cn[4] = { ith, fth, ft, 0 }; const float sn[4] = { -1, -1, 1, 1 }; double co[4]; sst = lsq(4, cn, sn, fw, lo, hi, co); }
+  /* With the kick and without it; the kick is kept only if it leaves at least 20% less unexplained (with noise, a
    * small kick can stand in for a few milliseconds of delay: the simpler model is the safer one then) */
   double bk, dk, lk, b0, d0, l0;
   fit_kick = 1; if (spin_search(S, lo, hi, &bk, &dk, &lk)) { fc_fmt(S->msg, (int)sizeof S->msg, "spintest: no fit: did it turn at all?"); return -1; }
   fit_kick = 0; if (spin_search(S, lo, hi, &b0, &d0, &l0)) b0 = 1e30;
-  const int kick = !(b0 < 1e30) || bk < 0.9 * b0;
+  const int kick = !(b0 < 1e30) || bk < 0.8 * b0;
   double best = kick ? bk : b0, bd = kick ? dk : d0, bl = kick ? lk : l0, g = 0, r = 0, k = 0, c = 0;
   fit_kick = kick;
   model_x(S, bd, bl); regress(lo, hi, &g, &r, &k, &c); fit_kick = 1;
@@ -201,18 +207,21 @@ void spin_said(const spin_state *S, char *out, int cap) {
 }
 
 /* ───────── the rope lift test (spin_core.h) ───────── */
-#define LIFT_PULSE_S 0.25      /* [s] each pulse */
+#define LIFT_PULSE_S 0.6       /* [s] each pulse, long enough for slow motors to get there (read over its last quarter second) */
+#define LIFT_RING 50           /* frames a pulse is read over: its last quarter second */
+#define LIFT_BRAKE_S 0.5       /* [s] at base after a pulse, to stop it climbing, before the hold */
+#define LIFT_PULSE_DV 0.7f     /* [m/s] a pulse that has sped it up this much ends there (it would climb too far) */
 #define LIFT_REST_S 1.5        /* [s] at base after lift-off and between pulses */
-#define LIFT_OVER 1.04f        /* the accelerometer this far over its reading at rest: lifted off */
-#define LIFT_RISE 0.08f        /* [m] or the height this far up */
-#define LIFT_MAX_RISE 0.4f     /* [m] higher: stop */
-#define LIFT_AVG 40            /* frames the accelerometer is averaged over for lift-off (0.2 s) */
+#define LIFT_OVER 1.04f        /* a pulse at least this far over the reading at rest lifted it */
+#define LIFT_TAU 0.7f          /* [s] the leaky vertical speed's memory (longer than a springy rope's bounce) */
+#define LIFT_V 0.35f           /* [m/s] the leaky speed over this: lifted off (a rope's bounce: about ±0.13) */
+#define LIFT_VMAX 1.2f         /* [m/s] over this: it's flying up, stop */
 void lift_init(lift_state *L) { memset(L, 0, sizeof *L); }
 static int lift_running(const lift_state *L) { return L->phase >= LIFT_SETTLE && L->phase <= LIFT_PULSE; }
 int lift_start(lift_state *L, int n, float base, float top, float rate, float step, double t) {
   if (lift_running(L)) { fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: already running"); return -1; }
-  if (n < 1 || n > FC_MAX_MOTORS || !(base >= 0.05f && base <= 0.7f) || !(top > base && top <= 1) || !(rate >= 0.005f && rate <= 0.2f) || !(step >= 0.01f && step <= 0.2f)) {
-    fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: base 0.05 to 0.7, top above it up to 1, rate 0.005 to 0.2 a second, step 0.01 to 0.2"); L->phase = LIFT_FAILED; return -1;
+  if (n < 1 || n > FC_MAX_MOTORS || !(base >= 0.05f && base <= 0.7f) || !(top > base && top <= 1) || !(rate >= 0.005f && rate <= 0.2f) || !(step == 0 || (step >= 0.01f && step <= 0.2f))) {
+    fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: base 0.05 to 0.7, top above it up to 1, rate 0.005 to 0.2 a second, step 0 (no pulses) or 0.01 to 0.2"); L->phase = LIFT_FAILED; return -1;
   }
   lift_init(L);
   L->n = n; L->base = base; L->top = top; L->rate = rate; L->step = step; L->u = base;
@@ -233,14 +242,19 @@ int lift_tick(lift_state *L, double t, float *out) {
     if (!(gn > 1)) { lift_stop(L, "the accelerometer reads nothing at rest"); return 0; }
     L->up[0] = (float)(ux / gn); L->up[1] = (float)(uy / gn); L->up[2] = (float)(uz / gn);
     L->g_rest = (float)gn; L->alt_rest = (float)(L->a0 / L->n0);
-    L->phase = LIFT_RAMP; L->ph_t = t; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: rising from %.2f", (double)L->base);
+    L->phase = LIFT_RAMP; L->ph_t = t; L->vl = 0; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: rising from %.2f", (double)L->base);
   }
   if (L->phase == LIFT_RAMP) {
     L->u = L->base + L->rate * (float)(t - L->ph_t);
     if (L->u >= L->top) { L->phase = LIFT_DONE; L->ok = 0; fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: it didn't lift off up to %.2f", (double)L->top); return 0; }
   }
-  if (L->phase == LIFT_REST && t - L->ph_t >= LIFT_REST_S) {
-    float u = L->lift_u + (float)(L->k + 1) * L->step;
+  if (L->phase == LIFT_REST && ((L->step == 0 && t - L->ph_t >= LIFT_BRAKE_S + 0.5) || (t - L->ph_t >= LIFT_REST_S && (L->calm >= 60 || t - L->ph_t >= 4.0)))) {   /* (and the bounce died down: calm for 0.3 s) */
+    float u = L->lift_u + (float)L->k * L->step;                  /* (from lift-off up: small steps, it climbs little) */
+    if (L->step == 0) {                                            /* lift-off only: done once it has braked */
+      L->phase = LIFT_DONE; L->ok = 1;
+      fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done: lifted off at %.3f on %.2f V", (double)L->lift_u, (double)L->lift_v);
+      return 0;
+    }
     if (L->k >= LIFT_PULSES || u > L->top) {
       float top = 0; for (int i = 0; i < L->np; i++) if (L->pf[i] > top) top = L->pf[i];
       L->phase = LIFT_DONE; L->ok = top >= LIFT_OVER;
@@ -248,13 +262,16 @@ int lift_tick(lift_state *L, double t, float *out) {
       else fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: done, but no pulse lifted it (a false lift-off at %.3f?): a bigger step", (double)L->lift_u);
       return 0;
     }
-    L->phase = LIFT_PULSE; L->ph_t = t; L->u = u; L->ps = 0; L->pn = 0; L->pvs = 0;
+    L->phase = LIFT_PULSE; L->ph_t = t; L->u = u; L->pri = 0; L->dv = 0;
     fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: pulse %d at %.2f", L->k + 1, (double)u);
   }
-  if (L->phase == LIFT_PULSE && t - L->ph_t >= LIFT_PULSE_S) {
-    if (L->pn > 0) { L->pu[L->np] = L->u; L->pf[L->np] = (float)(L->ps / L->pn); L->pv[L->np] = L->pvs / (float)L->pn; L->np++; }
-    L->k++; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base;
+  if (L->phase == LIFT_PULSE && (t - L->ph_t >= LIFT_PULSE_S || L->dv > LIFT_PULSE_DV)) {
+    { const int nr = L->pri < LIFT_RING ? L->pri : LIFT_RING; double f = 0, vv = 0;   /* (its last quarter second, whenever it ended) */
+      for (int i = 0; i < nr; i++) { f += L->pring[i]; vv += L->pvring[i]; }
+      if (nr >= 20) { L->pu[L->np] = L->u; L->pf[L->np] = (float)(f / nr); L->pv[L->np] = (float)(vv / nr); L->np++; } }
+    L->k++; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base; L->calm = 0;   /* (brake at base, then the hold) */
   }
+  if (L->phase == LIFT_REST && t - L->ph_t >= LIFT_BRAKE_S) L->u = L->step == 0 ? L->base : L->hold;
   for (int i = 0; i < L->n; i++) out[i] = L->u;
   return L->n;
 }
@@ -272,22 +289,24 @@ void lift_ltel(lift_state *L, const float *lt, int n, double t) {
   /* the accelerometer along its direction at rest (an average of a vibrating vector's length reads high; along a
    * fixed direction the vibration averages out) */
   const float fm = (fx * L->up[0] + fy * L->up[1] + fz * L->up[2]);
-  const float rise = have_alt ? alt - L->alt_rest : 0;
-  if (rise > L->climb) L->climb = rise;
-  if (rise > LIFT_MAX_RISE) { L->u = L->base; lift_stop(L, "it rose 40 cm: a lower step or top"); return; }
-  if (L->phase == LIFT_RAMP && st == FC_TESTING) {
-    /* the last LIFT_AVG frames' mean (the motors shake the accelerometer: one frame says little), over the
-     * threshold for 10 frames in a row */
-    L->ring[L->ri % LIFT_AVG] = fm; L->ri++;
-    float mean = 0; const int nr = L->ri < LIFT_AVG ? L->ri : LIFT_AVG; for (int i = 0; i < nr; i++) mean += L->ring[i]; mean /= (float)nr;
-    if (nr == LIFT_AVG && mean > LIFT_OVER * L->g_rest) L->over++; else L->over = 0;
-    if (L->over >= 10 || rise > LIFT_RISE) {
-      L->lift_u = um; L->lift_v = v; L->phase = LIFT_REST; L->ph_t = t; L->u = L->base; L->k = 0;
-      fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: lifted off at %.3f", (double)um);
-    }
+  /* the vertical speed, from the accelerometer along its direction at rest less its reading then, leaking away over
+   * LIFT_TAU: the rope's bounce averages out, a lift keeps it climbing. (The barometer is no use here: the props'
+   * wash moves it tens of centimetres.) */
+  { double dt = lt[0] - L->prev_lt; if (dt < -FC_LTEL_WRAP / 2) dt += FC_LTEL_WRAP; if (!(dt > 0 && dt < 0.05)) dt = 0.005; L->prev_lt = lt[0];
+    L->vl += ((double)fm - L->g_rest - L->vl / LIFT_TAU) * dt; }
+  if (have_alt && alt - L->alt_rest > L->climb) L->climb = alt - L->alt_rest;   /* (kept, not used: see above) */
+  if (fabsf(fm / L->g_rest - 1) < 0.04f) L->calm++; else L->calm = 0;   /* (frames in a row within 4% of 1 g: not bouncing) */
+  if (L->phase == LIFT_RAMP && L->vl > LIFT_VMAX) { L->u = L->base; lift_stop(L, "it was flying up: a lower step or top"); return; }   /* (rising only: the rope catching it afterwards jerks it up too) */
+  if (L->phase == LIFT_RAMP && st == FC_TESTING && L->vl > LIFT_V) {
+    L->lift_u = um; L->lift_v = v; L->phase = LIFT_REST; L->ph_t = t; L->k = 0; L->calm = 0;
+    L->hold = 0.85f * um > L->base ? 0.85f * um : L->base; L->u = L->base;   /* (brake at base, then just under hover: it settles back onto the rope gently) */
+    fc_fmt(L->msg, (int)sizeof L->msg, "lifttest: lifted off at %.3f", (double)um);
   }
   /* a pulse: its second half (the motors have spun up), the accelerometer against its reading at rest */
-  if (L->phase == LIFT_PULSE && st == FC_TESTING && t - L->ph_t >= LIFT_PULSE_S * 0.5) { L->ps += fm / L->g_rest; L->pvs += v; L->pn++; }
+  if (L->phase == LIFT_PULSE && st == FC_TESTING) {
+    L->dv += ((double)fm - L->g_rest) * 0.005;                     /* (the speed it gained in this pulse) */
+    if (t - L->ph_t >= 0.15) { L->pring[L->pri % LIFT_RING] = fm / L->g_rest; L->pvring[L->pri % LIFT_RING] = v; L->pri++; }
+  }
 }
 void lift_said(const lift_state *L, char *out, int cap) {
   if (L->phase == LIFT_IDLE) { fc_fmt(out, cap, "lifttest: idle (lifttest BASE TOP [RATE STEP], e.g. lifttest 0.3 0.85)"); return; }

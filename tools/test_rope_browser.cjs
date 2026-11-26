@@ -4,7 +4,8 @@
 // board, as dfb_pi runs it):
 //  - the spin test: its spin-up against a thrust step measured directly, stock motors and rotors 3.3× heavier; Apply
 //    keeps it in the design (undo too), and Gains from the motors uses it;
-//  - the lift test with props 30% grippier than their cards say (a speed-limited motor lifts less than 30% more): its hover throttle against the simulated truth,
+//  - the lift test (lift-off only) with props 30% grippier than their cards say (a speed-limited motor lifts less than
+//    30% more), Forget, and an implausible result refused: its hover throttle against the simulated truth,
 //    the strength it finds, and Apply fitting the cards so that the controller's model lifts what they do.
 'use strict';
 const fs=require('fs'),path=require('path'),http=require('http'),assert=require('assert');
@@ -56,22 +57,29 @@ try{
     const ms=actuators(),rho=flightAtmosphere().rho,W=truth.m*G,real=new Map(ms.map(c=>[c.id,FlightPhysics.motor(c,designVref())]));
     renderRopeLift();document.querySelector('[data-focus-key="rlt-start"]').click();running=false;
     step(25);rltPoll();
-    assert(rlt.phase==='done'&&rlt.result&&rlt.result.pulses.length>=2,'lift test done: '+rlt.text);
+    assert(rlt.phase==='done'&&rlt.result&&rlt.result.liftU>0,'lift test done: '+rlt.text);
     for(const c of ms)c.propPhysics={...c.propPhysics,ct:c.propPhysics.ct/1.3};
     recomputeProps();
     const a=rltAnalyse(rlt.result);
     const Ttrue=u=>ms.reduce((t,c)=>{const mp=real.get(c.id);return t+FlightPhysics.equilibrium({...mp,kT:mp.kT*spreadOf(c).kT},u,a.V,rho).T;},0);
     let lo=0,hi=1;for(let i=0;i<40;i++){const m=(lo+hi)/2;if(Ttrue(m)<W)lo=m;else hi=m;}
-    out.lift={hover:+a.hoverU.toFixed(3),trueHover:+lo.toFixed(3),model:+a.hoverModel.toFixed(3),ratio:+a.ratio.toFixed(3),pulses:rlt.result.pulses};
+    const ratioTrue=W/rltBelieved(lo,a.V);
+    out.lift={liftU:rlt.result.liftU,hover:+a.hoverU.toFixed(3),trueHover:+lo.toFixed(3),model:+a.hoverModel.toFixed(3),ratio:+a.ratio.toFixed(3),ratioTrue:+ratioTrue.toFixed(3)};
     assert(Math.abs(a.hoverU-lo)<0.02,`hover ${a.hoverU} against the truth's ${lo}`);
-    const ratioTrue=a.pts.reduce((t,p)=>t+Ttrue(p.u)/p.model,0)/a.pts.length;out.lift.ratioTrue=+ratioTrue.toFixed(3);
     assert(ratioTrue>1.04,'the cards do say less than the motors give ('+ratioTrue+')');
     assert(Math.abs(a.ratio/ratioTrue-1)<0.06,`it finds how much stronger they are: ${a.ratio} against ${ratioTrue}`);
+    const ctBefore=ms.map(c=>c.propPhysics.ct);
     document.querySelector('[data-focus-key="rlt-apply"]').click();
     assert(rlt.applied&&ms.every(c=>motorMeasured(c)),'Apply marks the cards measured: '+rlt.msg);
-    const after=rltBelieved(a.pts[0].u,a.V)/a.pts[0].T;out.lift.after=+after.toFixed(3);
-    assert(Math.abs(after-1)<0.08,`after Apply the controller's model lifts what they do (${after})`);
+    const after=rltBelieved(a.hoverU,a.V)/W;out.lift.after=+after.toFixed(3);
+    assert(Math.abs(after-1)<0.03,`after Apply the controller's model holds the weight at the measured hover (${after})`);
     assert(tsgModel().measured,'Gains from the motors now counts them measured');
+    document.querySelector('[data-focus-key="rlt-forget"]').click();
+    assert(ms.every((c,i)=>c.propPhysics.ct===ctBefore[i]&&!c.thrustTest),'Forget puts the cards back');
+    // an implausible result is refused
+    rlt.result={liftU:0.25,volts:a.V,pulses:[]};rlt.applied=false;const ct0=ms.map(c=>c.propPhysics.ct);
+    assert(!rltAnalyse(rlt.result).sane,'a hover far below the model is implausible');
+    rltApply();assert(ms.every((c,i)=>c.propPhysics.ct===ct0[i])&&/Not applied/.test(rlt.msg),'and not applied');
     return out;
   });
   console.log(JSON.stringify(result));

@@ -753,12 +753,12 @@ int main(int argc, char **argv) {
             else if (len) { link_raw(link, fr, len); snprintf(reply, sizeof reply, "to the ESP32: %s (its answer: status, or the log)", line); }
             else snprintf(reply, sizeof reply, "esp32 LINE: a settings line of at most 126 characters");
           } else if (!strncmp(s, "lifttest", 8) && (!s[8] || s[8] == ' ')) {   /* the rope lift test (spin_core.h) */
-            const char *a = s + 8; while (*a == ' ') a++; float lb, lt2, lr = 0.04f, ls = 0.04f;
+            const char *a = s + 8; while (*a == ' ') a++; float lb, lt2, lr = 0.04f, ls = 0;
             fc_cmd rsc; const int radio_armed = radio_here && !rc_stick_cmd(&RCI, t, &rsc) && rsc.arm;
             const int armed = fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE);
             if (!*a) lift_said(&LFT, reply, (int)sizeof reply);
             else if (!strcmp(a, "stop")) { lift_stop(&LFT, "asked to"); lift_said(&LFT, reply, (int)sizeof reply); }
-            else if (sscanf(a, "%f %f %f %f", &lb, &lt2, &lr, &ls) < 2) snprintf(reply, sizeof reply, "lifttest BASE TOP [RATE STEP] (e.g. lifttest 0.3 0.85), lifttest stop, or lifttest (how it goes)");
+            else if (sscanf(a, "%f %f %f %f", &lb, &lt2, &lr, &ls) < 2) snprintf(reply, sizeof reply, "lifttest BASE TOP [RATE STEP] (e.g. lifttest 0.3 0.85: lift-off only; STEP 0.02: pulses above it too), lifttest stop, or lifttest (how it goes)");
             else if (!no_nav) snprintf(reply, sizeof reply, "lifttest: only in angle mode (dfb_pi --no-navigation)");
             else if (!n_mot) snprintf(reply, sizeof reply, "lifttest: no airframe (--airframe, or Upload design)");
             else if (armed || radio_armed) snprintf(reply, sizeof reply, "lifttest: disarm first");

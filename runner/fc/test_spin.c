@@ -101,11 +101,11 @@ int main(void) {
   { spin_init(&S); const float yaw[4] = { 1, -1, 1, -1 }; CHECK(spin_start(&S, 4, yaw, 0.3f, 0.5f, 0.25f, 0), "a step too big: refused"); }
   /* the lift test: a drone on a rope that hovers at uh, its thrust ∝ u^1.6 after a 40 ms spin-up; the rope holds it
    * at z = 0 (it can't go lower); the barometer 3 cm noisy */
-  for (int c = 0; c < 3; c++) {
-    const double uh = c == 0 ? 0.55 : c == 1 ? 0.45 : 0.68, m = 0.29, g = 9.81, lagT = 0.04;
+  for (int c = 0; c < 4; c++) {
+    const double uh = c == 0 ? 0.55 : c == 1 ? 0.45 : c == 2 ? 0.68 : 0.52, m = 0.29, g = 9.81, lagT = c == 3 ? 0.19 : 0.04;   /* (the last: motors as slow as the real drone's) */
     lift_state L; lift_init(&L);
-    CHECK(!lift_start(&L, 4, 0.3f, 0.95f, 0.04f, 0.04f, 0), "lift test starts");
-    double T = 0, z = 0, vz = 0, fsum = 0, asum = 0, usum = 0; int na = 0; float applied = 0;
+    CHECK(!lift_start(&L, 4, 0.3f, 0.95f, 0.04f, 0, 0), "lift test starts (lift-off only)");
+    double T = 0, z = -m * g / (m * 81) + 0.03, vz = 0, fsum = 0, asum = 0, usum = 0; int na = 0; float applied = 0;   /* (let go 3 cm high: it bounces) */
     struct { double at; float u; } q[64]; int qn = 0;
     for (int ms = 0; ms < 30000 && (L.phase != LIFT_DONE && L.phase != LIFT_FAILED); ms++) {
       double t = ms * 0.001; float o[FC_MAX_MOTORS]; int k = lift_tick(&L, t, o);
@@ -113,9 +113,12 @@ int main(void) {
       while (qn && q[0].at <= t) { applied = q[0].u; memmove(q, q + 1, sizeof q[0] * (size_t)--qn); }
       if (!k) applied = 0;
       double Tt = m * g * pow(applied / uh, 1.6); T += (Tt - T) * 0.001 / lagT;
-      double a = T / m - g; if (z <= 0 && a < 0) { a = 0; vz = 0; z = 0; }
-      vz += a * 0.001; z += vz * 0.001; if (z < 0) { z = 0; vz = 0; }
-      double f = a + g; fsum += f; asum += z; usum += applied; na++;
+      /* a springy rope (it bounces at about 1.4 Hz, a little damped), slack above where it holds the weight */
+      const double kr = m * 81, cr = 2 * 0.15 * sqrt(kr * m), zr = -m * g / kr;
+      const double rope = z < 0 ? fmax(0, -kr * z - cr * vz) : 0;
+      double a = (T + rope) / m - g;
+      vz += a * 0.001; z += vz * 0.001;
+      double f = (T + rope) / m; fsum += f; asum += z - zr; usum += applied; na++;
       if (na == 5) {
         /* (the motors shake it: the accelerometer's 5 ms averages scatter, more the faster they spin) */
         const double shake = 2.0 * applied / 0.5;
@@ -126,10 +129,9 @@ int main(void) {
       }
     }
     char said[300]; lift_said(&L, said, sizeof said); printf("  %s\n", said);
-    CHECK(L.ok && fabs(L.lift_u - uh) < 0.03, "hovers at %.2f: lifted off at %.3f", uh, L.lift_u);
-    int good = L.np >= 2; for (int i = 0; i < L.np; i++) { double want = pow(L.pu[i] / uh, 1.6); if (fabs(L.pf[i] / want - 1) > 0.04) good = 0; }
-    CHECK(good, "each pulse reads its thrust over the weight within 4%% (%d pulses)", L.np);
-    CHECK(L.climb < 0.4f, "it rose at most %.2f m", (double)L.climb);
+    CHECK(L.ok && L.lift_u > uh - 0.005 && L.lift_u < uh + 0.06, "hovers at %.2f: lifted off at %.3f (a little over)", uh, L.lift_u);
+    CHECK(L.np == 0 && fabs(L.lift_u / 1.07 / uh - 1) < 0.025, "hover %.3f from lift-off / 1.07 against %.2f", L.lift_u / 1.07, uh);
+    CHECK(L.climb < 0.45f, "it rose at most %.2f m (the rope stretched 12 cm of it)", (double)L.climb);
   }
   { lift_state L; lift_init(&L); CHECK(lift_start(&L, 4, 0.3f, 0.2f, 0.04f, 0.04f, 0), "lift: a top below the base is refused"); }
   printf(fails ? "rope spin test: %d FAILED\n" : "rope spin test: ok\n", fails);

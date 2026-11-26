@@ -51,10 +51,13 @@ void spin_said(const spin_state *S, char *out, int cap);
 /* The rope lift test: how much the motors lift, with the drone hanging on the rope. While the rope is taut the
  * accelerometer reads 1 g whatever the motors do (the rope takes the difference); once their thrust passes the
  * weight the drone rises and the accelerometer reads thrust over mass. So: every motor at the same throttle, from
- * base, rising slowly (rate per second) until it lifts off the rope (the accelerometer along its direction at rest, averaged over 0.2 s, 4% over its reading then for 50 ms,
- * or the height 8 cm up): that throttle holds the weight. Back to base at once; then short pulses (a quarter second) at
- * lift-off + step, + 2 step, ... (up to top), resting at base between: each reads thrust = mass × the accelerometer.
- * It stops when armed, swinging, turning, 40 cm up, or the telemetry stops. */
+ * base, rising slowly (rate per second) until it lifts off the rope: the accelerometer's excess over its reading at rest
+ * (along its direction then), integrated into a vertical speed that leaks away over 0.7 s, passes 0.35 m/s (a springy
+ * rope's bounce averages out; a lift keeps climbing; the barometer is no use under the props' wash). That throttle
+ * is a little over what holds the weight. Between pulses it holds just under that (it settles back gently), and each
+ * pulse waits for the bounce to die down. Then pulses (0.6 s, cut short once 0.7 m/s faster) at
+ * lift-off, + step, + 2 step (up to top), resting between: each reads thrust = mass × the accelerometer.
+ * It stops when armed, swinging, turning, flying up (the leaky speed over 1.2 m/s), or the telemetry stops. */
 #define LIFT_PULSES 3
 enum { LIFT_IDLE, LIFT_SETTLE, LIFT_RAMP, LIFT_REST, LIFT_PULSE, LIFT_DONE, LIFT_FAILED };
 typedef struct {
@@ -66,10 +69,11 @@ typedef struct {
   float alt_rest, g_rest, v_sum; int v_n;         /* their means; the pack's voltage while it lifted */
   float lift_u, lift_v;                           /* lift-off: the throttle (as the flight core sent it), the voltage */
   float pu[LIFT_PULSES], pf[LIFT_PULSES], pv[LIFT_PULSES]; int np;   /* each pulse: throttle, thrust / weight, voltage */
-  double ps; int pn; float pvs;                   /* the pulse being read: sum of the accelerometer's ratio, count, volts */
+  float pring[50], pvring[50]; int pri;           /* the pulse being read: its last frames' accelerometer ratio and volts */
   float climb;                                    /* the most it rose [m] */
   int ns; float st[SPIN_MAX], su[SPIN_MAX], sf[SPIN_MAX][3], sa[SPIN_MAX], sp[SPIN_MAX];   /* every frame: time, throttle, accelerometer, height, phase */
-  float ring[40]; int ri;                         /* the accelerometer's last frames while rising (lift-off: their mean) */
+  double vl, prev_lt;                             /* the leaky vertical speed [m/s]; the last LTEL time */
+  float hold; int calm; double dv;                /* between pulses: just under hover; frames in a row not bouncing; the speed a pulse gained */
   int ok; char msg[200];
 } lift_state;
 void lift_init(lift_state *L);
@@ -77,6 +81,6 @@ int lift_start(lift_state *L, int n, float base, float top, float rate, float st
 int lift_tick(lift_state *L, double t, float *out);
 void lift_ltel(lift_state *L, const float *lt, int n, double t);
 void lift_stop(lift_state *L, const char *why);
-/* "lifttest: ...; result LIFT_U VOLTS NP U1 F1 V1 U2 F2 V2 ..." (F: thrust / weight, V: the pack's volts) once it lifted. */
+/* step 0: lift-off only (the default: what matters most, and the least climbing). "lifttest: ...; result LIFT_U VOLTS NP U1 F1 V1 U2 F2 V2 ..." (F: thrust / weight, V: the pack's volts) once it lifted. */
 void lift_said(const lift_state *L, char *out, int cap);
 #endif

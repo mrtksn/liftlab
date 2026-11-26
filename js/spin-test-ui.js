@@ -121,7 +121,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && spt.phase 
 // each read as thrust / weight. Here: against what the flight controller believes the motors give at the same
 // throttle and voltage, how strong they really are; Apply fits the motor cards to it (the controller's model, the
 // simulator) and marks them measured (Gains from the motors then narrows its strength range).
-const rlt = { base: 0.3, top: 0.9, rate: 0.04, step: 0.04, phase: 'idle', text: '', result: null, msg: '', tone: '', timer: 0, applied: false };
+const rlt = { base: 0.3, top: 0.9, rate: 0.04, step: 0, phase: 'idle', text: '', result: null, msg: '', tone: '', timer: 0, applied: false };
 function rltParse(text) {
   const s = String(text || '').trim(); if (!/^lifttest:/.test(s)) return null;
   const m = /result ([\d.]+) ([\d.]+) (\d+)((?: [\d.]+)*)/.exec(s);
@@ -157,45 +157,67 @@ function rltStop() { if (sptWhere() === 'sim') simSpinStop(); else cardTextOut('
 // What the flight controller believes all the motors lift together at throttle u on V volts [N] (their thrust at
 // the reference voltage and curve, as its model has them).
 const rltBelieved = (u, V) => actuators().reduce((t, c) => { const e = u * (V > 0.5 ? V : designVref()) / designVref(); return t + c.tmax * believedThrust(clamp(e, 0, 1.5), curveHat(c)); }, 0);
-// The measured points: each pulse's thrust [N] (mass × its reading), and lift-off (about the weight: it triggers 4%
-// over it, a little late). { pts: [{ u, V, T, model }], ratio: measured / believed, hoverU, hoverModel }.
+// The result: the hover throttle (lift-off is a little over it: the leaky speed needs a few percent of excess thrust
+// for a moment; in the simulator and on made-up drones it comes out 7% over in throttle, steady), how strong the
+// motors are against what the flight controller believes they give there (the weight against its belief at hover),
+// and any pulses (each pulse's thrust: mass × its reading). { hoverU, hoverModel, ratio, pts, mass, V, sane }.
+const RLT_OVER = 1.07, RLT_SANE = [0.6, 1.8];
 function rltAnalyse(r) {
   const m = (model && model.m) || cfg.frame.mass, W = m * G, V = r.volts;
-  const pts = r.pulses.filter(p => p.f >= 1.03).map(p => ({ u: p.u, V: p.V || V, T: p.f * W, model: rltBelieved(p.u, p.V || V) }));   // (a pulse that didn't lift it read 1 g: the rope held it)
-  if (!pts.length) return null;
-  const ratio = pts.reduce((a, p) => a + p.T / p.model, 0) / pts.length;
-  // hover: lift-off is a little over the weight (it triggers at 4% over): back down along thrust ∝ u^k, k from the
-  // model's own curve there (about 1.5–2), the pack's voltage at lift-off
-  const k = clamp(Math.log(rltBelieved(r.liftU * 1.05, V) / rltBelieved(r.liftU, V)) / Math.log(1.05), 1.1, 3);
-  const hoverU = r.liftU * Math.pow(1.04, -1 / k);
+  if (!(r.liftU > 0)) return null;
+  const hoverU = r.liftU / RLT_OVER, ratio = W / Math.max(1e-9, rltBelieved(hoverU, V));
+  const pts = r.pulses.filter(p => p.f >= 1.04).map(p => ({ u: p.u, V: p.V || V, T: p.f * W, model: rltBelieved(p.u, p.V || V) }));   // (a pulse that read about 1 g: the rope held it)
   let lo = 0, hi = 1.2; for (let i = 0; i < 50; i++) { const mid = (lo + hi) / 2; if (rltBelieved(mid, V) < W) lo = mid; else hi = mid; }
-  return { pts, ratio, hoverU, hoverModel: lo, mass: m, V };
+  return { pts, ratio, hoverU, hoverModel: lo, mass: m, V, sane: ratio >= RLT_SANE[0] && ratio <= RLT_SANE[1] };
 }
-// Apply: each motor's card fitted to its share of the measured thrust (one undo step), marked measured.
+// The prop coefficient that makes a motor give thrust T [N] at throttle u on V volts (bisection on log ct).
+function rltCt(c, u, V, T, vref, rho) {
+  const thrust = ct => FlightPhysics.equilibrium(FlightPhysics.motor({ ...c, propPhysics: { ...c.propPhysics, ct } }, vref), u * flightDuty(c), V > 0.5 ? V : vref, rho).T;
+  let lo = Math.log(0.01), hi = Math.log(0.5);
+  if (thrust(Math.exp(hi)) < T || thrust(Math.exp(lo)) > T) return null;
+  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (thrust(Math.exp(mid)) < T) lo = mid; else hi = mid; }
+  return Math.exp((lo + hi) / 2);
+}
+// Apply: each motor's card made to hold its share of the weight at the measured hover throttle (one undo step),
+// marked measured, its old numbers kept on it (Forget puts them back). Refused when the result is implausible.
 function rltApply() {
   const r = rlt.result, a = r && rltAnalyse(r); if (!a) return;
+  if (!a.sane) { rlt.msg = `Not applied: ${a.ratio.toFixed(2)}× is not believable for motors like these (it should be between ${RLT_SANE[0]} and ${RLT_SANE[1]}). Run it again, steadier.`; rlt.tone = 'bad'; renderRopeLift(); return; }
   const ms = actuators(), n = ms.length, vref = designVref(), rho = flightAtmosphere().rho, out = [];
-  const pts = [{ u: r.liftU, V: a.V, grams: 1.04 * a.mass * 1000 / n }, ...a.pts.map(p => ({ u: p.u, V: p.V, grams: p.T / G * 1000 / n }))];
   for (const c of ms) {
-    const kind = c.motorPhysics?.kind, bend = curveHat(c);
+    const kind = c.motorPhysics?.kind;
     if (c.propPhysics?.rows) { out.push(`${c.name}: has a measured prop table, kept`); continue; }
-    const rec = { at: Date.now(), vref, bend: +bend.toFixed(3), points: pts.map(p => ({ ...p })), source: 'rope', ct: null, tmax: 0, rms: 0 };
+    const prev = c.thrustTest && c.thrustTest.source === 'rope' && c.thrustTest.prev ? c.thrustTest.prev : { ct: c.propPhysics?.ct ?? null, tmax: c.tmax };
+    const rec = { at: Date.now(), vref, bend: +curveHat(c).toFixed(3), points: [{ u: +a.hoverU.toFixed(4), V: a.V, grams: +(a.mass * 1000 / n).toFixed(1) }], source: 'rope', ct: null, tmax: 0, rms: 0, prev };
     if (kind === 'brushless' || kind === 'brushed') {
-      const ph = ThrustTest.fitPhysics(pts, (ct, u, V) => FlightPhysics.equilibrium(FlightPhysics.motor({ ...c, propPhysics: { ...c.propPhysics, ct } }, vref), u * flightDuty(c), V > 0.5 ? V : vref, rho).T);
-      if (!ph) continue;
-      rec.ct = +ph.ct.toFixed(5); c.propPhysics = { ...c.propPhysics, ct: rec.ct };
+      const ct = rltCt(c, a.hoverU, a.V, a.mass * G / n, vref, rho); if (!ct) { out.push(`${c.name}: its model can't make that thrust, kept`); continue; }
+      rec.ct = +ct.toFixed(5); c.propPhysics = { ...c.propPhysics, ct: rec.ct };
       rec.tmax = +FlightPhysics.motor(c, vref).ratedThrust.toFixed(4);
     } else { c.tmax = +(c.tmax * a.ratio).toFixed(4); rec.tmax = c.tmax; }
     c.thrustTest = rec;
   }
-  undoKey = 'rope-lift:' + Date.now();
+  rltRefresh('rope-lift');
+  rlt.applied = true;
+  rlt.msg = `Saved in the design: every motor's card now holds the drone at ${Math.round(a.hoverU * 100)}% (they lift ${a.ratio.toFixed(2)}× what they did)${out.length ? ' (' + out.join('; ') + ')' : ''}. Forget puts the old cards back. ${sptWhere() === 'live' ? 'Upload design puts the corrected model on the drone.' : 'On the real drone, Upload design puts it there.'}`;
+  rlt.tone = 'ok'; renderRopeLift();
+}
+// Forget: every card fitted on the rope back to what it was before.
+function rltForget() {
+  let k = 0;
+  for (const c of actuators()) {
+    const m = c.thrustTest; if (!m || m.source !== 'rope') continue;
+    if (m.prev) { if (m.prev.ct != null) c.propPhysics = { ...c.propPhysics, ct: m.prev.ct }; else if (m.prev.tmax > 0) c.tmax = m.prev.tmax; }
+    delete c.thrustTest; k++;
+  }
+  rltRefresh('rope-forget'); rlt.applied = false;
+  rlt.msg = k ? `Put back ${k} motor card${k > 1 ? 's' : ''} as they were before the rope.` : 'No card was fitted on the rope.'; rlt.tone = k ? 'ok' : ''; renderRopeLift();
+}
+function rltRefresh(key) {
+  undoKey = key + ':' + Date.now();
   recomputeProps(); cPts = contactPoints(); rebuildDrone(); refreshEnvelope(); renderMass();
-  for (const c of ms) refreshCard(c);
+  for (const c of actuators()) refreshCard(c);
   buildActRows(); save(); refreshTuning();
   if (typeof flightRerenderParts === 'function') flightRerenderParts();
-  rlt.applied = true;
-  rlt.msg = `Saved in the design: every motor's card now lifts ${a.ratio.toFixed(2)}× what it did${out.length ? ' (' + out.join('; ') + ')' : ''}. ${sptWhere() === 'live' ? 'Upload design puts the corrected model on the drone.' : 'On the real drone, Upload design puts it there.'}`;
-  rlt.tone = 'ok'; renderRopeLift();
 }
 
 function renderRopeLift() {
@@ -203,28 +225,31 @@ function renderRopeLift() {
   const fold = $('#spinTestFold'); if (fold && !fold.open) return;
   const where = sptWhere(), focus = document.activeElement && box.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
   box.textContent = '';
-  box.append(el('p', { class: 'hint', text: 'Every motor together rises slowly from the base throttle until the drone lifts off the rope (the accelerometer over 1 g, or the barometer up 8 cm): that throttle holds its weight. Then short pulses a little above it, each read as thrust = mass × acceleration. It rises a few centimetres each time and the rope catches it.' }));
+  box.append(el('p', { class: 'hint', text: 'Every motor together rises slowly from the base throttle until the drone lifts off the rope: the accelerometer, averaged, shows it climbing (the rope\'s bounce averages out; the barometer is no use under the props). That throttle holds its weight, a little over. Then back down at once: it rises a few tens of centimetres and the rope catches it. A pulse step above 0 adds pulses above lift-off, each read as thrust = mass × acceleration (they climb more).' }));
   const num = (key, label, min, max, step) => {
     const i = el('input', { type: 'number', class: 'num', min, max, step, inputmode: 'decimal', 'aria-label': label, 'data-focus-key': 'rlt-' + key, value: rlt[key], disabled: rlt.phase === 'run' || undefined });
     i.addEventListener('change', () => { const v = parseFloat(i.value); if (Number.isFinite(v) && v >= min && v <= max) rlt[key] = v; renderRopeLift(); });
     return el('label', { class: 'field' }, el('span', { text: label }), i);
   };
-  box.append(el('div', { class: 'tt-setup' }, num('base', 'Base throttle', 0.05, 0.7, 0.05), num('top', 'Highest', 0.3, 1, 0.05), num('rate', 'Rise (/s)', 0.005, 0.2, 0.005), num('step', 'Pulse step', 0.01, 0.2, 0.01)));
+  box.append(el('div', { class: 'tt-setup' }, num('base', 'Base throttle', 0.05, 0.7, 0.05), num('top', 'Highest', 0.3, 1, 0.05), num('rate', 'Rise (/s)', 0.005, 0.2, 0.005), num('step', 'Pulse step (0: none)', 0, 0.2, 0.01)));
   box.append(el('p', { class: 'hint', text: `The drone weighs ${Math.round(((model && model.m) || cfg.frame.mass) * 1000)} g by the design: the thrust is read against that, so weigh it if you're not sure.` }));
   box.append(el('div', { class: 'design-tools' },
     rlt.phase === 'run' ? UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'rlt-stop', text: 'Stop', onclick: rltStop })
       : UI.button({ class: 'btn sm primary', type: 'button', 'data-focus-key': 'rlt-start', disabled: where === 'down' || spt.phase === 'run' || undefined, text: rlt.result ? 'Run again' : 'Start', onclick: rltStart })));
-  if (rlt.text) box.append(el('p', { class: 'ui-status' + (rlt.phase === 'failed' ? ' bad' : rlt.phase === 'done' ? (rlt.result && rlt.result.pulses.length ? ' ok' : ' warn') : ''), role: 'status', text: (rlt.phase === 'run' ? 'Running: ' : '') + rlt.text }));
+  if (rlt.text) box.append(el('p', { class: 'ui-status' + (rlt.phase === 'failed' ? ' bad' : rlt.phase === 'done' ? (rlt.result && rlt.result.liftU > 0 ? ' ok' : ' warn') : ''), role: 'status', text: (rlt.phase === 'run' ? 'Running: ' : '') + rlt.text }));
   const a = rlt.result && rltAnalyse(rlt.result);
   if (a) {
     const pct = x => Math.round(x * 100) + '%';
     box.append(el('div', { class: 'scal-result' },
       el('p', { text: `It hovers at about ${pct(a.hoverU)} throttle on ${a.V.toFixed(2)} V; the flight controller's model says ${pct(a.hoverModel)}.` }),
-      el('p', { text: `The motors lift ${a.ratio.toFixed(2)}× what the model says${Math.abs(a.ratio - 1) > 0.1 ? ` — every correction the controller makes is ${a.ratio > 1 ? 'that much too strong' : 'that much too weak'}` : ''}.` }),
-      el('p', { class: 'hint', text: a.pts.map(p => `${pct(p.u)}: ${Math.round(p.T / G * 1000)} g (model ${Math.round(p.model / G * 1000)} g)`).join(' · ') })));
+      el('p', { class: a.sane ? '' : 'ui-status bad', text: a.sane ? `The motors lift ${a.ratio.toFixed(2)}× what the model says at hover${Math.abs(a.ratio - 1) > 0.1 ? ` — every correction the controller makes is ${a.ratio > 1 ? 'that much too strong' : 'that much too weak'}` : ''}.` : `${a.ratio.toFixed(2)}× what the model says: not believable for motors like these (it should be between ${RLT_SANE[0]} and ${RLT_SANE[1]}). The rope or the bounce fooled it: run it again, steadier.` }),
+      a.pts.length ? el('p', { class: 'hint', text: a.pts.map(p => `${pct(p.u)}: ${Math.round(p.T / G * 1000)} g (model ${Math.round(p.model / G * 1000)} g)`).join(' · ') }) : null));
   }
   if (rlt.msg) box.append(el('p', { class: 'ui-status' + (rlt.tone ? ' ' + rlt.tone : ''), role: 'status', text: rlt.msg }));
-  box.append(el('div', { class: 'design-tools' }, UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'rlt-apply', disabled: !a || rlt.applied || rlt.phase === 'run' || undefined, text: 'Apply to the motor cards', title: 'Fit every motor card to the measured thrust (one undo step)', onclick: rltApply })));
+  const fitted = actuators().some(c => c.thrustTest && c.thrustTest.source === 'rope');
+  box.append(el('div', { class: 'design-tools' },
+    UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'rlt-apply', disabled: !a || !a.sane || rlt.applied || rlt.phase === 'run' || undefined, text: 'Apply to the motor cards', title: 'Make every motor card hold the drone at the measured hover throttle (one undo step; Forget puts them back)', onclick: rltApply }),
+    fitted ? UI.button({ class: 'btn sm', type: 'button', 'data-focus-key': 'rlt-forget', disabled: rlt.phase === 'run' || undefined, text: 'Forget the rope fit', title: 'Put the motor cards back as they were before the rope', onclick: rltForget }) : null));
   if (focus) { const f = box.querySelector(`[data-focus-key="${focus}"]`); if (f && !f.disabled) f.focus(); }
 }
 document.addEventListener('toggle', e => { if (e.target && e.target.id === 'spinTestFold' && e.target.open) renderRopeLift(); }, true);

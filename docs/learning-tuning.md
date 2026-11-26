@@ -85,7 +85,10 @@ flight core's own clock; frames older than the last are dropped. The differentia
 D = mean of sign·(u − base) and the yaw rate ω are fitted as
 ω̇ = p·D(t − d) + q·x − k·θ − c·ω + b, x = D(t − d) through 1/(1 + τs), every signal averaged over the
 telemetry windows and smoothed alike. For each (d, τ) on a grid (d 0–80 ms, τ 5–300 ms, coarse then fine) the
-five coefficients are least squares; the best residual wins. g = p + q is the yaw acceleration per unit of
+coefficients are least squares on the yaw rate itself (the model integrated over time: ω = p·∫a + q·∫x − k·∫θ −
+c·θ + b·t + ω₀, so the gyro's noise isn't differentiated, and b takes a steady torque from motors that don't quite
+cancel at the base throttle); the best residual wins, and the fit is graded on what's left after that steady
+torque, the rope and the air. On the first real drone the derivative form explained 4% and this one 90%. g = p + q is the yaw acceleration per unit of
 differential throttle and r = p/g the kick: a voltage-driven brushless motor's reaction torque jumps with its
 current when the throttle steps, then settles to the drag at the new speed, with the same pole τ as its thrust
 (the simulator's toy motors: r ≈ 6–9). r is kept ≥ 0 (a negative kick would stand in for delay). The fit is
@@ -105,26 +108,28 @@ spin-ups of 28–140 ms and kicks of 0–6 through a link with 3–25 ms of vary
 ## Rope lift test
 
 Tune → Rope hang → Lift test (`spin_core.c` `lift_*`, `js/spin-test-ui.js`). Disarmed, every motor at the same
-throttle: 1.5 s at `base` (the accelerometer's magnitude and the height averaged: the reading at rest), then rising
-at `rate` per second until the accelerometer reads 4% over its rest value for three telemetry frames or the height
-is 8 cm up: lift-off, at the throttle the flight core sent then. 1.5 s back at `base`, then up to three pulses of
-0.25 s at lift-off + k·`step` (k = 1, 2, 3, not over `top`), 1.5 s at `base` between; each pulse's second half is
-averaged as thrust/weight = |f|/|f_rest| with the pack's voltage. While the rope is taut |f| is the rest value
-whatever the thrust, so only thrust over the weight is measured. Stops: armed, roll/pitch rate over 3 rad/s, yaw
-over 8 rad/s, 40 cm up, the telemetry gone.
+throttle: 1.5 s at `base` (the accelerometer's mean: its reading and direction at rest), then rising at `rate` per
+second. The accelerometer along that direction, less its reading at rest, is integrated into a vertical speed that
+leaks away over 0.7 s; lift-off is that speed passing 0.35 m/s. A springy rope's bounce averages out (±6% of g at
+1.4 Hz on the first real drone gave ±0.13 m/s), a lift keeps climbing. The barometer is not used: the props' wash
+moved it ±20–40 cm with the drone still. At lift-off the throttle drops to `base` for 0.5 s (a brake) and, with
+`step` 0 (the default), it ends. Rising stops if that speed passes 1.2 m/s.
 
-LiftLab compares each pulse's thrust (the design's mass × g × ratio) with what the flight controller believes the
-motors give at that throttle and voltage (`tmax`, `curveHat`, e = u·V/Vref): their mean ratio is the strength. The
-hover throttle is lift-off backed down 4% along the model's local curve. Apply fits each motor's card to its share
-of the pulses and of lift-off (≈ 1.04 × weight), as the scale test does (`ThrustTest.fitPhysics` for a fixed motor,
-`tmax` × the ratio for a generic one; a prop table stays), keeping the current bend, and records `thrustTest` with
-`source: 'rope'`, so `motorMeasured` holds and Gains from the motors narrows the strength range.
+Lift-off comes about 7% over the hover throttle (the excess the leaky speed needs, for a moment), steady across
+fast and slow (190 ms) motors and a bouncing rope in `test_spin.c`; LiftLab takes hover = lift-off / 1.07 and the
+strength = weight / what the flight controller believes the motors give there (`tmax`, `curveHat`, the pack's
+voltage). Apply refuses a strength outside 0.6–1.8 (the first real run read 3.39 off a barometer jump), fits each
+card (a fixed motor's prop coefficient by bisection, a generic one's `tmax`) to hold its share of the weight at
+hover, and keeps its old numbers on `thrustTest.prev`; **Forget the rope fit** puts them back.
 
-dfb_pi: `lifttest BASE TOP [RATE STEP]` (defaults 0.04 a second, 0.04), `lifttest`, `lifttest stop`; the same
-conditions as `spintest`, one rope test at a time; its result line is
-`... ; result LIFT_U VOLTS NP U1 F1 V1 U2 F2 V2 ...`. The simulator's rope (`simBenchHold('rope')`) holds the drone
-level and lets it rise: the rotors' force against its weight, caught at the height it hung from; the sensors read
-that motion. `runner/fc/test_spin.c` checks lift-off and the pulses on made-up drones hovering at 45–68%.
+With `step` > 0 it then holds 85% of lift-off (after the brake) and gives pulses at lift-off, + step, + 2 step:
+up to 0.6 s each, cut once the accelerometer says it gained 0.7 m/s, read over their last quarter second, each
+waiting for 0.3 s of calm first, braking after. They climb more and, with slow motors, read a little low.
+
+dfb_pi: `lifttest BASE TOP [RATE STEP]` (0.04 a second, step 0), `lifttest`, `lifttest stop`; result line
+`... ; result LIFT_U VOLTS NP [U F V ...]`. Each test's samples go to `rope-lift.csv` / `rope-spin.csv` beside the
+design. The simulator's rope (`simBenchHold('rope')`) holds the drone level and lets it rise: the rotors' force
+against its weight, caught where it hung; the sensors read that motion.
 
 ## Simulator autotune workflow
 
