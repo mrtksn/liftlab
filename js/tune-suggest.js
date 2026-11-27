@@ -40,10 +40,18 @@ const TuneSuggest = (() => {
   // quite match: one a few percent stronger than the others) tips it no more than tilt [rad] before the integral
   // trims it out. Too soft, and a lift-off's push tips the drone over before it catches it.
   const firmHz = (alpha, tilt = 15 * Math.PI / 180) => alpha > 0 ? Math.sqrt(alpha / tilt) / (2 * Math.PI) : 0;
+  // The firmest response a top-heavy drone needs [Hz]: its centre of mass h [m] above the props (along their thrust),
+  // mass m [kg], inertia J [kg·m²] about the softer of roll and pitch. Leaning, it slides; sliding, the props' drag
+  // (their H-force, in the rotor plane, below the weight) tips it further, at up to h·m·g/J [rad/s²] per radian of
+  // lean once the slide has built up (drag then carries the whole lean's push). The loop's stiffness kR = ωn² must
+  // beat that, or it settles at a lean and runs away (in the simulator: a 290 g toy with its battery on top, h 2.3 cm,
+  // falls over at kR 25 and holds from about 60). Below the props (h ≤ 0) the drag rights it instead: no floor.
+  const tipHz = (h, m, J) => h > 0 && m > 0 && J > 0 ? Math.sqrt(h * m * 9.81 / J) / (2 * Math.PI) : 0;
   // The gains for one loop ('rp' or 'yaw'); now: its current gains [P, D, I]; model.firm: { rp, yaw } the firmest
   // response each needs [Hz]. The quickest safe gains; or, when those are softer than it needs (or none are safe),
   // the gains at that firmness with the most margin, marked firm (with safeHz: the quickest safe one, or null).
-  // Gains that already keep the margin and are firm enough stay as they are (keep: true): this never speeds a loop up.
+  // Gains that already keep the margin and are firm enough stay as they are (keep: true): this never speeds a loop up
+  // past what it is now, or past the firmness it needs when it's softer than that.
   function suggest(loop, now, model) {
     const floor = model.firm ? model.firm[loop] || 0 : 0, jn = judge(now, model), fn = feelOf(now);
     if (jn.safe && fn.hz >= floor - 1e-9) return { ...fn, gains: now.slice(), ...jn, keep: true };
@@ -62,7 +70,8 @@ const TuneSuggest = (() => {
     const L = LOOPS[loop], top = Math.min(feelOf(now).integ, 0.8), integs = [top, 0.5, 0.3, 0.15, 0].filter((x, i, a) => x <= top + 1e-9 && a.indexOf(x) === i);
     let best = null;
     // the quickest response; at the same speed the faster integral, then the larger margin
-    const top2 = Math.min(L.hz[1], feelOf(now).hz);                   // (never quicker than now)
+    // (never quicker than now, unless now is softer than the loop needs: then up to that floor, on the grid)
+    const floor = model.firm ? model.firm[loop] || 0 : 0, top2 = Math.min(L.hz[1], Math.max(feelOf(now).hz, Math.ceil(floor / 0.025 - 1e-9) * 0.025));
     for (let hz = L.hz[0]; hz <= top2 + 1e-9; hz += 0.025) for (const integ of integs) for (const zeta of [0.8, 0.9, 1, 1.1]) {
       const g = gainsOf(hz, zeta, integ), j = judge(g, model);
       const better = !best || hz > best.hz + 1e-9 || (Math.abs(hz - best.hz) < 1e-9 && (integ > best.integ + 1e-9 || (Math.abs(integ - best.integ) < 1e-9 && j.margin > best.margin)));
@@ -72,6 +81,6 @@ const TuneSuggest = (() => {
   }
   // The model's strength range: measured on the scale (every motor) or only described.
   const strengthsFor = measured => { const r = measured ? RANGE.measured : RANGE.guessed; return [r[0], 1, r[1]]; };
-  return { RANGE, LOOPS, gainsOf, feelOf, judge, suggest, quickestSafe, firmHz, strengthsFor };
+  return { RANGE, LOOPS, gainsOf, feelOf, judge, suggest, quickestSafe, firmHz, tipHz, strengthsFor };
 })();
 if (typeof module !== 'undefined') module.exports = TuneSuggest;

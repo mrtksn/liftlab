@@ -13,8 +13,16 @@ function tsgModel() {
   const ms = actuators(), lags = ms.map(c => ({ c, lag: motorSpinUp(c) })), slow = lags.reduce((a, b) => b.lag > a.lag ? b : a, lags[0] || { lag: 0.03 });
   const measured = ms.length > 0 && ms.every(c => motorMeasured(c));
   const mt = cfg.motorTiming, lag = tsg.lag ?? (mt ? mt.lag : slow.lag), delay = tsg.delay ?? (mt ? mt.delay : 0.012), spread = measured ? 0.02 : 0.06, alpha = tsgPush(spread);
+  const tip = tsgTip(), mismatchHz = TuneSuggest.firmHz(alpha);
   return { lag, lagFrom: tsg.lag == null ? (mt ? 'rope' : slow.c ? slow.c.name : '') : 'typed', delay, delayFrom: tsg.delay == null ? (mt ? 'rope' : 'assumed') : 'typed', measured, strengths: TuneSuggest.strengthsFor(measured),
-    spread, alpha, firm: { rp: TuneSuggest.firmHz(alpha) } };
+    spread, alpha, mismatchHz, tipH: tip.h, tipHz: tip.hz, firm: { rp: Math.max(mismatchHz, tip.hz) } };
+}
+// How top-heavy it is: the centre of mass's height above the props along their thrust (the hover's share of each),
+// and the firmness that takes (TuneSuggest.tipHz), about the softer of roll and pitch.
+function tsgTip() {
+  const ms = actuators(); if (!ms.length || typeof model === 'undefined' || !model) return { h: 0, hz: 0 };
+  let h = 0; for (const c of ms) { const r = rotorNow(c, restAngle); h += dot(sub(model.c, r.p), r.d) / ms.length; }
+  return { h, hz: TuneSuggest.tipHz(h, model.m, Math.min(model.J[0], model.J[4])) };
 }
 // The steady push [rad/s²] of one motor lifting spread (a fraction) more than the model says, hovering: its share of
 // the weight times its lever about the centre of mass, over the inertia, the worst motor about the worse axis.
@@ -23,6 +31,14 @@ function tsgPush(spread) {
   const Th = model.m * G / ms.length; let a = 0;
   for (const c of ms) { const r = sub(rotorNow(c, restAngle).p, model.c); a = Math.max(a, spread * Th * Math.abs(r[1]) / model.J[0], spread * Th * Math.abs(r[0]) / model.J[4]); }
   return a;
+}
+// Why roll and pitch need the firmness they do (m: tsgModel): top-heavy, or motors that don't quite match; short:
+// what goes wrong when softer.
+function tsgFirmWhy(m, short = false) {
+  const mis = `it has to hold a motor lifting ${Math.round(m.spread * 100)}% more than the others within 15° until the integral trims it`;
+  const tip = `its weight sits ${(m.tipH * 100).toFixed(1)} cm above the props, so once it leans and slides, the props' drag below the weight tips it further`;
+  if (short) return m.tipHz >= m.mismatchHz ? `${tip}, and softer it settles at a lean and runs away until it falls` : `a lift-off's push from motors that differ by ${Math.round(m.spread * 100)}% would tip it over`;
+  return m.tipHz >= m.mismatchHz ? `${tip} (${m.tipHz.toFixed(2)} Hz is what beats that)${m.mismatchHz ? `; and ${mis} (${m.mismatchHz.toFixed(2)} Hz)` : ''}` : `${mis}${m.tipHz ? `; it's also top-heavy (weight ${(m.tipH * 100).toFixed(1)} cm above the props: ${m.tipHz.toFixed(2)} Hz)` : ''}`;
 }
 const tsgNow = (t, L) => { const a = L.axes[0]; return [t.att.kR[a], t.att.kW[a], t.att.kI[a]]; };
 const tsgFeel = g => { const f = TuneSuggest.feelOf(g); return `${f.hz.toFixed(2)} Hz, damping ${f.zeta.toFixed(2)}, integral ${f.integ.toFixed(2)}`; };
@@ -53,25 +69,27 @@ function renderTuneSuggest(msg = '') {
     m.lagFrom === 'typed' ? 'Spin-up: as typed.' : m.lagFrom === 'rope' ? 'Spin-up: measured on the rope (Rope spin test).' : `Spin-up: the slowest motor near hover (${m.lagFrom}), from its physical model (KV, resistance, rotor inertia, prop); the Rope spin test measures it.`,
     m.delayFrom === 'typed' ? 'Delay: as typed.' : m.delayFrom === 'rope' ? 'Delay: measured on the rope, and a control step.' : 'Delay: a control step, the ESC\'s pulse and the gyro\'s filter, assumed (the Rope spin test measures it).',
     m.measured ? `Strength: measured on the scale, so known within ${Math.round((1 - m.strengths[0]) * 100)}%.` : `Strength: only described on the motor cards, so the real motors may be anywhere from ${m.strengths[0]}× to ${m.strengths[2]}× as strong; the gains must keep a margin across all of it (Motor thrust measures it).`,
-    m.firm.rp ? `Roll and pitch must also be firm enough (${m.firm.rp.toFixed(2)} Hz or more) to hold a motor lifting ${Math.round(m.spread * 100)}% more than the others within 15° until the integral trims it.` : '',
+    m.firm.rp ? `Roll and pitch must also be firm enough (${m.firm.rp.toFixed(2)} Hz or more): ${tsgFirmWhy(m)}.` : '',
   ].join(' ') }));
   const sugs = TSG_LOOPS.map(L => { const now = tsgNow(t, L); return { L, now, j: TuneSuggest.judge(now, m), s: TuneSuggest.suggest(L.id, now, m) }; });
   const list = el('div', { class: 'tsg-loops' });
   for (const { L, now, j, s } of sugs) {
     const hold = g => L.id === 'rp' && m.alpha > 0 ? `; a ${Math.round(m.spread * 100)}% motor mismatch tips it ${Math.round(m.alpha / g[0] * 180 / Math.PI)}° until the integral trims it` : '';
     const deg = x => x == null ? 'no' : `${Math.round(x)}°`, margins = (x, g) => `${deg(x.nominal)} margin as described, ${deg(x.margin)} at worst${g ? hold(g) : ''}`;
-    const nm = j.nominal ?? -90, nowTone = j.safe ? 'ok' : nm < 15 ? 'bad' : 'warn';
+    const nm = j.nominal ?? -90, nowTone = j.safe && !(L.id === 'rp' && TuneSuggest.feelOf(now).hz < m.firm.rp - 1e-9) ? 'ok' : nm < 15 || (L.id === 'rp' && m.tipHz > TuneSuggest.feelOf(now).hz + 1e-9) ? 'bad' : 'warn';
     const why = nm < 15 ? 'expect it to overshoot and shake' : nm < 30 || (j.margin ?? -90) < 20 ? 'bouncy, little room for noise, wind or motors stronger than described'
       : !j.integralOk ? 'its integral is too quick for this response: a slow swing after each push'
       : j.peak > 1.35 ? `it overshoots (peaks ${j.peak.toFixed(2)}× in its response)` : 'it magnifies disturbances near its own speed';
-    const nowText = j.safe ? `within the limits: ${margins(j, now)}` : `${margins(j)} (${j.at}× strength)${hold(now)}: ${why}`;
+    const soft = L.id === 'rp' && TuneSuggest.feelOf(now).hz < m.firm.rp - 1e-9;   // (softer than it needs: it can't hold the drone)
+    const nowText = soft ? `too soft (${m.firm.rp.toFixed(2)} Hz or more needed): ${tsgFirmWhy(m, true)}`
+      : j.safe ? `within the limits: ${margins(j, now)}` : `${margins(j)} (${j.at}× strength)${hold(now)}: ${why}`;
     const sugText = !s ? 'Nothing keeps a margin: motors this slow (or this much delay) can\'t be held with these laws. Check the spin-up and the delay.'
-      : s.keep ? 'Keep these: within the limits, and firm enough.' : `Suggested: ${tsgFeel(s.gains)} · ${margins(s, s.gains)}. Softer holds less firmly: in gusts it wanders more, so fly it gently at first.`;
+      : s.keep ? 'Keep these: within the limits, and firm enough.' : `Suggested: ${tsgFeel(s.gains)} · ${margins(s, s.gains)}. ${s.hz > TuneSuggest.feelOf(now).hz + 1e-9 ? 'Firmer than now, as much as it needs to hold the drone and no more.' : 'Softer holds less firmly: in gusts it wanders more, so fly it gently at first.'}`;
     list.append(el('div', { class: 'tt-motor tsg-loop' },
       el('div', { class: 'scal-pose-h' }, el('b', { text: L.label })),
       el('p', { class: 'hint' }, el('span', { text: 'Now: ' + tsgFeel(now) + ' · ' }), el('span', { class: 'ui-status ' + nowTone, text: nowText })),
       el('p', { class: 'hint' + (s ? '' : ' warn'), text: sugText }),
-      s && s.firm ? el('p', { class: 'hint warn', text: `A compromise: ${s.safeHz ? `gains up to ${s.safeHz.toFixed(2)} Hz would keep the full margin` : 'no gains keep the full margin'}, but that soft it can't hold motors that differ by ${Math.round(m.spread * 100)}%: a lift-off's push would tip it over (${m.firm.rp.toFixed(2)} Hz is the least that keeps it within 15°). ${m.measured ? 'Quicker motors or less delay would help.' : 'Measuring the motors (Motor thrust) narrows the strength range and buys margin.'}` }) : null));
+      s && s.firm ? el('p', { class: 'hint warn', text: `A compromise: ${s.safeHz ? `gains up to ${s.safeHz.toFixed(2)} Hz would keep the full margin` : 'no gains keep the full margin'}, but that soft it can't hold it: ${tsgFirmWhy(m, true)} (${m.firm.rp.toFixed(2)} Hz is the least). ${m.measured ? 'Quicker motors or less delay would help.' : 'Measuring the motors (Motor thrust) narrows the strength range and buys margin.'}` }) : null));
   }
   box.append(list);
   if (msg) box.append(el('p', { class: 'ui-status ok', role: 'status', text: msg }));

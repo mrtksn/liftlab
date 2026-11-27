@@ -34,6 +34,14 @@ const y = S.suggest('yaw', DEF.yaw, slow); assert(y && y.hz >= 0.2 && y.hz <= 3,
   assert(f.firm && f.hz >= 0.85 && f.safeHz === (q0 && q0.hz) && f.safeHz < 0.85, `marked firm at ${f.hz} (safe up to ${f.safeHz})`);
   assert(f.nominal < 30, `its margin is said (${f.nominal})`);
   const q = S.suggest('rp', DEF.rp, { ...model(0.025, 0.008, false), firm: { rp: floor } }); assert(!q.firm && q.hz > floor, 'quick motors: no compromise'); }
+// top-heavy: the weight above the props sets a floor (the 290 g toy with its battery on top: h 2.3 cm, J 0.00087),
+// below them none; gains softer than it (kR 25, as Tune once suggested for it) are sped up to it, plainly when that's safe
+{ const tip = S.tipHz(0.023, 0.297, 0.00087); assert(tip > 1.3 && tip < 1.5, `tipping floor ${tip}`);
+  assert(S.tipHz(-0.02, 0.297, 0.00087) === 0, 'weight below the props: no floor');
+  const m = { ...model(0.022, 0.012, false), firm: { rp: tip } }, soft = [25.27, 6.53, 20.21];
+  const s = S.suggest('rp', soft, m); assert(s && !s.keep && !s.firm && s.hz >= tip && s.safe, `too soft: sped up to ${s && s.hz} Hz, safe`);
+  assert(s.hz <= Math.ceil(tip / 0.025) * 0.025 + 1e-9, `no quicker than the floor needs (${s.hz})`);
+  const d = S.suggest('rp', DEF.rp, m); assert(d.keep, 'the defaults, firm enough and safe, are kept'); }
 // the round trip of the feel
 const f = S.feelOf(S.gainsOf(1.2, 0.9, 0.5)); assert(Math.abs(f.hz - 1.2) < 1e-9 && Math.abs(f.zeta - 0.9) < 1e-9 && Math.abs(f.integ - 0.5) < 1e-9);
 console.log(`tune suggest: ok (slow guessed ${sug.hz.toFixed(2)} Hz ζ ${sug.zeta}, margin ${sug.margin.toFixed(0)}°; measured ${meas.hz.toFixed(2)} Hz; defaults' worst margin ${sNow.margin == null ? 'none' : sNow.margin.toFixed(0) + '°'})`);
