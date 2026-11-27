@@ -68,6 +68,7 @@ int rc_stick_cmd(const rc_input *in, double t, fc_cmd *c);
 typedef struct {
   float target[3], vref[3], heading;     /* the navigation's target, from home [m]; its velocity; heading [rad] */
   int have_target, fly, arm, level;
+  float takeoff_h;                        /* the height a take-off climbs to, and home is flown back at [m above home]; 0: 1.5 m */
   int hold_was, home_was; uint32_t cmd_seen;
   int learn_req;                          /* a LEARN command came: its code, for the learning (the board passes it on) */
   pickup_state pk;                        /* a PICKUP under way (its requests to the cargo task: pk.nreq, the board passes them on) */

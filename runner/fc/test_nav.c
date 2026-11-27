@@ -196,6 +196,7 @@ int main(int argc, char **argv) {
     CHECK(B.p[2] < 0.05 && vmin > -1.2 && hypot(B.p[0] - x0, B.p[1] - y0) < 0.8 && F.state == FC_ARMED && !NO.fly && !N.fly_land && !N.landed,
           "lands where it is (%.2f m off, fastest descent %.2f m/s), then idles, still armed (%s; %s)", hypot(B.p[0] - x0, B.p[1] - y0), -vmin, F.why, N.why);
     fly(1); CHECK(B.p[2] < 0.05, "and stays on the ground (z %.2f)", B.p[2]);
+    CHECK(NO.have_home, "with a GPS fix the home stays where it was: a place, not the estimate's drift");
     SP.target[0] = (float)NO.p[0]; SP.target[1] = (float)NO.p[1]; SP.target[2] = 1.5f; SP.fly = 1; fly(6);
     CHECK(fabs(B.p[2] - 1.5) < 0.3, "\"fly\" on again: takes off (z %.2f)", B.p[2]);
     SP.fly = 0; fly(0.5); SP.fly = 1; fly(4);
@@ -220,6 +221,10 @@ int main(int argc, char **argv) {
   SP.target[2] = 1.2f; fly(8);
   CHECK(fabs(B.p[2] - 1.2) < 0.3 && herr() < 0.6, "back down where the rangefinder sees again: z %.2f, %.2f m off", B.p[2], herr());
   range_max = 1e9;
+  { SP.fly = 0; for (int k = 0; k < 800 && (N.fly_land || NO.fly); k++) fly(0.01);
+    fly(1); CHECK(B.p[2] < 0.05 && !NO.have_home && NO.p[0] == 0 && NO.p[1] == 0, "on flow, landed, it lets its home go (z %.2f): the next take-off is from where it stands, not a fly back over the drift since", B.p[2]);
+    SP.target[0] = 0; SP.target[1] = 0; SP.target[2] = 1.2f; SP.fly = 1; fly(6);
+    CHECK(NO.have_home && fabs(B.p[2] - 1.2) < 0.3 && hypot(NO.p[0], NO.p[1]) < 0.4, "takes off again from there to (0, 0) of its new home: %.2f m from it, z %.2f", hypot(NO.p[0], NO.p[1]), B.p[2]); }
 
   printf("a map (map_core.h): a wall ahead, the drone placed in it by hand\n");
   { static map_grid M; static uint8_t cells[80 * 60 * 30], file[40000]; const int n[3] = { 80, 60, 30 }; const float o[3] = { -4, -3, 0 };

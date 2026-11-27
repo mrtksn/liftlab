@@ -46,7 +46,7 @@ int flow_in_reading(flow_in *FI, const char *s, double t) {
   if (strncmp(s, "flow ", 5)) return 0;
   int n = sscanf(s + 5, "%lf %f %f %f %f %f %f %f %f %d %f %f %f %u %f %d", &r.t, &r.dt, &r.f[0], &r.f[1], &r.q, &dx, &dy, &FI->exp_ms, &FI->gain, &mean, &tex, &res, &FI->proc, &seq, &radpx, &mir);
   if (n < 5) return 0;
-  FI->last = r; FI->t_rx = t; FI->mean = (float)mean; if (radpx > 0) FI->rad_px = radpx;
+  FI->last = r; FI->t_rx = t; FI->mean = (float)mean; if (n >= 12) { FI->tex = tex; FI->resid = res; } if (radpx > 0) FI->rad_px = radpx;
   if (!FI->n++) FI->t_first = t;
   if (r.q > 0) FI->n_good++;
   if (FI->cal_on && r.q >= 0.3f && r.dt > 0 && r.dt < 0.1) {      /* (waits for the gyro after it: the latest delay tried) */

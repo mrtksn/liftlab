@@ -43,6 +43,16 @@ int main(void) {
     CHECK(P.have_target && P.target[1] == -2, "and the radio's pilot keeps it");
     memset(&sp, 0, sizeof sp); sp.fly = 1; sp.target[0] = 9; rc_who_sp(&P, &o, 0, &sp);
     CHECK(!sp.fly && sp.target[0] == 9, "disarmed: not flying, the target left alone"); }
+  /* landed after the sticks flew it, the navigation lets its home go on the ground: the next fly takes off from where
+   * it stands (its new home), to the take-off height set, not to the old target in the old home's terms */
+  { rc_pilot P; rc_pilot_init(&P); P.takeoff_h = 0.6f; P.have_target = 1; P.target[0] = -25; P.target[1] = 25; P.target[2] = 1.5f;
+    static nav_state N2; nav_out o; memset(&o, 0, sizeof o); nav_sp sp; memset(&sp, 0, sizeof sp);
+    rc_input in; memset(&in, 0, sizeof in); in.frames = 1;
+    in.ch[RC_FLY] = -1;                                                           /* (sticks centred: no move asked) */
+    in.t_ch = 1.0; rc_pilot_step(&P, &in, 1.0, &N2, &o, 0.01f, &sp);                 /* on the ground, no home, fly off */
+    in.ch[RC_FLY] = 1; in.t_ch = 1.01; rc_pilot_step(&P, &in, 1.01, &N2, &o, 0.01f, &sp);
+    CHECK(P.have_target && P.target[0] == 0 && P.target[1] == 0 && fabsf(P.target[2] - 0.6f) < 1e-6f && fabsf(sp.target[2] - 0.6f) < 1e-6f,
+          "fly on after a landing: takes off from where it stands to its take-off height (target %.1f %.1f %.2f; set point %.2f, have %d)", (double)P.target[0], (double)P.target[1], (double)P.target[2], (double)sp.target[2], P.have_target); }
   if (fails) { printf("who: %d checks failed\n", fails); return 1; }
   printf("who: all checks passed\n");
   return 0;

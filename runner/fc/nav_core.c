@@ -296,7 +296,14 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   /* "fly" off in the air: it lands where it is first (idling there it would drop); back on, it flies on */
   if (!sp->fly && N->last.fly && !N->fly_land) { N->fly_land = 1; say(N, "fly off in the air: landing"); }
   if (sp->fly && N->fly_land) { N->fly_land = 0; if (N->sup_mode < 2 && !N->rc_rth) { N->auto_on = 0; N->auto_land = 0; } }
-  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); N->zc = N->p[2]; N->climbed = 0; return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
+  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) {   /* on the ground (or not ready to leave it): nothing to steer */
+    memset(N->iPos, 0, sizeof N->iPos); N->zc = N->p[2]; N->climbed = 0;
+    /* each take-off is from home: on the ground the estimate (the accelerometer's, between fixes) drifts, metres a
+     * minute, and a home kept from the last flight would send it to fly that drift back as it lifts off. A home from a
+     * map fix is a place in the map, not the estimate's: that one stays */
+    if (!sp->fly && !N->fly_land && N->have_home && !N->home_from_fix) N->have_home = 0;
+    return 0;
+  }
 
   /* the supervisor's return home and landing, and the landing for "fly" off: it moves the target itself, as the
    * pilot would, within the limits */

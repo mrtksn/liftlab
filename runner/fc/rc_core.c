@@ -52,7 +52,8 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
     if (N->landed && !P->arm) { nav_land_reset(N); P->fly = 0; P->have_target = 0; P->landed_was = 0; }
     P->level = in->ch[RC_LEVEL] < -0.33f ? 0 : in->ch[RC_LEVEL] > 0.33f ? 2 : 1;
     int fly = in->ch[RC_FLY] > 0;
-    if (fly && !P->fly && !P->have_target) { P->target[0] = o->p[0]; P->target[1] = o->p[1]; P->target[2] = 1.5f; P->heading = N->map.yaw; P->have_target = 1; }   /* (it takes off facing the way it stands: not turning to a heading of 0 on the way up) */
+    if (!o->have_home && !fly) P->have_target = 0;    /* (on the ground the navigation lets its home go: a target from before is in the old home's terms) */
+    if (fly && !P->fly && !P->have_target) { P->target[0] = o->p[0]; P->target[1] = o->p[1]; P->target[2] = P->takeoff_h > 0 ? P->takeoff_h : 1.5f; P->heading = N->map.yaw; P->have_target = 1; }   /* (it takes off facing the way it stands: not turning to a heading of 0 on the way up) */
     if (!fly && P->fly) {                              /* (the next "fly" starts where the drone is then) */
       P->have_target = 0;
       if (o->fly) say(P, "fly switch off: landing");   /* (the navigation lands it, then idles) */
@@ -76,7 +77,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
     int hold = in->ch[RC_HOLD] > 0.5f, home = in->ch[RC_HOME] > 0.5f;
     if ((hold && !P->hold_was) || (home && !P->home_was)) { pickup_cancel(&P->pk, hold ? "hold" : "home"); mis_stop(P, hold ? "hold" : "home"); }
     if (hold && !P->hold_was && o->have_home) { for (int k = 0; k < 3; k++) { P->target[k] = o->p[k]; P->vref[k] = 0; } P->target[2] = clampf_(P->target[2], BOX_ZLO, BOX_ZHI); }
-    if (home && !P->home_was) { P->target[0] = P->target[1] = 0; P->target[2] = 1.5f; for (int k = 0; k < 3; k++) P->vref[k] = 0; }
+    if (home && !P->home_was) { P->target[0] = P->target[1] = 0; P->target[2] = P->takeoff_h > 0 ? P->takeoff_h : 1.5f; for (int k = 0; k < 3; k++) P->vref[k] = 0; }
     P->hold_was = hold; P->home_was = home;
   }
   /* the sticks move the target (not while the navigation flies home or lands by itself) */

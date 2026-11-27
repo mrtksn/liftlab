@@ -68,6 +68,8 @@
  *                   | --radio serial,115200 --crsf /dev/ttyAMA1 [--bind PHRASE]]
  *                  [--latch pwm0,gpio17 [--latch-us 1000,2000]]
  * While the radio's channels come, they fly it; the text commands are for when there is no radio.
+ * --takeoff-height H: the height a take-off climbs to, and home is flown back at [m above home] (default 1.5): an
+ *   optical-flow drone flies where its camera reads the floor best (the flight recorder's flow columns show where).
  * --no-navigation (the design's Pi without the Navigation task: a drone with no position sensor, indoors): angle
  * mode. The radio's sticks go to the ESP32 as they are (fc/rc_core.h rc_stick_cmd, as the simulator's receiver board
  * makes them): the sticks lean it and turn it, the throttle's middle holds the height on the barometer. The estimate,
@@ -189,6 +191,7 @@ static void gps_read(gps_t *G, int fd) {
 
 /* ── the pilot ── */
 typedef struct { int arm, fly, landing; nav_sp sp; } pilot_t;
+static float takeoff_h = 1.5f;   /* --takeoff-height: where a take-off (the radio's fly switch, the text takeoff) climbs to */
 static void pilot_line(pilot_t *P, nav_state *N, const nav_out *o, char *s, char *reply, size_t rn) {
   float a, b, c; reply[0] = 0;
   if (!strncmp(s, "arm", 3)) {
@@ -197,7 +200,7 @@ static void pilot_line(pilot_t *P, nav_state *N, const nav_out *o, char *s, char
   }
   else if (!strncmp(s, "disarm", 6)) { P->arm = 0; P->fly = 0; snprintf(reply, rn, "disarmed"); }
   else if (!strncmp(s, "takeoff", 7)) {
-    float h = 1.5f; sscanf(s + 7, "%f", &h);
+    float h = takeoff_h; sscanf(s + 7, "%f", &h);
     if (!P->arm) snprintf(reply, rn, "arm first");
     else { P->fly = 1; P->landing = 0; P->sp.target[0] = o->p[0]; P->sp.target[1] = o->p[1]; P->sp.target[2] = h; P->sp.fly = 1; snprintf(reply, rn, "taking off to %.1f m", h); }
   }
@@ -528,6 +531,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--no-learning")) { no_learn = 1; continue; }
     if (!strcmp(argv[i], "--no-supervisor")) { no_super = 1; continue; }
     if (!strcmp(argv[i], "--no-navigation")) { no_nav = 1; continue; }
+    if (!strcmp(argv[i], "--takeoff-height") && i + 1 < argc) { takeoff_h = (float)atof(argv[++i]); if (!(takeoff_h >= 0.2f && takeoff_h <= 15)) { fprintf(stderr, "--takeoff-height: 0.2 to 15 m\n"); return 2; } continue; }
     if (i + 1 >= argc) break;
     if (!strcmp(argv[i], "--link")) link_dev = argv[++i]; else if (!strcmp(argv[i], "--mqtt-id")) mqtt_id = argv[++i]; else if (!strcmp(argv[i], "--baud")) baud = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--gps")) gps_dev = argv[++i]; else if (!strcmp(argv[i], "--gps-baud")) gps_baud = atoi(argv[++i]);
@@ -662,7 +666,7 @@ int main(int argc, char **argv) {
   }
   const int radio_here = R != 0;                    /* (the radio's end here: its fd may be −1, an nRF24L01's or two links') */
   static tlm_store TS; static tlm_watch TW; static rc_input RCI; static crsf_parser CP; static rc_pilot RP;
-  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP);
+  tlm_init(&TS); tlm_watch_init(&TW); rc_pilot_init(&RP); RP.takeoff_h = takeoff_h;
   double tlm_want = -10, next_pub = 0, next_radio = 0, next_pack = 0; nav_sp last_sp; memset(&last_sp, 0, sizeof last_sp);
   int gps = gps_dev ? open_serial(gps_dev, gps_baud) : -1;
   int udp = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1110,21 +1114,27 @@ int main(int argc, char **argv) {
           char name[64]; time_t now = time(NULL); struct tm tmv; localtime_r(&now, &tmv);
           mkdir("flights", 0755); strftime(name, sizeof name, "flights/flight-%Y%m%d-%H%M%S.csv", &tmv);
           rec = fopen(name, "w");
-          if (rec) { fprintf(rec, "t,fc_t,fc_state,roll_deg,pitch_deg,yaw_deg,wx,wy,wz,ax,ay,az,baro,have_flow,fx,fy,fq,range,px,py,pz,vx,vy,vz,tx,ty,tz,spx,spy,spz,accx,accy,accz,fly,pos_ok,sticks,guard,map_aligned,level_h,level_v\n");
-                     printf("flight recorder: %s\n", name); }
+          if (rec) { fprintf(rec, "t,fc_t,fc_state,roll_deg,pitch_deg,yaw_deg,wx,wy,wz,ax,ay,az,baro,have_flow,fx,fy,fq,range,px,py,pz,vx,vy,vz,tx,ty,tz,spx,spy,spz,accx,accy,accz,fly,pos_ok,sticks,guard,map_aligned,level_h,level_v,"
+                                  "flow_q_raw,flow_age,flow_tex,flow_resid,flow_mean,flow_exp_ms,flow_gain,tel_age");
+                     for (int i = 0; i < (n_mot ? n_mot : 4) && i < 20; i++) fprintf(rec, ",m%d", i + 1);   /* (the ESP32's motor commands, in the airframe's order) */
+                     fprintf(rec, "\n"); printf("flight recorder: %s\n", name); }
           system("ls -1t flights/flight-*.csv 2>/dev/null | tail -n +31 | xargs -r rm -f");   /* (the last 30 flights) */
         }
         if (rec) {
           float R9[9]; { float w = in.q[0], x = in.q[1], y = in.q[2], z = in.q[3];
             R9[0] = 1 - 2 * (y * y + z * z); R9[3] = 2 * (x * y + w * z); R9[6] = 2 * (x * z - w * y); R9[7] = 2 * (y * z + w * x); R9[8] = 1 - 2 * (x * x + y * y); }
           const double D = 57.29578;
-          fprintf(rec, "%.3f,%.3f,%d,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.3f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%.1f,%.1f\n",
+          fprintf(rec, "%.3f,%.3f,%d,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.3f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%.1f,%.1f",
                   t, (double)v[0], (int)fc_state, atan2(R9[7], R9[8]) * D, -asin(R9[6] < -1 ? -1 : R9[6] > 1 ? 1 : R9[6]) * D, atan2(R9[3], R9[0]) * D,
                   (double)in.w[0], (double)in.w[1], (double)in.w[2], (double)in.acc[0], (double)in.acc[1], (double)in.acc[2], (double)in.baro_alt,
                   in.have_flow, (double)in.flow[0], (double)in.flow[1], (double)in.flow_q, (double)in.range,
                   (double)o.p[0], (double)o.p[1], (double)o.p[2], (double)o.v[0], (double)o.v[1], (double)o.v[2], (double)o.target[0], (double)o.target[1], (double)o.target[2],
                   (double)P.sp.target[0], (double)P.sp.target[1], (double)P.sp.target[2], (double)o.acc[0], (double)o.acc[1], (double)o.acc[2],
                   o.fly, o.pos_ok, sticks, o.guard, N.map.aligned, (double)P.sp.vmax[0], (double)P.sp.vmax[1]);
+          /* the flow as dfb_flow had it (before the 0.2 cut above): why a reading was poor, or none came */
+          fprintf(rec, ",%.2f,%.3f,%.4f,%.3f,%.0f,%.1f,%.1f,%.2f", (double)FI.last.q, FI.n ? t - FI.t_rx : -1.0, (double)FI.tex, (double)FI.resid, (double)FI.mean, (double)FI.exp_ms, (double)FI.gain, t - tl_t < 1e8 ? t - tl_t : -1.0);
+          for (int i = 0; i < (n_mot ? n_mot : 4) && i < 20; i++) fprintf(rec, ",%.3f", (double)tl[16 + i]);
+          fprintf(rec, "\n");
           static double flushed; if (t - flushed > 1) { fflush(rec); flushed = t; }
           if (t > rec_until) { fclose(rec); rec = NULL; }
         }

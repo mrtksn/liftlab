@@ -24,7 +24,7 @@ typedef struct { double t; float dt, f[2], q; } flow_reading;
 
 typedef struct {
   flow_reading last; double t_rx, t_first; long n, n_good;
-  float exp_ms, gain, mean, proc; float rad_px;   /* (as dfb_flow reports them) */
+  float exp_ms, gain, mean, proc, tex, resid; float rad_px;   /* (as dfb_flow reports them) */
   double gt[FLOW_GYRO_N]; float gw[FLOW_GYRO_N][3]; int gn, gi; double t_nav;
   flow_reading pend[FLOW_PEND_N]; int pn;
   int cal_on; long cal_n; float cal_wmax;

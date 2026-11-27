@@ -181,6 +181,14 @@ the sticks as in angle mode: they lean it and turn it, the throttle's middle hol
 the position back for a second it takes over again where the drone is (in the air, only while the fly switch is on:
 with it off it would land it). Each handover is said (`position lost: the sticks fly it`, `position hold: holding
 here`), in the log and down the radio. The motor and rope tests take the sticks' way while they run, disarmed.
+
+Each take-off is from home: on the ground the navigation lets its home go (between fixes the estimate drifts, metres a
+minute, while it sits there), and takes it again where the drone stands as it lifts off. A home from a GPS fix stays.
+`--takeoff-height H` sets how high a take-off climbs (the radio's fly switch, the text `takeoff`; default 1.5 m): a
+flow drone flies best where its camera reads the floor best. The flight recorder (`flights/flight-*.csv` beside the
+design's files, the last 30) has the flow as dfb_flow gave it (`flow_q_raw`, `flow_age`, `flow_tex`, `flow_resid`,
+`flow_mean`, `flow_exp_ms`, `flow_gain`) and the ESP32's motor commands (`m1`…, in the airframe's order) beside what the
+navigation believed and asked for: where the flow gets poor (height, light, blur), and what the motors did about a lean.
 LiftLab's install guide (Computers → the Pi → Install) gives both programs' commands: `flight` with `--range`, and
 `flow` with the camera's settings.
 
