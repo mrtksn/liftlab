@@ -130,3 +130,31 @@ int file_rx_line(file_rx *R, const char *line, char *r, int cap) {
   fc_fmt(r, cap, "file %s: %d bytes in %d pieces, send them", name, (int)size, (int)file_rx_pieces(size));
   return 1;
 }
+
+static void b64(const uint8_t *b, int n, char *o) {
+  static const char A[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  int k = 0;
+  for (int i = 0; i < n; i += 3) {
+    uint32_t v = (uint32_t)b[i] << 16 | (i + 1 < n ? (uint32_t)b[i + 1] << 8 : 0) | (i + 2 < n ? b[i + 2] : 0);
+    o[k++] = A[v >> 18 & 63]; o[k++] = A[v >> 12 & 63];
+    o[k++] = i + 1 < n ? A[v >> 6 & 63] : '='; o[k++] = i + 2 < n ? A[v & 63] : '=';
+  }
+  o[k] = 0;
+}
+int file_tx_pieces(const uint8_t *b, uint32_t n, uint32_t off, int count, char *out, int cap) {
+  if (off % FILE_TX_PIECE) return -1;
+  if (count < 1) count = 1;
+  if (count > FILE_TX_N) count = FILE_TX_N;
+  int k = 0, got = 0; out[0] = 0;
+  for (; got < count && off < n; got++, off += FILE_TX_PIECE) {
+    uint32_t m = n - off < FILE_TX_PIECE ? n - off : FILE_TX_PIECE;
+    if (k + 10 + 48 + 2 > cap) return -1;
+    if (got) out[k++] = ' ';
+    out[k++] = 'f'; out[k++] = 'g'; out[k++] = ':';
+    char d[12]; int dn = 0; uint32_t x = off; do { d[dn++] = (char)('0' + x % 10); x /= 10; } while (x);
+    while (dn) out[k++] = d[--dn];
+    out[k++] = ':'; b64(b + off, (int)m, out + k); while (out[k]) k++;
+  }
+  out[k] = 0;
+  return got;
+}

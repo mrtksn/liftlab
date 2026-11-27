@@ -357,7 +357,7 @@ function linkChannels(ch, t, fr, lat) {
 // here, on the data path, whether the tab is open or not.
 let gs = { v: {}, at: {}, log: [], frames: 0, bytes: 0, trackXY: [], link: null, alert: null, sent: null, rate: [], vHist: [], vN: 0 };
 function gsReset() {
-  Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, vHist: [], vN: 0 });
+  Object.assign(gs, { v: {}, at: {}, log: [], frames: 0, bytes: 0, lastAge: -1, trackXY: [], link: null, rate: [], alert: null, sent: null, nmsg: 0, nIn: 0, fg: [], vHist: [], vN: 0 });
   if (typeof GS_UI !== 'undefined') Object.assign(GS_UI, { built: false, paused: null, clearId: 0, logN: -1 });   // (the widgets hold the old run's values: built again; the log starts again)
   if (typeof GS_UI !== 'undefined') GS_UI.open.clear();
 }
@@ -387,6 +387,12 @@ function gsRead() {
   if (gs.v.pos && gs.at.pos !== posAt) { gs.trackXY.push([gs.v.pos.x, gs.v.pos.y]); if (gs.trackXY.length > 400) gs.trackXY.shift(); }   // a new position frame: a point
   if (gs.v.battery && gs.at.battery !== battAt) { gs.vHist.push(gs.v.battery.volts); if (gs.vHist.length > 120) gs.vHist.shift(); gs.vN++; }   // a new battery frame
   const nm = o[6];
-  for (let i = Math.max(gs.nmsg, nm - 16); i < nm; i++) { gs.log.unshift({ t: g.gnd_msg_t(i), sev: g.gnd_msg_sev(i), text: cstr(g, g.gnd_msg_text(i), 60) }); if (gs.log.length > 60) gs.log.length = 60; }
-  gs.nmsg = nm;
+  // (a file's pieces coming down, fg:OFF:DATA (file_rx.h), go to gs.fg for Compare with the drone, not the log:
+  // gs.nmsg counts the log's messages, gs.nIn the ground's)
+  for (let i = Math.max(gs.nIn || 0, nm - 16); i < nm; i++) {
+    const m = { t: g.gnd_msg_t(i), sev: g.gnd_msg_sev(i), text: cstr(g, g.gnd_msg_text(i), 60) };
+    if (m.text.startsWith('fg:')) { (gs.fg ||= []).push(m.text); if (gs.fg.length > 400) gs.fg.splice(0, gs.fg.length - 400); continue; }
+    gs.log.unshift(m); if (gs.log.length > 60) gs.log.length = 60; gs.nmsg++;
+  }
+  gs.nIn = nm;
 }

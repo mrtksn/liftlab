@@ -895,6 +895,15 @@ html.phone .crash,html.phone .liftoff{bottom:200px}
 .install-dlg h3{margin:0;display:flex;align-items:center;gap:var(--space-8);font-family:var(--f-display);font-weight:600;font-size:var(--text-lg);letter-spacing:.02em}
 .install-dlg p{max-width:none}
 .install-dlg code{font-family:var(--f-mono);font-size:.9em}
+/* Compare with the drone (drone-compare.js): a row a setting or file; what differs stands out */
+.compare-dlg h3{margin-top:var(--space-12)}
+.dc-table{width:100%;border-collapse:collapse;font-size:var(--text-sm);margin:var(--space-6) 0}
+.dc-table th{text-align:left;color:var(--muted);font-weight:500;padding:var(--space-4) var(--space-6);border-bottom:1px solid var(--line-strong)}
+.dc-table td{padding:var(--space-4) var(--space-6);border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+.dc-table td:nth-child(2),.dc-table td:nth-child(3){font-family:var(--f-mono)}
+.dc-table tr.dc-differ td:nth-child(3){color:var(--warn)}
+.dc-table tr.dc-note td{color:var(--muted);border-bottom:none;padding-top:0;font-family:inherit}
+.dc-more{margin-top:var(--space-6)}
 .inst-n{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-family:var(--f-mono);font-size:var(--text-sm)}
 .inst-step{display:flex;flex-direction:column;gap:var(--space-8);padding:var(--space-12) 0;border-top:1px solid var(--line)}
 .inst-step p,.inst-manual p{margin:0}

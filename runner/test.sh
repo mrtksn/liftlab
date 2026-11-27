@@ -26,7 +26,7 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_fc" fc/test_fc.c fc/fc_core.c rn_host.c rn.
 "$T/test_fc" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_level" fc/test_level.c fc/fc_core.c fc/fc_text.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_level" fc/testdata
-cc -O2 -Wall -Wextra -I. -o "$T/test_file_rx" fc/test_file_rx.c fc/file_rx.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
+cc -O2 -Wall -Wextra -I. -o "$T/test_file_rx" fc/test_file_rx.c fc/file_rx.c fc/tlm_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_file_rx"
 cc -O2 -Wall -Wextra -I. -o "$T/test_spin" fc/test_spin.c fc/spin_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_spin"

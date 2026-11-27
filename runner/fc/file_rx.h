@@ -41,4 +41,17 @@ int file_rx_name_ok(const char *s);
  * or 0 if the line isn't one. */
 int file_rx_begins(const char *line, char *name, uint32_t *size, uint32_t *crc);
 
+/* Files down the radio, the other way (LiftLab's drone card reads the drone's files: Compare with the drone), one
+ * radio message (tlm_core.h TLM_TEXT, 56 characters) a piece:
+ *   fget NAME              the drone answers "fget NAME: SIZE CRC" (CRC-32 in hex), or that it has no such file
+ *   fget NAME OFF [N]      N pieces (1 to FILE_TX_N) from byte OFF, a multiple of FILE_TX_PIECE, each "fg:OFF:DATA"
+ *                          (DATA base64, FILE_TX_PIECE bytes, the last piece fewer), separated by spaces. No space in
+ *                          a piece: a long answer is cut into messages at its spaces (tlm_core.c), a piece each
+ * The reader asks for what it's missing again: messages over an ExpressLRS module may not all arrive. */
+#define FILE_TX_PIECE 33            /* [bytes] a piece down: 44 base64 characters, "fg:32736:" before them: 53 */
+#define FILE_TX_N 3                 /* pieces an answer: three messages (dfb_pi sends at most 3 of a reply) */
+/* The pieces of b (n bytes) from off, at most count (≤ FILE_TX_N), into out: how many, 0 past the end, or −1 if off
+ * isn't a piece's or out is too small. */
+int file_tx_pieces(const uint8_t *b, uint32_t n, uint32_t off, int count, char *out, int cap);
+
 #endif

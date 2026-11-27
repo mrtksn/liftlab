@@ -114,6 +114,16 @@ port or its standard input):
 between the wiring and the airframe (an airframe with more motors than the old wiring has outputs is refused until
 then); it leaves `restart` to you.
 
+The other way, the card's **Compare** reads what the drone has and lists what differs from the design: the ESP32's
+settings (a row each; the ones the design keeps, such as pins, ESC pulses, level, the IMU's calibration and the sensors'
+drivers, can be taken into the design with **Take**) and the Pi's design files (an airframe that differs is read: its
+mass, inertia, IMU mount and each motor's effect). It only reads; these do it, and change nothing but `esp32.txt`:
+
+| | |
+|---|---|
+| `readout` | asks the ESP32 for `show` and keeps its whole answer (the radio's messages hold only its start) as `esp32.txt` here, then says `readout: esp32.txt SIZE CRC` |
+| `fget NAME [OFFSET [COUNT]]` | a file of this folder down the radio: with no offset its size and CRC-32 (`fget NAME: SIZE CRC`); with one, `COUNT` pieces (1 to 3) from there, each one message `fg:OFFSET:DATA` (base64, 33 bytes; `runner/fc/file_rx.h`). The reader asks again for the ones that didn't come |
+
 `sticks ARM THROTTLE [ROLL PITCH YAW]` (arm 0/1, throttle 0..1, the rest −1..1, yaw as the flight controller's: negative
 turns right), `motor N THROTTLE` (N from 1 in the airframe's order; `--airframe` lets `dfb_pi` check it), `motor off`.
 

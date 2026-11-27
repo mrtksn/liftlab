@@ -302,7 +302,11 @@ static radio_io *open_link(const rlink_cfg *L, const char *dev, const char *nrf_
  *                         (link_uart, baud); disarmed only
  *   airframe [NAME]       the airframe in NAME (--airframe's, or drone.dfa) to the ESP32, checked here first; the
  *                         ESP32 checks it against its wiring, keeps it in flash and says so; disarmed only
- *   restart               dfb_pi stops, and its service starts it again with this folder's files; disarmed only */
+ *   restart               dfb_pi stops, and its service starts it again with this folder's files; disarmed only
+ * And the other way, for LiftLab's Compare with the drone (file_rx.h, files down):
+ *   readout               asks the ESP32 for its settings (show) and keeps its whole answer as esp32.txt here; says
+ *                         "readout: esp32.txt SIZE CRC" when it has it
+ *   fget NAME [OFF [N]]   a file of this folder down the radio: its size and CRC, or N pieces from OFF */
 static file_rx FRX;
 static char wq[96][128]; static int wq_n, wq_at; static double wq_next, wq_quiet = -1e9;   /* settings lines on their way to the ESP32 */
 static double restart_t = -1;
@@ -352,6 +356,16 @@ static int design_line(const char *s, int link, int armed, const char *af_path, 
   }
   if (r) return 1;
   const char *a;
+  if (!strncmp(s, "fget", 4) && (!s[4] || s[4] == ' ')) {
+    char nm[FILE_RX_NAME + 2]; unsigned off = 0; int cnt = FILE_TX_N, m = sscanf(s + 4, " %32s %u %d", nm, &off, &cnt);
+    if (m < 1 || !file_rx_name_ok(nm)) { snprintf(reply, (size_t)rn, "fget NAME [OFFSET [COUNT]]: a file in this folder"); return 1; }
+    uint32_t n; uint8_t *b = file_load(nm, &n);
+    if (!b) { snprintf(reply, (size_t)rn, "fget %s: no such file here", nm); return 1; }
+    if (m == 1) snprintf(reply, (size_t)rn, "fget %s: %u %08x", nm, (unsigned)n, (unsigned)rn_crc32(b, n));
+    else if (file_tx_pieces(b, n, off, cnt, reply, rn) < 0) snprintf(reply, (size_t)rn, "fget %s: %u isn't a piece's offset (multiples of %d)", nm, off, FILE_TX_PIECE);
+    else if (!*reply) snprintf(reply, (size_t)rn, "fget %s: %u is past its end (%u bytes)", nm, off, (unsigned)n);
+    free(b); return 1;
+  }
   if (!strncmp(s, "wiring", 6) && (!s[6] || s[6] == ' ')) {
     a = s + 6; while (*a == ' ') a++; if (!*a) a = "wiring.txt";
     if (armed) { snprintf(reply, (size_t)rn, "wiring: disarm first"); return 1; }
@@ -662,6 +676,7 @@ int main(int argc, char **argv) {
   static float tl[36]; double tl_t = -1e9;          /* the ESP32's last telemetry (RN_LINK_TELEM, flight.c) */
   static float pw[12]; double pw_t = -1e9;          /* its power monitor's (RN_LINK_POWER) */
   static char esp_said[160]; double esp_said_t = -1e9;   /* what the ESP32 said last (an event or a report): status shows it */
+  static char ro_buf[4096]; int ro_n = 0; double ro_until = -1;   /* readout: the ESP32's answer to show, gathered for esp32.txt */
   int in_control = 0;   /* this program flies it: the drone was on the ground when we started, or a pilot (radio, text) took over since */ uint32_t seen_log = 0;
   int in_fd = 0, nav_got = 0; float nav_v[16];
   static rc_who WHO; int sticks = 1;   /* who flies it (rc_core.h rc_who): the sticks as in angle mode (from the start: a
@@ -780,6 +795,10 @@ int main(int argc, char **argv) {
               else { fleet_engage(&FL, a[1] == 'n', &N, &o, "asked"); FL.said = 0; snprintf(reply, sizeof reply, "%s", FL.msg[0] ? FL.msg : "fleet program off"); in_control = 1; }
             } else snprintf(reply, sizeof reply, "fleet program: %s; %s; target %.1f %.1f %.1f; publishes %d values; messages %u sent, %u in; %u runs, %u failed",
                             have_fleet ? "in the program" : "none", FL.engaged ? "flying it" : "not flying it", FL.go_p[0], FL.go_p[1], FL.go_p[2], FL.npub, (unsigned)FL.sent, (unsigned)FL.got, (unsigned)FL.calls, (unsigned)FL.fails);
+          } else if (!strcmp(s, "readout")) {            /* the ESP32's settings, whole, into esp32.txt (fget takes it down) */
+            uint8_t fr[64]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_SETTING, (const uint8_t *)"show", 4);
+            if (!len) snprintf(reply, sizeof reply, "readout: couldn't frame it");
+            else { link_raw(link, fr, len); ro_n = 0; ro_buf[0] = 0; ro_until = t + 1.5; snprintf(reply, sizeof reply, "readout: asking the ESP32 for its settings"); }
           } else if (!strncmp(s, "esp32 ", 6) || !strcmp(s, "safety on") || !strcmp(s, "safety off") || !strcmp(s, "safety") || !strcmp(s, "imucal") || (!strncmp(s, "level", 5) && (!s[5] || s[5] == ' '))) {
             /* a settings line to the ESP32 (esp32 LINE: show, level=boot, save, reboot ...; the shortcuts as they are:
              * safety, level, level none, level R,P[,Y], level yaw Y, imucal):
@@ -878,6 +897,13 @@ int main(int argc, char **argv) {
       if (++wq_at == wq_n) printf("wiring: %d lines sent to the ESP32\n", wq_n);
       wq_next = t + 0.02;
     }
+    if (ro_until >= 0 && t >= ro_until) {                  /* readout: what the ESP32 said, kept */
+      char e[3 * TLM_TEXT], why[96]; ro_until = -1;
+      if (!ro_n) snprintf(e, sizeof e, "readout: no answer from the ESP32 (is it connected to the Pi?)");
+      else if (file_put("esp32.txt", (const uint8_t *)ro_buf, (uint32_t)ro_n, why, sizeof why)) snprintf(e, sizeof e, "readout: couldn't write esp32.txt: %s", why);
+      else snprintf(e, sizeof e, "readout: esp32.txt %d %08x", ro_n, (unsigned)rn_crc32((const uint8_t *)ro_buf, (uint32_t)ro_n));
+      printf("%s\n", e); if (radio_here) tlm_text(&TS, 6, e);
+    }
     if (restart_t >= 0 && t - restart_t > 1) { printf("restart: asked for; stopping (the service starts it again)\n"); fflush(stdout); exit(75); }   /* (75: a failure to systemd, so restart = on-failure starts it too) */
     loop_prof_at(&LP, LP_LINK);
     uint8_t rxs[512]; const uint8_t *rx = rxs; ssize_t n; int si = 0;
@@ -896,7 +922,8 @@ int main(int argc, char **argv) {
       if (type == RN_LINK_EVENT || type == RN_LINK_REPORT) {
         printf("esp32: %.*s\n", (int)L.len, (char *)L.buf);
         int k = (int)L.len < (int)sizeof esp_said - 1 ? (int)L.len : (int)sizeof esp_said - 1; memcpy(esp_said, L.buf, (size_t)k); esp_said[k] = 0; esp_said_t = t;
-        if (radio_here && t - radio_text_t < 5 && !(t < wq_quiet && !strncmp(esp_said, "set ", 4))) { char e[3 * TLM_TEXT + 8]; snprintf(e, sizeof e, "esp32: %s", esp_said); tlm_text(&TS, 6, e); }   /* (its answer to the radio's text) */
+        if (t < ro_until && type == RN_LINK_REPORT && ro_n + (int)L.len + 1 < (int)sizeof ro_buf) { memcpy(ro_buf + ro_n, L.buf, L.len); ro_n += (int)L.len; ro_buf[ro_n++] = '\n'; ro_buf[ro_n] = 0; }
+        else if (radio_here && t - radio_text_t < 5 && !(t < wq_quiet && !strncmp(esp_said, "set ", 4))) { char e[3 * TLM_TEXT + 8]; snprintf(e, sizeof e, "esp32: %s", esp_said); tlm_text(&TS, 6, e); }   /* (its answer to the radio's text) */
       }
       if (type == RN_LINK_RC) { rc_unpack(&RCI, (const float *)L.buf, (int)(L.len / 4), t); continue; }          /* the ESP32's radio */
       if (type == RN_LINK_PEER) { fleet_peers(&FL, (const float *)L.buf, (int)(L.len / 4), t); continue; }        /* the other drones, as the ESP32 hears them */

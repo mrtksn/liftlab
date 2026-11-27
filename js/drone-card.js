@@ -12,6 +12,8 @@
 //                droneText). The answer comes back down as a message: the card shows it under the line.
 //   upload       Upload design: the design's files to the drone's Pi, its wiring and airframe on to the ESP32 (below:
 //                cardUpload), up the radio; shown when the radio is on a Pi. Pressed again while it runs, it stops
+//   compare      Compare with the drone: its settings and the Pi's files, read down the radio, beside the design's
+//                (drone-compare.js); shown when the radio is on a Pi
 //   disconnect   leave the real drone (shown only while connected)
 // confirm: the first press asks, a second within 3 s does it. In the simulator the switches take over from the
 // simulator's pilot (who arms and takes off by itself after a reset) until the next reset.
@@ -33,7 +35,7 @@ function cardShown(b) {
   const nav = hasTask('nav');
   if (b.act === 'home') return nav;
   if (b.act === 'disconnect') return cardLive();
-  if (b.act === 'upload') return !!cardRadioPi();
+  if (b.act === 'upload' || b.act === 'compare') return !!cardRadioPi();
   if (b.act === 'fly') return !(cardLive() && !nav && live.gp);       // (angle mode with a gamepad: its throttle stick takes off)
   return true;
 }
@@ -49,10 +51,10 @@ const CARD_KINDS = {
   switch: { name: 'Switches', one: 'switch', how: 'held on the radio', hint: 'A radio channel in every frame (about 250 a second): it stays as you set it, and if the link drops the drone lets go of it (its failsafe).' },
   pulse: { name: 'Momentary', one: 'momentary switch', how: 'on the radio for a moment', hint: 'A radio channel switched on for a moment: the drone acts on it once.' },
   text: { name: 'Commands', one: 'command', how: 'one-off text', hint: 'A line of text up the radio, sent once (again until it arrives); the answer shows under the command line.' },
-  page: { name: 'Actions', one: 'page action', how: 'run by this page', hint: 'This page does it: Upload design runs a series of commands; Disconnect sends nothing.' },
+  page: { name: 'Actions', one: 'page action', how: 'run by this page', hint: 'This page does it: Upload design and Compare run a series of commands; Disconnect sends nothing.' },
 };
 const CARD_KIND_ORDER = ['switch', 'pulse', 'text', 'page'];
-const CARD_ACT_KIND = { arm: 'switch', fly: 'switch', hold: 'pulse', home: 'pulse', send: 'text', upload: 'page', disconnect: 'page' };
+const CARD_ACT_KIND = { arm: 'switch', fly: 'switch', hold: 'pulse', home: 'pulse', send: 'text', upload: 'page', compare: 'page', disconnect: 'page' };
 // The commands the drone's Pi takes (dfb_pi: docs/pi-suite.md), for the command line's suggestions and the editor's menu.
 const CARD_CMDS = [
   { cmd: 'level', label: 'Level here', what: 'as it sits now is level (disarmed, still)', confirm: true },
@@ -87,13 +89,14 @@ function cardRoute(b) {
   if (b.act === 'home') return { kind, to: nav ? nav.name : '', what: 'fly back to where it took off' };
   if (b.act === 'send') { const r = cardTextRoute(b.cmd); return { kind, ...r, what: `sends "${b.cmd || ''}"${r.what ? ': ' + r.what : ''}` }; }
   if (b.act === 'upload') return { kind, to: pi ? `${pi.name}, then ${cardCoreName()}` : '', what: 'the design\'s files, wiring and airframe onto the drone' };
+  if (b.act === 'compare') return { kind, to: pi ? `${pi.name}, and ${cardCoreName()}` : '', what: 'reads the drone\'s settings and files, and shows what differs from the design' };
   return { kind, to: 'this page', what: 'leave the real drone (nothing is sent)' };
 }
 const cardRouteTo = r => r.to ? `→ ${r.to}${r.via ? ` (through ${r.via})` : ''}` : '';
 // Why a button isn't on the card now ('' when it is).
 function cardHiddenWhy(b) {
   if (cardShown(b)) return '';
-  return { home: 'not shown: this design has no navigation', disconnect: 'shown while connected to the real drone', upload: 'shown when the radio is on a Pi',
+  return { home: 'not shown: this design has no navigation', disconnect: 'shown while connected to the real drone', upload: 'shown when the radio is on a Pi', compare: 'shown when the radio is on a Pi',
     fly: 'not shown: the gamepad\'s throttle takes off in angle mode' }[b.act] || 'not shown now';
 }
 function cardExplain(b) {
@@ -142,6 +145,7 @@ function cardPress(i, el) {
   else if (b.act === 'disconnect') { if (L) why = liveStopPress(); }
   else if (b.act === 'send') why = cardSend(b.cmd);
   else if (b.act === 'upload') { if (cardUp.on) { cardUp.stop = true; why = ''; } else why = cardUploadStart(); }
+  else if (b.act === 'compare') dcOpen();
   cardNote(why || '', why ? 'bad' : '');
   if (why && el) flashEl(el);
   cardRender(true);
@@ -422,9 +426,9 @@ function cardDrag(e) {
 // In the same groups as the card, each row saying what it does and who takes it; a button moves within its group (a
 // change of what it does moves it to that one's group). Add a button from a menu: the switches, the Pi's commands, your
 // own command, the page's actions (the ones your buttons haven't, marked).
-const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Command (text)', upload: 'Upload design', disconnect: 'Disconnect' };
+const CARD_ACT_LABEL = { arm: 'Arm switch', fly: 'Take-off switch', hold: 'Hold', home: 'Fly home', send: 'Command (text)', upload: 'Upload design', compare: 'Compare with the drone', disconnect: 'Disconnect' };
 const CARD_ACT_NEW = { arm: { label: 'Arm', on: 'Armed', act: 'arm' }, fly: { label: 'Take off', on: 'Land', act: 'fly' }, hold: { label: 'Hold', act: 'hold' }, home: { label: 'Home', act: 'home' },
-  upload: { label: 'Upload design', act: 'upload', confirm: true }, disconnect: { label: 'Disconnect', act: 'disconnect' } };
+  upload: { label: 'Upload design', act: 'upload', confirm: true }, compare: { label: 'Compare', act: 'compare' }, disconnect: { label: 'Disconnect', act: 'disconnect' } };
 function cardSetButtons(list) {
   const C = computers(); C.ground.buttons = fixCardButtons(list);
   undoKey = 'cardButtons'; save(); $('#cardEditor').dataset.sig = JSON.stringify(cardButtons()); cardRender(true);
@@ -493,7 +497,7 @@ function cardRenderEditor() {
   const actOpt = a => opt('act:' + a, CARD_ACT_NEW[a].label + (has(a) ? '' : ' (not on the card)'));
   add.append(og('switch', actOpt('arm'), actOpt('fly')), og('pulse', actOpt('hold'), actOpt('home')),
     og('text', ...(cardRadioPi() ? CARD_CMDS.map(c => opt('cmd:' + c.cmd, `${c.label} (${c.cmd})`)) : []), opt('cmd:', 'Your own command…')),
-    og('page', actOpt('upload'), actOpt('disconnect')));
+    og('page', actOpt('upload'), actOpt('compare'), actOpt('disconnect')));
   add.addEventListener('change', () => {
     const v = add.value; if (!v) return;
     if (v.startsWith('act:')) list.push({ ...CARD_ACT_NEW[v.slice(4)] });

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;500&family=STIX+Two+Text:ital,wght@0,400;0,700;1,400&display=swap">
-<link rel="stylesheet" href="css/style.css?v=4f66c532f0">
+<link rel="stylesheet" href="css/style.css?v=15c3862da5">
 </head>
 <body>
 <div class="app">
@@ -496,6 +496,11 @@
         <p class="hint" id="installSub"></p>
         <div id="installBody"></div>
       </dialog>
+      <dialog class="ask install-dlg compare-dlg" id="compareDlg" aria-labelledby="compareTitle">
+        <div class="dialog-toolbar"><h2 id="compareTitle" tabindex="-1">Compare with the drone</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" id="compareClose">Close</button></div></div>
+        <p class="hint" id="compareSub"></p>
+        <div id="compareBody"></div>
+      </dialog>
       <dialog class="ask design-dialog" id="designSaveDlg" aria-labelledby="designSaveTitle">
         <form id="designSaveForm">
           <div class="dialog-toolbar"><h2 id="designSaveTitle">Save design as</h2><div class="dialog-actions"><button class="btn sm" type="button" data-design-history="undo">↶ Undo</button><button class="btn sm" type="button" data-design-history="redo">↷ Redo</button><button class="btn" type="button" data-close-dialog>Close</button></div></div>
@@ -716,20 +721,21 @@
 <script src="js/fc-export.js?v=f9cb82cf6c"></script>
 <script src="js/board-wasm.js?v=e503d1df1f"></script>
 <script src="js/crsf.js?v=004ad7fe81"></script>
-<script src="js/link.js?v=924573b83b"></script>
+<script src="js/link.js?v=91ab0ad046"></script>
 <script src="js/link-elrs.js?v=33789af5df"></script>
 <script src="js/link-packet.js?v=e182da6569"></script>
 <script src="js/link-nrf24.js?v=963a738f55"></script>
 <script src="js/link-serial.js?v=43560834db"></script>
 <script src="js/peer-air.js?v=82475d500b"></script>
-<script src="js/boards.js?v=2e7001c2f2"></script>
+<script src="js/boards.js?v=35e1771a17"></script>
 <script src="js/programs.js?v=66a0fde1e7"></script>
 <script src="js/wasm-meter.js?v=3e6eded09b"></script>
 <script src="js/apps.js?v=93c0cbb01e"></script>
 <script src="js/bus-ui.js?v=da1a33f914"></script>
 <script src="js/gs-widgets.js?v=6d00ad1810"></script>
 <script src="js/live.js?v=6f175c9171"></script>
-<script src="js/drone-card.js?v=7f51da8aad"></script>
+<script src="js/drone-card.js?v=f786d8439e"></script>
+<script src="js/drone-compare.js?v=e22717341d"></script>
 <script src="js/usb-view.js?v=676b6e4056"></script>
 <script src="js/gs-ui.js?v=0721b57512"></script>
 <script src="js/agent.js?v=df7f044dda"></script>

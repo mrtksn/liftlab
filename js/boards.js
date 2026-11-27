@@ -87,12 +87,12 @@ function computers() {
 }
 // The drone card's buttons (drone-card.js), the command module's: what each does (act), its label (and its label while
 // on, for the switches), the text a "send" sends up the radio, and whether a second press is wanted (confirm).
-const CARD_ACTS = ['arm', 'fly', 'hold', 'home', 'send', 'upload', 'disconnect'];
+const CARD_ACTS = ['arm', 'fly', 'hold', 'home', 'send', 'upload', 'compare', 'disconnect'];
 const CARD_TEXT_MAX = 57;                                            // (rc_core.h RC_TEXT)
 const CARD_BUTTONS_DEFAULT = [
   { label: 'Arm', on: 'Armed', act: 'arm' }, { label: 'Take off', on: 'Land', act: 'fly' }, { label: 'Hold', act: 'hold' }, { label: 'Home', act: 'home' },
   { label: 'Level here', act: 'send', cmd: 'level', confirm: true }, { label: 'Safety off', act: 'send', cmd: 'safety off', confirm: true },
-  { label: 'Safety on', act: 'send', cmd: 'safety on' }, { label: 'Upload design', act: 'upload', confirm: true }, { label: 'Disconnect', act: 'disconnect' },
+  { label: 'Safety on', act: 'send', cmd: 'safety on' }, { label: 'Upload design', act: 'upload', confirm: true }, { label: 'Compare', act: 'compare' }, { label: 'Disconnect', act: 'disconnect' },
 ];
 function fixCardButtons(list) {
   if (!Array.isArray(list)) return null;
@@ -257,6 +257,7 @@ function f32Blob(magic, vals) {
 }
 // (Re)start every board: at each reset, as if powered on with the program, the airframe and the configs.
 function boardsStart() {
+  simDroneSeed();
   if (typeof atStop === 'function') atStop('Flight reset; measure again before applying a recommendation.');
   if (brt.autotune) { brt.autotune.phase = 'stopped'; brt.autotune.attVerified = null; }
   brt.gnd = null; brt.gndErr = ''; brt.gndOk = false;               // (the last run's command module is no one's until groundStart: nothing is queued into it)
@@ -825,6 +826,21 @@ const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; 
 function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
 // The simulated Pi's folder: the files sent up (file_rx.h), kept until the page is closed, as the real Pi's are on its disk.
 const simPiFiles = new Map();
+// The simulated ESP32's settings (KEY → VALUE, as `show` gives them): what it was last given, as the real one keeps
+// its flash. Both start, once a page, as the design is then (installed with it); Upload design changes them; later
+// edits to the design don't, so Compare with the drone shows them until the next upload.
+let simEspSettings = null;
+function simDroneSeed() {
+  if (simEspSettings || typeof dcDesignSettings !== 'function') return;   // (once, and only once the page has it all)
+  try { simEspSettings = dcDesignSettings(); } catch (e) { simEspSettings = new Map(); }
+  try { if (!simPiFiles.size && typeof cardUploadFiles === 'function') for (const f of cardUploadFiles()) simPiFiles.set(f.name, f.data); } catch (e) { /* (a design with wiring problems: no files yet) */ }
+}
+// What the simulated ESP32 answers to show: its settings on one line, its sensors' on the next (as flight.c says them).
+function simEspShow() {
+  const S = simEspSettings || new Map(), prof = ['imu', 'baro', 'mag'], main = [...S].filter(([k]) => !prof.includes(k));
+  return [main.map(([k, v]) => `${k}=${v}`).join(' '), 'sensor profiles: ' + prof.map(k => `${k}=${S.get(k) ?? '-1,0'}`).join(' '),
+    'IMU: the simulator\'s; flying the design\'s airframe (the simulator\'s flight core)'].join('\n') + '\n';
+}
 const simArmed = () => brt.fcState === 1 || brt.fcState === 2;        // (the flight core armed or in its failsafe: fc_core.h)
 const WIRING_KEEP = ['link_uart', 'baud'];                           // (dfb_pi's KEEP_KEYS: its own link to the ESP32)
 // The Pi's own commands for the design's files, as dfb_pi.c design_line answers them: { say: [answers], log } or null
@@ -844,6 +860,21 @@ function piText(tw, s) {
     return { say: said ? [said] : [], log: !s.startsWith('fd ') || !!said };
   }
   let a;
+  if (s === 'readout') {                                              // (dfb_pi: show to the ESP32, its answer kept as esp32.txt)
+    simDroneSeed(); const b = new TextEncoder().encode(simEspShow()); simPiFiles.set('esp32.txt', b);
+    return { say: ['readout: asking the ESP32 for its settings', `readout: esp32.txt ${b.length} ${crc32(b).toString(16).padStart(8, '0')}`], log: true };
+  }
+  if ((a = /^fget(?: +(\S+))?(?: +(\d+))?(?: +(-?\d+))?$/.exec(s))) {     // (dfb_pi: a file of its folder down: file_rx.h)
+    simDroneSeed();
+    const name = a[1], f = name && simPiFiles.get(name), P = 33;
+    if (!name || !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,30}$/.test(name)) return { say: ['fget NAME [OFFSET [COUNT]]: a file in this folder'], log: true };
+    if (!f) return { say: [`fget ${name}: no such file here`], log: true };
+    if (a[2] == null) return { say: [`fget ${name}: ${f.length} ${crc32(f).toString(16).padStart(8, '0')}`], log: true };
+    let off = +a[2]; const n = Math.max(1, Math.min(3, a[3] == null ? 3 : +a[3])), out = [];
+    if (off % P) return { say: [`fget ${name}: ${off} isn't a piece's offset (multiples of ${P})`], log: true };
+    for (; out.length < n && off < f.length; off += P) out.push(`fg:${off}:${cardUpB64(f.subarray(off, off + P))}`);
+    return { say: out.length ? [out.join(' ')] : [`fget ${name}: ${off} is past its end (${f.length} bytes)`], log: false };
+  }
   if ((a = /^wiring(?: (.*))?$/.exec(s))) {
     const name = (a[1] || '').trim() || 'wiring.txt', f = simPiFiles.get(name);
     if (simArmed()) return { say: ['wiring: disarm first'], log: true };
@@ -853,7 +884,7 @@ function piText(tw, s) {
       const l = raw.trim(); if (!l || l[0] === '#') continue;
       const k = l.indexOf('='); if (k < 0 || l.length > 126) { bad++; continue; }
       if (WIRING_KEEP.includes(l.slice(0, k))) { kept.add(l.slice(0, k)); continue; }
-      n++;
+      n++; simDroneSeed(); simEspSettings.set(l.slice(0, k), l.slice(k + 1));   // (the simulated ESP32 keeps it, as the real one saves it)
     }
     if (!n) return { say: [`wiring: no settings lines in ${name}`], log: true };
     return { say: [`wiring: ${n} settings lines to the ESP32, then save${kept.size ? ` (kept as they are: ${[...kept].join(', ')})` : ''}${bad ? ' (skipped lines that aren\'t KEY=VALUE)' : ''}; it uses them after esp32 reboot`,

@@ -1,7 +1,8 @@
 /* file_rx.h: a file in pieces of text, as LiftLab's drone card sends it (js/drone-card.js cardUpload): pieces in any
  * order and again, the missing ones listed, a damaged one found, names and sizes refused.
- *   cc -O2 -I.. -o test_file_rx test_file_rx.c file_rx.c fc_core.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_file_rx */
+ *   cc -O2 -I.. -o test_file_rx test_file_rx.c file_rx.c tlm_core.c fc_core.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_file_rx */
 #include "file_rx.h"
+#include "tlm_core.h"
 #include "../rn.h"
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +75,31 @@ int main(void) {
   CHECK(strlen(small) < sizeof small && strstr(small, "missing"), "the missing list fits its room: %s", small);
   file_rx_line(&R, "file end", r, sizeof r);
   CHECK(strlen(r) <= FILE_RX_SAY && strstr(r, "missing 101 of 101: 0 36"), "the missing list fits one message (%d): %s", (int)strlen(r), r);
+
+  /* down: the pieces of the file, three an answer, each one message, the same bytes */
+  { char out[200], want[200], d[80]; uint32_t off = 0; int answers = 0;
+    while (off < size) {
+      int got = file_tx_pieces(f, size, off, 3, out, sizeof out); answers++;
+      CHECK(got >= 1 && got <= FILE_TX_N, "pieces at %u: %d", (unsigned)off, got);
+      int k = 0; want[0] = 0;
+      for (int i = 0; i < got; i++, off += FILE_TX_PIECE) {
+        uint32_t m = size - off < FILE_TX_PIECE ? size - off : FILE_TX_PIECE; b64(f + off, (int)m, d);
+        char one[80]; int w = snprintf(one, sizeof one, "fg:%u:%s", (unsigned)off, d);
+        CHECK(w <= 56, "a piece down fits one message: %d characters", w);
+        k += snprintf(want + k, sizeof want - (size_t)k, "%s%s", i ? " " : "", one);
+      }
+      CHECK(!strcmp(out, want), "the pieces down: \"%s\" (want \"%s\")", out, want);
+      if (got < 1) break;
+    }
+    CHECK(answers == (int)((size + 3 * FILE_TX_PIECE - 1) / (3 * FILE_TX_PIECE)), "answers for the file: %d", answers);
+    CHECK(file_tx_pieces(f, size, (size + FILE_TX_PIECE - 1) / FILE_TX_PIECE * FILE_TX_PIECE, 3, out, sizeof out) == 0, "past the end: none");
+    CHECK(file_tx_pieces(f, size, 5, 1, out, sizeof out) == -1, "an offset off the pieces");
+    /* an answer of three pieces, as the radio cuts it into messages (tlm_core.c, at its spaces): a piece each */
+    { static tlm_store TS; memset(&TS, 0, sizeof TS); file_tx_pieces(f, size, 0, 3, out, sizeof out); tlm_text(&TS, 6, out);
+      CHECK(TS.qn == 3, "three messages: %d", TS.qn);
+      for (int i = 0; i < TS.qn && i < 3; i++) { char w1[80], d1[80]; b64(f + i * FILE_TX_PIECE, FILE_TX_PIECE, d1); snprintf(w1, sizeof w1, "fg:%d:%s", i * FILE_TX_PIECE, d1);
+        CHECK(!strcmp(TS.q[(TS.qh + i) % TLM_QN].s, w1), "message %d is a whole piece: \"%s\"", i, TS.q[(TS.qh + i) % TLM_QN].s); } }
+    CHECK(file_tx_pieces((const uint8_t *)"a", 1, 0, 3, out, sizeof out) == 1 && !strcmp(out, "fg:0:YQ=="), "one byte down: %s", out); }
 
   if (fails) printf("file_rx: %d FAILED\n", fails);
   else printf("file_rx: ok (%u pieces of %d bytes)\n", (unsigned)np, FILE_RX_PIECE);
