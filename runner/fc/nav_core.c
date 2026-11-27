@@ -114,13 +114,23 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
   memcpy(gt, target, 3 * sizeof *gt); memcpy(gv, vref, 3 * sizeof *gv);
   if (!G->M || !G->M->ok || !G->aligned || G->t_fix > NAV_FIX_STALE) return 0;
   float pm[3]; to_map(N, pm, N->pa);
-  const int inside = map_at(G->M, pm, 1) == MAP_OCC;   /* within its radius of something already (taking off, a map
-                                                       * that moved): it may move, slowly, but nothing is cut short */
+  const int inside = map_at(G->M, pm, 1) == MAP_OCC;   /* within its radius of something already (an overshoot, a map
+                                                       * that moved, taking off beside something) */
   int g = 0; float d_occ, d_unk;
   float d[3] = { target[0] - N->p[0], target[1] - N->p[1], target[2] - N->p[2] }, dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  if (dist > 0.02f && inside) {
+    /* within its radius of something already: along it or away is allowed, slowly; toward it (the cells as sent, within
+     * its radius on the way) the target goes back to the margin's edge, so it backs off (holding where it is would let
+     * it creep on into it) */
+    float u[3] = { d[0] / dist, d[1] / dist, d[2] / dist }, um[3]; rotz(um, -G->psi, u);
+    map_look(G->M, pm, um, dist + G->radius, 0, &d_occ, &d_unk);
+    float allow = d_occ - G->radius - 0.05f; if (allow < -0.5f) allow = -0.5f;
+    if (dist > allow) { for (int i = 0; i < 3; i++) gt[i] = N->p[i] + u[i] * allow; g = 2; }
+    if (G->v_unknown < *vlim) { *vlim = G->v_unknown; g |= 1; }
+  }
   if (dist > 0.02f && !inside) {
     float u[3] = { d[0] / dist, d[1] / dist, d[2] / dist }, um[3]; rotz(um, -G->psi, u);
-    map_look(G->M, pm, um, dist + 0.5f, &d_occ, &d_unk);
+    map_look(G->M, pm, um, dist + 0.5f, 1, &d_occ, &d_unk);
     float allow = d_occ - 0.05f, into = d_unk + 0.5f;   /* stop short of it; into the unknown half a metre at a time */
     if (into < allow) allow = into;
     if (allow < 0) allow = 0;
@@ -128,7 +138,7 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
     /* and toward it no faster than it can stop in the room there is (the target alone would let it come at full speed
      * and overshoot), looking as far as it could need to stop from its fastest; near the unknown, slowly */
     const float look = 8;
-    map_look(G->M, pm, um, look, &d_occ, &d_unk);
+    map_look(G->M, pm, um, look, 1, &d_occ, &d_unk);
     float vt = 1e9f;
     if (d_occ < look) { float room = d_occ - 0.05f; if (room < 0) room = 0; vt = sqrtf(2 * NAV_GUARD_BRAKE * room); }
     if (d_unk < 1 && vt > G->v_unknown) vt = G->v_unknown;
@@ -138,7 +148,7 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
   float vn = sqrtf(vref[0] * vref[0] + vref[1] * vref[1] + vref[2] * vref[2]);
   if (vn > 0.01f) {
     float u[3] = { vref[0] / vn, vref[1] / vn, vref[2] / vn }, um[3]; rotz(um, -G->psi, u);
-    map_look(G->M, pm, um, 4, &d_occ, &d_unk);
+    map_look(G->M, pm, um, 4, 1, &d_occ, &d_unk);
     float room = d_occ - 0.05f; if (room < 0) room = 0;
     float vmax = sqrtf(2 * NAV_GUARD_BRAKE * room);
     if ((d_unk < 1 || inside) && vmax > G->v_unknown) vmax = G->v_unknown;

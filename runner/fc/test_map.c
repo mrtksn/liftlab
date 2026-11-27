@@ -27,16 +27,18 @@ int main(void) {
   CHECK(map_at(&M, p, 0) == MAP_FREE && map_at(&M, wall, 0) == MAP_OCC && map_at(&M, far, 0) == MAP_UNKNOWN && map_at(&M, out, 0) == MAP_UNKNOWN, "what points are");
   CHECK(map_at(&M, near, 0) == MAP_FREE && map_at(&M, near, 1) == MAP_OCC, "25 cm from the wall: free, but inside the grown wall");
   float d_occ, d_unk, east[3] = { 1, 0, 0 }, west[3] = { -1, 0, 0 };
-  map_look(&M, p, east, 10, &d_occ, &d_unk);
+  map_look(&M, p, east, 10, 1, &d_occ, &d_unk);
   CHECK(fabsf(d_occ - 2.7f) < 0.11f, "toward the wall: it stops 0.3 m short of it at x 3.0 (%.2f m)", (double)d_occ);
   CHECK(fabsf(d_unk - d_occ) < 1e-6f, "and the unknown beyond the wall isn't reached first (%.2f)", (double)d_unk);
   float q[3] = { 4.0f, 0, 1 };
-  map_look(&M, q, east, 10, &d_occ, &d_unk);
+  map_look(&M, q, east, 10, 1, &d_occ, &d_unk);
   CHECK(fabsf(d_unk - 0.5f) < 0.11f && d_occ > 9.9f, "beyond the wall: the unknown 0.5 m on (%.2f), nothing occupied (%.2f)", (double)d_unk, (double)d_occ);
-  map_look(&M, p, west, 3, &d_occ, &d_unk);
+  map_look(&M, p, west, 3, 1, &d_occ, &d_unk);
   CHECK(fabsf(d_unk - 1.0f) < 0.11f && d_occ >= 3, "west: the map ends 1 m away (%.2f)", (double)d_unk);
-  map_look(&M, near, east, 3, &d_occ, &d_unk);
+  map_look(&M, near, east, 3, 1, &d_occ, &d_unk);
   CHECK(d_occ == 0, "from inside the grown wall: 0 (%.2f)", (double)d_occ);
+  map_look(&M, near, east, 3, 0, &d_occ, &d_unk);
+  CHECK(fabsf(d_occ - 0.15f) < 0.06f, "the wall itself, as sent: 0.15 m on (%.2f)", (double)d_occ);
   map_grow(&M, 0.05f); CHECK(map_at(&M, near, 1) == MAP_FREE, "a smaller radius: 25 cm from the wall is free");
   /* bad files: refused, the map kept */
   uint32_t crc = M.crc, mid = len / 2; file[mid] ^= 1;

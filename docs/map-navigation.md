@@ -37,17 +37,25 @@ map.
 - **The guard** (in `nav_step`, for every pilot: sticks, text commands, return home, the fleet program): the target is
   cut short so the drone stops before an occupied (grown) cell, and goes at most half a metre into unknown space;
   toward what's mapped it flies no faster than it can stop in the room left (1 m/s² of braking), and near the unknown
-  slowly. A pilot's own target (the radio's, a text command's) waits where the guard stopped it. Not while it lands
-  (the floor is in the map too), and not without a fix for 10 s (where it is in the map is no longer known).
+  slowly. While the sticks move the target, it waits where the guard stopped it (rather than running on into what's in the way); a go-to keeps its place and goes on as the map opens. Not while it lands
+  (the floor is in the map too), and not without a fix for 10 s (where it is in the map is no longer known). Within
+  its radius of something (an overshoot, a map that moved): along it or away, slowly; toward it, the target goes back to
+  the margin's edge.
 - Later: **routes** for go-to and return home around what the map shows (a search on the grid).
 
 ## Mappers
 
-- **The simulator, from the World**: the World's boxes (the city, imported objects, a survey brought in as a model)
-  made into a map, all at once ("the map is known") or as its cameras see it (each camera part's view, ray by ray,
-  marks cells free and occupied: "it explores"). Fixes from where the drone truly is, with the noise, rate, delay and
-  dropouts set. Both go up the simulated radio when it lands on the navigation's board (a lost link loses them),
-  otherwise straight to that board (as Room Survey would reach the Pi over its Wi-Fi).
+- **The simulator** (World settings → The navigation's map), from one of two sources:
+  - *the World as it is*: the World's boxes (the city, imported objects, a survey brought in as a model) around where
+    the drone starts, every cell free or occupied at once;
+  - *what the drone's cameras see*: the map starts unknown; a few times a second each camera on the frame (camera parts
+    along their view, the downward flow camera) casts rays across its field of view, marking cells free up to what
+    each ray meets within the camera's reach and that cell occupied, as a reconstruction from the pictures would; where
+    the drone has been is free. The map goes up again as it grows (every 2 s by default).
+  Fixes from where the drone truly is, with the noise, rate, delay and dropouts set. It reaches the drone by its own
+  link (straight to the navigation's board, at once, as Room Survey reaches the Pi's command port over the Wi-Fi; lost
+  while the drone's radio link is down), or by the radio's text commands (a few lines a second, shared with the fixes:
+  a map takes a while).
 - **Room Survey**: its reconstruction made into the same map file, its localisation of the downward camera's frames
   (stamped on the drone's clock) as fixes, sent through the Wi-Fi bridge or straight to the Pi's command port.
 
@@ -63,16 +71,19 @@ reads it. The drone's side doesn't know or care.
 | Fixes anchor the map and correct the position estimate | built |
 | `dfb_pi`: `map.dmp` and the map commands | built |
 | Simulator: map from the World, sent up the radio or to the board, fixes with noise, delay and dropouts (World settings → The navigation's map) | built |
-| Simulator: map from what the cameras see (unknown until seen) | next |
-| Room Survey: map file and fixes | later |
+| Simulator: map from what the cameras see (unknown until seen) | built |
+| Room Survey: map file and fixes | next |
 | Routes around obstacles | later |
 
 Checked in the simulator (open World; fixes 5 a second, 3 cm noise, 0.2 s delay):
-- A wall 3 m ahead, told to go 6 m: the toy drone on its flow camera stops at 2.59 m (its radius 0.39 m and the
-  margin; without the map it flies into the wall); a GPS quad at 2.77 m.
+- A wall 3 m ahead, told to go 6 m: the toy drone on its flow camera comes to 2.65 m and settles at 2.51 m (its
+  radius 0.39 m and the margin; without the map it flies into the wall); a GPS quad comes to 2.84 m.
 - A minute's hover: the toy drone's estimate within 0.08 m of where it is (0.17 m without fixes), held within 0.24 m.
   A GPS quad's hold in the simulator is poor with or without the map (it circles, a few metres over the minute; the
   nav test's GPS hold fails the same way): the fixes, at the estimator's gains (0.8/s on position), only take some of
   it out.
+- The map from the cameras, the same wall, told to go 6 m: the toy drone (a front camera, the flow camera) climbs and
+  goes out as the map opens, stops at 2.72 m and settles at 2.61 m. A drone with no camera sees nothing: it only creeps
+  into the unknown.
 - The link cut while hovering: the fixes stop reaching it, it flies home and lands (the guard stands down after 10 s
   without a fix).

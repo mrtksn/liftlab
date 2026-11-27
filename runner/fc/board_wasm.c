@@ -635,7 +635,7 @@ EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
   if (sticks) rc_who_sp(&RP, &last_o, who_core_armed, &sp);
   if (RP.said) { RP.said = 0; tlm_text(&TS, 4, RP.msg); nio[NIO_IN + 14 + 6] = 1; } else nio[NIO_IN + 14 + 6] = 0;
   int e = nav_run(&sp);
-  if (last_o.guard & 2) { for (int i = 0; i < 3; i++) { RP.target[i] = last_o.target[i]; sp.target[i] = last_o.target[i]; } }   /* (the map's guard cut it short: the pilot's target waits there) */
+  if ((last_o.guard & 2) && (RP.vref[0] != 0 || RP.vref[1] != 0 || RP.vref[2] != 0)) { for (int i = 0; i < 3; i++) { RP.target[i] = last_o.target[i]; sp.target[i] = last_o.target[i]; } }   /* (the map's guard cut it short while the sticks move it: the target waits there, not running on into what's in the way; a go-to keeps its place, and goes on as the map opens) */
   float *p = nio + NIO_IN + 14;
   for (int i = 0; i < 3; i++) *p++ = sp.target[i];
   *p++ = sp.heading; *p++ = (float)arm; *p++ = (float)rc_link_ok(&RCI, t);

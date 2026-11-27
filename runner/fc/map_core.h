@@ -43,10 +43,10 @@ int map_load(map_grid *M, const uint8_t *buf, uint32_t len, float radius, char *
 void map_grow(map_grid *M, float radius);
 /* The state at a point of the map [m] (outside it: unknown); grown: with the radius. */
 int map_at(const map_grid *M, const float p[3], int grown);
-/* Along the unit direction d from p (both in the map's axes), up to maxd [m]: how far until the grown map is
- * occupied (*d_occ) and until it is unknown (*d_unk), each maxd if nothing is met. From a point already inside a grown
- * cell, d_occ is 0. */
-void map_look(const map_grid *M, const float p[3], const float d[3], float maxd, float *d_occ, float *d_unk);
+/* Along the unit direction d from p (both in the map's axes), up to maxd [m]: how far until the map is occupied
+ * (*d_occ) and until it is unknown (*d_unk), each maxd if nothing is met; grown: the map grown by the radius (from a
+ * point already inside a grown cell, d_occ is 0), else the cells as sent. */
+void map_look(const map_grid *M, const float p[3], const float d[3], float maxd, int grown, float *d_occ, float *d_unk);
 
 /* Write a map file from cells (one state byte each, x fastest), for the tests and the tools: its length, or 0 if it
  * doesn't fit cap. */

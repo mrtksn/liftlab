@@ -82,14 +82,14 @@ int map_at(const map_grid *M, const float p[3], int grown) {
   return get2(grown ? M->grown : M->raw, i);
 }
 
-void map_look(const map_grid *M, const float p[3], const float d[3], float maxd, float *d_occ, float *d_unk) {
+void map_look(const map_grid *M, const float p[3], const float d[3], float maxd, int grown, float *d_occ, float *d_unk) {
   *d_occ = maxd; *d_unk = maxd;
   if (!M->ok) { *d_unk = 0; return; }
   float step = M->res * 0.5f; int seen_unk = 0;
   for (float s = 0;; s += step) {
     if (s > maxd) s = maxd;
     float q[3] = { p[0] + d[0] * s, p[1] + d[1] * s, p[2] + d[2] * s };
-    int st = map_at(M, q, 1);
+    int st = map_at(M, q, grown);
     if (st == MAP_OCC) { *d_occ = s; if (!seen_unk) *d_unk = s; return; }
     if (st == MAP_UNKNOWN && !seen_unk) { seen_unk = 1; *d_unk = s; }
     if (s >= maxd) return;

@@ -1088,7 +1088,7 @@ int main(int argc, char **argv) {
         if (was && !LS.cal) printf("learning: %s\n", LS.msg);
       }
       loop_prof_in(&LP, LP_NAVSTEP); int e = nav_step(&N, &in, &P.sp, dt, &o); loop_prof_out(&LP);
-      if (o.guard & 2) { memcpy(P.sp.target, o.target, sizeof P.sp.target); if (radio) { memcpy(RP.target, o.target, sizeof RP.target); RP.have_target = 1; } }   /* (the map's guard cut it short: the pilot's target waits there) */
+      if ((o.guard & 2) && (P.sp.vref[0] != 0 || P.sp.vref[1] != 0 || P.sp.vref[2] != 0)) { memcpy(P.sp.target, o.target, sizeof P.sp.target); if (radio) { memcpy(RP.target, o.target, sizeof RP.target); RP.have_target = 1; } }   /* (the map's guard cut it short while the sticks move it: the target waits there; a go-to keeps its place) */
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
         int k = fleet_out(&FL, fo); if (k) send_frame(link, RN_LINK_PEER_OUT, fo, (uint32_t)k * 4);

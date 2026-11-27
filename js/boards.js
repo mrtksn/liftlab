@@ -761,7 +761,7 @@ function boardsControl(dt) {
     const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 12).subarray(41);
     brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err,
       guard: o[22] | 0, guardTarget: [o[23], o[24], o[25]] };   // (the map's guard: 1 slowed, 2 the target cut short, docs/map-navigation.md)
-    if (!tw && (brt.navOut.guard & 2) && brt.home) { setpoint.x = brt.home[0] + o[23]; setpoint.y = brt.home[1] + o[24]; setpoint.z = brt.home[2] + o[25]; }   // (the simulator's pilot's target waits where the guard stopped it)
+    if (!tw && (brt.navOut.guard & 2) && brt.home && pilot.vref.some(v => v !== 0)) { setpoint.x = brt.home[0] + o[23]; setpoint.y = brt.home[1] + o[24]; setpoint.z = brt.home[2] + o[25]; }   // (the simulator's pilot's target waits where the guard stopped it)
     if (tw) {
       brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5, sticks: o[21] > 0.5 };   // (sticks: the radio's sticks fly it, as angle mode: rc_who)
       if (o[20] > 0.5) { const m = cstr(nav, nav.rc_msg_ptr()); if (m.startsWith('pickup')) cargoLog(`${navB.name}: ${m}`, 'board'); else rnEvent(`${navB.name}: ${m}`, 'warn'); }
