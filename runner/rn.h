@@ -25,6 +25,14 @@
 #define RN_SNAME 16              /* a memory field's name, zero-padded */
 #define RN_BLS_MAX 48            /* most inputs the least-squares kernel handles */
 #define RN_CODE_MAX 65536        /* most code words in a program */
+/* The kernels' scratch space: one per thread on a computer with threads (a Pi runs the learning's fits on a worker,
+ * each thread with its own host, beside the flight's formulas: runner/pi/learn_fit_worker.h); plain statics on the
+ * flight controller and in the simulator. */
+#if defined(__linux__) || defined(__APPLE__)
+#define RN_TLS _Thread_local
+#else
+#define RN_TLS
+#endif
 
 /* A formula's memory field: its present flag, its place and size in the arena (address −1, size 0 while it
  * has no type yet), and its name, so the memory can move to another program by name. */

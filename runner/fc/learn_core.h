@@ -55,6 +55,17 @@ typedef struct {                         /* one calibration stage */
 } ln_seg;
 typedef struct { int kind, who, bad, n; float col[6], cmd0, dt; float u[LN_WIN], y[LN_WIN]; } ln_win;
 typedef struct { int motor, mask; float ang[FC_MAX_CHAIN]; int joint[FC_MAX_CHAIN]; } ln_pulse;
+/* A test stage's fits (identifyMotorResponse or identifyServoResponse, once per motor or servo tested), as numbers
+ * only: the inputs go in, learn_fit_run() fills the results, and nothing else in the learning is touched. That lets
+ * a companion run it on a worker thread (runner/pi/learn_fit_worker.h), on its own copy of the program, while its
+ * main loop goes on: a second or more on a Pi Zero. */
+#define LN_FIT_MAX (FC_MAX_MOTORS > FC_MAX_JOINTS ? FC_MAX_MOTORS : FC_MAX_JOINTS)
+#define LN_FIT_IN (1 + 4 * 2 * (1 + LN_WIN) + 1)   /* the formula's inputs: up to 4 windows, then dt */
+typedef struct {
+  int fn, kind, n, gen;                  /* the formula (a host index), 1 motors / 2 servos, how many, the airframe's */
+  int who[LN_FIT_MAX], err[LN_FIT_MAX];
+  float in[LN_FIT_MAX][LN_FIT_IN], out[LN_FIT_MAX][4];
+} ln_fit_job;
 
 enum { LN_THR_NONE = 0, LN_THR_HAND, LN_THR_FREE, LN_THR_EXCITE, LN_THR_RECOVER };
 
@@ -90,6 +101,10 @@ typedef struct {
   ln_win win[LN_TESTS]; int nwin, win_cur;
   double sums_e[6], sums_d[6], sums_y[6], sums_y2[6]; int sums_n;
   float fit_force, fit_rot, desc_force, desc_rot; int have_fit;
+  /* the test stages' fits: done at once (fit_start NULL), or started elsewhere and handed back with learn_fit_done();
+   * meanwhile the learning holds (fit_busy), so it goes on as if no time had passed. fit_seg: the stage last fitted. */
+  ln_fit_job fit; int fit_busy, fit_seg, fit_gen;
+  int (*fit_start)(void *ctx, ln_fit_job *J); void *fit_ctx;   /* 0: started (learn_fit_done follows), else run it here */
   /* the throw */
   int thr; ln_pulse plan[LN_PLAN]; int nplan, pi, step, cut; float tplan, thr_t, ts, w0[3], low_t, h0, z, zmax, zmin, calm_t, t_free;
   float res_fitR, res_fitF, res_taus[LN_THROW_IN], res_r[3]; int res_ok, res_nt;
@@ -119,9 +134,12 @@ enum { LN_CMD_CALIBRATE = 1, LN_CMD_STOP, LN_CMD_USE_DESC, LN_CMD_USE_LEARNED, L
 int learn_command(learn_state *L, int cmd);
 /* The navigation flies home or lands by itself (the radio link lost, the supervisor, the fly switch off in the air):
  * a calibration running stops, and none starts until it flies for the pilot again. Its test moves would shake the
- * way home, and its fits take the companion's time from the navigation (a second on a Pi Zero, when the flight core
- * gets no command and goes to its failsafe). Call it on every navigation step. */
+ * way home. Call it on every navigation step. */
 void learn_nav_own(learn_state *L, int own);
+/* The fits (see ln_fit_job): run a job on a host with the learning's formulas (any thread, if nothing else calls
+ * that host meanwhile); and hand a finished job back, on the learning's thread. */
+void learn_fit_run(rn_host *H, ln_fit_job *J);
+void learn_fit_done(learn_state *L);
 /* For the screen: a few numbers (see learn_core.c learn_status) and the message. */
 int learn_status(const learn_state *L, float *out);
 /* The throw plan's length in pulses and its rough duration [s] (to say how high to throw it). */

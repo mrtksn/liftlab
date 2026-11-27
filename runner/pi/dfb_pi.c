@@ -79,6 +79,7 @@
 #define _DEFAULT_SOURCE
 #include "autotune_core.h"
 #include "autotune_worker.h"
+#include "learn_fit_worker.h"
 #include "file_rx.h"
 #include "fleet.h"
 #include "latch_hw.h"
@@ -566,6 +567,7 @@ int main(int argc, char **argv) {
     if (!no_learn) { if (learn_init(&LS, &H) || learn_config_load(&LS, pc, np) || learn_airframe(&LS, af, na)) fprintf(stderr, "learning: %s\n", LS.msg); else have_learn = 1; }
     if (!no_super) { if (super_init(&SS, &H) || super_config_load(&SS, pc, np) || super_airframe(&SS, af, na)) fprintf(stderr, "supervisor: %s\n", SS.why_text); else have_super = 1; }
   } else if (af_path || pi_path) fprintf(stderr, "the learning and the supervisor need both --airframe and --pi\n");
+  static learn_fit_worker LFW; if (have_learn) learn_fit_worker_init(&LFW, &LS, rn_builtin_img, rn_builtin_len);   /* the calibration's fits, off the main loop */
 
   static cargo_state CG; static latch_out LO[CG_MAX]; uint32_t cg_drive = 0, cg_said = 0;
   if (latch_spec) {                                                  /* the latches: each closed to start with */
@@ -685,6 +687,7 @@ int main(int argc, char **argv) {
       }
     }
     autotune_work_poll(&AW, &AT);
+    if (have_learn) learn_fit_poll(&LFW, &LS);
     static unsigned at_events;
     if (AT.events != at_events) {
       at_events = AT.events;

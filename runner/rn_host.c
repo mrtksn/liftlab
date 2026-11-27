@@ -155,7 +155,7 @@ void rn_host_tick(rn_host *H, float dt) {
 }
 
 /* One call on one slot: the instance's memory in, inputs in, run, result out, memory back. */
-static float swap_buf[512];
+static RN_TLS float swap_buf[512];
 static int run_on(rn_host *H, int s, int fn, int inst, const float *in, float *out) {
   rn_slot *S = &H->slot[s]; int j = fmap[s][fn]; if (j < 0) return RN_T_NO_FN;
   const rn_fn *f = &S->P.fn[j];

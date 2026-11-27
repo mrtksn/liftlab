@@ -60,6 +60,7 @@ int learn_init(learn_state *L, rn_host *H) {
     if (*slot[i] < 0 || rn_host_in_size(H, *slot[i]) != in_sz[i] || rn_host_out_size(H, *slot[i]) != out_sz[i]) { SAY("formula %s isn't what the learning expects", names[i]); return -1; }
   }
   L->keep = 0; L->hold_pulses = 1; L->then_cal = 1;
+  L->fit_busy = 0; L->fit_seg = -1; L->fit_gen = 0; L->fit_start = 0; L->fit_ctx = 0;   /* (a companion sets fit_start after this) */
   L->ok = 1; SAY("learning ready");
   return 0;
 }
@@ -78,6 +79,7 @@ int learn_airframe(learn_state *L, const uint8_t *blob, uint32_t len) {
   for (int i = 0; i < L->FA.A.n_motors; i++) { L->col0[i] = n; L->nb[i] = L->FA.A.mot[i].n_basis; n += L->nb[i]; L->m_eff[i] = 1; L->m_meas[i] = 0; }
   for (int j = 0; j < FC_MAX_JOINTS; j++) L->j_meas[j] = 0;
   if (n > LN_IN) { SAY("this airframe has %d inputs; the learning takes %d", n, LN_IN); return -1; }
+  L->fit_gen++;                                                      /* a fit still running belongs to the old one */
   L->n = n; L->use_learned = 0; L->cal = 0; L->thr = LN_THR_NONE; L->refining = 0; L->have_fit = 0;
   reset_learning(L); memcpy(L->flyB, L->B, sizeof L->B); L->accepted = L->adapt = 0; L->adapt_updates = L->adapt_rollbacks = 0; L->model_dirty = 1;
   SAY("Flying on the airframe description%s.", L->keep ? ", learning in flight" : "");
@@ -282,7 +284,7 @@ static void start_calibration(learn_state *L, int from_throw) {
   add_seg(L, 4, -1, 0.04f, 3);                                           /* everything together */
   add_seg(L, 5, -1, 0.04f, 2);                                           /* validating, on a fresh signal */
   float t0 = 0; for (int s = 0; s < L->nseg; s++) { L->seg[s].t0 = t0; t0 += L->seg[s].dur; }
-  L->total = t0; L->cal_t = 0; L->cur = -1; L->gate = -1; L->held = 0; L->waiting = 0; L->from_throw = from_throw && L->use_learned;
+  L->total = t0; L->cal_t = 0; L->cur = -1; L->fit_seg = -1; L->gate = -1; L->held = 0; L->waiting = 0; L->from_throw = from_throw && L->use_learned;
   for (int i = 0; i < 6; i++) L->sums_e[i] = L->sums_d[i] = L->sums_y[i] = L->sums_y2[i] = 0;
   L->sums_n = 0; L->cal = 1; L->msg[0] = 0;
 }
@@ -309,39 +311,57 @@ static void finish_calibration(learn_state *L) {
   else SAY("Calibration finished. The learned model explains %d%% of the rotation and %d%% of the force, but %s does %s (%d%%, %d%%), so it keeps flying on %s.",
     pc(L->fit_rot), pc(L->fit_force), base, better ? "nearly as well" : "as well or better", pc(L->desc_rot), pc(L->desc_force), base);
 }
-static void fit_motors(learn_state *L) {
-  if (!L->hold_pulses) return;
-  for (int i = 0; i < L->FA.A.n_motors; i++) {
-    int k = 1, nw = 0; float dt = 0.005f;
+/* ── the test stages' fits (ln_fit_job): the inputs gathered here, run anywhere, the results taken back here ── */
+static void fit_prepare(learn_state *L, int kind) {                 /* kind 1: the motors' pulses, 2: the servos' steps */
+  ln_fit_job *J = &L->fit; J->kind = kind; J->fn = kind == 1 ? L->f_mot : L->f_srv; J->n = 0; J->gen = L->fit_gen;
+  if (kind == 1 && !L->hold_pulses) return;
+  const int count = kind == 1 ? L->FA.A.n_motors : L->FA.A.n_joints, least = kind == 1 ? 30 : 50;
+  for (int i = 0; i < count && J->n < LN_FIT_MAX; i++) {
+    float *in = J->in[J->n]; int k = 1, nw = 0; float dt = 0.005f;
     for (int w = 0; w < L->nwin && nw < 4; w++) {
-      const ln_win *W = &L->win[w]; if (W->kind != 1 || W->who != i || W->bad || W->n < 30) continue;
-      k = put_list(pk, k, W->u, W->n, LN_WIN); k = put_list(pk, k, W->y, W->n, LN_WIN); nw++; dt = W->dt;
+      const ln_win *W = &L->win[w]; if (W->kind != kind || W->who != i || W->bad || W->n < least) continue;
+      k = put_list(in, k, W->u, W->n, LN_WIN); k = put_list(in, k, W->y, W->n, LN_WIN); nw++; dt = W->dt;
     }
     if (!nw) continue;
-    pk[0] = (float)nw; for (; k < 1 + 4 * 2 * (1 + LN_WIN); k++) pk[k] = 0;
-    pk[k++] = dt;
-    float o[4]; if (call(L, L->f_mot, o)) continue;   /* tau, curve, gain, fit */
-    L->m_fit[i] = o[3];
-    if (o[3] < 0.5f || !(o[2] > 0.3f && o[2] < 3)) continue;   /* a poor fit, or a response nothing like the model's */
-    L->m_tau[i] = o[0]; L->m_curve[i] = o[1]; L->m_meas[i] = 1;
+    in[0] = (float)nw; for (; k < LN_FIT_IN - 1; k++) in[k] = 0;
+    in[k] = dt;
+    J->who[J->n++] = i;
   }
 }
-static void fit_servos(learn_state *L) {
-  for (int j = 0; j < L->FA.A.n_joints; j++) {
-    int k = 1, nw = 0; float dt = 0.005f;
-    for (int w = 0; w < L->nwin && nw < 4; w++) {
-      const ln_win *W = &L->win[w]; if (W->kind != 2 || W->who != j || W->bad || W->n < 50) continue;
-      k = put_list(pk, k, W->u, W->n, LN_WIN); k = put_list(pk, k, W->y, W->n, LN_WIN); nw++; dt = W->dt;
+void learn_fit_run(rn_host *H, ln_fit_job *J) {
+  for (int k = 0; k < J->n; k++) {
+    int e = rn_host_call(H, J->fn, 0, J->in[k], J->out[k]);
+    if (!e) for (int m = 0; m < 4; m++) if (!fin(J->out[k][m])) e = -1;
+    J->err[k] = e;
+  }
+}
+static void fit_apply(learn_state *L) {
+  const ln_fit_job *J = &L->fit;
+  if (J->gen != L->fit_gen) return;                                  /* fitted on an airframe since replaced */
+  for (int k = 0; k < J->n; k++) {
+    if (J->err[k]) continue;
+    const float *o = J->out[k]; int i = J->who[k];
+    if (J->kind == 1) {                                              /* tau, curve, gain, fit */
+      L->m_fit[i] = o[3];
+      if (o[3] < 0.5f || !(o[2] > 0.3f && o[2] < 3)) continue;      /* a poor fit, or a response nothing like the model's */
+      L->m_tau[i] = o[0]; L->m_curve[i] = o[1]; L->m_meas[i] = 1;
+    } else {                                                         /* rate, lag, gain, fit */
+      L->j_fit[i] = o[3];
+      if (o[3] < 0.4f || !(o[2] > 0.3f && o[2] < 3)) continue;
+      L->j_rate[i] = o[0]; L->j_lag[i] = o[1]; L->j_meas[i] = 1; L->model_dirty = 1;
     }
-    if (!nw) continue;
-    pk[0] = (float)nw; for (; k < 1 + 4 * 2 * (1 + LN_WIN); k++) pk[k] = 0;
-    pk[k++] = dt;
-    float o[4]; if (call(L, L->f_srv, o)) continue;   /* rate, lag, gain, fit */
-    L->j_fit[j] = o[3];
-    if (o[3] < 0.4f || !(o[2] > 0.3f && o[2] < 3)) continue;
-    L->j_rate[j] = o[0]; L->j_lag[j] = o[1]; L->j_meas[j] = 1; L->model_dirty = 1;
   }
 }
+/* Fit the stage that just ended: here, or started elsewhere (returns 1: the learning holds until learn_fit_done). */
+static int fit_stage(learn_state *L, int kind) {
+  L->fit_seg = L->cur;
+  fit_prepare(L, kind);
+  if (!L->fit.n) return 0;
+  if (L->fit_start && !L->fit_start(L->fit_ctx, &L->fit)) { L->fit_busy = 1; return 1; }
+  learn_fit_run(L->H, &L->fit); fit_apply(L);
+  return 0;
+}
+void learn_fit_done(learn_state *L) { if (!L->fit_busy) return; L->fit_busy = 0; fit_apply(L); }
 /* What the stage asks for at time t into it: fills the EXC frame; returns the recording window's end (0: none). */
 static float seg_now(learn_state *L, const ln_seg *s, float t, float *e) {
   const fc_airframe *A = &L->FA.A; int nm = A->n_motors; float *m = e + 6, *sv = e + 6 + nm;
@@ -383,13 +403,15 @@ static void record(learn_state *L, const ln_seg *s, int si) {
   W->y[W->n] = project(W->col, y6); W->n++;
 }
 static void calibration_tick(learn_state *L, float *e) {
+  if (L->fit_busy) { L->waiting = 1; e[0] = 0; return; }           /* a stage's fit runs elsewhere: hold until it is back */
   float tilt = tilt_of(L);
   if (tilt > 0.52f || nrm3(L->w) > 4) {                              /* tilted past 30° or spinning: pause the excitation */
     L->held = 1; if (L->win_cur >= 0) L->win[L->win_cur].bad = 1; e[0] = 0; return;
   }
   L->held = 0; L->cal_t += L->dt;
   int si = -1; for (int s = 0; s < L->nseg; s++) if (L->cal_t >= L->seg[s].t0 && L->cal_t < L->seg[s].t0 + L->seg[s].dur) { si = s; break; }
-  if (L->cur >= 0 && L->cur != si && L->seg[L->cur].after) { if (L->seg[L->cur].after == 1) fit_motors(L); else fit_servos(L); }   /* a test stage just ended: fit it */
+  if (L->cur >= 0 && L->cur != si && L->seg[L->cur].after && L->fit_seg != L->cur &&   /* a test stage just ended: fit it */
+      fit_stage(L, L->seg[L->cur].after)) { L->cal_t -= L->dt; L->waiting = 1; e[0] = 0; return; }   /* (elsewhere: on from here once it's back) */
   if (si < 0) { finish_calibration(L); e[0] = 0; return; }
   const ln_seg *s = &L->seg[si];
   if (L->cur != si) {
@@ -668,7 +690,7 @@ void learn_ltel(learn_state *L, const float *p, int n) {
     if (!L->external_load) refine_step(L);
     if (L->thr == LN_THR_RECOVER) { L->thr_t += L->dt; recover_check(L); }
     L->updated = 0;
-    if (!L->external_load && cadence_ok && (L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* valid telemetry only (200 Hz) */
+    if (!L->fit_busy && !L->external_load && cadence_ok && (L->keep || L->cal) && flying && !(L->flags & 2) && L->n) {   /* valid telemetry only (200 Hz) */
       float mem = L->cal ? maxf(MEM_CAL, L->total) : MEM_FLIGHT;
       if (!rls_step(L, mem)) L->updated = 1;
     }

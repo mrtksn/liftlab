@@ -303,7 +303,7 @@ static void k_m2q(float *d, const float *M) {
  * minimization,  min ‖√W (C x − r)‖² + Σ (λⱼ + qⱼ)(xⱼ − qⱼ rⱼ / (λⱼ + qⱼ))²,  by Householder QR on the stacked
  * system [√W C; √(Λ+Q)], which never squares it. Same answer in exact arithmetic; holds up in floats. */
 #define RN_BLS_ROWS (16 + RN_BLS_MAX)
-static float bls_M[RN_BLS_ROWS * (RN_BLS_MAX + 1)];
+static RN_TLS float bls_M[RN_BLS_ROWS * (RN_BLS_MAX + 1)];
 static void qr_solve(float *M, int rows, int m, float *x) {
   const int W = m + 1;
   for (int c = 0; c < m; c++) {
@@ -327,12 +327,12 @@ static void qr_solve(float *M, int rows, int m, float *x) {
     x[r] = FABSF(M[r * W + r]) < 1e-30f ? 0 : s / M[r * W + r];
   }
 }
-static uint32_t bls_work;
+static RN_TLS uint32_t bls_work;
 static int k_bls(float *A, int32_t d, int32_t cl, int32_t lo, int32_t hi, int32_t w, int32_t Wt, int32_t pq, int32_t pr, int32_t rel, int K, int cap) {
   int n = (int)A[cl];
   if (n < 0 || n > cap || n > RN_BLS_MAX || K > 16) return RN_T_KERNEL;
-  static float x[RN_BLS_MAX], y[RN_BLS_MAX], r[16], sw[16];
-  static int F[RN_BLS_MAX]; static uint8_t fixed[RN_BLS_MAX];
+  static RN_TLS float x[RN_BLS_MAX], y[RN_BLS_MAX], r[16], sw[16];
+  static RN_TLS int F[RN_BLS_MAX]; static RN_TLS uint8_t fixed[RN_BLS_MAX];
   const float *C = A + cl + 1, *L = A + lo + 1, *U = A + hi + 1, *wv = A + w, *Wv = A + Wt;
   float relv = A[rel];
   int nq = pq >= 0 ? (int)A[pq] : 0, nr = pr >= 0 ? (int)A[pr] : 0;
