@@ -92,6 +92,7 @@
 #include "radio_udp.h"
 #include "rn_link.h"
 #include "flow_in.h"
+#include "loop_prof.h"
 #include "range_tof250.h"
 #include "spin_core.h"
 #include "super_core.h"
@@ -115,6 +116,9 @@ extern const uint8_t *const rn_builtin_img;
 extern const uint32_t rn_builtin_len;
 
 int serial_custom_baud(int fd, int baud);
+#ifndef LOOP_MIN_S
+#define LOOP_MIN_S 0.002                 /* the main loop's shortest pass [s] (below) */
+#endif
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 
 static int open_serial(const char *dev, int baud) {
@@ -662,11 +666,20 @@ int main(int argc, char **argv) {
   int in_fd = 0, nav_got = 0; float nav_v[16];
   static rc_who WHO; int sticks = 1;   /* who flies it (rc_core.h rc_who): the sticks as in angle mode (from the start: a
                                         * restart in the air passes the radio's sticks on), or the navigation */
+  static loop_prof LP; loop_prof_init(&LP);   /* where the main loop's processor time goes: the command cpu (loop_prof.h) */
   static flow_in FI; flow_in_init(&FI);   /* the downward camera's optical flow: dfb_flow's readings to the command port (flow_in.h) */
   static pickup_state PKt; pickup_init(&PKt); uint32_t pk_seen[2] = { 0, 0 };   /* a pickup from a text command (the radio's is in RP) */
   for (;;) {
     struct pollfd pf[5] = { { link_publish ? link_mq.fd : link, POLLIN, 0 }, { gps, POLLIN, 0 }, { in_fd, POLLIN, 0 }, { udp, POLLIN, 0 }, { crsf, POLLIN, 0 } };
-    poll(pf, 5, 5);
+    loop_prof_at(&LP, LP_WAIT);
+    {   /* one pass every LOOP_MIN_S at most: at 921600 baud the flight core's bytes are nearly always there, and a pass for
+         * each few of them spent most of the processor checking everything for nothing (cpu). Between passes they wait in
+         * the kernel's buffer (~180 bytes in 2 ms); a frame waits 2 ms at most */
+      static double pass_t; double gap = now_s() - pass_t;
+      if (gap >= 0 && gap < LOOP_MIN_S) { struct timespec ts = { 0, (long)((LOOP_MIN_S - gap) * 1e9) }; nanosleep(&ts, NULL); }
+      poll(pf, 5, 5); pass_t = now_s();
+    }
+    loop_prof_at(&LP, LP_IO);
     double t = now_s();
     tof250_poll(&RF, t);                                             /* (one short I²C transfer at most) */
     flush_link(link);
@@ -694,11 +707,13 @@ int main(int argc, char **argv) {
       printf("autotune: %s\n", AT.message);
     }
 
+    loop_prof_at(&LP, LP_RADIO);
     if (R && (packets || (pf[4].revents & POLLIN))) for (int more = 1; more;) {   /* (a packet link: every pass, it sends its packets from there) */
       uint8_t b[512]; int n = R->read(R, b, sizeof b, 0); for (int i = 0; i < n; i++) tlm_crsf_input(&CP, b[i], &RCI, t);
       more = n == (int)sizeof b;
     }
     if (gps >= 0 && (pf[1].revents & POLLIN)) gps_read(&G, gps);
+    loop_prof_at(&LP, LP_CMD);
     static uint32_t text_seen; static double radio_text_t = -1e9;   /* the radio's text commands (rc_core.h RC_CMD_TEXT): the last taken, when */
     if (RCI.text_n - text_seen > RC_TEXTQ) text_seen = RCI.text_n - RC_TEXTQ;   /* (more came at once than are kept: the oldest are gone) */
     for (int k = 2; k < 5; k++) if (k == 4 ? RCI.text_n != text_seen : pf[k].fd >= 0 && (pf[k].revents & POLLIN)) {   /* the pilot: standard input, UDP, the radio's text (one a pass, in turn) */
@@ -717,11 +732,12 @@ int main(int argc, char **argv) {
       char *s = buf, *nl;
       while ((nl = memchr(s, '\n', (size_t)(buf + have - s)))) {      /* one command per line */
         *nl = 0; if (nl > s && nl[-1] == '\r') nl[-1] = 0;
-        if (k == 3 && flow_in_reading(&FI, s, t)) { s = nl + 1; continue; }   /* a reading from the camera (dfb_flow): taken, no answer */
+        if (k == 3) { loop_prof_in(&LP, LP_FLOWIN); int fr_ = flow_in_reading(&FI, s, t); loop_prof_out(&LP); if (fr_) { s = nl + 1; continue; } }   /* a reading from the camera (dfb_flow): taken, no answer */
         if (*s) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
           if (!design) design = flow_in_command(&FI, s, t, reply, (int)sizeof reply);   /* flow, flowcal: the camera's (no pilot's command) */
+          if (!design && (!strcmp(s, "cpu") || !strcmp(s, "cpu off"))) { loop_prof_said(&LP, s + 3 + (s[3] == ' '), LP_CMD, reply, sizeof reply); design = 1; }   /* where the processor time goes (loop_prof.h) */
           if (!design && !strcmp(s, "height")) {             /* the height's sources side by side, and what the navigation fused */
             int kk = 0; char rs[200]; tof250_said(&RF, t, rs, (int)sizeof rs);
             kk += snprintf(reply + kk, sizeof reply - (size_t)kk, "%s; barometer %s", rs, nav_v[13] > 0.5f && t - last_nav < 1 ? "" : "not heard");
@@ -855,6 +871,7 @@ int main(int argc, char **argv) {
       }
       if (k == 2) { in_n = (int)(buf + have - s); if (in_n >= (int)sizeof in - 1) in_n = 0; memmove(in, s, (size_t)in_n); }
     }
+    loop_prof_at(&LP, LP_OUT);
     if (wq_at < wq_n && t >= wq_next) {                    /* the wiring's settings lines to the ESP32, one each 20 ms (its UART's buffer) */
       uint8_t fr[192]; uint32_t len = rn_link_frame(fr, sizeof fr, RN_LINK_SETTING, (const uint8_t *)wq[wq_at], (uint32_t)strlen(wq[wq_at]));
       if (len) link_raw(link, fr, len);
@@ -862,6 +879,7 @@ int main(int argc, char **argv) {
       wq_next = t + 0.02;
     }
     if (restart_t >= 0 && t - restart_t > 1) { printf("restart: asked for; stopping (the service starts it again)\n"); fflush(stdout); exit(75); }   /* (75: a failure to systemd, so restart = on-failure starts it too) */
+    loop_prof_at(&LP, LP_LINK);
     uint8_t rxs[512]; const uint8_t *rx = rxs; ssize_t n; int si = 0;
     if (link_publish) { mq_rx_n = 0; mq_nstart = 0; mq_poll(&link_mq, t); rx = mq_rx; n = (ssize_t)mq_rx_n; }   /* (it connects, reads and pings) */
     else n = (pf[0].revents & POLLIN) ? read(link, rxs, sizeof rxs) : 0;
@@ -905,6 +923,7 @@ int main(int argc, char **argv) {
           continue;
         memcpy(lt, L.buf, (size_t)total * 4);
         if (have_learn) {
+          loop_prof_in(&LP, LP_LEARN);
           static char was[sizeof LS.msg]; memcpy(was, LS.msg, sizeof was);
           learn_ltel(&LS, lt, n);
           int k = learn_exc_frame(&LS, fo);
@@ -916,14 +935,18 @@ int main(int argc, char **argv) {
           if (!LS.cal) said = 0;
           static int thr_was; if (thr_was && !LS.thr && P.fly) { memcpy(P.sp.target, o.p, sizeof P.sp.target); memset(P.sp.vref, 0, sizeof P.sp.vref); }   /* caught itself: hold there */
           thr_was = LS.thr;
+          loop_prof_out(&LP);
         }
         if (have_super) {
+          loop_prof_in(&LP, LP_SUPER);
           super_ltel(&SS, lt, n);
           int k = super_set_frame(&SS, fo);
           if (k) { send_frame(link, RN_LINK_SET, fo, (uint32_t)k * 4); nav_set(&N, fo, k); if (have_learn) learn_set(&LS, fo, k); }
           for (; seen_log < SS.log_seq; seen_log++) { uint32_t back = SS.log_seq - 1 - seen_log; if (back < SP_LOG) printf("supervisor: %.1f s %s\n", SS.log[back].t, SS.log[back].text); }
+          loop_prof_out(&LP);
         }
         if (type == RN_LINK_TUNE_LTEL && have_learn && have_super) {
+          loop_prof_in(&LP, LP_TUNE);
           autotune_sample(&AT, lt, total, t);
           if (restore_tuning && AT.have_status) {
             float b[PID_FRAME] = {PID_VERSION, 3, 16777215};
@@ -954,6 +977,7 @@ int main(int argc, char **argv) {
               return 1;
             }
           }
+          loop_prof_out(&LP);
         }
         continue;
       }
@@ -961,6 +985,7 @@ int main(int argc, char **argv) {
     }
     /* the navigation: a step on the newest NAV frame (two in one read: the older is passed over, so no step is made of
      * no time), and a guided command from it */
+    loop_prof_at(&LP, LP_NAV);
     if (nav_got) {
       nav_got = 0; const float *v = nav_v;
       nav_in in; memset(&in, 0, sizeof in);
@@ -1030,7 +1055,7 @@ int main(int argc, char **argv) {
         const int was = LS.cal; learn_nav_own(&LS, N.rc_rth || N.sup_mode >= 2 || N.fly_land);
         if (was && !LS.cal) printf("learning: %s\n", LS.msg);
       }
-      int e = nav_step(&N, &in, &P.sp, dt, &o);
+      loop_prof_in(&LP, LP_NAVSTEP); int e = nav_step(&N, &in, &P.sp, dt, &o); loop_prof_out(&LP);
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
         int k = fleet_out(&FL, fo); if (k) send_frame(link, RN_LINK_PEER_OUT, fo, (uint32_t)k * 4);
@@ -1067,6 +1092,7 @@ int main(int argc, char **argv) {
       cg_drive = d;
       if (CG.nmsg != cg_said) { cg_said = CG.nmsg; printf("cargo: %s\n", CG.msg); }
     }
+    loop_prof_at(&LP, LP_TLM);
     if ((have_learn || have_super || radio_here || have_fleet) && t - last_want > 0.5) {
       float w = (float)((have_learn || have_super ? 1 : 0) | (radio_here ? 2 : 0) | (have_fleet ? 4 : 0) |
                         (have_learn && have_super && baud >= 460800 ? 8 : 0));
@@ -1091,6 +1117,7 @@ int main(int argc, char **argv) {
     } else if (!radio_here && t - tlm_want < 1 && t >= next_pack) {
       next_pack = t + 0.05; static float pk[TLM_PACK_MAX]; int n = tlm_pack(&TS, pk, TLM_PACK_MAX); if (n) send_frame(link, RN_LINK_TLM, pk, (uint32_t)n * 4);
     }
+    loop_prof_at(&LP, LP_OUT);
     if (P.arm && t - last_nav > 0.3) P.arm = P.fly = 0;   /* lost the drone's telemetry: nothing to fly on */
     /* No navigation telemetry (the ESP32 sends it while guided commands come): announce ourselves, disarmed. Never
      * while it may be flying: commands that stop land it (its failsafe), a disarm would drop it. Every frame it sends
