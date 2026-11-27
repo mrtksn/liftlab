@@ -919,7 +919,7 @@ function piText(tw, s) {
     return { say: [`airframe ${name}: ${k & 255} motors, ${k >> 8} servos, to the ESP32 (it says when it has it)`, 'esp32: airframe loaded and saved (the simulator flies the design\'s)'], log: true };
   }
   if (s === 'restart') return { say: [simArmed() ? 'restart: disarm first' : 'restart: the simulator\'s Pi runs the design\'s files already'], log: true };
-  if (/^map(fix|guard)?( |$)/.test(s)) { const r = simMapText(s); return r == null ? null : { say: r ? [r] : [], log: !s.startsWith('mapfix') }; }   // (dfb_pi: the navigation's map commands)
+  if (/^map(fix|guard|anchor)?( |$)/.test(s)) { const r = simMapText(s); return r == null ? null : { say: r ? [r] : [], log: !s.startsWith('mapfix') }; }   // (dfb_pi: the navigation's map commands)
   return null;
 }
 

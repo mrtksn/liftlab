@@ -221,6 +221,22 @@ int main(int argc, char **argv) {
   CHECK(fabs(B.p[2] - 1.2) < 0.3 && herr() < 0.6, "back down where the rangefinder sees again: z %.2f, %.2f m off", B.p[2], herr());
   range_max = 1e9;
 
+  printf("a map (map_core.h): a wall ahead, the drone placed in it by hand\n");
+  { static map_grid M; static uint8_t cells[80 * 60 * 30], file[40000]; const int n[3] = { 80, 60, 30 }; const float o[3] = { -4, -3, 0 };
+    for (int z = 0; z < n[2]; z++) for (int y = 0; y < n[1]; y++) for (int x = 0; x < n[0]; x++) {
+      float px = o[0] + (x + 0.5f) * 0.1f; cells[x + n[0] * (y + n[1] * z)] = px > 2.0f && px < 2.2f ? MAP_OCC : MAP_FREE; }
+    uint32_t len = map_encode(file, sizeof file, 0.1f, o, n, cells); char r[200];
+    nav_map_attach(&N, &M); CHECK(nav_map_load(&N, file, len, r, sizeof r) == 0, "loads: %s", r);
+    float here[3] = { (float)B.p[0], (float)B.p[1], (float)B.p[2] };   /* (anchored where it truly is: the map's axes the World's) */
+    double R[9]; qm(R, B.q);
+    CHECK(nav_mapanchor(&N, here, (float)atan2(R[3], R[0])) == 0 && N.map.anchored, "placed by hand");
+    SP.target[0] = 5; SP.target[1] = 0; double xmax = -9;
+    for (int k = 0; k < 120; k++) { fly(0.1); if (B.p[0] > xmax) xmax = B.p[0]; if (getenv("MAPDBG") && k % 3 == 0) printf("    t %.1f true %.2f est %.2f v %.2f guard %d tgt %.2f\n", B.t, B.p[0], (double)NO.p[0], B.v[0], NO.guard, (double)NO.target[0]); }
+    CHECK(xmax < 2.0 - N.map.radius + 0.1 && B.p[0] > 1.2, "told to fly 5 m, it stops short of the wall at 2 m (came to %.2f m, its radius %.2f m)", xmax, (double)N.map.radius);
+    fly(12); CHECK(N.map.t_fix > NAV_FIX_STALE && NO.guard, "an anchor doesn't go stale: the guard still holds it %.0f s on", (double)N.map.t_fix);
+    SP.target[0] = 0; fly(8); CHECK(herr() < 0.6, "and back away from it: %.2f m off", herr());
+    nav_map_attach(&N, 0); }
+
   printf("tilt-rotor quad\n");
   /* (it gets there in 2 s, then wanders around the target by up to about 1.5 m on GPS: judged on the mean distance) */
   start(tilt, lt, 0); arm(); SP.target[2] = 1.5f; SP.fly = 1; fly(8); SP.target[0] = 3; fly(2);

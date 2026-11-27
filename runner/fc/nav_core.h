@@ -73,11 +73,17 @@ typedef struct {
  * 2 m: re-solved). Without fixes for NAV_FIX_STALE the guard stands down (where it is in the map is no longer known). */
 #define NAV_FIX_STALE 10.0f              /* [s] */
 #define NAV_GUARD_BRAKE 1.0f             /* [m/s²] the braking the guard counts on (well inside what it can do) */
+#define NAV_DRIFT_SHARE 0.15f            /* the guard's margin grows by this share of the distance flown since a fix (up to 1 m) */
 typedef struct {
   map_grid *M;                           /* the host's map (nav_map_attach), or NULL */
   float radius, v_unknown;               /* the guard: the drone's radius with its margin [m]; its speed near the unknown [m/s] */
   int aligned; float psi, off[3], t_fix, sigma;
   int fuse;                              /* the fixes correct the estimate (1, the default; map fuse off: they only place it) */
+  int anchored;                          /* placed by hand (mapanchor): the guard doesn't stand down without fixes (the flow
+                                          * carries where it is from there) */
+  float yaw;                             /* the navigation's heading, the last step [rad] (for an anchor) */
+  float odo;                             /* how far it has flown since the last fix [m]: its position in the map is that much
+                                          * less sure (the flow's scale), so the guard's margin grows with it */
   float fix_a[3], fix_age;               /* the last fix in the navigation's own frame, and how old it was when it came */
   uint32_t n_fix;
   int guard_was;                         /* (for what it says when the guard starts and stops) */
@@ -130,8 +136,12 @@ int nav_map_load(nav_state *N, const uint8_t *buf, uint32_t len, char *reply, in
 /* A fix: where the hub was age seconds ago, in the map [m]; psi the turn from the map's axes to the navigation's [rad];
  * sigma how sure [m]. 0, or −1 if the estimate hasn't started (nothing to align). */
 int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma);
+/* Placed by hand: the hub is at p in the map, facing heading [rad, from the map's +X toward +Y]. An anchor doesn't go
+ * stale (fixes, when they come, correct it). 0, or −1 before the estimate has started. */
+int nav_mapanchor(nav_state *N, const float p[3], float heading);
 /* The map's text commands (docs/map-navigation.md): mapfix T X Y Z PSI [SIGMA] (T on the clock `now` is on: the
- * flight core's; T ≤ 0: −T seconds ago), mapguard RADIUS [V_UNKNOWN], map (how it is), map clear. 1 if it was one (reply set), else 0. */
+ * flight core's; T ≤ 0: −T seconds ago), mapanchor X Y Z HEADING_DEG, mapguard RADIUS [V_UNKNOWN], map (how it is),
+ * map clear, map fuse on|off. 1 if it was one (reply set), else 0. */
 int nav_map_command(nav_state *N, const char *s, double now, char *reply, int rn);
 
 /* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. In the

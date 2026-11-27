@@ -63,6 +63,9 @@ TYPES = {
         description="Saved trajectory descriptors in LingBot coordinates."),
     "Clearance map": dict(display="report", panel="clearance",
         description="Clearance report: per-frame distance from the walked path to the nearest occupied cell."),
+    "Navigation map": dict(display="report",
+        description="The drone's map (map.dmp, runner/fc/map_core.h): {url, file, bytes, cells, cell_m, origin_m, "
+                    "occupied, free, unknown, levelled, units}. Download it from url, or send it with Send to the drone."),
     "Pixel frames": dict(display="pixels",
         description="Array of {frame, width, height, format, pixels}. Use Float32Array for depth, Uint8ClampedArray "
                     "for rgba."),
@@ -390,6 +393,84 @@ def run_clearance(ctx):
 import clearance as _clearance
 import gaussian_mesh as _gaussian_mesh
 CLEARANCE_PARAMS = _clearance.PARAMS
+import nav_map as _nav_map
+NAV_MAP_PARAMS = (*_nav_map.PARAMS,
+                  choice("unknown_as", "Space the walk didn't see through",
+                         [["unknown", "Unknown: the drone goes in slowly, half a metre at a time"],
+                          ["free", "Free: trust that the walk saw the room's surfaces"]],
+                         help="The clearance grid only calls a cell free where two views saw through it; a walk with "
+                              "the camera at hand height leaves most of a room unknown."))
+
+
+def _clearance_folder(ctx, ref):
+    """The clearance grid's folder from its node (its settings and the Gaussian map it came from)."""
+    if not ref or ref.get("op") != "clearance":
+        raise ValueError("Connect the Walk clearance node.")
+    root, suffix = splat_root(ctx, (ref.get("inputs") or {}).get("splats"))
+    folder = _clearance.artifact_dir(ctx.run, root, validate(CLEARANCE_PARAMS, ref.get("params")))
+    if not (folder/"grid.npz").is_file():
+        raise ValueError("Run Walk clearance first.")
+    return suffix, folder
+
+
+def _nav_map_file(ctx, ref):
+    """The map file a Navigation map node makes (its folder, the file, its settings)."""
+    if not ref or ref.get("op") != "navigation-map":
+        raise ValueError("Connect a Navigation map node.")
+    params = validate(NAV_MAP_PARAMS, ref.get("params"))
+    _, folder = _clearance_folder(ctx, (ref.get("inputs") or {}).get("clearance"))
+    suffix = variant(params, NAV_MAP_PARAMS)
+    return folder, folder/("navmap" + (f"-{suffix}" if suffix else "") + ".dmp"), params
+
+
+def run_navigation_map(ctx):
+    import numpy as np
+    splat_variant, folder = _clearance_folder(ctx, ctx.ref("clearance"))
+    suffix = variant(ctx.params, NAV_MAP_PARAMS)
+    file = folder/("navmap" + (f"-{suffix}" if suffix else "") + ".dmp")
+    g = np.load(folder/"grid.npz")
+    grid = folder/"grid.npz"
+    if ctx.params["unknown_as"] == "free":                # (a copy of the grid with the unknown called free)
+        import tempfile
+        cells = g["cells"].copy(); cells[cells == _nav_map.UNKNOWN] = _nav_map.FREE
+        tmp = Path(tempfile.mkdtemp()) / "grid.npz"
+        np.savez(tmp, cells=cells, origin_m=g["origin_m"], voxel_m=g["voxel_m"])
+        grid = tmp
+    m = _nav_map.from_clearance(grid, ctx.params)
+    file.write_bytes(m["data"])
+    report = json.loads((folder/"report.json").read_text()) if (folder/"report.json").is_file() else {}
+    model = ctx.model or {}
+    out = dict(file=file.name, bytes=len(m["data"]), cells=m["n"], cell_m=round(m["res"], 4), origin_m=[round(v, 3) for v in m["origin"]],
+               occupied=m["occupied"], free=m["free"], unknown=m["unknown"],
+               levelled=bool(model.get("gravity_aligned")), units=report.get("scale_source") or model.get("units"),
+               url=artifact("/gaussian-artifact", ctx.run, model.get("feature_index", ""), "clearance-v1/" + file.name,
+                            variant=splat_variant, clearance=folder.name))
+    if not out["levelled"]:
+        out["warning"] = "This walk's map isn't levelled from the IMU: its Z may not be straight up, and the drone's floor and ceiling would tilt."
+    return dict(navmap=out)
+
+
+def run_send_to_drone(ctx):
+    if ctx.body.get("peek"):
+        raise Pending("Not sent: run this node to send the map to the drone")
+    folder, file, mp = _nav_map_file(ctx, ctx.ref("navmap"))
+    if not file.is_file():
+        raise ValueError("Run the Navigation map first.")
+    data = file.read_bytes()
+    anchor, heading = None, ctx.params["heading_deg"]
+    if ctx.params["anchor"] == "start":
+        anchor = (0.0, 0.0, 0.0, heading)                 # (the walk's map starts at its first camera)
+    elif ctx.params["anchor"] == "floor":
+        res, origin, cells = _nav_map.decode(data)
+        floor = _nav_map.floor_below(cells, res, origin)
+        if floor is None:
+            raise ValueError("No floor found under where the walk started: say where the drone is another way.")
+        anchor = (0.0, 0.0, floor + 0.05, heading)
+    host = str(ctx.survey.pi).split("@")[-1]
+    lines = _nav_map.lines(data, ctx.params["radius_m"], anchor)
+    said = _nav_map.send(host, lines)
+    return dict(answers=[dict(drone=host, said=a) for a in said] or [dict(drone=host, said="no answer (is dfb_pi running, on port 14560?)")])
+
 
 SPLAT_FIT_PARAMS = (   # gaussian-view.js fitGaussianAttributes
     number("extent_trim_pct", "Ignore the outermost points when sizing cells", 2.0, 0.0, 49.0, unit="%", group="Cells",
@@ -514,6 +595,16 @@ OPERATORS = [
          inputs=[port("splats", "Trained Gaussian map"), port("map", "Camera map")],
          outputs=[port("clearance", "Clearance map")], params=[*CLEARANCE_PARAMS], run=run_clearance,
          description="Free and occupied space around the walked path, from the splats and ToF sightlines."),
+    dict(id="navigation-map", label="Navigation map", group="Drone",
+         inputs=[port("clearance", "Clearance map")], outputs=[port("navmap", "Navigation map")], params=list(NAV_MAP_PARAMS),
+         run=run_navigation_map,
+         description="The walk's free and occupied space as the drone's map (map.dmp): merged into the drone's cells, "
+                     "occupied wherever any part was."),
+    dict(id="send-to-drone", label="Send to the drone", group="Drone",
+         inputs=[port("navmap", "Navigation map")], outputs=[port("answers", "JSON records")], params=list(_nav_map.SEND_PARAMS),
+         run=run_send_to_drone,
+         description="The map to the drone's Pi over the Wi-Fi (dfb_pi's command port), with the guard's radius and where "
+                     "the drone is. Its answers come back."),
     dict(id="lingbot-map", label="LingBot-Map", group="Mapping",
          inputs=[port("photos", "Recorded photos"), port("map", "Camera map")],
          outputs=[port("result", "LingBot trajectory and points")], params=list(LINGBOT_PARAMS), run=run_lingbot,

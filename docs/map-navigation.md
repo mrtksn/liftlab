@@ -26,6 +26,8 @@ work over every link:
   The first fix anchors the map to the navigation's estimate (nothing jumps); after it each fix corrects the
   estimate, as a GPS fix does (the estimator's fix without a velocity, or with the GPS's velocity when there is a GPS),
   so the flow's drift goes. `map fuse off`: fixes only place the drone in the map.
+- `mapanchor X Y Z HEADING`: placed by hand: the hub is at X Y Z in the map, its nose HEADING degrees from the map's
+  +X toward +Y. An anchor doesn't go stale (the flow carries the position on); fixes, when they come, correct it.
 - `mapguard RADIUS [V_UNKNOWN]`: the drone's radius with its margin (the occupied cells are grown by it) and its speed
   near the unknown; `map`: how the map and the fixes stand; `map clear`.
 
@@ -37,7 +39,8 @@ map.
 - **The guard** (in `nav_step`, for every pilot: sticks, text commands, return home, the fleet program): the target is
   cut short so the drone stops before an occupied (grown) cell, and goes at most half a metre into unknown space;
   toward what's mapped it flies no faster than it can stop in the room left (1 m/s² of braking), and near the unknown
-  slowly. While the sticks move the target, it waits where the guard stopped it (rather than running on into what's in the way); a go-to keeps its place and goes on as the map opens. Not while it lands
+  slowly. The margin grows by 15 % of the distance flown since the last fix or anchor (up to 1 m): without fixes, the
+  flow's error grows with distance. Too close already, the target goes back so it backs off. While the sticks move the target, it waits where the guard stopped it (rather than running on into what's in the way); a go-to keeps its place and goes on as the map opens. Not while it lands
   (the floor is in the map too), and not without a fix for 10 s (where it is in the map is no longer known). Within
   its radius of something (an overshoot, a map that moved): along it or away, slowly; toward it, the target goes back to
   the margin's edge.
@@ -56,8 +59,9 @@ map.
   link (straight to the navigation's board, at once, as Room Survey reaches the Pi's command port over the Wi-Fi; lost
   while the drone's radio link is down), or by the radio's text commands (a few lines a second, shared with the fixes:
   a map takes a while).
-- **Room Survey**: its reconstruction made into the same map file, its localisation of the downward camera's frames
-  (stamped on the drone's clock) as fixes, sent through the Wi-Fi bridge or straight to the Pi's command port.
+- **Room Survey** (survey/README.md, *A map for the drone*): a walk's clearance grid as the map file (node
+  *Navigation map*), sent to the Pi's command port over the Wi-Fi with the guard's radius and an anchor (node *Send to
+  the drone*). Live fixes from the downward camera's frames come later.
 
 Which cameras a mapper uses, and where they are, is the design's: any camera part on the frame, any computer that
 reads it. The drone's side doesn't know or care.
@@ -72,7 +76,9 @@ reads it. The drone's side doesn't know or care.
 | `dfb_pi`: `map.dmp` and the map commands | built |
 | Simulator: map from the World, sent up the radio or to the board, fixes with noise, delay and dropouts (World settings → The navigation's map) | built |
 | Simulator: map from what the cameras see (unknown until seen) | built |
-| Room Survey: map file and fixes | next |
+| Room Survey: map file, sent with an anchor | built |
+| Room Survey: live fixes from the camera's frames | next |
+| `mapanchor` (placed by hand), the margin growing with distance since a fix | built |
 | Routes around obstacles | later |
 
 Checked in the simulator (open World; fixes 5 a second, 3 cm noise, 0.2 s delay):

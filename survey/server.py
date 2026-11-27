@@ -805,7 +805,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[0-9a-f]{0,8}", suffix):
                 return self.send(b"Invalid variant","text/plain",400)
             allowed = re.fullmatch(r"mesh-v1(-[0-9a-f]{8})?/(mesh\.ply|report\.json)", name) or name in ("report.json","cloud.ply","gaussians.ply",
-                               "clearance-v1/report.json","clearance-v1/grid.npz") or re.fullmatch(
+                               "clearance-v1/report.json","clearance-v1/grid.npz") or re.fullmatch(r"clearance-v1/navmap(-[0-9a-f]{8})?\.dmp", name) or re.fullmatch(
                 r"(reference/[0-9]{7}\.jpg|renders/[0-9]{7}\.png)",name)
             if path == "/lingbot-artifact":
                 if name in ("view.html","cloud.ply","trajectory.json","predictions.npz"):
@@ -844,7 +844,7 @@ class Handler(BaseHTTPRequestHandler):
                         folder = root/chosen if re.fullmatch(r"clearance-v1-[0-9a-f]{16}", chosen) else clearance.artifact_dir(run, root)
                         file = folder/file.name
                     mime = {".ply":"application/octet-stream",".json":"application/json",
-                            ".jpg":"image/jpeg",".png":"image/png",".npz":"application/octet-stream"}[file.suffix]
+                            ".jpg":"image/jpeg",".png":"image/png",".npz":"application/octet-stream",".dmp":"application/octet-stream"}[file.suffix]
                     return self.send(file.read_bytes(), mime,
                                      filename=file.name if mime == "application/octet-stream" else None)
                 except (ValueError,OSError):

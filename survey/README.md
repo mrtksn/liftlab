@@ -31,6 +31,25 @@ Data types (`TYPES` in `operators.py`) declare how they are displayed (map, poin
 
 **Device and recording** (beside Survey leveling) holds how this Mac drives the hardware, saved as `device.json` in the survey folder: Pi SSH destination, image size, frame rate, JPEG bitrate, 180° rotation, lens calibration file, ToF I²C address and poll rate, telemetry UDP port, live-map view spacing and limits, and the calibration checkerboard size (the printable target follows it). `--pi` on the command line still overrides the destination. Camera and sensor changes apply on the next Connect camera.
 
+## A map for the drone
+
+Two pipeline nodes (group **Drone**) take a walk's free and occupied space to the drone's navigation
+(docs/map-navigation.md):
+
+- **Navigation map** (from **Walk clearance**): the clearance grid merged into the drone's cells (8 cm by default,
+  coarser if the map wouldn't fit the drone: 450 000 cells, 32 KB). A merged cell is occupied if any of its cells is,
+  free if at least half are, unknown otherwise; *Space the walk didn't see through* can call the unknown free when the
+  walk saw the room's surfaces (the clearance grid only calls a cell free where two views saw through it). It writes
+  `map.dmp` (`nav_map.py`, the format of `runner/fc/map_core.h`) beside the clearance grid, with a download link, and
+  warns when the walk's map isn't levelled from the IMU.
+- **Send to the drone**: sends the map to the Pi's command port over the Wi-Fi (dfb_pi, UDP 14560, the Pi from Device
+  and recording), with the guard's radius and where the drone is: where the walk started (begin the walk with the
+  drone at its take-off spot), or on the floor below it, facing the way the walk's camera first looked (90°, the map's
+  +Y) unless set otherwise. It runs only when asked (opening a preset doesn't send). The drone's answers come back.
+
+Placed by hand, the drone carries its position on its flow camera, and its guard leaves it more room the further it
+flies (15 % of the distance) until live fixes come.
+
 ## Frame depth replay
 
 Open a saved walk and use **Frame view** above the recorded image to switch between the original photo and four depth sources. The shared timeline selects the same frame in both views. The original photo includes the full fisheye field of view. All four depth previews use the central rectified camera view. In **Reconstruction**, select a method to see its build and display controls.

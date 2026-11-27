@@ -105,18 +105,24 @@ int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma
   else if (!G->fuse) for (int i = 0; i < 3; i++) G->off[i] += 0.5f * e[i];
   float d[3] = { p[0] - G->off[0], p[1] - G->off[1], p[2] - G->off[2] }; rotz(G->fix_a, psi, d);   /* (the fix in the navigation's frame) */
   G->fix_age = age > 0 ? age : 0;
-  G->aligned = 1; G->t_fix = 0; G->sigma = sigma; G->n_fix++;
+  G->aligned = 1; G->t_fix = 0; G->odo = 0; G->sigma = sigma; G->n_fix++;
   return 0;
+}
+
+int nav_mapanchor(nav_state *N, const float p[3], float heading) {
+  if (nav_mapfix(N, 0, p, N->map.yaw - heading, 0.05f)) return -1;   /* (psi: the navigation's heading less the map's) */
+  N->map.anchored = 1; return 0;
 }
 
 static int guard(nav_state *N, const float *target, const float *vref, float *gt, float *gv, float *vlim, nav_out *out, float dt) {
   nav_mapstate *G = &N->map; (void)dt;
   memcpy(gt, target, 3 * sizeof *gt); memcpy(gv, vref, 3 * sizeof *gv);
-  if (!G->M || !G->M->ok || !G->aligned || G->t_fix > NAV_FIX_STALE) return 0;
+  if (!G->M || !G->M->ok || !G->aligned || (G->t_fix > NAV_FIX_STALE && !G->anchored)) return 0;
   float pm[3]; to_map(N, pm, N->pa);
   const int inside = map_at(G->M, pm, 1) == MAP_OCC;   /* within its radius of something already (an overshoot, a map
                                                        * that moved, taking off beside something) */
   int g = 0; float d_occ, d_unk;
+  float extra = NAV_DRIFT_SHARE * G->odo; if (extra > 1) extra = 1;   /* (less sure where it is: more room) */
   float d[3] = { target[0] - N->p[0], target[1] - N->p[1], target[2] - N->p[2] }, dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
   if (dist > 0.02f && inside) {
     /* within its radius of something already: along it or away is allowed, slowly; toward it (the cells as sent, within
@@ -124,23 +130,23 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
      * it creep on into it) */
     float u[3] = { d[0] / dist, d[1] / dist, d[2] / dist }, um[3]; rotz(um, -G->psi, u);
     map_look(G->M, pm, um, dist + G->radius, 0, &d_occ, &d_unk);
-    float allow = d_occ - G->radius - 0.05f; if (allow < -0.5f) allow = -0.5f;
+    float allow = d_occ - G->radius - 0.05f - extra; if (allow < -0.5f) allow = -0.5f;
     if (dist > allow) { for (int i = 0; i < 3; i++) gt[i] = N->p[i] + u[i] * allow; g = 2; }
     if (G->v_unknown < *vlim) { *vlim = G->v_unknown; g |= 1; }
   }
   if (dist > 0.02f && !inside) {
     float u[3] = { d[0] / dist, d[1] / dist, d[2] / dist }, um[3]; rotz(um, -G->psi, u);
     map_look(G->M, pm, um, dist + 0.5f, 1, &d_occ, &d_unk);
-    float allow = d_occ - 0.05f, into = d_unk + 0.5f;   /* stop short of it; into the unknown half a metre at a time */
+    float allow = d_occ - 0.05f - extra, into = d_unk + 0.5f;   /* stop short of it; into the unknown half a metre at a time */
     if (into < allow) allow = into;
-    if (allow < 0) allow = 0;
+    if (allow < -0.5f) allow = -0.5f;                   /* (too close already, the margin grown: back off, not hold and creep) */
     if (dist > allow) { for (int i = 0; i < 3; i++) gt[i] = N->p[i] + u[i] * allow; g = 2; }
     /* and toward it no faster than it can stop in the room there is (the target alone would let it come at full speed
      * and overshoot), looking as far as it could need to stop from its fastest; near the unknown, slowly */
     const float look = 8;
     map_look(G->M, pm, um, look, 1, &d_occ, &d_unk);
     float vt = 1e9f;
-    if (d_occ < look) { float room = d_occ - 0.05f; if (room < 0) room = 0; vt = sqrtf(2 * NAV_GUARD_BRAKE * room); }
+    if (d_occ < look) { float room = d_occ - 0.05f - extra; if (room < 0) room = 0; vt = sqrtf(2 * NAV_GUARD_BRAKE * room); }
     if (d_unk < 1 && vt > G->v_unknown) vt = G->v_unknown;
     if (vt < 0.1f) vt = 0.1f;
     if (vt < 1e8f && vt < *vlim) { *vlim = vt; g |= 1; }
@@ -149,7 +155,7 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
   if (vn > 0.01f) {
     float u[3] = { vref[0] / vn, vref[1] / vn, vref[2] / vn }, um[3]; rotz(um, -G->psi, u);
     map_look(G->M, pm, um, 4, 1, &d_occ, &d_unk);
-    float room = d_occ - 0.05f; if (room < 0) room = 0;
+    float room = d_occ - 0.05f - extra; if (room < 0) room = 0;
     float vmax = sqrtf(2 * NAV_GUARD_BRAKE * room);
     if ((d_unk < 1 || inside) && vmax > G->v_unknown) vmax = G->v_unknown;
     if (vn > vmax) { for (int i = 0; i < 3; i++) gv[i] = vref[i] * vmax / vn; g |= 1; }
@@ -182,6 +188,14 @@ int nav_map_command(nav_state *N, const char *s, double now, char *r, int rn) {
     else r[0] = 0;                                       /* (taken: a fix says nothing back, as a flow reading doesn't) */
     return 1;
   }
+  if ((a = word(s, "mapanchor"))) {
+    for (const char *e; n < 4 && (e = mnum(a, &v[n])); n++) a = e;
+    if (n < 4) { fc_fmt(r, rn, "mapanchor X Y Z HEADING: where the hub is in the map [m], and which way it faces [deg, from the map's +X toward +Y]"); return 1; }
+    float p[3] = { v[0], v[1], v[2] };
+    if (nav_mapanchor(N, p, v[3] * 0.017453293f)) fc_fmt(r, rn, "mapanchor: not yet (the estimate hasn't started)");
+    else fc_fmt(r, rn, "mapanchor: here is %.2f %.2f %.2f in the map, facing %.0f deg", (double)v[0], (double)v[1], (double)v[2], (double)v[3]);
+    return 1;
+  }
   if ((a = word(s, "mapguard"))) {
     for (const char *e; n < 2 && (e = mnum(a, &v[n])); n++) a = e;
     if (n >= 1 && v[0] >= 0 && v[0] < 5) { N->map.radius = v[0]; if (N->map.M) map_grow(N->map.M, v[0]); }
@@ -192,15 +206,15 @@ int nav_map_command(nav_state *N, const char *s, double now, char *r, int rn) {
   if ((a = word(s, "map"))) {
     while (*a == ' ') a++;
     const map_grid *M = N->map.M;
-    if (word(a, "clear")) { if (N->map.M) N->map.M->ok = 0; N->map.aligned = 0; fc_fmt(r, rn, "map: cleared"); return 1; }
+    if (word(a, "clear")) { if (N->map.M) N->map.M->ok = 0; N->map.aligned = 0; N->map.anchored = 0; fc_fmt(r, rn, "map: cleared"); return 1; }
     if ((a = word(a, "fuse"))) { while (*a == ' ') a++; if (word(a, "on")) N->map.fuse = 1; else if (word(a, "off")) N->map.fuse = 0;
       fc_fmt(r, rn, "map fuse: %s", N->map.fuse ? "on (the fixes correct the estimate)" : "off (the fixes only place it in the map)"); return 1; }
     if (!M) { fc_fmt(r, rn, "map: this navigation keeps no map"); return 1; }
     if (!M->ok) { fc_fmt(r, rn, "map: none (send map.dmp)"); return 1; }
     fc_fmt(r, rn, "map: %d x %d x %d at %.2f m, %d occupied; ", M->n[0], M->n[1], M->n[2], (double)M->res, (int)M->n_occ);
     if (!N->map.aligned) fc_fmt_add(r, rn, "no fix yet (mapfix): the guard waits");
-    else fc_fmt_add(r, rn, "%d fixes, the last %.1f s ago%s; guard %s, radius %.2f m", (int)N->map.n_fix, (double)N->map.t_fix,
-                    N->map.t_fix > NAV_FIX_STALE ? " (too long: the guard stands down)" : "", N->map.guard_was & 2 ? "stopping short" : N->map.guard_was ? "slowing" : "clear", (double)N->map.radius);
+    else fc_fmt_add(r, rn, "%s%d fixes, the last %.1f s ago%s; guard %s, radius %.2f m", N->map.anchored ? "anchored by hand; " : "", (int)N->map.n_fix, (double)N->map.t_fix,
+                    N->map.t_fix > NAV_FIX_STALE && !N->map.anchored ? " (too long: the guard stands down)" : "", N->map.guard_was & 2 ? "stopping short" : N->map.guard_was ? "slowing" : "clear", (double)N->map.radius);
     return 1;
   }
   return 0;
@@ -210,7 +224,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   const nav_config *C = &N->C;
   float R[9], q[4];
   for (int k = 0; k < 4; k++) q[k] = in->q[k] / qn;
-  qmat(R, q);
+  qmat(R, q); N->map.yaw = atan2f(R[3], R[0]);
   float b[64]; int k = 0, e;
 
   /* the references, each corrected for where its sensor sits */
@@ -376,7 +390,7 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
            sp->fly && !N->sup_mode && !N->rc_rth, 1);
   nav_sp test = *sp;
   if (dt > 0 && fin(dt)) N->test_left = N->test_left > dt ? N->test_left - dt : 0;
-  if (dt > 0 && fin(dt)) N->map.t_fix += dt;
+  if (dt > 0 && fin(dt)) { N->map.t_fix += dt; N->map.odo += sqrtf(N->v[0] * N->v[0] + N->v[1] * N->v[1] + N->v[2] * N->v[2]) * dt; }
   if (N->test_left > 0 && !N->sup_mode && !N->rc_rth && sp->fly) test.target[N->test_axis] += N->test_offset;
   sp = &test;
   memset(out, 0, sizeof *out);
