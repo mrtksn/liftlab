@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <linux/i2c-dev.h>
@@ -29,6 +30,8 @@ int tof250_parse(tof250_pi *T, const char *spec) {
   return 0;
 }
 
+static uint64_t mono_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
+
 static void fail(tof250_pi *T, double t, const char *what) {
   T->fails++; T->range = 0; T->t = t; T->phase = 0; T->next = t + 1.0;   /* not answering: try again in a second */
   snprintf(T->why, sizeof T->why, "%s: %s", what, strerror(errno));
@@ -48,13 +51,14 @@ void tof250_poll(tof250_pi *T, double t) {
     if (t < T->next) return;
     const unsigned char reg = 0;                                    /* the distance register */
     if (write(T->fd, &reg, 1) != 1) { fail(T, t, "no answer"); return; }
+    T->ask_ns = mono_ns();
     T->phase = 1; T->read_at = t + 0.002; T->next = t + 0.1;       /* (the datasheet's preparation time; its 10 Hz) */
     return;
   }
   if (t < T->read_at) return;
   unsigned char d[2];
   if (read(T->fd, d, 2) != 2) { fail(T, t, "no answer"); return; }
-  T->phase = 0; T->range = lb_tof250_metres(d); T->t = t; T->n++;
+  T->phase = 0; T->range = lb_tof250_metres(d); T->t = t; T->n++; T->raw = d[0] << 8 | d[1]; T->read_ns = mono_ns();
   if (T->range < 0) T->n_far++;
   if (T->said) { T->said = 0; printf("rangefinder: answering again (%.2f m)\n", (double)T->range); fflush(stdout); }
 }

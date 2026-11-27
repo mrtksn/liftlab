@@ -19,7 +19,7 @@
  *   dfb_flow [--dev /dev/video0] [--subdev /dev/v4l-subdev0] [--size 640x480]
  *            [--fps 30] [--crop 256] [--center X,Y] [--patch 64] [--levels 3] [--iters 6]
  *            [--rad-px R] [--mirror] [--exposure-max MS] [--gain-max X] [--bright B]
- *            [--send HOST:PORT] [--print [EVERY]] [--bench SECONDS] [--save DIR [FRAMES]]
+ *            [--send HOST:PORT] [--print [EVERY]] [--bench SECONDS] [--save DIR [FRAMES]] [--frames PORT [--frames-every N]]
  *   --size      the sensor mode [raw px] (the ov5647's 640x480 is binned from the whole sensor at up to ~59 fps)
  *   --fps       frames a second (the sensor's own frame time: fewer cost less, and leave room for a longer exposure)
  *   --crop      the patch's side on the sensor [raw px]; --patch its side after binning (crop/patch an even number)
@@ -28,11 +28,14 @@
  *   --mirror    the picture comes mirrored (left–right): flips FX
  *   --bench     measure for a while, then print the frame rate and the time per frame
  *   --save      write the next FRAMES patches as PGM pictures into DIR (to look at what it sees)
+ *   --frames PORT   every Nth whole frame as a small colour picture, to a reader on 127.0.0.1:PORT (frame_out.h: Room
+ *                   Survey records the floor through it, survey/pi_drone_camera.py); --frames-every N (10)
  *
  * Build: sh runner/pi/build.sh (with dfb_pi), or zig through tools/build_pi_cross.sh.
  */
 #define _DEFAULT_SOURCE
 #include "flow_core.h"
+#include "frame_out.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -92,7 +95,7 @@ static unsigned pixfmt_for(unsigned code, int *raw10) {
 static void usage(void) {
   fprintf(stderr, "usage: dfb_flow [--dev /dev/video0] [--subdev /dev/v4l-subdev0] [--size 640x480] [--fps 30] [--crop 256] [--center X,Y]\n"
                   "                [--patch 64] [--levels 3] [--iters 6] [--rad-px R] [--mirror] [--exposure-max MS] [--gain-max X]\n"
-                  "                [--bright B] [--send HOST:PORT] [--print [EVERY]] [--bench SECONDS] [--save DIR [FRAMES]]\n");
+                  "                [--bright B] [--send HOST:PORT] [--print [EVERY]] [--bench SECONDS] [--save DIR [FRAMES]] [--frames PORT [--frames-every N]]\n");
 }
 
 #define NBUF 4
@@ -100,6 +103,7 @@ static flow_state F;
 
 int main(int argc, char **argv) {
   const char *dev = "/dev/video0", *subdev = "/dev/v4l-subdev0", *send_to = NULL, *save_dir = NULL;
+  int frames_port = 0, frames_every = 10;
   int W = 640, H = 480, crop = 256, cx = -1, cy = -1, patch = 64, levels = 3, iters = 6, mirror = 0, every = 0, save_n = 0;
   double rad_px = 0.0040, exp_max_ms = 8, gain_max = 16, bright = 90, bench = 0, fps = 30;
   for (int i = 1; i < argc; i++) {
@@ -120,6 +124,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(a, "--gain-max")) gain_max = atof(NEXT());
     else if (!strcmp(a, "--bright")) bright = atof(NEXT());
     else if (!strcmp(a, "--send")) send_to = NEXT();
+    else if (!strcmp(a, "--frames")) frames_port = atoi(NEXT());
+    else if (!strcmp(a, "--frames-every")) frames_every = atoi(NEXT());
     else if (!strcmp(a, "--print")) { every = 1; if (v && v[0] >= '0' && v[0] <= '9') every = atoi(NEXT()); }
     else if (!strcmp(a, "--bench")) bench = atof(NEXT());
     else if (!strcmp(a, "--save")) { save_dir = NEXT(); save_n = 30; if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') save_n = atoi(argv[++i]); }
@@ -196,6 +202,16 @@ int main(int argc, char **argv) {
   int cbpl = raw10 ? crop / 4 * 5 : crop, xoff = raw10 ? x0 / 4 * 5 : x0;
   uint8_t *rows = malloc((size_t)cbpl * (size_t)crop);
   if (!rows) { fprintf(stderr, "dfb_flow: out of memory\n"); return 1; }
+  /* the pictures for a reader (--frames): the whole frame copied out, then each 2x2 block one RGB pixel */
+  frame_out FO; memset(&FO, 0, sizeof FO); FO.fd = FO.listen_fd = -1; uint8_t *whole = NULL, *pic = NULL; int order = 0;
+  if (frames_port > 0) {
+    if (frames_every < 1) frames_every = 1;
+    order = pf == V4L2_PIX_FMT_SBGGR10P || pf == V4L2_PIX_FMT_SBGGR8 ? FO_BGGR : pf == V4L2_PIX_FMT_SGBRG10P || pf == V4L2_PIX_FMT_SGBRG8 ? FO_GBRG
+          : pf == V4L2_PIX_FMT_SGRBG10P || pf == V4L2_PIX_FMT_SGRBG8 ? FO_GRBG : FO_RGGB;
+    whole = malloc((size_t)bpl * (size_t)H); pic = malloc((size_t)(W / 2) * (size_t)(H / 2) * 3);
+    if (!whole || !pic || frame_out_open(&FO, frames_port)) { fprintf(stderr, "dfb_flow: --frames %d: %s\n", frames_port, whole && pic ? strerror(errno) : "out of memory"); return 1; }
+    fprintf(stderr, "dfb_flow: pictures (%dx%d, every %d frames) to a reader on 127.0.0.1:%d\n", W / 2, H / 2, frames_every, frames_port);
+  }
   double copy_sum = 0, bin_sum = 0, flow_sum = 0;
   double t_prev = 0, t0 = now(), proc_sum = 0, proc_max = 0, bench_end = bench > 0 ? t0 + bench : 0; long frames = 0, drops = 0, good = 0;
   unsigned seq_prev = 0; int have_seq = 0, ae_wait = 0, saved = 0;
@@ -216,7 +232,12 @@ int main(int argc, char **argv) {
     seq_prev = b.sequence; have_seq = 1;
     for (int j = 0; j < crop; j++) memcpy(rows + (size_t)j * cbpl, (const uint8_t *)mem[b.index] + (size_t)(y0 + j) * bpl + xoff, (size_t)cbpl);
     unsigned seq = b.sequence; int exp_used = exp_l, gain_used = gain;
+    int picture = whole && seq % (unsigned)frames_every == 0 && frame_out_wanted(&FO);   /* (only while a reader is there) */
+    if (picture) memcpy(whole, mem[b.index], (size_t)bpl * (size_t)H);
+    uint64_t t_ns = (uint64_t)b.timestamp.tv_sec * 1000000000ull + (uint64_t)b.timestamp.tv_usec * 1000ull;
     xioctl(fd, VIDIOC_QBUF, &b);
+    if (picture) { frame_out_rgb(pic, whole, bpl, W, H, raw10, order); frame_out_balance(&FO, pic, W / 2, H / 2);
+      frame_out_send(&FO, pic, W / 2, H / 2, t_ns, seq, (uint32_t)(exp_used * line_s * 1e6), (uint32_t)(100.0 * gain_used / gain_unit)); }
     double tc = cpu_now();
     int mean = flow_bin_bayer(rows, cbpl, raw10, 0, 0, patch, bin, img);
     double tb = cpu_now();

@@ -49,6 +49,8 @@ jobs:
           /tmp/test-who
           cc -Wall -Wextra -Werror -fsanitize=address,undefined -Irunner -Irunner/fc runner/fc/test_map.c runner/fc/map_core.c runner/rn.c -lm -o /tmp/test-map
           /tmp/test-map
+          cc -Wall -Wextra -Werror -fsanitize=address,undefined runner/pi/test_frame_out.c runner/pi/frame_out.c -lm -o /tmp/test-frame-out
+          /tmp/test-frame-out
       - name: Sensor driver register tests
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined tools/test_accel_readout.c -lm -o /tmp/test-accel-readout

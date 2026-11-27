@@ -700,7 +700,15 @@ int main(int argc, char **argv) {
     }
     loop_prof_at(&LP, LP_IO);
     double t = now_s();
-    tof250_poll(&RF, t);                                             /* (one short I²C transfer at most) */
+    { long was = RF.n; tof250_poll(&RF, t);                         /* (one short I²C transfer at most) */
+      if (RF.n != was && survey_fd >= 0) {                          /* each reading for Room Survey too (survey/pi_drone_camera.py,
+                                                                     * 127.0.0.1:14683): asked, read [ns], the raw value, big-endian */
+        uint8_t rp[20]; uint64_t a0 = RF.ask_ns, a1 = RF.read_ns; int32_t rv = RF.raw;
+        for (int i = 0; i < 8; i++) { rp[i] = (uint8_t)(a0 >> (56 - 8 * i)); rp[8 + i] = (uint8_t)(a1 >> (56 - 8 * i)); }
+        for (int i = 0; i < 4; i++) rp[16 + i] = (uint8_t)((uint32_t)rv >> (24 - 8 * i));
+        struct sockaddr_in ra = survey_addr; ra.sin_port = htons(14683);
+        sendto(survey_fd, rp, sizeof rp, MSG_DONTWAIT, (struct sockaddr *)&ra, sizeof ra);
+      } }
     flush_link(link);
     if (tx_failed) {
       fprintf(stderr, "flight UART stalled; stopping companion\n");

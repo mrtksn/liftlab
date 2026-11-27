@@ -595,7 +595,7 @@ function piGuide(t, K) {
   // the downward camera's flow (dfb_flow) and a rangefinder on this Pi's I²C (dfb_pi --range): the navigation's flow reference
   const flowCam = tasks.includes('nav') && sensorsOf('flow').find(c => wiredTo(c) === t && hardwarePart(computers(), c, cfg.comps).driver === 'picam');
   const tofPi = tasks.includes('nav') && sensorsOf('tof').find(c => wiredTo(c) === t), tofAddr = tofPi ? hardwarePart(computers(), tofPi, cfg.comps).address || 0x52 : 0;
-  const flowArgs = flowCam ? (w => `--send 127.0.0.1:14560 --fps ${w.fps ?? 30} --rad-px ${w.radPx ?? 0.004}${w.mirror ? ' --mirror' : ''}`)(hardwarePart(computers(), flowCam, cfg.comps)) : '';
+  const flowArgs = flowCam ? (w => `--send 127.0.0.1:14560 --fps ${w.fps ?? 30} --rad-px ${w.radPx ?? 0.004}${w.mirror ? ' --mirror' : ''} --frames 14682`)(hardwarePart(computers(), flowCam, cfg.comps)) : '';
   const fields = [['host', 'Pi (user@address)', 'pi@raspberrypi.local', 'What you type after ssh']];
   if (fix) fields.push(['gps', 'GPS port', gpsSensor && partWiring(gpsSensor).port || '/dev/ttyUSB0', 'Change this saved connection in the Computers board and device details',true]);
   const mqttLink = linkMqtt(computers(), t), mqttBus = hardwareBus(computers(), t);

@@ -11,6 +11,7 @@
  */
 #ifndef RANGE_TOF250_H
 #define RANGE_TOF250_H
+#include <stdint.h>
 
 typedef struct {
   char dev[64]; int addr, fd;
@@ -18,6 +19,8 @@ typedef struct {
   double next, read_at, t_try;
   float range; double t;                 /* the latest: > 0 metres, −1 out of reach (no return), 0 not answering; when */
   long n, n_far, fails; int said;
+  int raw; uint64_t ask_ns, read_ns;     /* the latest reading as the sensor gave it (cm; 8888 no return), and when it was
+                                          * asked for and read [ns, CLOCK_MONOTONIC] (Room Survey's range samples) */
   char why[96];
 } tof250_pi;
 

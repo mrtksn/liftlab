@@ -29,6 +29,11 @@ Opening a preset collects outputs that already exist and stops at the first node
 
 Data types (`TYPES` in `operators.py`) declare how they are displayed (map, points, polygons, splats, frames, table, …) and which tool panel goes with them, so a new operator that produces an existing kind of data needs no dashboard change. Thresholds the processing used to fix — ToF scale checks, up-axis limits, frame recovery and gap repair, cloud-plane support, clearance grid and pose gaps — are operator settings with the previous values as defaults.
 
+**The drone's own camera.** In Device and recording, *Camera: the drone's downward camera* records through the drone's
+flow program instead of Picamera2 (`pi_drone_camera.py` over SSH; `dfb_flow --frames`, docs/pi-suite.md): every tenth
+frame, 320 × 240, balanced on the drone, three a second, with its flight telemetry and ToF readings, while the
+drone's programs run. Give it a lens calibration file of its own (its pictures are smaller and unprocessed).
+
 **Device and recording** (beside Survey leveling) holds how this Mac drives the hardware, saved as `device.json` in the survey folder: Pi SSH destination, image size, frame rate, JPEG bitrate, 180° rotation, lens calibration file, ToF I²C address and poll rate, telemetry UDP port, live-map view spacing and limits, and the calibration checkerboard size (the printable target follows it). `--pi` on the command line still overrides the destination. Camera and sensor changes apply on the next Connect camera.
 
 ## A map for the drone

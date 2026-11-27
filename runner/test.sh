@@ -34,6 +34,8 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_flow" fc/test_flow.c fc/flow_core.c -lm
 "$T/test_flow"
 cc -O2 -Wall -Wextra -o "$T/test_flow_in" pi/test_flow_in.c pi/flow_in.c -lm
 "$T/test_flow_in"
+cc -O2 -Wall -Wextra -o "$T/test_frame_out" pi/test_frame_out.c pi/frame_out.c -lm
+"$T/test_frame_out"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_map" fc/test_map.c fc/map_core.c rn.c -lm
 "$T/test_map"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_who" fc/test_who.c fc/rc_core.c fc/pickup_core.c -lm

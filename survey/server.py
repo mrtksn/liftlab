@@ -161,12 +161,14 @@ class Survey:
         finally:
             err.close()
         self.process = p
-        p.stdin.write((HERE / "pi_camera.py").read_bytes())
+        p.stdin.write((HERE / ("pi_drone_camera.py" if self.device["camera_source"] == "drone" else "pi_camera.py")).read_bytes())
         p.stdin.close()
         threading.Thread(target=self.capture, args=(p,), daemon=True).start()
 
     def sender_args(self):
         d = self.device
+        if d["camera_source"] == "drone":                # (the drone's camera: its pictures, telemetry and ranges as they come)
+            return [f"--frames-port={d['frames_port']}", f"--telemetry-port={d['telemetry_port']}", f"--rotate={int(d['rotate_180'])}"]
         return [f"--width={d['camera_width']}", f"--height={d['camera_height']}", f"--fps={d['camera_fps']}",
                 f"--bitrate={d['jpeg_bitrate']}", f"--rotate={int(d['rotate_180'])}", f"--tof-address={d['tof_address']}",
                 f"--tof-hz={d['tof_poll_hz']}", f"--telemetry-port={d['telemetry_port']}"]

@@ -10,5 +10,5 @@ ${CC:-cc} -pthread -O2 -Wall -Wextra -Wno-unused-parameter -I.. -I../fc -o dfb_p
 echo "built dfb_pi"
 # the downward camera's optical flow (dfb_flow.c, fc/flow_core.c): Linux only (V4L2)
 if [ "$(uname)" = Linux ] || [ -n "$CC" ]; then
-  ${CC:-cc} -O2 -Wall -Wextra -I../fc -o dfb_flow dfb_flow.c ../fc/flow_core.c -lm && echo "built dfb_flow"
+  ${CC:-cc} -O2 -Wall -Wextra -I../fc -o dfb_flow dfb_flow.c frame_out.c ../fc/flow_core.c -lm && echo "built dfb_flow"
 fi

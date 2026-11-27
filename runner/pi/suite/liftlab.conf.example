@@ -35,5 +35,5 @@ boot = yes
 
 # [flow]
 # description = the downward camera's optical flow, to flight's command port (dfb_pi: flow, flowcal)
-# command = nice -n 10 bin/dfb_flow --send 127.0.0.1:14560 --rad-px 0.0040
+# command = nice -n 10 bin/dfb_flow --send 127.0.0.1:14560 --rad-px 0.0040 --frames 14682
 # boot = no

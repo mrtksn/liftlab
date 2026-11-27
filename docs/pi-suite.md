@@ -161,6 +161,12 @@ floor, in good light) for about 40 s, then `liftlab send flight flowcal`: it giv
 the picture is mirrored (`--mirror`), how the camera is turned against the body, and the camera's delay against the
 gyro.
 
+With `--frames 14682` it also serves every tenth frame (`--frames-every`) as a small balanced colour picture, 320 × 240,
+to a reader on the Pi's own port 14682 (`runner/pi/frame_out.h`); `dfb_pi` sends each ToF reading to port 14683 and its
+flight telemetry to 14681. Room Survey records walks through these (Device and recording → Camera: the drone's
+downward camera; `survey/pi_drone_camera.py`), so nothing on the drone stops for a survey. Nothing is made while no one
+reads; a reader costs about 15 % of a Pi Zero (compressing three pictures a second).
+
 With a downward rangefinder beside the camera (`dfb_pi --range tof250:/dev/i2c-1:0x52`, a TOF250 on the Pi's I²C),
 the navigation takes both as its optical-flow reference: the flow for the speed over the ground, the rangefinder for
 the height above it. Its estimate fuses the height: near the ground the rangefinder leads and the barometer's offset is

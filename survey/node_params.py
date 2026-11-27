@@ -116,6 +116,13 @@ def validate(schema, values):
 DEVICE_PARAMS = (
     dict(group="Connection", key="pi_host", label="Pi SSH destination", kind="text", default="pi@192.168.2.127",
          pattern=r"[A-Za-z0-9_.@:\-\[\]]+", help="user@host for SSH. Key login must work without a password."),
+    dict(group="Camera", key="camera_source", label="Camera", kind="choice", default="picamera",
+         options=[["picamera", "The Pi camera through Picamera2 (the drone's flow program stopped)"],
+                  ["drone", "The drone's downward camera through its flow program, while it runs"]],
+         help="The drone's: dfb_flow sends every Nth frame (its --frames port) and dfb_pi the telemetry and the ToF; "
+              "nothing on the drone stops. Its pictures are 320 × 240: use a lens calibration file of their own."),
+    dict(group="Camera", key="frames_port", label="The flow program's picture port", kind="int", default=14682,
+         min=1024, max=65535, help="dfb_flow --frames PORT, on the Pi (the drone's camera only)."),
     dict(group="Camera", key="camera_width", label="Image width", kind="int", unit="px", default=640, min=64, max=4096),
     dict(group="Camera", key="camera_height", label="Image height", kind="int", unit="px", default=480, min=48, max=4096),
     dict(group="Camera", key="camera_fps", label="Frame rate", kind="number", unit="fps", default=8.0, min=1.0, max=120.0),
