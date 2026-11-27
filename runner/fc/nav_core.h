@@ -50,6 +50,7 @@ typedef struct {
                                           * first); 1: fly to the target */
 } nav_sp;
 
+#define NAV_LIFTOFF_S 3.0f                /* lift-off: how long it may climb before the flow must speak [s] */
 typedef struct {
   float acc[3], heading; int fly;        /* the guided command for the flight core */
   float p[3], v[3];                      /* the estimate, relative to home */
@@ -57,7 +58,8 @@ typedef struct {
   int ready;                             /* the estimate has settled on its references: it may take off */
   int landed;                            /* the supervisor had it land, and it is down: it stays on the ground */
   int pos_ok;                            /* it knows where it is across the ground: a horizontal reference (the flow's
-                                          * speed, the GPS) spoke in the last 0.3 s. Without one the estimate drifts */
+                                          * speed, the GPS) spoke in the last 0.3 s, or it is on the ground, or lifting
+                                          * off (its first NAV_LIFTOFF_S, below 0.3 m). Without one the estimate drifts */
 } nav_out;
 
 typedef struct {
@@ -72,6 +74,7 @@ typedef struct {
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
   float t_noref;                         /* how long since a horizontal reference spoke (nav_out.pos_ok) */
+  float t_fly;                           /* how long it has been flying (the last step's fly): its lift-off (nav_out.pos_ok) */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
   int sup_mode; float lim_speed, lim_accel, lim_lean;
   int rc_rth;                            /* the pilot's radio link is lost in flight: it flies home and lands (rc_core.h) */

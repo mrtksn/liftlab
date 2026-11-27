@@ -101,6 +101,11 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     float r[3]; m3v(r, R, C->flow_pos); flow_h = o[2] - r[2];
     if (in->flow_q > 0) { float wr[3], vw[3]; cross(wr, in->w, C->flow_pos); m3v(vw, R, wr); flow_v[0] = o[0] - vw[0]; flow_v[1] = o[1] - vw[1]; flow_has_v = 1; }
   }
+  /* on the ground (not flying) with no horizontal reference: it stands there, so its velocity is zero. Without this the
+   * estimate takes the ground's push on the accelerometer for air drag and drifts off, never ready to take off; with it
+   * the accelerometer's bias is learned before lift-off. (Carried by hand, the flow speaks once its rangefinder does.) */
+  float flow_age = have_flow ? in->flow_age : 0;
+  if (!flow_has_v && !have_fix && !N->last.fly) { have_flow = 1; flow_has_v = 1; flow_v[0] = flow_v[1] = 0; flow_age = 0; }
 
   /* where it is: the estimator starts once every reference fitted has spoken (or after 3 s with what there is),
    * so it begins from them rather than from zero */
@@ -111,15 +116,18 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   /* ready to take off: the estimate has run a moment and stands still (it does, on the ground) */
   if (N->t_est > 1.0f && fabsf(N->v[0]) < 0.3f && fabsf(N->v[1]) < 0.3f && fabsf(N->v[2]) < 0.3f) N->t_still += dt; else N->t_still = 0;
   out->ready = N->t_still > 0.5f || N->have_home;
-  /* where it is across the ground: known while a horizontal reference speaks (the flow's speed, or the GPS) */
+  /* where it is across the ground: known while a horizontal reference speaks (the flow's speed, or the GPS); and on the
+   * ground, and for its first seconds low in the air, without one: standing there it doesn't drift, and a downward
+   * camera's rangefinder (and so its flow) only starts a few centimetres up */
   N->t_noref = (flow_has_v || have_fix) ? 0 : N->t_noref + dt;
-  out->pos_ok = N->t_noref < 0.3f;
+  N->t_fly = N->last.fly ? N->t_fly + dt : 0;
+  out->pos_ok = N->t_noref < 0.3f || !N->last.fly || (N->t_fly < NAV_LIFTOFF_S && N->p[2] < 0.3f);
   k = 0;
   for (int i = 0; i < 9; i++) b[k++] = R[i];
   for (int i = 0; i < 3; i++) b[k++] = in->acc[i];
   b[k++] = (float)have_baro; b[k++] = in->baro_age; b[k++] = baro_alt;
   b[k++] = (float)have_fix; b[k++] = in->fix_age; for (int i = 0; i < 3; i++) b[k++] = fix_p[i]; for (int i = 0; i < 3; i++) b[k++] = fix_v[i];
-  b[k++] = (float)have_flow; b[k++] = in->flow_age; b[k++] = (float)have_range; b[k++] = flow_h;   /* (a height only from the rangefinder itself) */ b[k++] = (float)flow_has_v; b[k++] = flow_v[0]; b[k++] = flow_v[1];
+  b[k++] = (float)have_flow; b[k++] = flow_age; b[k++] = (float)have_range; b[k++] = flow_h;   /* (a height only from the rangefinder itself) */ b[k++] = (float)flow_has_v; b[k++] = flow_v[0]; b[k++] = flow_v[1];
   b[k++] = C->m; b[k++] = dt;
   float pv[6];
   if ((e = call(N, N->f_pe, b, pv))) return -1;
