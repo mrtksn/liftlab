@@ -372,12 +372,14 @@ function positionEstimator(st, R, accel, baro, fix, flow, m, dt) {
   st.v = add(st.v, scl(a, dt)); st.p = add(st.p, scl(st.v, dt));
   const past = age => st.h[Math.max(0, st.h.length - 1 - Math.round(age / dt))] || { p: st.p, v: st.v };
   const range = flow && flow.h != null;                  // rangefinder height available
-  if (fix) {
+  if (fix) {                                             // a position fix: GPS (with its velocity), or a map's (without)
     const then = past(fix.age);
     const e = sub(fix.p, then.p); if (baro || range) e[2] = 0;   // barometer or rangefinder own altitude
     st.p = add(st.p, scl(e, kP * dt)); st.v = add(st.v, scl(e, kV * dt));
-    st.v = add(st.v, scl(sub(fix.v, then.v), kFixV * dt));
-    for (let i = 0; i < 2; i++) st.ab[i] -= kBias * kFixV * (fix.v[i] - then.v[i]) * dt;
+    if (fix.v) {
+      st.v = add(st.v, scl(sub(fix.v, then.v), kFixV * dt));
+      for (let i = 0; i < 2; i++) st.ab[i] -= kBias * kFixV * (fix.v[i] - then.v[i]) * dt;
+    }
   }
   if (flow && flow.v) {                                  // optical flow: horizontal velocity over the ground
     const then = past(flow.age);

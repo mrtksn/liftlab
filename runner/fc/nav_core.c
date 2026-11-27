@@ -60,7 +60,7 @@ int nav_init(nav_state *N, rn_host *H) {
   const char *names[] = { "positionEstimator", "flowVelocity", "positionControl" };
   int *slot[] = { &N->f_pe, &N->f_fv, &N->f_pc };
   /* what this code passes and expects back, in floats (js/rn-sigs.js) */
-  const int in_sz[] = { 9 + 3 + 3 + 8 + 7 + 1 + 1, 2 + 1 + 3 + 9, 3 + 3 + 3 + 1 + 1 + 7 }, out_sz[] = { 6, 3, 3 };
+  const int in_sz[] = { 9 + 3 + 3 + 9 + 7 + 1 + 1, 2 + 1 + 3 + 9, 3 + 3 + 3 + 1 + 1 + 7 }, out_sz[] = { 6, 3, 3 };
   for (int i = 0; i < 3; i++) {
     *slot[i] = rn_host_find(H, names[i]);
     if (*slot[i] < 0 || rn_host_in_size(H, *slot[i]) != in_sz[i] || rn_host_out_size(H, *slot[i]) != out_sz[i]) { say(N, "a navigation formula isn't what this code expects"); return -1; }
@@ -79,7 +79,7 @@ static int call(nav_state *N, int fn, const float *in, float *out) {
 static void rotz(float *o, float psi, const float *v) { float c = cosf(psi), sn = sinf(psi), x = c * v[0] - sn * v[1], y = sn * v[0] + c * v[1]; o[0] = x; o[1] = y; o[2] = v[2]; }
 static void to_map(const nav_state *N, float *o, const float *pa) { rotz(o, -N->map.psi, pa); for (int i = 0; i < 3; i++) o[i] += N->map.off[i]; }
 
-void nav_map_attach(nav_state *N, map_grid *M) { N->map.M = M; if (!(N->map.radius > 0)) N->map.radius = 0.3f; if (!(N->map.v_unknown > 0)) N->map.v_unknown = 0.3f; }
+void nav_map_attach(nav_state *N, map_grid *M) { N->map.M = M; N->map.fuse = 1; if (!(N->map.radius > 0)) N->map.radius = 0.3f; if (!(N->map.v_unknown > 0)) N->map.v_unknown = 0.3f; }
 
 int nav_map_load(nav_state *N, const uint8_t *buf, uint32_t len, char *reply, int rn) {
   if (!N->map.M) { fc_fmt(reply, rn, "map: this navigation keeps no map"); return -1; }
@@ -92,14 +92,20 @@ int nav_map_load(nav_state *N, const uint8_t *buf, uint32_t len, char *reply, in
 
 int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma) {
   if (!N->have_pa || !fin(age) || !fin(p[0]) || !fin(p[1]) || !fin(p[2]) || !fin(psi)) return -1;
-  float then[3], m[3];
+  nav_mapstate *G = &N->map; float then[3], m[3], a0[3], a1[3];
   for (int i = 0; i < 3; i++) then[i] = N->pa[i] - N->v[i] * (age > 0 ? age : 0);
-  N->map.psi = psi; to_map(N, m, then);                 /* (with the offset it has: m − p is how far off it is) */
+  if (G->aligned && psi != G->psi) {                    /* the heading turned: where the drone is in the map stays */
+    rotz(a0, -G->psi, N->pa); rotz(a1, -psi, N->pa); for (int i = 0; i < 3; i++) G->off[i] += a0[i] - a1[i];
+  }
+  G->psi = psi; to_map(N, m, then);
   float e[3] = { p[0] - m[0], p[1] - m[1], p[2] - m[2] }, en = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
-  /* the first fix, or a jump (the map re-solved): taken as it is; otherwise half way, so one noisy fix moves it less */
-  float k = !N->map.aligned || en > 2 ? 1.0f : 0.5f;
-  for (int i = 0; i < 3; i++) N->map.off[i] += k * e[i];
-  N->map.aligned = 1; N->map.t_fix = 0; N->map.sigma = sigma; N->map.n_fix++;
+  /* the first fix, or a jump (the map re-solved): anchored there; otherwise the estimate is corrected (fuse), or, not
+   * fusing, the offset moves half way (one noisy fix moves it less) */
+  if (!G->aligned || en > 2) for (int i = 0; i < 3; i++) G->off[i] += e[i];
+  else if (!G->fuse) for (int i = 0; i < 3; i++) G->off[i] += 0.5f * e[i];
+  float d[3] = { p[0] - G->off[0], p[1] - G->off[1], p[2] - G->off[2] }; rotz(G->fix_a, psi, d);   /* (the fix in the navigation's frame) */
+  G->fix_age = age > 0 ? age : 0;
+  G->aligned = 1; G->t_fix = 0; G->sigma = sigma; G->n_fix++;
   return 0;
 }
 
@@ -120,11 +126,14 @@ static int guard(nav_state *N, const float *target, const float *vref, float *gt
     if (allow < 0) allow = 0;
     if (dist > allow) { for (int i = 0; i < 3; i++) gt[i] = N->p[i] + u[i] * allow; g = 2; }
     /* and toward it no faster than it can stop in the room there is (the target alone would let it come at full speed
-     * and overshoot); near the unknown, slowly */
-    float room = d_occ - 0.05f; if (room < 0) room = 0;
-    float vt = sqrtf(2 * NAV_GUARD_BRAKE * room); if (d_unk < 1 && vt > G->v_unknown) vt = G->v_unknown;
+     * and overshoot), looking as far as it could need to stop from its fastest; near the unknown, slowly */
+    const float look = 8;
+    map_look(G->M, pm, um, look, &d_occ, &d_unk);
+    float vt = 1e9f;
+    if (d_occ < look) { float room = d_occ - 0.05f; if (room < 0) room = 0; vt = sqrtf(2 * NAV_GUARD_BRAKE * room); }
+    if (d_unk < 1 && vt > G->v_unknown) vt = G->v_unknown;
     if (vt < 0.1f) vt = 0.1f;
-    if (vt < *vlim) { *vlim = vt; g |= 1; }
+    if (vt < 1e8f && vt < *vlim) { *vlim = vt; g |= 1; }
   }
   float vn = sqrtf(vref[0] * vref[0] + vref[1] * vref[1] + vref[2] * vref[2]);
   if (vn > 0.01f) {
@@ -174,6 +183,8 @@ int nav_map_command(nav_state *N, const char *s, double now, char *r, int rn) {
     while (*a == ' ') a++;
     const map_grid *M = N->map.M;
     if (word(a, "clear")) { if (N->map.M) N->map.M->ok = 0; N->map.aligned = 0; fc_fmt(r, rn, "map: cleared"); return 1; }
+    if ((a = word(a, "fuse"))) { while (*a == ' ') a++; if (word(a, "on")) N->map.fuse = 1; else if (word(a, "off")) N->map.fuse = 0;
+      fc_fmt(r, rn, "map fuse: %s", N->map.fuse ? "on (the fixes correct the estimate)" : "off (the fixes only place it in the map)"); return 1; }
     if (!M) { fc_fmt(r, rn, "map: this navigation keeps no map"); return 1; }
     if (!M->ok) { fc_fmt(r, rn, "map: none (send map.dmp)"); return 1; }
     fc_fmt(r, rn, "map: %d x %d x %d at %.2f m, %d occupied; ", M->n[0], M->n[1], M->n[2], (double)M->res, (int)M->n_occ);
@@ -207,6 +218,12 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     float r[3], wr[3], vw[3]; m3v(r, R, C->fix_pos); cross(wr, in->w, C->fix_pos); m3v(vw, R, wr);
     for (int i = 0; i < 3; i++) { fix_p[i] = in->fix_p[i] - r[i]; fix_v[i] = in->fix_v[i] - vw[i]; }
   }
+  /* the fix the estimator gets: the map's position while one is fresh (indoors the better one, and in the GPS's frame
+   * once anchored), with the GPS's velocity if there is one (without a speed reference of its own, a position alone
+   * makes a poor hold); else the GPS's */
+  int map_fresh = N->map.fuse && N->map.aligned && N->map.t_fix < 1.0f;
+  int use_fix = have_fix || map_fresh, fix_has_v = have_fix; float fix_age = in->fix_age;
+  if (map_fresh) { fix_age = N->map.fix_age + N->map.t_fix; for (int i = 0; i < 3; i++) fix_p[i] = N->map.fix_a[i]; }
   if (have_flow) {
     float ws[3], o[3]; m3tv(ws, C->flow_R, in->w);                           /* gyro in the camera's axes */
     k = 0; b[k++] = in->flow[0]; b[k++] = in->flow[1]; b[k++] = range; for (int i = 0; i < 3; i++) b[k++] = ws[i]; for (int i = 0; i < 9; i++) b[k++] = Rs[i];
@@ -232,14 +249,14 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   /* where it is across the ground: known while a horizontal reference speaks (the flow's speed, or the GPS); and on the
    * ground, and for its first seconds low in the air, without one: standing there it doesn't drift, and a downward
    * camera's rangefinder (and so its flow) only starts a few centimetres up */
-  N->t_noref = (flow_has_v || have_fix) ? 0 : N->t_noref + dt;
+  N->t_noref = (flow_has_v || have_fix || map_fresh) ? 0 : N->t_noref + dt;
   N->t_fly = N->last.fly ? N->t_fly + dt : 0;
   out->pos_ok = N->t_noref < 0.3f || !N->last.fly || (N->t_fly < NAV_LIFTOFF_S && N->p[2] < 0.3f);
   k = 0;
   for (int i = 0; i < 9; i++) b[k++] = R[i];
   for (int i = 0; i < 3; i++) b[k++] = in->acc[i];
   b[k++] = (float)have_baro; b[k++] = in->baro_age; b[k++] = baro_alt;
-  b[k++] = (float)have_fix; b[k++] = in->fix_age; for (int i = 0; i < 3; i++) b[k++] = fix_p[i]; for (int i = 0; i < 3; i++) b[k++] = fix_v[i];
+  b[k++] = (float)use_fix; b[k++] = fix_age; for (int i = 0; i < 3; i++) b[k++] = fix_p[i]; b[k++] = (float)fix_has_v; for (int i = 0; i < 3; i++) b[k++] = fix_v[i];
   b[k++] = (float)have_flow; b[k++] = flow_age; b[k++] = (float)have_range; b[k++] = flow_h;   /* (a height only from the rangefinder itself) */ b[k++] = (float)flow_has_v; b[k++] = flow_v[0]; b[k++] = flow_v[1];
   b[k++] = C->m; b[k++] = dt;
   float pv[6];

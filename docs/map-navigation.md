@@ -23,8 +23,9 @@ work over every link:
   the flight core's clock (`dfb_pi`: the clock its NAV frames carry; the simulator: the board's), or, at zero or
   below, that many seconds ago. PSI [rad] is the turn from the map's axes to the navigation's (the flight core's
   heading has no north: it starts where the drone points and drifts, and the mapper sees both). SIGMA [m], how sure.
-  Today a fix places the drone in the map (the guard uses it); next it also corrects the position estimate, as a GPS
-  fix does without a velocity.
+  The first fix anchors the map to the navigation's estimate (nothing jumps); after it each fix corrects the
+  estimate, as a GPS fix does (the estimator's fix without a velocity, or with the GPS's velocity when there is a GPS),
+  so the flow's drift goes. `map fuse off`: fixes only place the drone in the map.
 - `mapguard RADIUS [V_UNKNOWN]`: the drone's radius with its margin (the occupied cells are grown by it) and its speed
   near the unknown; `map`: how the map and the fixes stand; `map clear`.
 
@@ -58,14 +59,20 @@ reads it. The drone's side doesn't know or care.
 | Piece | State |
 | --- | --- |
 | Map format, load, look-ups (`map_core.c`, `test_map.c`) | built |
-| Fixes place the drone in the map; the guard in the navigation | built |
+| The guard in the navigation | built |
+| Fixes anchor the map and correct the position estimate | built |
 | `dfb_pi`: `map.dmp` and the map commands | built |
 | Simulator: map from the World, sent up the radio or to the board, fixes with noise, delay and dropouts (World settings → The navigation's map) | built |
-| Fixes into the position estimate (no more drift) | next |
-| Simulator: map from what the cameras see (unknown until seen) | later |
+| Simulator: map from what the cameras see (unknown until seen) | next |
 | Room Survey: map file and fixes | later |
 | Routes around obstacles | later |
 
-Checked in the simulator (open World, a wall 3 m ahead, told to go 6 m): the toy drone on its flow camera stops at
-2.54 m (its radius 0.39 m and the margin); without the map it flies into the wall. A GPS quad stops near 2.85 m: it
-holds its GPS estimate, which wanders, until fixes correct the estimate itself.
+Checked in the simulator (open World; fixes 5 a second, 3 cm noise, 0.2 s delay):
+- A wall 3 m ahead, told to go 6 m: the toy drone on its flow camera stops at 2.59 m (its radius 0.39 m and the
+  margin; without the map it flies into the wall); a GPS quad at 2.77 m.
+- A minute's hover: the toy drone's estimate within 0.08 m of where it is (0.17 m without fixes), held within 0.24 m.
+  A GPS quad's hold in the simulator is poor with or without the map (it circles, a few metres over the minute; the
+  nav test's GPS hold fails the same way): the fixes, at the estimator's gains (0.8/s on position), only take some of
+  it out.
+- The link cut while hovering: the fixes stop reaching it, it flies home and lands (the guard stands down after 10 s
+  without a fix).

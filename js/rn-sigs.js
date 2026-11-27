@@ -20,7 +20,7 @@ const RN_SIGS = (() => {
     flowVelocity: S(['flow', 'range', 'w', 'Rs'], [V2, num, V3, M3], V3),
     servoPredictor: S(['st', 'cmd', 'rate', 'lag', 'dt'], [state(), num, num, num, num], num),
     positionEstimator: S(['st', 'R', 'accel', 'baro', 'fix', 'flow', 'm', 'dt'],
-      [state({ h: ring(rec({ p: V3, v: V3 }), 801) }), M3, V3, opt(rec({ age: num, alt: num })), opt(rec({ age: num, p: V3, v: V3 })),
+      [state({ h: ring(rec({ p: V3, v: V3 }), 801) }), M3, V3, opt(rec({ age: num, alt: num })), opt(rec({ age: num, p: V3, v: opt(V3) })),
         opt(rec({ age: num, h: opt(num), v: opt(V2) })), num, num], rec({ p: V3, v: V3 })),
     identifyEffectiveness: S(['st', 'u', 'f', 'w', 'r', 'dt', 'init', 'memory', 'lags', 'mot'],
       [state(), L, V3, V3, V3, num, arr(L, 6), num, opt(L), opt(rec({ coll: L, m: L, phi: L, v: L }))], rec({ B: arr(L, 6), B2: opt(arr(L, 3)) }), { ownPool: true }),

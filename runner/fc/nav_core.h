@@ -67,14 +67,18 @@ typedef struct {
 } nav_out;
 
 /* The map and where the drone is in it (docs/map-navigation.md, map_core.h). The map's axes turned by psi are the
- * navigation's; a point of the navigation (its own estimate, pa) is at Rz(−psi)·pa + off in the map. Each fix sets
- * them; without fixes for NAV_FIX_STALE the guard stands down (where it is in the map is no longer known). */
+ * navigation's; a point of the navigation (its own estimate, pa) is at Rz(−psi)·pa + off in the map. The first fix
+ * anchors off (so nothing jumps); after it the fixes correct the estimate (a fix in the estimator, without velocity:
+ * the drift goes) and off stays, moved only to keep the drone's place when psi changes, or when the map jumps (over
+ * 2 m: re-solved). Without fixes for NAV_FIX_STALE the guard stands down (where it is in the map is no longer known). */
 #define NAV_FIX_STALE 10.0f              /* [s] */
 #define NAV_GUARD_BRAKE 1.0f             /* [m/s²] the braking the guard counts on (well inside what it can do) */
 typedef struct {
   map_grid *M;                           /* the host's map (nav_map_attach), or NULL */
   float radius, v_unknown;               /* the guard: the drone's radius with its margin [m]; its speed near the unknown [m/s] */
   int aligned; float psi, off[3], t_fix, sigma;
+  int fuse;                              /* the fixes correct the estimate (1, the default; map fuse off: they only place it) */
+  float fix_a[3], fix_age;               /* the last fix in the navigation's own frame, and how old it was when it came */
   uint32_t n_fix;
   int guard_was;                         /* (for what it says when the guard starts and stops) */
 } nav_mapstate;
