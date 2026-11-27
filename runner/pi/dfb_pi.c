@@ -1040,6 +1040,7 @@ int main(int argc, char **argv) {
       nav_got = 0; const float *v = nav_v;
       nav_in in; memset(&in, 0, sizeof in);
       memcpy(in.q, v + 2, 16); memcpy(in.w, v + 6, 12); memcpy(in.acc, v + 9, 12); in.have_att = v[14] > 0.5f;
+      in.disarmed = (int)v[1] != FC_ARMED && (int)v[1] != FC_FAILSAFE;   /* (the NAV frame carries the flight core's state: disarmed, crashed, a test) */
       in.have_baro = v[13] > 0.5f; in.baro_alt = v[12]; in.baro_age = 0.005f;
       if (in.have_att) flow_in_gyro(&FI, t, in.w);                     /* (the camera's flow is calibrated against it: flowcal) */
       {   /* the downward camera's flow (dfb_flow) and its rangefinder (--range): the navigation's flow reference. Without a
@@ -1115,7 +1116,7 @@ int main(int argc, char **argv) {
           mkdir("flights", 0755); strftime(name, sizeof name, "flights/flight-%Y%m%d-%H%M%S.csv", &tmv);
           rec = fopen(name, "w");
           if (rec) { fprintf(rec, "t,fc_t,fc_state,roll_deg,pitch_deg,yaw_deg,wx,wy,wz,ax,ay,az,baro,have_flow,fx,fy,fq,range,px,py,pz,vx,vy,vz,tx,ty,tz,spx,spy,spz,accx,accy,accz,fly,pos_ok,sticks,guard,map_aligned,level_h,level_v,"
-                                  "flow_q_raw,flow_age,flow_tex,flow_resid,flow_mean,flow_exp_ms,flow_gain,tel_age");
+                                  "flow_q_raw,flow_age,flow_tex,flow_resid,flow_mean,flow_exp_ms,flow_gain,tel_age,p1_v,p1_a,p2_v,p2_a,p3_v,p3_a");
                      for (int i = 0; i < (n_mot ? n_mot : 4) && i < 20; i++) fprintf(rec, ",m%d", i + 1);   /* (the ESP32's motor commands, in the airframe's order) */
                      fprintf(rec, "\n"); printf("flight recorder: %s\n", name); }
           system("ls -1t flights/flight-*.csv 2>/dev/null | tail -n +31 | xargs -r rm -f");   /* (the last 30 flights) */
@@ -1133,6 +1134,7 @@ int main(int argc, char **argv) {
                   o.fly, o.pos_ok, sticks, o.guard, N.map.aligned, (double)P.sp.vmax[0], (double)P.sp.vmax[1]);
           /* the flow as dfb_flow had it (before the 0.2 cut above): why a reading was poor, or none came */
           fprintf(rec, ",%.2f,%.3f,%.4f,%.3f,%.0f,%.1f,%.1f,%.2f", (double)FI.last.q, FI.n ? t - FI.t_rx : -1.0, (double)FI.tex, (double)FI.resid, (double)FI.mean, (double)FI.exp_ms, (double)FI.gain, t - tl_t < 1e8 ? t - tl_t : -1.0);
+          for (int c = 0; c < 3; c++) { const int fresh = t - pw_t < 2 && pw[4 * c] > 0; fprintf(rec, fresh ? ",%.3f,%.3f" : ",,", (double)pw[4 * c + 1], (double)pw[4 * c + 2]); }   /* (the ESP32's power monitor: each channel's volts and amps, blank where none) */
           for (int i = 0; i < (n_mot ? n_mot : 4) && i < 20; i++) fprintf(rec, ",%.3f", (double)tl[16 + i]);
           fprintf(rec, "\n");
           static double flushed; if (t - flushed > 1) { fflush(rec); flushed = t; }

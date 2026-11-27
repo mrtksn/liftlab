@@ -41,6 +41,8 @@ typedef struct {
   int have_fix; float fix_p[3], fix_v[3], fix_age;               /* GPS: position [m] in its own frame, velocity [m/s] */
   int have_flow; float flow[2], range, flow_q, flow_age;          /* flow [rad/s], range [m] (≤ 0: out of its reach: the
                                                                   * fused height scales the flow), tracking quality 0–1 */
+  int disarmed;                          /* the flight core says it is disarmed (0: armed, or not known): nothing flies, so
+                                          * a landing it was making is over (after a crash its estimate may never say so) */
 } nav_in;
 
 typedef struct {
@@ -53,6 +55,16 @@ typedef struct {
                                           * of its own). The target is flown to no faster */
 } nav_sp;
 
+/* Taking off, until it has left the ground (NAV_LIFTED_H above home): on the ground the drone can't move, so whatever
+ * it asks for there only winds up (its height integral, the flight core's thrust trim) and lifts it off with all of
+ * it at once, at full thrust, with nothing left to keep it level; and a sideways ask leans it on its feet, so it lifts
+ * off leaning and slides. So until then: no sideways ask, the height target no more than NAV_TAKEOFF_LEAD above it,
+ * its height integral held, and no more than NAV_TAKEOFF_A up (rising): the trim comes up only as far as lifting it needs. */
+#define NAV_LIFTED_H 0.10f
+#define NAV_TAKEOFF_LEAD 0.15f
+#define NAV_TAKEOFF_A 1.0f
+#define NAV_TAKEOFF_RAMP 1.5f              /* [m/s² a second] and that up-limit rises while it hasn't lifted: a drone weaker than
+                                          * its model still gets off, at no more thrust than it takes */
 #define NAV_TAKEOFF_V 0.5f               /* [m/s] it climbs no faster after leaving the ground, until it first reaches the
                                           * height it was asked for (a take-off, not a launch) */
 #define NAV_LIFTOFF_S 3.0f                /* lift-off: how long it may climb before the flow must speak [s] */
@@ -103,9 +115,9 @@ typedef struct {
   float p[3], v[3];
   float pa[3]; int have_pa;              /* the estimate as it is (not from home): in the GPS frame once GPS is heard (fleet.h) */
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
-  float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
+  float t_est, t_wait, t_still, t_disarmed;                   /* how long the estimator has run; how long it has waited for its references */
   float t_noref;                         /* how long since a horizontal reference spoke (nav_out.pos_ok) */
-  float zc; int climbed;                 /* the height target it flies to (moved toward the pilot's at no more than its speed
+  float zc, t_ground; int climbed, lifted;                 /* the height target it flies to (moved toward the pilot's at no more than its speed
                                           * level, NAV_TAKEOFF_V on the way up from the ground), and whether it has got up */
   float t_fly;                           /* how long it has been flying (the last step's fly): its lift-off (nav_out.pos_ok) */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */

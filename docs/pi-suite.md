@@ -187,8 +187,17 @@ minute, while it sits there), and takes it again where the drone stands as it li
 `--takeoff-height H` sets how high a take-off climbs (the radio's fly switch, the text `takeoff`; default 1.5 m): a
 flow drone flies best where its camera reads the floor best. The flight recorder (`flights/flight-*.csv` beside the
 design's files, the last 30) has the flow as dfb_flow gave it (`flow_q_raw`, `flow_age`, `flow_tex`, `flow_resid`,
-`flow_mean`, `flow_exp_ms`, `flow_gain`) and the ESP32's motor commands (`m1`…, in the airframe's order) beside what the
+`flow_mean`, `flow_exp_ms`, `flow_gain`), the ESP32's power monitor (`p1_v`, `p1_a`, … each channel) and its motor commands (`m1`…, in the airframe's order) beside what the
 navigation believed and asked for: where the flow gets poor (height, light, blur), and what the motors did about a lean.
+
+Taking off, until it is 10 cm up, the navigation asks for no sideways acceleration (a drifting estimate would lean the
+drone on its feet, and it would lift off leaning and slide), keeps its height target no more than 15 cm above the drone
+and its height integral held, and asks for at most +1 m/s² up, rising 1.5 m/s² a second: on the ground the drone can't
+climb, so a bigger ask only winds up (its own integral, the flight core's thrust trim) and lifts it off at full thrust
+with nothing left to keep it level. Once the flight core is disarmed (a crash), a landing the navigation was making, or
+a return for a lost radio, is over: down is down, even where its estimate never says so; the position counts as known
+on the ground (so the radio's switches arm it as ever), and an estimate that ran off while it lay there (still over
+1 m/s after a second disarmed) starts again from its references.
 LiftLab's install guide (Computers → the Pi → Install) gives both programs' commands: `flight` with `--range`, and
 `flow` with the camera's settings.
 

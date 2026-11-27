@@ -41,14 +41,14 @@ static void basis(double *v, const double *ang, int k) {
   int n = 1; v[0] = 1;
   for (int i = 0; i < k; i++) { double f[3] = { 1, cos(ang[i]), sin(ang[i]) }; for (int a = n - 1; a >= 0; a--) { double x = v[a]; v[3 * a] = x * f[0]; v[3 * a + 1] = x * f[1]; v[3 * a + 2] = x * f[2]; } n *= 3; }
 }
-static double acc_b[3];
+static double acc_b[3], plant_k = 1.04;
 static void plant_step(body *B, const fc_airframe *A, const fc_out *o, double dt) {
   double a[6] = { 0 };
   for (int i = 0; i < A->n_motors; i++) {
     const fc_motor *M = &A->mot[i]; double ang[FC_MAX_CHAIN], b[FC_MAX_BASIS];
     for (int c = 0; c < M->n_chain; c++) ang[c] = B->th[M->chain[c]];
     basis(b, ang, M->n_chain);
-    double u = o->motor[i], k = M->bend, T = 1.04 * ((1 - k) * u + k * u * u);   /* 4% stronger than the model thinks */
+    double u = o->motor[i], k = M->bend, T = plant_k * ((1 - k) * u + k * u * u);   /* (4% stronger than the model thinks, as a rule) */
     for (int r = 0; r < 6; r++) { double s = 0; for (int n = 0; n < M->n_basis; n++) s += b[n] * M->cols[n][r]; a[r] += s * T; }
   }
   for (int j = 0; j < A->n_joints; j++) { double d = o->servo[j] - B->th[j], mx = A->jnt[j].rate * dt; B->th[j] += d > mx ? mx : d < -mx ? -mx : d; }
@@ -59,7 +59,7 @@ static void plant_step(body *B, const fc_airframe *A, const fc_out *o, double dt
   int ground = B->p[2] <= 0 && aw[2] * dt + B->v[2] <= 0;
   if (ground) { aw[2] += -(aw[2] * dt + B->v[2]) / dt; aw[0] = aw[1] = 0; B->v[0] = B->v[1] = 0; for (int k = 0; k < 3; k++) { B->w[k] = 0; a[3 + k] = 0; } }
   for (int i = 0; i < 3; i++) { B->v[i] += aw[i] * dt; B->p[i] += B->v[i] * dt; }
-  if (B->p[2] < 0) B->p[2] = 0;
+  if (B->p[2] < 0) { B->p[2] = 0; if (B->v[2] < 0) B->v[2] = 0; }   /* (on the floor it stops: a speed left into it would flicker the contact) */
   for (int k = 0; k < 3; k++) B->w[k] += a[3 + k] * dt;
   double *q = B->q, w0 = B->w[0], w1 = B->w[1], w2 = B->w[2];
   double dq[4] = { -q[1] * w0 - q[2] * w1 - q[3] * w2, q[0] * w0 + q[2] * w2 - q[3] * w1, q[0] * w1 - q[1] * w2 + q[3] * w0, q[0] * w2 + q[1] * w1 - q[2] * w0 };
@@ -79,7 +79,7 @@ static double DELAY = 0.006;
 static body B; static fc_out O; static nav_sp SP; static int use_fix = 1, use_flow = 0, link_on = 1; static double range_max = 1e9;   /* the rangefinder's reach [m] */
 static long drop_gyro_at = -1; static int drop_att = 0, idle_cmds = 0;   /* a missed IMU sample (that ms); NAV frames without the attitude; commands to idle */
 static nav_out NO;                                                    /* the navigation's last output */
-static nav_in latest; static int have_latest;
+static nav_in latest; static int have_latest; static int arm_cmd = 1;
 /* GPS: 5 Hz, 150 ms late, 20 cm noise with a slow wander; barometer 25 Hz; flow 100 Hz with its rangefinder */
 static double gps_w[3]; static struct { double at, p[3], v[3]; } gq[8]; static int gq_n;
 static void fly(double seconds) {
@@ -120,8 +120,9 @@ static void fly(double seconds) {
         in.flow[0] = (float)(B.w[1] - vs[0] / range + 0.05 * gauss()); in.flow[1] = (float)(-B.w[0] - vs[1] / range + 0.05 * gauss());
       }
       if (drop_att > 0) { drop_att--; in.have_att = 0; }
+      in.disarmed = F.state != FC_ARMED && F.state != FC_FAILSAFE;   /* (as dfb_pi: the NAV frame says so) */
       int e = nav_step(&N, &in, &SP, 0.01f, &o); NO = o;
-      fc_cmd c; memset(&c, 0, sizeof c); c.arm = 1; c.test_motor = -1;
+      fc_cmd c; memset(&c, 0, sizeof c); c.arm = arm_cmd; c.test_motor = -1;
       c.guided = 1; memcpy(c.acc, o.acc, sizeof c.acc); c.heading = o.heading; c.throttle = o.fly ? 1 : 0;
       if (!o.fly) idle_cmds++;
       if (link_on && cq_n < QN && !(e > 0 && o.fly)) { cq[cq_n].at = t + DELAY; cq[cq_n].c = c; cq_n++; }   /* (as dfb_pi: nothing to step on in the air, no command) */
@@ -207,6 +208,18 @@ int main(int argc, char **argv) {
   fly(8); CHECK(F.state == FC_DISARMED && B.p[2] < 0.05, "and lands (%s, z %.2f)", F.why, B.p[2]);
 
   printf("optical flow + rangefinder (indoors, no GPS)\n");
+  { /* a drone 10% weaker than its model (a heavier battery, worn props): its thrust trim has to come up on the ground
+     * before it lifts off. It must not lift off at full thrust with nothing left to keep it level (the real drone did) */
+    plant_k = 0.90; start(quad, lq, 1); arm();
+    SP.target[2] = 0.6f; SP.fly = 1; double umax = 0, tilt = 0, t_off = -1;
+    for (int k = 0; k < 600; k++) {
+      fly(0.01); double R[9]; qm(R, B.q); double tl = acos(R[8] > 1 ? 1 : R[8]) * 57.3; if (tl > tilt) tilt = tl;
+      if (B.p[2] > 0.02 && t_off < 0) t_off = k * 0.01;
+      if (B.p[2] < 0.3) for (int i = 0; i < F.A.n_motors; i++) if (O.motor[i] > umax) umax = O.motor[i];
+    }
+    CHECK(t_off > 0 && umax < 0.95 && tilt < 8 && fabs(B.p[2] - 0.6) < 0.2 && herr() < 0.3,
+          "10%% weaker than its model: lifts off after %.1f s, motors at most %.2f while low, tilt at most %.1f°, then holds (z %.2f, %.2f m off)", t_off, umax, tilt, B.p[2], herr());
+    plant_k = 1.04; }
   start(quad, lq, 1); arm();
   SP.target[2] = 1.2f; SP.fly = 1; fly(8);
   CHECK(fabs(B.p[2] - 1.2) < 0.25 && herr() < 0.5, "takes off and holds (z %.2f, %.2f m off)", B.p[2], herr());
@@ -225,6 +238,14 @@ int main(int argc, char **argv) {
     fly(1); CHECK(B.p[2] < 0.05 && !NO.have_home && NO.p[0] == 0 && NO.p[1] == 0, "on flow, landed, it lets its home go (z %.2f): the next take-off is from where it stands, not a fly back over the drift since", B.p[2]);
     SP.target[0] = 0; SP.target[1] = 0; SP.target[2] = 1.2f; SP.fly = 1; fly(6);
     CHECK(NO.have_home && fabs(B.p[2] - 1.2) < 0.3 && hypot(NO.p[0], NO.p[1]) < 0.4, "takes off again from there to (0, 0) of its new home: %.2f m from it, z %.2f", hypot(NO.p[0], NO.p[1]), B.p[2]); }
+  { /* a crash: the flight core disarms in the air with "fly" off. The landing it would make is over: down is down, even
+     * where its estimate (a rangefinder gone, the floor hit hard) never says so; the position stays good, home is let go */
+    arm_cmd = 0; SP.fly = 0; fly(3);
+    CHECK(F.state == FC_DISARMED && !N.fly_land && !N.auto_on && !NO.fly && NO.pos_ok && !NO.have_home,
+          "disarmed in the air (a crash): no landing left to make, the position good, home let go (%s; fly_land %d, fly %d, pos_ok %d, home %d)",
+          fc_state_name(F.state), N.fly_land, NO.fly, NO.pos_ok, NO.have_home);
+    arm_cmd = 1; fly(1); SP.target[0] = SP.target[1] = 0; SP.target[2] = 1.2f; SP.fly = 1; fly(6);
+    CHECK(F.state == FC_ARMED && fabs(B.p[2] - 1.2) < 0.3 && hypot(NO.p[0], NO.p[1]) < 0.4, "armed again: takes off from where it lies (z %.2f, %.2f m from it; %s %s, ready %d fly %d landed %d; v %.2f %.2f %.2f, still %.2f)", B.p[2], hypot(NO.p[0], NO.p[1]), fc_state_name(F.state), F.why, NO.ready, NO.fly, N.landed, N.v[0], N.v[1], N.v[2], N.t_still); }
 
   printf("a map (map_core.h): a wall ahead, the drone placed in it by hand\n");
   { static map_grid M; static uint8_t cells[80 * 60 * 30], file[40000]; const int n[3] = { 80, 60, 30 }; const float o[3] = { -4, -3, 0 };

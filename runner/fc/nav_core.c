@@ -265,6 +265,13 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
    * so it begins from them rather than from zero */
   N->seen |= (have_baro ? 1 : 0) | (have_fix ? 2 : 0) | (have_range ? 4 : 0);
   N->t_wait += dt;
+  /* disarmed a while and the estimate still says it moves fast: it ran off (a crash: free fall, the hit, a rangefinder
+   * that went quiet), and lying there it isn't moving. Started again, it begins from its references as at power-up */
+  N->t_disarmed = in->disarmed && dt > 0 ? N->t_disarmed + dt : 0;
+  if (N->t_disarmed > 1 && N->t_est > 0 && N->H && sqrtf(N->v[0] * N->v[0] + N->v[1] * N->v[1] + N->v[2] * N->v[2]) > 1) {
+    rn_host_forget(N->H, N->f_pe); N->t_est = 0; N->t_still = 0; N->t_wait = 0; memset(N->v, 0, sizeof N->v);
+    say(N, "the position estimate ran off while it lay disarmed: started again");
+  }
   if (!N->t_est && (N->seen & C->refs) != C->refs && N->t_wait < 3) return 0;
   N->t_est += dt;
   /* ready to take off: the estimate has run a moment and stands still (it does, on the ground) */
@@ -275,7 +282,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
    * camera's rangefinder (and so its flow) only starts a few centimetres up */
   N->t_noref = (flow_has_v || have_fix || map_fresh) ? 0 : N->t_noref + dt;
   N->t_fly = N->last.fly ? N->t_fly + dt : 0;
-  out->pos_ok = N->t_noref < 0.3f || !N->last.fly || (N->t_fly < NAV_LIFTOFF_S && N->p[2] < 0.3f);
+  out->pos_ok = N->t_noref < 0.3f || !N->last.fly || in->disarmed || (N->t_fly < NAV_LIFTOFF_S && N->p[2] < 0.3f);
   k = 0;
   for (int i = 0; i < 9; i++) b[k++] = R[i];
   for (int i = 0; i < 3; i++) b[k++] = in->acc[i];
@@ -294,14 +301,17 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
 
   if (N->landed) { out->landed = 1; return 0; }                    /* the supervisor landed it: it stays down */
   /* "fly" off in the air: it lands where it is first (idling there it would drop); back on, it flies on */
-  if (!sp->fly && N->last.fly && !N->fly_land) { N->fly_land = 1; say(N, "fly off in the air: landing"); }
+  if (in->disarmed && (N->fly_land || N->auto_on || N->rc_rth)) {   /* disarmed: down, however it got there (a crash) */
+    N->fly_land = 0; N->auto_on = 0; N->auto_land = 0; N->rc_rth = 0; say(N, "disarmed: down (a landing it was making is over)");
+  }
+  if (!sp->fly && N->last.fly && !N->fly_land && !in->disarmed) { N->fly_land = 1; say(N, "fly off in the air: landing"); }
   if (sp->fly && N->fly_land) { N->fly_land = 0; if (N->sup_mode < 2 && !N->rc_rth) { N->auto_on = 0; N->auto_land = 0; } }
-  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) {   /* on the ground (or not ready to leave it): nothing to steer */
-    memset(N->iPos, 0, sizeof N->iPos); N->zc = N->p[2]; N->climbed = 0;
+  if ((!sp->fly && !N->fly_land) || in->disarmed || (!N->have_home && !out->ready)) {   /* on the ground (or not ready to leave it): nothing to steer */
+    memset(N->iPos, 0, sizeof N->iPos); N->zc = N->p[2]; N->climbed = 0; N->lifted = 0; N->t_ground = 0;
     /* each take-off is from home: on the ground the estimate (the accelerometer's, between fixes) drifts, metres a
      * minute, and a home kept from the last flight would send it to fly that drift back as it lifts off. A home from a
      * map fix is a place in the map, not the estimate's: that one stays */
-    if (!sp->fly && !N->fly_land && N->have_home && !N->home_from_fix) N->have_home = 0;
+    if ((in->disarmed || (!sp->fly && !N->fly_land)) && N->have_home && !N->home_from_fix) N->have_home = 0;
     return 0;
   }
 
@@ -345,6 +355,8 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     if (dz > vz_up * dt) { N->zc += vz_up * dt; lv[2] = vz_up; }
     else if (dz < -vz_dn * dt) { N->zc -= vz_dn * dt; lv[2] = -vz_dn; }
     else N->zc = target[2];
+    if (!N->lifted && N->p[2] >= NAV_LIFTED_H) N->lifted = 1;
+    if (!N->lifted && N->zc > N->p[2] + NAV_TAKEOFF_LEAD) N->zc = N->p[2] + NAV_TAKEOFF_LEAD;   /* (on the ground: see NAV_LIFTED_H) */
     lt[2] = N->zc; }
   target = lt; vref = lv;
   for (int i = 0; i < 3; i++) out->target[i] = target[i];
@@ -360,7 +372,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     ev[i] = N->v[i] - clampf(vref[i], -vmax, vmax);
     /* the integral only works near the target: on the way to a far one it would wind up and carry the drone past it
      * (a 4 m descent left it 5 m·s, over a metre, too low) */
-    if (fabsf(ep[i]) < 1) N->iPos[i] = clampf(N->iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);
+    if (fabsf(ep[i]) < 1 && N->lifted) N->iPos[i] = clampf(N->iPos[i] + ep[i] * dt, i < 2 ? -2 : -5, i < 2 ? 2 : 5);
   }
   k = 0;
   for (int i = 0; i < 3; i++) b[k++] = ep[i];
@@ -397,6 +409,10 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   }
   for (int i = 0; i < 3; i++) out->acc[i] = Fd[i] / C->m;
   out->acc[2] -= G_;
+  if (!N->lifted) {                                               /* (still on the ground: see NAV_LIFTED_H) */
+    N->t_ground += dt; const float up = NAV_TAKEOFF_A + NAV_TAKEOFF_RAMP * N->t_ground;
+    out->acc[0] = out->acc[1] = 0; if (out->acc[2] > up) out->acc[2] = up;
+  }
   out->heading = sp->heading; out->fly = 1;
   return 0;
 }

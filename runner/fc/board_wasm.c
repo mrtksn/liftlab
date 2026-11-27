@@ -650,7 +650,7 @@ static int nav_run(nav_sp *sp_radio) {
   in.have_att = a[k++] > 0.5f;
   in.have_baro = a[k++] > 0.5f; in.baro_alt = a[k++]; in.baro_age = a[k++];
   in.have_fix = a[k++] > 0.5f; for (int i = 0; i < 3; i++) in.fix_p[i] = a[k++]; for (int i = 0; i < 3; i++) in.fix_v[i] = a[k++]; in.fix_age = a[k++];
-  in.have_flow = a[k++] > 0.5f; in.flow[0] = a[k++]; in.flow[1] = a[k++]; in.range = a[k++]; in.flow_q = a[k++]; in.flow_age = a[k++];
+  in.disarmed = 0; in.have_flow = a[k++] > 0.5f; in.flow[0] = a[k++]; in.flow[1] = a[k++]; in.range = a[k++]; in.flow_q = a[k++]; in.flow_age = a[k++];
   for (int i = 0; i < 3; i++) sp.target[i] = a[k++];
   for (int i = 0; i < 3; i++) sp.vref[i] = a[k++];
   sp.heading = a[k++]; sp.fly = a[k++] > 0.5f; sp.vmax[0] = sp.vmax[1] = 0;
