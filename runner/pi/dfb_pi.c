@@ -342,6 +342,7 @@ static spin_state SPN;
 static lift_state LFT;                           /* the rope lift test (spin_core.h) */
 static void mot_yaw_from(const fc_airframe *A) { for (int i = 0; i < A->n_motors && i < FC_MAX_MOTORS; i++) mot_yaw[i] = A->mot[i].cols[0][5]; }
 /* One of these commands: 1 (reply filled), or 0. armed: the ESP32 says it's armed. */
+static nav_state *map_nav;   /* the navigation, for a map file that comes (design_line) */
 static int design_line(const char *s, int link, int armed, const char *af_path, int *n_mot, char mot_name[][16], double t, char *reply, int rn) {
   char name[FILE_RX_NAME + 1]; uint32_t size, crc, hs, hc;
   if (file_rx_begins(s, name, &size, &crc) && file_rx_name_ok(name) && file_here(name, &hs, &hc) && hs == size && hc == crc && crc != CRC32_RESIDUE) {
@@ -352,6 +353,7 @@ static int design_line(const char *s, int link, int armed, const char *af_path, 
     char why[96];
     if (file_put(FRX.name, FRX.buf, FRX.size, why, sizeof why)) snprintf(reply, (size_t)rn, "file %s: couldn't write it: %s", FRX.name, why);
     else snprintf(reply, (size_t)rn, "file %s: saved, %u bytes", FRX.name, (unsigned)FRX.size);
+    if (!strcmp(FRX.name, "map.dmp") && map_nav) { char r[160]; nav_map_load(map_nav, FRX.buf, FRX.size, r, sizeof r); size_t k = strlen(reply); snprintf(reply + k, (size_t)rn > k ? (size_t)rn - k : 0, "; %s", r); }   /* (the navigation takes it) */
     return 1;
   }
   if (r) return 1;
@@ -576,6 +578,8 @@ int main(int argc, char **argv) {
   if (nav_init(&N, &H)) { fprintf(stderr, "%s\n", N.why); return 1; }
   { uint32_t n; uint8_t *blob = read_file(cfg_path, &n); if (!blob) return 1;
     if (nav_config_load(&N, blob, n)) { fprintf(stderr, "%s\n", N.why); return 1; } }
+  static map_grid MAP; nav_map_attach(&N, &MAP); map_nav = &N;   /* the navigation's map (docs/map-navigation.md): map.dmp here, or sent up */
+  { uint32_t n; uint8_t *b = file_load("map.dmp", &n); if (b) { char r[200]; nav_map_load(&N, b, n, r, sizeof r); printf("%s (map.dmp)\n", r); free(b); } }
   static fleet_state FL; int have_fleet = !fleet_init(&FL, &H);   /* the fleet program (fleet.h): beside the navigation */
   if (!have_fleet) printf("%s\n", FL.msg);
   FL.said = 0;
@@ -752,6 +756,7 @@ int main(int argc, char **argv) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
           if (!design) design = flow_in_command(&FI, s, t, reply, (int)sizeof reply);   /* flow, flowcal: the camera's (no pilot's command) */
+          if (!design) design = nav_map_command(&N, s, nav_v[0] + (last_nav > 0 ? t - last_nav : 0), reply, (int)sizeof reply);   /* mapfix, mapguard, map: the navigation's map (on the flight core's clock) */
           if (!design && (!strcmp(s, "cpu") || !strcmp(s, "cpu off"))) { loop_prof_said(&LP, s + 3 + (s[3] == ' '), LP_CMD, reply, sizeof reply); design = 1; }   /* where the processor time goes (loop_prof.h) */
           if (!design && !strcmp(s, "height")) {             /* the height's sources side by side, and what the navigation fused */
             int kk = 0; char rs[200]; tof250_said(&RF, t, rs, (int)sizeof rs);
@@ -880,7 +885,7 @@ int main(int argc, char **argv) {
           }
           if (!strncmp(s, "status", 6) && (radio_udp_is(R) || radio_pserial_is(R) || radio_nrf24_is(R))) { size_t k2 = strlen(reply); if (k2 + 3 < sizeof reply) { memcpy(reply + k2, "; ", 2); (radio_udp_is(R) ? radio_udp_counts : radio_pserial_is(R) ? radio_pserial_counts : radio_nrf24_counts)(R, reply + k2 + 2, (int)(sizeof reply - k2 - 2)); } }   /* (and the packet link's counts) */
           if (k == 2) printf("%s\n", reply);
-          else if (k == 3) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);
+          else if (k == 3 && *reply) sendto(udp, reply, strlen(reply), 0, (struct sockaddr *)&from, fl);   /* (a fix says nothing back) */
           else if (*reply) {                                   /* the radio's: the answer goes down as messages (the first 3, ~170 characters; a file's pieces say nothing) */
             printf("radio text answer: %s\n", reply);
             if (radio_here) { if (strlen(reply) > 3 * TLM_TEXT) memcpy(reply + 3 * TLM_TEXT - 3, "...", 4); tlm_text(&TS, 6, reply); }
@@ -1083,6 +1088,7 @@ int main(int argc, char **argv) {
         if (was && !LS.cal) printf("learning: %s\n", LS.msg);
       }
       loop_prof_in(&LP, LP_NAVSTEP); int e = nav_step(&N, &in, &P.sp, dt, &o); loop_prof_out(&LP);
+      if (o.guard & 2) { memcpy(P.sp.target, o.target, sizeof P.sp.target); if (radio) { memcpy(RP.target, o.target, sizeof RP.target); RP.have_target = 1; } }   /* (the map's guard cut it short: the pilot's target waits there) */
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);
         int k = fleet_out(&FL, fo); if (k) send_frame(link, RN_LINK_PEER_OUT, fo, (uint32_t)k * 4);

@@ -9,7 +9,7 @@
  * module raises its alarm), a command module with another binding phrase (nothing taken either way). Then both
  * programs again with the line one way at a time (serial,57600,half: the drone answers each packet): it arms and
  * takes off, and the uplink is 100%. And dfb_ground and dfb_pi refuse a serial link without its port or too slow.
- *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_serial_e2e test_ground_serial_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_serial_e2e test_ground_serial_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_serial_e2e */
 #define _DEFAULT_SOURCE
 #define main main_orig

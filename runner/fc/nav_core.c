@@ -10,6 +10,9 @@ void *memset(void *d, int c, unsigned long n);
 #include <string.h>
 #endif
 
+#include "fc_core.h"
+#include "wasm_math.h"
+
 #define G_ 9.81f
 #define NAV_MAGIC 0x434E4644u   /* 'DFNC' */
 
@@ -70,6 +73,116 @@ static int call(nav_state *N, int fn, const float *in, float *out) {
   int e = rn_host_call(N->H, fn, 0, in, out);
   if (!e) { int n = rn_host_out_size(N->H, fn); for (int k = 0; k < n; k++) if (!fin(out[k])) return -1; }
   return e;
+}
+
+/* ───────── the map (docs/map-navigation.md) ───────── */
+static void rotz(float *o, float psi, const float *v) { float c = cosf(psi), sn = sinf(psi), x = c * v[0] - sn * v[1], y = sn * v[0] + c * v[1]; o[0] = x; o[1] = y; o[2] = v[2]; }
+static void to_map(const nav_state *N, float *o, const float *pa) { rotz(o, -N->map.psi, pa); for (int i = 0; i < 3; i++) o[i] += N->map.off[i]; }
+
+void nav_map_attach(nav_state *N, map_grid *M) { N->map.M = M; if (!(N->map.radius > 0)) N->map.radius = 0.3f; if (!(N->map.v_unknown > 0)) N->map.v_unknown = 0.3f; }
+
+int nav_map_load(nav_state *N, const uint8_t *buf, uint32_t len, char *reply, int rn) {
+  if (!N->map.M) { fc_fmt(reply, rn, "map: this navigation keeps no map"); return -1; }
+  char why[64];
+  if (map_load(N->map.M, buf, len, N->map.radius, why, sizeof why)) { fc_fmt(reply, rn, "map: %s%s", why, N->map.M->ok ? " (the map it had stays)" : ""); return -1; }
+  const map_grid *M = N->map.M;
+  fc_fmt(reply, rn, "map: %d x %d x %d cells at %.2f m, %d occupied", M->n[0], M->n[1], M->n[2], (double)M->res, (int)M->n_occ);
+  return 0;
+}
+
+int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma) {
+  if (!N->have_pa || !fin(age) || !fin(p[0]) || !fin(p[1]) || !fin(p[2]) || !fin(psi)) return -1;
+  float then[3], m[3];
+  for (int i = 0; i < 3; i++) then[i] = N->pa[i] - N->v[i] * (age > 0 ? age : 0);
+  N->map.psi = psi; to_map(N, m, then);                 /* (with the offset it has: m − p is how far off it is) */
+  float e[3] = { p[0] - m[0], p[1] - m[1], p[2] - m[2] }, en = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+  /* the first fix, or a jump (the map re-solved): taken as it is; otherwise half way, so one noisy fix moves it less */
+  float k = !N->map.aligned || en > 2 ? 1.0f : 0.5f;
+  for (int i = 0; i < 3; i++) N->map.off[i] += k * e[i];
+  N->map.aligned = 1; N->map.t_fix = 0; N->map.sigma = sigma; N->map.n_fix++;
+  return 0;
+}
+
+static int guard(nav_state *N, const float *target, const float *vref, float *gt, float *gv, float *vlim, nav_out *out, float dt) {
+  nav_mapstate *G = &N->map; (void)dt;
+  memcpy(gt, target, 3 * sizeof *gt); memcpy(gv, vref, 3 * sizeof *gv);
+  if (!G->M || !G->M->ok || !G->aligned || G->t_fix > NAV_FIX_STALE) return 0;
+  float pm[3]; to_map(N, pm, N->pa);
+  const int inside = map_at(G->M, pm, 1) == MAP_OCC;   /* within its radius of something already (taking off, a map
+                                                       * that moved): it may move, slowly, but nothing is cut short */
+  int g = 0; float d_occ, d_unk;
+  float d[3] = { target[0] - N->p[0], target[1] - N->p[1], target[2] - N->p[2] }, dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  if (dist > 0.02f && !inside) {
+    float u[3] = { d[0] / dist, d[1] / dist, d[2] / dist }, um[3]; rotz(um, -G->psi, u);
+    map_look(G->M, pm, um, dist + 0.5f, &d_occ, &d_unk);
+    float allow = d_occ - 0.05f, into = d_unk + 0.5f;   /* stop short of it; into the unknown half a metre at a time */
+    if (into < allow) allow = into;
+    if (allow < 0) allow = 0;
+    if (dist > allow) { for (int i = 0; i < 3; i++) gt[i] = N->p[i] + u[i] * allow; g = 2; }
+    /* and toward it no faster than it can stop in the room there is (the target alone would let it come at full speed
+     * and overshoot); near the unknown, slowly */
+    float room = d_occ - 0.05f; if (room < 0) room = 0;
+    float vt = sqrtf(2 * NAV_GUARD_BRAKE * room); if (d_unk < 1 && vt > G->v_unknown) vt = G->v_unknown;
+    if (vt < 0.1f) vt = 0.1f;
+    if (vt < *vlim) { *vlim = vt; g |= 1; }
+  }
+  float vn = sqrtf(vref[0] * vref[0] + vref[1] * vref[1] + vref[2] * vref[2]);
+  if (vn > 0.01f) {
+    float u[3] = { vref[0] / vn, vref[1] / vn, vref[2] / vn }, um[3]; rotz(um, -G->psi, u);
+    map_look(G->M, pm, um, 4, &d_occ, &d_unk);
+    float room = d_occ - 0.05f; if (room < 0) room = 0;
+    float vmax = sqrtf(2 * NAV_GUARD_BRAKE * room);
+    if ((d_unk < 1 || inside) && vmax > G->v_unknown) vmax = G->v_unknown;
+    if (vn > vmax) { for (int i = 0; i < 3; i++) gv[i] = vref[i] * vmax / vn; g |= 1; }
+  }
+  out->guard = g;
+  if (g && !G->guard_was) say(N, g & 2 ? "map: stopping short of what's in the way" : "map: slowing (near something, or into the unknown)");
+  G->guard_was = g;
+  return g != 0;
+}
+
+/* a number ([-+]digits[.digits][e[-+]digits]); 0 if there's none */
+static const char *mnum(const char *s, float *v) {
+  while (*s == ' ') s++;
+  int neg = *s == '-'; if (*s == '-' || *s == '+') s++;
+  if (!((*s >= '0' && *s <= '9') || (*s == '.' && s[1] >= '0' && s[1] <= '9'))) return 0;
+  double x = 0, f = 0.1; while (*s >= '0' && *s <= '9') x = 10 * x + (*s++ - '0');
+  if (*s == '.') { s++; while (*s >= '0' && *s <= '9') { x += f * (*s++ - '0'); f *= 0.1; } }
+  if (*s == 'e' || *s == 'E') { int en = 0, eneg = 0; s++; if (*s == '-' || *s == '+') eneg = *s++ == '-'; while (*s >= '0' && *s <= '9') en = 10 * en + (*s++ - '0'); while (en--) x = eneg ? x / 10 : x * 10; }
+  *v = (float)(neg ? -x : x); return s;
+}
+static const char *word(const char *s, const char *w) { while (*w) if (*s++ != *w++) return 0; return (*s == 0 || *s == ' ') ? s : 0; }
+
+int nav_map_command(nav_state *N, const char *s, double now, char *r, int rn) {
+  const char *a; float v[6]; int n = 0;
+  if ((a = word(s, "mapfix"))) {
+    for (const char *e; n < 6 && (e = mnum(a, &v[n])); n++) a = e;
+    if (n < 5) { fc_fmt(r, rn, "mapfix T X Y Z PSI [SIGMA]: the hub at T (flight core's clock; T<=0: -T s ago), map axes [m]; PSI to nav axes [rad]"); return 1; }
+    float p[3] = { v[1], v[2], v[3] };
+    if (nav_mapfix(N, v[0] <= 0 ? -v[0] : (float)(now - v[0]), p, v[4], n > 5 ? v[5] : 0.1f)) fc_fmt(r, rn, "mapfix: not yet (the estimate hasn't started)");   /* (T ≤ 0: that long ago) */
+    else r[0] = 0;                                       /* (taken: a fix says nothing back, as a flow reading doesn't) */
+    return 1;
+  }
+  if ((a = word(s, "mapguard"))) {
+    for (const char *e; n < 2 && (e = mnum(a, &v[n])); n++) a = e;
+    if (n >= 1 && v[0] >= 0 && v[0] < 5) { N->map.radius = v[0]; if (N->map.M) map_grow(N->map.M, v[0]); }
+    if (n >= 2 && v[1] > 0 && v[1] < 10) N->map.v_unknown = v[1];
+    fc_fmt(r, rn, "mapguard: radius %.2f m, %.2f m/s near the unknown", (double)N->map.radius, (double)N->map.v_unknown);
+    return 1;
+  }
+  if ((a = word(s, "map"))) {
+    while (*a == ' ') a++;
+    const map_grid *M = N->map.M;
+    if (word(a, "clear")) { if (N->map.M) N->map.M->ok = 0; N->map.aligned = 0; fc_fmt(r, rn, "map: cleared"); return 1; }
+    if (!M) { fc_fmt(r, rn, "map: this navigation keeps no map"); return 1; }
+    if (!M->ok) { fc_fmt(r, rn, "map: none (send map.dmp)"); return 1; }
+    fc_fmt(r, rn, "map: %d x %d x %d at %.2f m, %d occupied; ", M->n[0], M->n[1], M->n[2], (double)M->res, (int)M->n_occ);
+    if (!N->map.aligned) fc_fmt_add(r, rn, "no fix yet (mapfix): the guard waits");
+    else fc_fmt_add(r, rn, "%d fixes, the last %.1f s ago%s; guard %s, radius %.2f m", (int)N->map.n_fix, (double)N->map.t_fix,
+                    N->map.t_fix > NAV_FIX_STALE ? " (too long: the guard stands down)" : "", N->map.guard_was & 2 ? "stopping short" : N->map.guard_was ? "slowing" : "clear", (double)N->map.radius);
+    return 1;
+  }
+  return 0;
 }
 
 static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, float qn, nav_out *out) {
@@ -169,9 +282,18 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     }
   }
 
+  /* the map's guard: the target cut short before what's in the way, slower near it and into the unknown (not while
+   * it lands: the floor is in the map too) */
+  float gt[3], gv[3], glim = 1e9f;
+  if (!(N->auto_on && N->auto_land) && guard(N, target, vref, gt, gv, &glim, out, dt)) { target = gt; vref = gv; }
+  else N->map.guard_was = 0;
+  for (int i = 0; i < 3; i++) out->target[i] = target[i];
+
   /* where to go: the acceleration toward the target */
   float ep[3], ev[3], vmax = C->speed_max > 0 ? C->speed_max : 6;
   if (N->lim_speed > 0 && N->lim_speed < vmax) vmax = N->lim_speed;   /* the supervisor's limit */
+  float vlimit = N->lim_speed > 0 ? N->lim_speed : 0;                 /* (the controller's: the supervisor's, or the guard's) */
+  if (glim < 1e8f) { if (glim < vmax) vmax = glim; if (!(vlimit > 0) || glim < vlimit) vlimit = glim; }
   for (int i = 0; i < 3; i++) {
     ep[i] = target[i] - N->p[i];
     ev[i] = N->v[i] - clampf(vref[i], -vmax, vmax);
@@ -185,7 +307,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   for (int i = 0; i < 3; i++) b[k++] = N->iPos[i];
   b[k++] = C->m; b[k++] = G_;
   b[k++] = 1;                                                      /* lim: the supervisor's (or the usual 6 m/s², 35°) */
-  b[k++] = 1; b[k++] = N->lim_accel > 0 ? N->lim_accel : 6; b[k++] = 1; b[k++] = N->lim_lean > 0 ? N->lim_lean : 35; b[k++] = N->lim_speed > 0; b[k++] = N->lim_speed;
+  b[k++] = 1; b[k++] = N->lim_accel > 0 ? N->lim_accel : 6; b[k++] = 1; b[k++] = N->lim_lean > 0 ? N->lim_lean : 35; b[k++] = vlimit > 0; b[k++] = vlimit;
   float Fd[3];
   if ((e = call(N, N->f_pc, b, Fd))) return -1;
   if (N->H->act == 0 && N->H->phase == RN_PH_FLYING && N->H->pending == 0 &&
@@ -194,7 +316,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
     float want[3], a[3], k = g[0] / g[3];
     for (int i = 0; i < 3; i++)
       want[i] = k * ep[i];
-    float xy = sqrtf(want[0] * want[0] + want[1] * want[1]), vh = N->lim_speed > 0 ? N->lim_speed : 6;
+    float xy = sqrtf(want[0] * want[0] + want[1] * want[1]), vh = vlimit > 0 ? vlimit : 6;
     if (xy > vh) {
       want[0] *= vh / xy;
       want[1] *= vh / xy;
@@ -227,6 +349,7 @@ int nav_step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, nav_out
            sp->fly && !N->sup_mode && !N->rc_rth, 1);
   nav_sp test = *sp;
   if (dt > 0 && fin(dt)) N->test_left = N->test_left > dt ? N->test_left - dt : 0;
+  if (dt > 0 && fin(dt)) N->map.t_fix += dt;
   if (N->test_left > 0 && !N->sup_mode && !N->rc_rth && sp->fly) test.target[N->test_axis] += N->test_offset;
   sp = &test;
   memset(out, 0, sizeof *out);

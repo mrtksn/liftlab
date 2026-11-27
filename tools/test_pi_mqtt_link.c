@@ -4,7 +4,7 @@
  * messages on PREFIX/link/from-fc), sends its commands as one frame a message (its "disarmed, I'm here" commands, the
  * flight core's 48-byte RN_LINK_CMD), and reconnects and carries on when the broker drops everyone.
  *   cd runner/pi && sh build.sh && cd ../.. && cc -O2 -Irunner -Irunner/fc -Itools tools/test_pi_mqtt_link.c \
- *     runner/fc/nav_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c \
+ *     runner/fc/nav_core.c runner/fc/map_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c \
  *     runner/fc/mqtt_min.c -lm -o /tmp/test_pi_mqtt && /tmp/test_pi_mqtt runner/pi/dfb_pi */
 #define _DEFAULT_SOURCE
 #define main main_orig

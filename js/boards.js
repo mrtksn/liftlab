@@ -758,8 +758,10 @@ function boardsControl(dt) {
     }
     if (tw) nav.who_core(brt.fcState === 1 || brt.fcState === 2 ? 1 : 0);   // (the flight core armed, as dfb_pi has it from the ESP32)
     const err = tw ? nav.nav_tick_radio(brt.t) : nav.nav_tick();
-    const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 8).subarray(41);
-    brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err };
+    const o = new Float32Array(nav.memory.buffer, nav.nio_ptr(), 41 + 14 + 12).subarray(41);
+    brt.navOut = { acc: [o[0], o[1], o[2]], heading: o[3], fly: o[4] > 0.5, p: [o[5], o[6], o[7]], v: [o[8], o[9], o[10]], haveHome: o[11] > 0.5, ready: o[12] > 0.5, landed: o[13] > 0.5, err,
+      guard: o[22] | 0, guardTarget: [o[23], o[24], o[25]] };   // (the map's guard: 1 slowed, 2 the target cut short, docs/map-navigation.md)
+    if (!tw && (brt.navOut.guard & 2) && brt.home) { setpoint.x = brt.home[0] + o[23]; setpoint.y = brt.home[1] + o[24]; setpoint.z = brt.home[2] + o[25]; }   // (the simulator's pilot's target waits where the guard stopped it)
     if (tw) {
       brt.navOut.radio = { target: [o[14], o[15], o[16]], heading: o[17], arm: o[18] > 0.5, link: o[19] > 0.5, sticks: o[21] > 0.5 };   // (sticks: the radio's sticks fly it, as angle mode: rc_who)
       if (o[20] > 0.5) { const m = cstr(nav, nav.rc_msg_ptr()); if (m.startsWith('pickup')) cargoLog(`${navB.name}: ${m}`, 'board'); else rnEvent(`${navB.name}: ${m}`, 'warn'); }
@@ -786,6 +788,7 @@ function boardsControl(dt) {
     else if (!err && T) fcSend({ arm: armNav, throttle: brt.navOut.fly ? 1 : 0, guided: 1, acc: brt.navOut.acc, heading: brt.navOut.heading }, linkDelay(navB, coreB));
     else if (!T) fcSend({ arm: 0, throttle: 0, guided: 1, acc: [0, 0, 0], heading: 0 }, linkDelay(navB, coreB));   // announcing itself, disarmed
   }
+  if (navB && typeof mapperStep === 'function') mapperStep();     // the simulated mapper's map and fixes (sim-mapper.js)
   // Without navigation: the pilot's sticks, 50 times a second (a radio, or fly.py over USB).
   if (!navB && !tw && brt.t >= brt.nextStick) { brt.nextStick += 0.02; fcSend(stickCommand(), 0.002); }
 
@@ -826,6 +829,20 @@ const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; 
 function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
 // The simulated Pi's folder: the files sent up (file_rx.h), kept until the page is closed, as the real Pi's are on its disk.
 const simPiFiles = new Map();
+// The navigation's map (docs/map-navigation.md): a map file, or a map command (mapfix, mapguard, map), to the board the
+// navigation runs on, as dfb_pi gives them to its own. A fix's time is the board's clock (brt.t), as the mapper stamps it.
+const MAP_FILE = 'map.dmp';
+const simNavInst = () => { const b = boardOf('nav'); return b ? brt.inst.get(b.id) : null; };
+function simMapLoad(bytes) {
+  const nav = simNavInst(); if (!nav || !nav.nav_map_file) return 'map: no navigation on the drone to take it';
+  if (bytes.length > 32768) return 'map: over the 32 KB a file may be';
+  new Uint8Array(nav.memory.buffer, nav.file_ptr(), bytes.length).set(bytes);
+  nav.nav_map_file(bytes.length); return cstr(nav, nav.txt_ptr(), 200);
+}
+function simMapText(s) {
+  const nav = simNavInst(); if (!nav || !nav.nav_map_text) return null;
+  txtIn(nav, s); return nav.nav_map_text(brt.t) ? cstr(nav, nav.txt_ptr(), 200) : null;
+}
 // The simulated ESP32's settings (KEY → VALUE, as `show` gives them): what it was last given, as the real one keeps
 // its flash. Both start, once a page, as the design is then (installed with it); Upload design changes them; later
 // edits to the design don't, so Compare with the drone shows them until the next upload.
@@ -855,6 +872,7 @@ function piText(tw, s) {
     if (r === 2) {
       const n = tw.file_size(), name = cstr(tw, tw.file_name(), 40);
       simPiFiles.set(name, new Uint8Array(tw.memory.buffer, tw.file_ptr(), n).slice());
+      if (name === MAP_FILE) return { say: [`file ${name}: saved, ${n} bytes`, simMapLoad(simPiFiles.get(name))], log: true };   // (dfb_pi: the navigation takes it)
       return { say: [`file ${name}: saved, ${n} bytes`], log: true };
     }
     return { say: said ? [said] : [], log: !s.startsWith('fd ') || !!said };
@@ -901,6 +919,7 @@ function piText(tw, s) {
     return { say: [`airframe ${name}: ${k & 255} motors, ${k >> 8} servos, to the ESP32 (it says when it has it)`, 'esp32: airframe loaded and saved (the simulator flies the design\'s)'], log: true };
   }
   if (s === 'restart') return { say: [simArmed() ? 'restart: disarm first' : 'restart: the simulator\'s Pi runs the design\'s files already'], log: true };
+  if (/^map(fix|guard)?( |$)/.test(s)) { const r = simMapText(s); return r == null ? null : { say: r ? [r] : [], log: !s.startsWith('mapfix') }; }   // (dfb_pi: the navigation's map commands)
   return null;
 }
 

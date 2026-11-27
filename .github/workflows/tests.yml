@@ -33,7 +33,7 @@ jobs:
       - run: node tools/test_learning.js
       - name: Learning model validation and bounded test commands
         run: |
-          cc -O1 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=undefined -Irunner -Irunner/fc tools/test_learning_native.c runner/fc/fc_core.c runner/fc/nav_core.c runner/rn_host.c runner/rn.c runner/pi/rn_builtin_pi.c -lm -o /tmp/test-learning
+          cc -O1 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=undefined -Irunner -Irunner/fc tools/test_learning_native.c runner/fc/fc_core.c runner/fc/nav_core.c runner/fc/map_core.c runner/rn_host.c runner/rn.c runner/pi/rn_builtin_pi.c -lm -o /tmp/test-learning
           /tmp/test-learning
       - name: Hardware measured tuning, transactions and Pi command client
         run: sh tools/test_hardware_tuning.sh
@@ -47,6 +47,8 @@ jobs:
           /tmp/test-flow-in
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_who.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-who
           /tmp/test-who
+          cc -Wall -Wextra -Werror -fsanitize=address,undefined -Irunner -Irunner/fc runner/fc/test_map.c runner/fc/map_core.c runner/rn.c -lm -o /tmp/test-map
+          /tmp/test-map
       - name: Sensor driver register tests
         run: |
           cc -Wall -Wextra -Werror -fsanitize=undefined tools/test_accel_readout.c -lm -o /tmp/test-accel-readout
@@ -67,7 +69,7 @@ jobs:
           /tmp/test-lmux
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_peer.c runner/fc/peer.c runner/fc/plink.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/fc/rc_core.c runner/fc/pickup_core.c -lm -o /tmp/test-peer
           /tmp/test-peer
-          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_fleet.c runner/fc/fleet_core.c runner/fc/fleet_link.c runner/fc/peer.c runner/fc/plink.c runner/fc/rc_core.c runner/fc/pickup_core.c runner/fc/nav_core.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/rn_host.c runner/rn.c runner/rn_builtin.c -lm -o /tmp/test-fleet
+          cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/fc/test_fleet.c runner/fc/fleet_core.c runner/fc/fleet_link.c runner/fc/peer.c runner/fc/plink.c runner/fc/rc_core.c runner/fc/pickup_core.c runner/fc/nav_core.c runner/fc/map_core.c runner/fc/radio_link.c runner/fc/crsf.c runner/fc/tlm_crsf.c runner/fc/tlm_core.c runner/rn_host.c runner/rn.c runner/rn_builtin.c -lm -o /tmp/test-fleet
           /tmp/test-fleet
           cc -Wall -Wextra -Werror -fsanitize=undefined -Irunner -Irunner/fc runner/esp_radio/test_esp_radio.c runner/esp_radio/usb_split.c runner/fc/crsf.c -lm -o /tmp/test-esp-radio
           /tmp/test-esp-radio
@@ -86,7 +88,7 @@ jobs:
           /tmp/test-mqtt
       - name: Pi companion over MQTT, end to end
         run: |
-          cc -O2 -Irunner -Irunner/fc -Itools tools/test_pi_mqtt_link.c runner/fc/nav_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c runner/fc/mqtt_min.c -lm -o /tmp/test-pi-mqtt
+          cc -O2 -Irunner -Irunner/fc -Itools tools/test_pi_mqtt_link.c runner/fc/nav_core.c runner/fc/map_core.c runner/fc/fc_core.c runner/rn_host.c runner/rn.c runner/rn_link.c runner/rn_builtin.c runner/fc/mqtt_min.c -lm -o /tmp/test-pi-mqtt
           /tmp/test-pi-mqtt runner/pi/dfb_pi
       - name: ESC signal sniffer analysis
         run: |

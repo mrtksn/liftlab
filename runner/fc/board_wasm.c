@@ -69,7 +69,7 @@ static float cmd[12];                /* arm roll pitch yaw throttle test_motor t
 /* nio: in q[4] w[3] acc[3] have_att | have_baro alt age | have_fix p[3] v[3] age | have_flow flow[2] range q age |
  *      target[3] vref[3] heading fly | dt   →   out acc[3] heading fly p[3] v[3] have_home ready landed */
 #define NIO_IN 41
-static float nio[NIO_IN + 14 + 8];
+static float nio[NIO_IN + 14 + 12];   /* (… after the radio's: the map's guard, and the target it flew to) */
 static rc_who WHO;                               /* who flies it, with the radio: the navigation or the sticks (rc_core.h) */
 static int who_core_armed;                       /* the flight core armed (or in its failsafe), as its telemetry says: who_core */
 
@@ -112,12 +112,14 @@ EXPORT("fc_setup") int fc_setup(uint32_t blob_len) {
 }
 /* The pack voltage the airframe's tables are for (the boards' vref= setting): after fc_setup. */
 EXPORT("fc_vref") void fc_vref(float v) { if (v >= 3 && v <= 60) F.vref = v; }
+static map_grid MAP;                      /* the navigation's map (map_core.h, docs/map-navigation.md) */
 static fleet_state FL;                    /* the fleet program, beside the navigation (fleet.h) */
 /* The navigation, with its config. */
 EXPORT("nav_setup") int nav_setup(uint32_t cfg_len) {
   if (!host_ok) return 3;
   if (nav_init(&N, &H)) return 1;
   if (nav_config_load(&N, ncfg, cfg_len)) return 2;
+  nav_map_attach(&N, &MAP);                       /* (the map it was given stays through a reset: the mapper sends it again) */
   nav_bus_attach(&N, &BUS);
   fleet_init(&FL, &H);                            /* (no fleet program in it: the fleet is off, the rest flies) */
   return 0;
@@ -489,6 +491,12 @@ EXPORT("file_line") int file_line(void) { char l[RC_TEXT + 8]; int i = 0; for (;
 EXPORT("file_ptr") uint8_t *file_ptr(void) { return FRX.buf; }
 EXPORT("file_size") int file_size(void) { return FRX.active == 2 ? (int)FRX.size : 0; }
 EXPORT("file_name") char *file_name(void) { int i = 0; for (; FRX.name[i]; i++) txt[i] = FRX.name[i]; txt[i] = 0; return txt; }
+/* The map's text commands for the navigation (nav_map_command: mapfix, mapguard, map), in txt, on the clock now (the
+ * board's, as the mapper stamps its fixes): 1 if it was one (the answer in txt, empty for a fix), else 0. */
+EXPORT("nav_map_text") int nav_map_text(double now) { char l[RC_TEXT + 8]; int i = 0; for (; i < (int)sizeof l - 1 && txt[i]; i++) l[i] = txt[i]; l[i] = 0; return nav_map_command(&N, l, now, txt, 200); }
+/* A map file (map_core.h) of len bytes at file_ptr (the file just received, or one the page put there): 0, or −1; what
+ * happened in txt. */
+EXPORT("nav_map_file") int nav_map_file(uint32_t len) { return len > FILE_RX_MAX ? -1 : nav_map_load(&N, FRX.buf, len, txt, 200); }
 /* An airframe in blob checked as the flight core would take it (fc_airframe_load), changing nothing: its motors + 256 ×
  * its servo joints, or −1 (why in txt). */
 EXPORT("af_check") int af_check(uint32_t n) {
@@ -627,6 +635,7 @@ EXPORT("nav_tick_radio") int nav_tick_radio(double t) {
   if (sticks) rc_who_sp(&RP, &last_o, who_core_armed, &sp);
   if (RP.said) { RP.said = 0; tlm_text(&TS, 4, RP.msg); nio[NIO_IN + 14 + 6] = 1; } else nio[NIO_IN + 14 + 6] = 0;
   int e = nav_run(&sp);
+  if (last_o.guard & 2) { for (int i = 0; i < 3; i++) { RP.target[i] = last_o.target[i]; sp.target[i] = last_o.target[i]; } }   /* (the map's guard cut it short: the pilot's target waits there) */
   float *p = nio + NIO_IN + 14;
   for (int i = 0; i < 3; i++) *p++ = sp.target[i];
   *p++ = sp.heading; *p++ = (float)arm; *p++ = (float)rc_link_ok(&RCI, t);
@@ -660,6 +669,7 @@ static int nav_run(nav_sp *sp_radio) {
   for (int i = 0; i < 3; i++) *p++ = o.p[i];
   for (int i = 0; i < 3; i++) *p++ = o.v[i];
   *p++ = (float)o.have_home; *p++ = (float)o.ready; *p++ = (float)o.landed;
+  p = nio + NIO_IN + 14 + 8; *p++ = (float)o.guard; for (int i = 0; i < 3; i++) *p++ = o.target[i];
   return e;
 }
 

@@ -16,7 +16,7 @@
  * link_uart's, then save (wiring), the ESP32's answers coming down but its "set ..." for each line. Then it starts a command module with another binding phrase: nothing it sends is taken (the
  * drone doesn't arm), nothing of the drone's reaches it, and both ends say the phrase doesn't match. And dfb_pi
  * refuses ESP-NOW (it needs an ESP32), dfb_ground ESP-NOW without the bridge's port.
- *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_wifi_e2e test_ground_wifi_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_wifi_e2e test_ground_wifi_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_wifi_e2e */
 #define _DEFAULT_SOURCE
 #define main main_orig

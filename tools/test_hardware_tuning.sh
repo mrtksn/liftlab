@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/liftlab-hardware-tuning.XXXXXX")
 trap 'rm -rf "$TEST_DIR"' EXIT HUP INT TERM
-COMMON="runner/fc/autotune_core.c runner/fc/learn_core.c runner/fc/fc_core.c runner/fc/nav_core.c runner/rn_host.c runner/rn.c"
+COMMON="runner/fc/autotune_core.c runner/fc/learn_core.c runner/fc/fc_core.c runner/fc/nav_core.c runner/fc/map_core.c runner/rn_host.c runner/rn.c"
 FLAGS="-pthread -O1 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize=undefined -Irunner -Irunner/fc"
 ${CC:-cc} $FLAGS tools/autotune_math_probe.c $COMMON -lm -o "$TEST_DIR/math"
 node tools/test_hardware_tuning.js "$TEST_DIR/math"

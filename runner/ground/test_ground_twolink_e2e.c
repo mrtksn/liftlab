@@ -8,7 +8,7 @@
  * one way only (serial,57600,up: a laser up): line A's uplink cut, the channels come by the laser and the command
  * module still sees the drone hearing it (by A's downlink); then A cut both ways: the command module has no telemetry
  * (its alarm), but the drone, still getting its channels by the laser, doesn't fail safe.
- *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_twolink_e2e test_ground_twolink_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_twolink_e2e test_ground_twolink_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_twolink_e2e */
 #define _DEFAULT_SOURCE
 #define main main_orig

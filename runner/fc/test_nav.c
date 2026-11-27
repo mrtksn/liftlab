@@ -2,7 +2,7 @@
  * 1 kHz, the navigation at 100 Hz, joined by a link that delays both ways (as the Pi's serial link does), on the
  * built-in flight program. The plant is test_fc.c's rigid body; GPS, barometer and optical flow are made from it
  * with noise and delay.
- *   cc -O2 -I.. -o test_nav test_nav.c nav_core.c fc_core.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_nav testdata */
+ *   cc -O2 -I.. -o test_nav test_nav.c nav_core.c map_core.c fc_core.c ../rn_host.c ../rn.c ../rn_builtin.c -lm && ./test_nav testdata */
 #include "fc_core.h"
 #include "nav_core.h"
 #include <math.h>

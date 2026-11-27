@@ -7,7 +7,7 @@
  * "status"), and checks the drone takes off, goes there, follows the stick, starts the learning's calibration from
  * the radio, that the telemetry comes back to the command module, and that when the radio goes quiet the drone flies
  * home and lands by itself (the calibration, still running then, stops), and the command module raises its alarm.
- *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_e2e test_ground_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_e2e test_ground_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_e2e */
 #define _DEFAULT_SOURCE
 #define main main_orig

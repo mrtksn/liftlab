@@ -8,7 +8,7 @@
  * position, and that when the command module stops, the commands stop and the ESP32 falls back on its failsafe.
  * Before arming, with the command module's channels coming (disarmed), a motor test sent to dfb_pi as text ("motors 0 0.3
  * 0 0", LiftLab's Motor thrust test) still reaches the ESP32 (RN_LINK_BENCH_TEST), and arming ends it.
- *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_angle_e2e test_ground_angle_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && sh ../pi/build.sh && cc -O2 -I.. -I../fc -o test_ground_angle_e2e test_ground_angle_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_ground_angle_e2e */
 #define _DEFAULT_SOURCE
 #define main main_orig

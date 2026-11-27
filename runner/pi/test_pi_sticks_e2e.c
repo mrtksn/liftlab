@@ -7,7 +7,7 @@
  *   - motors idle 0 0.2 runs motors 1 and 3 at once, each at its own (RN_LINK_BENCH_TEST), and says the idle;
  *   - arm on the bottom throttle arms it, and status says the text sticks, the ESP32's state and its telemetry;
  *   - when they stop coming, the commands stop within a second and the ESP32's failsafe disarms it (on the ground).
- *   sh build.sh && cc -O2 -I.. -I../fc -o test_pi_sticks_e2e test_pi_sticks_e2e.c ../fc/nav_core.c ../fc/fc_core.c \
+ *   sh build.sh && cc -O2 -I.. -I../fc -o test_pi_sticks_e2e test_pi_sticks_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c \
  *     ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c \
  *     ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && ./test_pi_sticks_e2e */
 #define _DEFAULT_SOURCE

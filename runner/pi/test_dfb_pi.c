@@ -6,7 +6,7 @@
  * gets there; then, as if the ESP32 had a radio receiver, sends the channels (RN_LINK_RC: arm, fly, the pitch stick
  * forward for 2 s) and asks for the Pi's telemetry (RN_LINK_WANT bit 2), checks the stick moves it and the
  * telemetry comes (RN_LINK_TLM), stops the channels and checks it flies home and lands by itself, then stops dfb_pi and checks the ESP32 goes to its failsafe.
- *   sh build.sh && cc -O2 -I.. -I../fc -o test_dfb_pi test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../rn_builtin.c -lm -lutil && ./test_dfb_pi */
+ *   sh build.sh && cc -O2 -I.. -I../fc -o test_dfb_pi test_dfb_pi.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../rn_builtin.c -lm -lutil && ./test_dfb_pi */
 #define _DEFAULT_SOURCE
 #define main main_orig
 #include "../fc/test_nav.c"

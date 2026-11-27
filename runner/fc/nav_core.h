@@ -22,6 +22,7 @@
 #include "bus.h"
 #include "pid_tuning.h"
 #include "rn_host.h"
+#include "map_core.h"
 #include <stdint.h>
 
 /* What the navigation needs to know about the drone (exported by the simulator with the airframe). */
@@ -60,7 +61,23 @@ typedef struct {
   int pos_ok;                            /* it knows where it is across the ground: a horizontal reference (the flow's
                                           * speed, the GPS) spoke in the last 0.3 s, or it is on the ground, or lifting
                                           * off (its first NAV_LIFTOFF_S, below 0.3 m). Without one the estimate drifts */
+  int guard;                             /* the map's guard this step: 0 nothing, 1 slowed (near something, or into the
+                                          * unknown), 2 the target cut short (the caller moves its own target there) */
+  float target[3];                       /* the target it flew to, relative to home (cut short by the guard) */
 } nav_out;
+
+/* The map and where the drone is in it (docs/map-navigation.md, map_core.h). The map's axes turned by psi are the
+ * navigation's; a point of the navigation (its own estimate, pa) is at Rz(−psi)·pa + off in the map. Each fix sets
+ * them; without fixes for NAV_FIX_STALE the guard stands down (where it is in the map is no longer known). */
+#define NAV_FIX_STALE 10.0f              /* [s] */
+#define NAV_GUARD_BRAKE 1.0f             /* [m/s²] the braking the guard counts on (well inside what it can do) */
+typedef struct {
+  map_grid *M;                           /* the host's map (nav_map_attach), or NULL */
+  float radius, v_unknown;               /* the guard: the drone's radius with its margin [m]; its speed near the unknown [m/s] */
+  int aligned; float psi, off[3], t_fix, sigma;
+  uint32_t n_fix;
+  int guard_was;                         /* (for what it says when the guard starts and stops) */
+} nav_mapstate;
 
 typedef struct {
   rn_host *H; int f_pe, f_fv, f_pc, ok;
@@ -81,6 +98,7 @@ typedef struct {
   int fly_land;                          /* "fly" went off in the air: it lands where it is, then idles */
   int auto_on, auto_land, landed; float auto_t[3], auto_v[3], land_t;
   nav_out last;                          /* the last step's output (held while a step can't be made) */
+  nav_mapstate map;                      /* the map, where it is in it, and the guard */
   char why[64];
   uint32_t steps;
   bus *bus; int bt[3];                   /* the board's data bus, if it has one (nav_bus_attach), and this code's topics */
@@ -101,6 +119,17 @@ int nav_tune(nav_state *N, const float *p, int n);
 /* Publish on the board's data bus (docs/topic-bus.md) after each step: nav.estimate, nav.setpoint, nav.command.
  * Without a bus (B NULL) nothing is published. 0, or −1 if the bus has no room. */
 int nav_bus_attach(nav_state *N, bus *B);
+/* The map (map_core.h) this host keeps for the navigation: attach once (radius 0.3 m, 0.3 m/s near the unknown by
+ * default); a map file loaded into it with nav_map_load (grown by the guard's radius). */
+void nav_map_attach(nav_state *N, map_grid *M);
+int nav_map_load(nav_state *N, const uint8_t *buf, uint32_t len, char *reply, int rn);
+/* A fix: where the hub was age seconds ago, in the map [m]; psi the turn from the map's axes to the navigation's [rad];
+ * sigma how sure [m]. 0, or −1 if the estimate hasn't started (nothing to align). */
+int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma);
+/* The map's text commands (docs/map-navigation.md): mapfix T X Y Z PSI [SIGMA] (T on the clock `now` is on: the
+ * flight core's; T ≤ 0: −T seconds ago), mapguard RADIUS [V_UNKNOWN], map (how it is), map clear. 1 if it was one (reply set), else 0. */
+int nav_map_command(nav_state *N, const char *s, double now, char *reply, int rn);
+
 /* The supervisor's settings (a SET frame): mode 2 flies home at its speed limit and lands, 3 lands where it is. In the
  * air the mode only steps up; on the ground it is as sent. */
 void nav_set(nav_state *N, const float *p, int n);

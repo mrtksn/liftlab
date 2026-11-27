@@ -34,9 +34,11 @@ cc -O2 -Wall -Wextra -I. -o "$T/test_flow" fc/test_flow.c fc/flow_core.c -lm
 "$T/test_flow"
 cc -O2 -Wall -Wextra -o "$T/test_flow_in" pi/test_flow_in.c pi/flow_in.c -lm
 "$T/test_flow_in"
+cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_map" fc/test_map.c fc/map_core.c rn.c -lm
+"$T/test_map"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_who" fc/test_who.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_who"
-cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
+cc -O2 -Wall -Wextra -I. -o "$T/test_nav" fc/test_nav.c fc/nav_core.c fc/map_core.c fc/fc_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_nav" fc/testdata
 cc -O2 -Wall -Wextra -I. -o "$T/test_cargo" fc/test_cargo.c fc/cargo_core.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/tlm_sources.c fc/crsf.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_cargo"
@@ -54,14 +56,14 @@ cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_lmux" fc/test_lmux.c fc/lmux.c fc/plin
 "$T/test_lmux"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_peer" fc/test_peer.c fc/peer.c fc/plink.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c fc/rc_core.c fc/pickup_core.c -lm
 "$T/test_peer"
-cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_fleet" fc/test_fleet.c fc/fleet_core.c fc/fleet_link.c fc/peer.c fc/plink.c fc/rc_core.c fc/pickup_core.c fc/nav_core.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c rn_host.c rn.c rn_builtin.c -lm
+cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_fleet" fc/test_fleet.c fc/fleet_core.c fc/fleet_link.c fc/peer.c fc/plink.c fc/rc_core.c fc/pickup_core.c fc/nav_core.c fc/map_core.c fc/radio_link.c fc/crsf.c fc/tlm_crsf.c fc/tlm_core.c rn_host.c rn.c rn_builtin.c -lm
 "$T/test_fleet"
 cc -O2 -Wall -Wextra -I. -Ifc -o "$T/test_esp_radio" esp_radio/test_esp_radio.c esp_radio/usb_split.c fc/crsf.c -lm
 "$T/test_esp_radio"
-(cd pi && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_dfb_pi" test_dfb_pi.c ../fc/nav_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../fc/pickup_core.c ../rn_builtin.c -lm -lutil && "$T/test_dfb_pi")
+(cd pi && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_dfb_pi" test_dfb_pi.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../rn_host.c ../rn.c ../rn_link.c ../fc/tlm_core.c ../fc/rc_core.c ../fc/pickup_core.c ../rn_builtin.c -lm -lutil && "$T/test_dfb_pi")
 cc -O2 -Wall -Wextra -Wno-unused-parameter -I. -Ifc -o "$T/test_ground" ground/test_ground.c ground/ground_core.c ground/rn_builtin_ground.c fc/tlm_core.c fc/tlm_crsf.c fc/radio_link.c fc/crsf.c fc/rc_core.c fc/pickup_core.c rn_host.c rn.c -lm
 "$T/test_ground"
-(cd ground && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_ground_e2e" test_ground_e2e.c ../fc/nav_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_e2e")
-(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_wifi_e2e" test_ground_wifi_e2e.c ../fc/nav_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_wifi_e2e")
-(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_serial_e2e" test_ground_serial_e2e.c ../fc/nav_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_serial_e2e")
-(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_twolink_e2e" test_ground_twolink_e2e.c ../fc/nav_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_twolink_e2e")
+(cd ground && sh build.sh && cc -O2 -I.. -I../fc -o "$T/test_ground_e2e" test_ground_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_e2e")
+(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_wifi_e2e" test_ground_wifi_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_wifi_e2e")
+(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_serial_e2e" test_ground_serial_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_serial_e2e")
+(cd ground && cc -O2 -I.. -I../fc -o "$T/test_ground_twolink_e2e" test_ground_twolink_e2e.c ../fc/nav_core.c ../fc/map_core.c ../fc/fc_core.c ../fc/tlm_core.c ../fc/tlm_sources.c ../fc/learn_core.c ../fc/super_core.c ../fc/rc_core.c ../fc/pickup_core.c ../fc/crsf.c ../rn_host.c ../rn.c ../rn_link.c ../rn_builtin.c -lm -lutil && "$T/test_ground_twolink_e2e")
