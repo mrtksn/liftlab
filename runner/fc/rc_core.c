@@ -52,7 +52,7 @@ int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const
     if (N->landed && !P->arm) { nav_land_reset(N); P->fly = 0; P->have_target = 0; P->landed_was = 0; }
     P->level = in->ch[RC_LEVEL] < -0.33f ? 0 : in->ch[RC_LEVEL] > 0.33f ? 2 : 1;
     int fly = in->ch[RC_FLY] > 0;
-    if (fly && !P->fly && !P->have_target) { P->target[0] = o->p[0]; P->target[1] = o->p[1]; P->target[2] = 1.5f; P->heading = sp->heading; P->have_target = 1; }
+    if (fly && !P->fly && !P->have_target) { P->target[0] = o->p[0]; P->target[1] = o->p[1]; P->target[2] = 1.5f; P->heading = N->map.yaw; P->have_target = 1; }   /* (it takes off facing the way it stands: not turning to a heading of 0 on the way up) */
     if (!fly && P->fly) {                              /* (the next "fly" starts where the drone is then) */
       P->have_target = 0;
       if (o->fly) say(P, "fly switch off: landing");   /* (the navigation lands it, then idles) */
