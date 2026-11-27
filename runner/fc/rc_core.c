@@ -30,6 +30,7 @@ static const float LEVEL[3][3] = { { 1, 0.6f, 0.785f }, { 3, 1.5f, 1.571f }, { 6
 
 int rc_pilot_step(rc_pilot *P, const rc_input *in, double t, nav_state *N, const nav_out *o, float dt, nav_sp *sp) {
   int ok = rc_link_ok(in, t);
+  sp->vmax[0] = LEVEL[P->level][0]; sp->vmax[1] = LEVEL[P->level][1];   /* (the speed level: the navigation flies no faster) */
   /* the link: lost in flight, the navigation flies home and lands; back, it holds where it is */
   if (!ok && in->frames && !P->lost) {
     P->lost = 1; pickup_cancel(&P->pk, "radio link lost"); mis_stop(P, "radio link lost");

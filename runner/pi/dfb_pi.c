@@ -110,6 +110,7 @@
 #include <sys/socket.h>
 #include <termios.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern const uint8_t *const rn_builtin_img;
@@ -1096,6 +1097,33 @@ int main(int argc, char **argv) {
         if (was && !LS.cal) printf("learning: %s\n", LS.msg);
       }
       loop_prof_in(&LP, LP_NAVSTEP); int e = nav_step(&N, &in, &P.sp, dt, &o); loop_prof_out(&LP);
+      {   /* the flight recorder: each step while armed (and 3 s after), one CSV line, into flights/ beside the design's files:
+           * what the navigation was given, what it believed, what it asked for (each flight its own file, the last 30 kept) */
+        static FILE *rec; static double rec_until; const int armed_now = fc_state == FC_ARMED || fc_state == FC_FAILSAFE;
+        if (armed_now) rec_until = t + 3;
+        if (!rec && armed_now) {
+          char name[64]; time_t now = time(NULL); struct tm tmv; localtime_r(&now, &tmv);
+          mkdir("flights", 0755); strftime(name, sizeof name, "flights/flight-%Y%m%d-%H%M%S.csv", &tmv);
+          rec = fopen(name, "w");
+          if (rec) { fprintf(rec, "t,fc_t,fc_state,roll_deg,pitch_deg,yaw_deg,wx,wy,wz,ax,ay,az,baro,have_flow,fx,fy,fq,range,px,py,pz,vx,vy,vz,tx,ty,tz,spx,spy,spz,accx,accy,accz,fly,pos_ok,sticks,guard,map_aligned,level_h,level_v\n");
+                     printf("flight recorder: %s\n", name); }
+          system("ls -1t flights/flight-*.csv 2>/dev/null | tail -n +31 | xargs -r rm -f");   /* (the last 30 flights) */
+        }
+        if (rec) {
+          float R9[9]; { float w = in.q[0], x = in.q[1], y = in.q[2], z = in.q[3];
+            R9[0] = 1 - 2 * (y * y + z * z); R9[3] = 2 * (x * y + w * z); R9[6] = 2 * (x * z - w * y); R9[7] = 2 * (y * z + w * x); R9[8] = 1 - 2 * (x * x + y * y); }
+          const double D = 57.29578;
+          fprintf(rec, "%.3f,%.3f,%d,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.3f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%d,%d,%d,%d,%d,%.1f,%.1f\n",
+                  t, (double)v[0], (int)fc_state, atan2(R9[7], R9[8]) * D, -asin(R9[6] < -1 ? -1 : R9[6] > 1 ? 1 : R9[6]) * D, atan2(R9[3], R9[0]) * D,
+                  (double)in.w[0], (double)in.w[1], (double)in.w[2], (double)in.acc[0], (double)in.acc[1], (double)in.acc[2], (double)in.baro_alt,
+                  in.have_flow, (double)in.flow[0], (double)in.flow[1], (double)in.flow_q, (double)in.range,
+                  (double)o.p[0], (double)o.p[1], (double)o.p[2], (double)o.v[0], (double)o.v[1], (double)o.v[2], (double)o.target[0], (double)o.target[1], (double)o.target[2],
+                  (double)P.sp.target[0], (double)P.sp.target[1], (double)P.sp.target[2], (double)o.acc[0], (double)o.acc[1], (double)o.acc[2],
+                  o.fly, o.pos_ok, sticks, o.guard, N.map.aligned, (double)P.sp.vmax[0], (double)P.sp.vmax[1]);
+          static double flushed; if (t - flushed > 1) { fflush(rec); flushed = t; }
+          if (t > rec_until) { fclose(rec); rec = NULL; }
+        }
+      }
       if ((o.guard & 2) && (P.sp.vref[0] != 0 || P.sp.vref[1] != 0 || P.sp.vref[2] != 0)) { memcpy(P.sp.target, o.target, sizeof P.sp.target); if (radio) { memcpy(RP.target, o.target, sizeof RP.target); RP.have_target = 1; } }   /* (the map's guard cut it short while the sticks move it: the target waits there; a go-to keeps its place) */
       if (have_fleet) {                                                 /* the fleet program: 10 times a second; what it says, back to the ESP32 */
         static float fo[FLEET_OUT_MAX]; fleet_step(&FL, &N, &o, t);

@@ -653,7 +653,7 @@ static int nav_run(nav_sp *sp_radio) {
   in.have_flow = a[k++] > 0.5f; in.flow[0] = a[k++]; in.flow[1] = a[k++]; in.range = a[k++]; in.flow_q = a[k++]; in.flow_age = a[k++];
   for (int i = 0; i < 3; i++) sp.target[i] = a[k++];
   for (int i = 0; i < 3; i++) sp.vref[i] = a[k++];
-  sp.heading = a[k++]; sp.fly = a[k++] > 0.5f;
+  sp.heading = a[k++]; sp.fly = a[k++] > 0.5f; sp.vmax[0] = sp.vmax[1] = 0;
   float dt = a[k++];
   nav_clock += dt;
   if (sp_radio) sp = *sp_radio;

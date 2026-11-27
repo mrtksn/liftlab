@@ -49,8 +49,12 @@ typedef struct {
   float heading;                         /* [rad] */
   int fly;                               /* 0: stay on the ground (idle; turned to 0 in the air, it lands where it is
                                           * first); 1: fly to the target */
+  float vmax[2];                         /* the pilot's speed level: the fastest horizontally and vertically [m/s] (0: none
+                                          * of its own). The target is flown to no faster */
 } nav_sp;
 
+#define NAV_TAKEOFF_V 0.5f               /* [m/s] it climbs no faster after leaving the ground, until it first reaches the
+                                          * height it was asked for (a take-off, not a launch) */
 #define NAV_LIFTOFF_S 3.0f                /* lift-off: how long it may climb before the flow must speak [s] */
 typedef struct {
   float acc[3], heading; int fly;        /* the guided command for the flight core */
@@ -101,6 +105,8 @@ typedef struct {
   int seen;                              /* references heard from since start (bits as nav_config.refs) */
   float t_est, t_wait, t_still;                   /* how long the estimator has run; how long it has waited for its references */
   float t_noref;                         /* how long since a horizontal reference spoke (nav_out.pos_ok) */
+  float zc; int climbed;                 /* the height target it flies to (moved toward the pilot's at no more than its speed
+                                          * level, NAV_TAKEOFF_V on the way up from the ground), and whether it has got up */
   float t_fly;                           /* how long it has been flying (the last step's fly): its lift-off (nav_out.pos_ok) */
   /* the health supervisor's mode and limits (fc_core.h SET): it flies home, or lands, by itself */
   int sup_mode; float lim_speed, lim_accel, lim_lean;

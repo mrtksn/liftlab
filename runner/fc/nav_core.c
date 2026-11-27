@@ -296,7 +296,7 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   /* "fly" off in the air: it lands where it is first (idling there it would drop); back on, it flies on */
   if (!sp->fly && N->last.fly && !N->fly_land) { N->fly_land = 1; say(N, "fly off in the air: landing"); }
   if (sp->fly && N->fly_land) { N->fly_land = 0; if (N->sup_mode < 2 && !N->rc_rth) { N->auto_on = 0; N->auto_land = 0; } }
-  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
+  if ((!sp->fly && !N->fly_land) || (!N->have_home && !out->ready)) { memset(N->iPos, 0, sizeof N->iPos); N->zc = N->p[2]; N->climbed = 0; return 0; }   /* on the ground (or not ready to leave it): nothing to steer */
 
   /* the supervisor's return home and landing, and the landing for "fly" off: it moves the target itself, as the
    * pilot would, within the limits */
@@ -328,12 +328,25 @@ static int step(nav_state *N, const nav_in *in, const nav_sp *sp, float dt, floa
   float gt[3], gv[3], glim = 1e9f;
   if (!(N->auto_on && N->auto_land) && guard(N, target, vref, gt, gv, &glim, out, dt)) { target = gt; vref = gv; }
   else N->map.guard_was = 0;
+  /* how fast it flies there: the pilot's speed level, and gently off the ground. Its height target moves toward the one
+   * asked for at no more than that, fed forward (whatever the position gains, it climbs at that speed) */
+  float lt[3], lv[3], vz_up = sp->vmax[1] > 0 ? sp->vmax[1] : 3, vz_dn;
+  if (!N->climbed) { if (N->p[2] >= target[2] - 0.15f) N->climbed = 1; else if (vz_up > NAV_TAKEOFF_V) vz_up = NAV_TAKEOFF_V; }
+  vz_dn = vz_up < 1.5f ? vz_up : 1.5f;
+  for (int i = 0; i < 3; i++) { lt[i] = target[i]; lv[i] = vref[i]; }
+  { float dz = target[2] - N->zc;
+    if (dz > vz_up * dt) { N->zc += vz_up * dt; lv[2] = vz_up; }
+    else if (dz < -vz_dn * dt) { N->zc -= vz_dn * dt; lv[2] = -vz_dn; }
+    else N->zc = target[2];
+    lt[2] = N->zc; }
+  target = lt; vref = lv;
   for (int i = 0; i < 3; i++) out->target[i] = target[i];
 
   /* where to go: the acceleration toward the target */
   float ep[3], ev[3], vmax = C->speed_max > 0 ? C->speed_max : 6;
   if (N->lim_speed > 0 && N->lim_speed < vmax) vmax = N->lim_speed;   /* the supervisor's limit */
-  float vlimit = N->lim_speed > 0 ? N->lim_speed : 0;                 /* (the controller's: the supervisor's, or the guard's) */
+  float vlimit = N->lim_speed > 0 ? N->lim_speed : 0;                 /* (the controller's: the supervisor's, the guard's, the level's) */
+  if (sp->vmax[0] > 0) { if (sp->vmax[0] < vmax) vmax = sp->vmax[0]; if (!(vlimit > 0) || sp->vmax[0] < vlimit) vlimit = sp->vmax[0]; }
   if (glim < 1e8f) { if (glim < vmax) vmax = glim; if (!(vlimit > 0) || glim < vlimit) vlimit = glim; }
   for (int i = 0; i < 3; i++) {
     ep[i] = target[i] - N->p[i];
