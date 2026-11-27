@@ -213,6 +213,7 @@ function compBody(c, only) {   // only: 'part' (its own settings) or 'phys' (its
       slider(c, 'tmaxC'), slider(c, 'cool'), checkF(c, 'failHeat', 'Overheating damages it'),
       selectF(c, 'failMode', 'When it fails', [['stop', 'It stops'], ['loss', 'It loses thrust']], rerender));
     if (c.failMode === 'loss') b.append(slider(c, 'failLoss'));
+    if (typeof motorTestBox === 'function') b.append(motorTestBox(c));   // (spin it alone on the real drone: drone-card.js)
     b.append(el('p', { class: 'hint', text: 'It heats from the current in its windings and cools faster with the prop spinning. Past its limit its magnet weakens for good; 35 °C past it, it fails the way you set here. You can also break it from the Health panel while flying. The sensors are what the supervisor has to go on: without a temperature sensor it estimates the heat from the ESC\'s current, and without either it can\'t see it.' }),
       el('p', { class: 'hint', text: 'The shaft points from the motor to the prop. A puller\'s thrust points along it, toward the prop; a pusher\'s prop is pitched the other way, so its thrust points back toward the motor and it blows air away past the prop. The motor, ESC and prop are simulated from these: prop speed, current and torque, spin-up and spin-down, the throttle curve and the battery sag all follow. Hidden values are real hardware traits the controller isn\'t told. Calibrate measures them.' }));
   } else if (c.type === 'joint') {

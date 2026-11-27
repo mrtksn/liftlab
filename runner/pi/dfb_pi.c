@@ -463,7 +463,9 @@ static const char *bench_said(const float *b, int n) {
 static void stick_line(const char *s, int angle_mode, int radio_has_it, int radio_armed, int n_mot, char (*names)[16], float *c, double *ct, float *bench, int *bench_n, double t, int fc_flying, char *reply, size_t rn) {
   float a[5] = { 0, 0, 0, 0, 0 }; int motor = s[0] == 'm', multi = !strncmp(s, "motors", 6);
   const char *arg = s + (multi ? 6 : motor ? 5 : 6); while (*arg == ' ') arg++;
-  if (!angle_mode) { snprintf(reply, rn, "%s: only while the sticks fly it (the fly switch off, or angle mode); now the navigation holds its position (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
+  /* (a motor test needs it disarmed, not the sticks: on the ground the navigation holds nothing, and the test itself
+   * hands it to the sticks while it runs) */
+  if (!angle_mode && !(motor && !fc_flying)) { snprintf(reply, rn, "%s: only while the sticks fly it (the fly switch off, or angle mode); now the navigation holds its position (arm, takeoff, land, ...)", motor ? "motor" : "sticks"); return; }
   /* With the radio's channels coming, a motor test still goes while its pilot is disarmed (LiftLab's Motor thrust
    * test, connected: its own channels keep coming); arming takes it back. The sticks stay the radio's. */
   if (radio_has_it && (!motor || radio_armed)) { snprintf(reply, rn, "%s: the radio's pilot has it (its channels come%s); nothing taken from here", motor ? "motor" : "sticks", motor ? ", armed" : ""); return; }
@@ -496,7 +498,10 @@ static void stick_line(const char *s, int angle_mode, int radio_has_it, int radi
     if (sscanf(arg, "%d %f", &k, &a[0]) != 2 || !isfinite(a[0])) { snprintf(reply, rn, "motor N THROTTLE (N from 1%s), or motor off", n_mot ? "" : "; this dfb_pi has no --airframe to check N against"); return; }
     if (k < 1 || (n_mot && k > n_mot) || k > FC_MAX_MOTORS) { snprintf(reply, rn, "motor: %d isn't one of this airframe's %d motors", k, n_mot); return; }
     if (fc_flying) { snprintf(reply, rn, "motor: not while it's armed (a test disarms it); disarm first"); return; }
-    float z[7] = { 0, 0, 0, 0, 0, (float)(k - 1), a[0] < 0 ? 0 : a[0] > 1 ? 1 : a[0] }; memcpy(c, z, sizeof z); *ct = t;
+    float z[7] = { 0, 0, 0, 0, 0, (float)(k - 1), a[0] < 0 ? 0 : a[0] > 1 ? 1 : a[0] };
+    const int again = t - *ct < TXT_STICK_S && c[5] == z[5] && c[6] == z[6];   /* (the same test renewed, as a held button sends it: no answer) */
+    memcpy(c, z, sizeof z); *ct = t;
+    if (again) { reply[0] = 0; return; }
     snprintf(reply, rn, "motor test: %d%s%s%s at %.2f", k, names ? " (" : "", names ? names[k - 1] : "", names ? ")" : "", (double)z[6]);
     return;
   }

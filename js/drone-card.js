@@ -535,3 +535,37 @@ function cardEditSet(on) {
   cardFoldSet(card.fold);
   setInterval(() => { if (!cardLive()) cardRender(); }, 200);         // (connected: live.js renders it with each frame)
 })();
+
+/* ───────── a motor on its own, on the real drone (each motor's settings: Test it on the drone) ───────── */
+// dfb_pi's `motor N THROTTLE` (N: the motor's place in the airframe, from 1): the flight controller spins that motor
+// alone while the commands keep coming, and stops it by itself half a second after the last (TXT_STICK_S). Held, the
+// button sends it four times a second; let go, `motor off`. Only while connected to the drone, and only disarmed (the
+// drone refuses it armed). Props off to see which corner and which way it turns.
+const motorTest = { on: null, timer: null, thr: 0.12 };
+function motorTestStop() {
+  clearInterval(motorTest.timer); motorTest.timer = null;
+  if (motorTest.on != null) { motorTest.on = null; if (cardLive()) cardTextOut('motor off'); }
+  document.querySelectorAll('.motor-test-btn').forEach(b => b.classList.remove('primary'));
+}
+window.addEventListener('blur', motorTestStop);
+document.addEventListener('visibilitychange', () => { if (document.hidden) motorTestStop(); });
+function motorTestBox(c) {
+  const motors = cfg.comps.filter(x => x.type === 'motor'), n = motors.indexOf(c) + 1;
+  const say = el('p', { class: 'hint', role: 'status' });
+  const live = cardLive();
+  const thr = el('input', { type: 'range', min: '0', max: '0.4', step: '0.01', value: String(motorTest.thr), 'aria-label': c.name + ' test throttle', disabled: !live });
+  const val = el('span', { text: `${Math.round(motorTest.thr * 100)}%` });
+  thr.addEventListener('input', () => { motorTest.thr = +thr.value; val.textContent = `${Math.round(motorTest.thr * 100)}%`; });
+  const btn = UI.button({ class: 'btn motor-test-btn', type: 'button', text: `Hold to spin ${c.name}`, disabled: !live, title: `Spins motor ${n} alone while held (dfb_pi: motor ${n} THROTTLE)` });
+  const send = () => { const why = cardTextOut(`motor ${n} ${motorTest.thr.toFixed(2)}`); if (why && !/too many/.test(why)) { say.textContent = why; motorTestStop(); } };
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault(); if (!cardLive()) return; motorTestStop();
+    motorTest.on = n; btn.classList.add('primary'); send(); motorTest.timer = setInterval(send, 250);
+    say.textContent = `Motor ${n} (${c.name}) spinning at ${Math.round(motorTest.thr * 100)}% while you hold it.`;
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, () => { if (motorTest.on === n) { motorTestStop(); say.textContent = `Motor ${n} stopped.`; } });
+  say.textContent = live ? `Motor ${n} of ${motors.length} in the airframe. Disarmed only. Props off to check which corner spins and which way (facing the prop, ${c.spin > 0 ? 'counter-clockwise' : 'clockwise'} in this design).`
+    : 'Connect to the drone (Ground tab) to spin this motor on the real drone.';
+  return UI.details({ title: 'Test it on the drone', class: 'hw-advanced' },
+    el('div', { class: 'hrow' }, el('span', { text: 'Throttle ' }), thr, val), el('div', { class: 'hrow' }, btn), say);
+}
