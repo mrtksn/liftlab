@@ -764,7 +764,7 @@ int main(int argc, char **argv) {
           char reply[1000]; float px, py, pz; int pl = 1;
           int design = design_line(s, link, fc_state_t > 0 && t - fc_state_t < 1 && (fc_state == FC_ARMED || fc_state == FC_FAILSAFE), af_path, &n_mot, mot_name, t, reply, sizeof reply);
           if (!design) design = flow_in_command(&FI, s, t, reply, (int)sizeof reply);   /* flow, flowcal: the camera's (no pilot's command) */
-          if (!design) design = nav_map_command(&N, s, nav_v[0] + (last_nav > 0 ? t - last_nav : 0), reply, (int)sizeof reply);   /* mapfix, mapguard, map: the navigation's map (on the flight core's clock) */
+          if (!design) design = nav_map_command(&N, s, t, reply, (int)sizeof reply);   /* mapfix, mapanchor, mapguard, map: the navigation's map (a fix's time on this computer's clock: its pictures' and its range readings') */
           if (!design && (!strcmp(s, "cpu") || !strcmp(s, "cpu off"))) { loop_prof_said(&LP, s + 3 + (s[3] == ' '), LP_CMD, reply, sizeof reply); design = 1; }   /* where the processor time goes (loop_prof.h) */
           if (!design && !strcmp(s, "height")) {             /* the height's sources side by side, and what the navigation fused */
             int kk = 0; char rs[200]; tof250_said(&RF, t, rs, (int)sizeof rs);

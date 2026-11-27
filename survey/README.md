@@ -52,6 +52,14 @@ Two pipeline nodes (group **Drone**) take a walk's free and occupied space to th
   drone at its take-off spot), or on the floor below it, facing the way the walk's camera first looked (90°, the map's
   +Y) unless set otherwise. It runs only when asked (opening a preset doesn't send). The drone's answers come back.
 
+**Fixes to the drone** (beside Connect camera): with the drone's own camera connected and a walk open whose map is in
+metres, each live picture is located in that walk's map (`localize.py`) and sent to the drone as `mapfix`
+(`drone_fixes.py`): where its hub is, and the turn from the map's axes to its flight core's heading (the camera's turn
+on the drone, Device and recording → *The drone's camera turned on it*, from flowcal; the flight core's attitude from
+its telemetry at the picture's moment). For a walk recorded through the drone's camera held level at flight height
+the ToF hardly changes, so lower *Smallest spread of ToF distances* (0.1 m) for the walk to get its scale; and with
+its 320 × 240 pictures, *Use every Nth frame* 1 and *Focal length guess* about 200 px.
+
 Placed by hand, the drone carries its position on its flow camera, and its guard leaves it more room the further it
 flies (15 % of the distance) until live fixes come.
 

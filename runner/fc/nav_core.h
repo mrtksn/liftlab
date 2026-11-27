@@ -140,7 +140,8 @@ int nav_mapfix(nav_state *N, float age, const float p[3], float psi, float sigma
  * stale (fixes, when they come, correct it). 0, or −1 before the estimate has started. */
 int nav_mapanchor(nav_state *N, const float p[3], float heading);
 /* The map's text commands (docs/map-navigation.md): mapfix T X Y Z PSI [SIGMA] (T on the clock `now` is on: the
- * flight core's; T ≤ 0: −T seconds ago), mapanchor X Y Z HEADING_DEG, mapguard RADIUS [V_UNKNOWN], map (how it is),
+ * host's: dfb_pi's CLOCK_MONOTONIC, the clock its camera's pictures carry; the simulator's board clock; T ≤ 0: −T
+ * seconds ago), mapanchor X Y Z HEADING_DEG, mapguard RADIUS [V_UNKNOWN], map (how it is),
  * map clear, map fuse on|off. 1 if it was one (reply set), else 0. */
 int nav_map_command(nav_state *N, const char *s, double now, char *reply, int rn);
 

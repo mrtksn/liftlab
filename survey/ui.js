@@ -598,6 +598,10 @@ async function update() {
   $('connect').textContent=connected?'Disconnect':'Connect camera'; $('connect').disabled=s.recording;
   $('record').textContent=s.recording?'Finish walk':'Start walk'; $('record').disabled=!s.recording&&!s.fresh;
   $('record').classList.toggle('recording',s.recording);
+  { const f=s.droneFixes||{}, b=$('droneFixes'), out=$('droneFixesStatus');   // live fixes for the drone (drone_fixes.py)
+    b.textContent=f.on?'Stop fixes':'Fixes to the drone'; b.disabled=!f.on&&!(s.fresh&&s.hasMap&&!s.recording);
+    out.textContent=!f.on?'':`Fixes in ${f.walk}'s map: ${f.located} of ${f.tried} pictures placed, ${f.sent} sent · ${f.status||'waiting for a picture'}`
+      +(f.xyz?` · at ${f.xyz.join(', ')} m, turn ${f.psiDeg}°, ${f.inliers} landmarks`:''); }
   let recordStatus = 'Ready to record';
   if(s.recording) recordStatus = 'Recording in progress';
   else if(!s.fresh) recordStatus = connected?'Waiting for live camera frames':'Connect the camera to record';
@@ -660,6 +664,7 @@ async function act(key,body={}) {
   }catch(e){$('error').textContent=e.message;}finally{active=false;}
 }
 $('connect').onclick=()=>act(['Live','Connecting'].includes(state.connection)?'disconnect':'connect');
+$('droneFixes').onclick=()=>act('drone-fixes',{on:!(state.droneFixes&&state.droneFixes.on)});
 $('levelStart').onchange=()=>{$('mountAngles').hidden=!$('levelStart').checked;};
 for(const id of ['mountPitch','mountRoll']){
   const saved=localStorage.getItem('room-survey-'+id);

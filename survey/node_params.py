@@ -121,6 +121,10 @@ DEVICE_PARAMS = (
                   ["drone", "The drone's downward camera through its flow program, while it runs"]],
          help="The drone's: dfb_flow sends every Nth frame (its --frames port) and dfb_pi the telemetry and the ToF; "
               "nothing on the drone stops. Its pictures are 320 × 240: use a lens calibration file of their own."),
+    dict(group="Camera", key="camera_turn_deg", label="The drone's camera turned on it", kind="number", unit="°",
+         default=90.0, min=-180.0, max=360.0,
+         help="About its own axis, against the drone's nose (dfb_pi's flowcal measures it; the design's flow camera mount). "
+              "Live fixes need it to tell which way the drone points."),
     dict(group="Camera", key="frames_port", label="The flow program's picture port", kind="int", default=14682,
          min=1024, max=65535, help="dfb_flow --frames PORT, on the Pi (the drone's camera only)."),
     dict(group="Camera", key="camera_width", label="Image width", kind="int", unit="px", default=640, min=64, max=4096),

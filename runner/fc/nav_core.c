@@ -182,7 +182,7 @@ int nav_map_command(nav_state *N, const char *s, double now, char *r, int rn) {
   const char *a; float v[6]; int n = 0;
   if ((a = word(s, "mapfix"))) {
     for (const char *e; n < 6 && (e = mnum(a, &v[n])); n++) a = e;
-    if (n < 5) { fc_fmt(r, rn, "mapfix T X Y Z PSI [SIGMA]: the hub at T (flight core's clock; T<=0: -T s ago), map axes [m]; PSI to nav axes [rad]"); return 1; }
+    if (n < 5) { fc_fmt(r, rn, "mapfix T X Y Z PSI [SIGMA]: the hub at T (this computer's clock; T<=0: -T s ago), map axes [m]; PSI to nav axes [rad]"); return 1; }
     float p[3] = { v[1], v[2], v[3] };
     if (nav_mapfix(N, v[0] <= 0 ? -v[0] : (float)(now - v[0]), p, v[4], n > 5 ? v[5] : 0.1f)) fc_fmt(r, rn, "mapfix: not yet (the estimate hasn't started)");   /* (T ≤ 0: that long ago) */
     else r[0] = 0;                                       /* (taken: a fix says nothing back, as a flow reading doesn't) */

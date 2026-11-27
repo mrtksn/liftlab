@@ -33,6 +33,7 @@ from cloth_surfaces import METHOD as CLOTH_METHOD, build_cloth
 import numpy as np
 import pycolmap as sfm
 from localize import Locator
+import drone_fixes
 from calibration import corners, solve
 from reconstruct import atomic_json, build, recover_gaps
 import node_params
@@ -107,6 +108,10 @@ class Survey:
     def __init__(self, root, pi):
         self.root, self.pi_override = root, pi
         self.device = device_settings(root)
+        # live fixes for the drone's navigation (drone_fixes.py): its pictures located in the opened walk's map
+        self.attitudes, self.fixer, self.fix_sender, self.fix_frame, self.fix_last = drone_fixes.Attitudes(), None, None, None, {}
+        self.fix_event = threading.Event()
+        threading.Thread(target=self.fix_worker, daemon=True).start()
         root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.process = self.latest = self.run = self.log = None
@@ -223,6 +228,11 @@ class Survey:
                             self.range_stats.popleft()
                     if motion:
                         self.motion_arrival = self.arrival
+                        for m in motion:                   # (the flight core's attitude, on the Pi's clock: for the fixes)
+                            self.attitudes.add(m[0], (m[4], m[5], m[6], m[7]))
+                    if self.fixer and magic == b"IMU2":   # (the newest picture to the fixes' worker: an older one waiting is dropped)
+                        self.fix_frame = (data, callback_ns / 1e9)
+                        self.fix_event.set()
                     self.connection = "Live"
                     if self.log:
                         if self.motion_log:
@@ -559,7 +569,49 @@ class Survey:
                                   [job[0].name for job in self.build_queue],
                     camera=[self.device["camera_width"], self.device["camera_height"]],
                     version=self.version, refs=self.refs, samples=len(self.samples), calibrated=self.calib.exists(),
-                    hasMap=bool(self.run and (self.run/"survey.json").exists()))
+                    hasMap=bool(self.run and (self.run/"survey.json").exists()),
+                    droneFixes=self.fix_state())
+
+    def fix_state(self):
+        f, last = self.fixer, self.fix_last or {}
+        if not f:
+            return dict(on=False)
+        return dict(on=True, walk=getattr(self, "fix_walk", None), tried=f.n, located=f.located,
+                    sent=self.fix_sender.sent if self.fix_sender else 0, status=last.get("status"),
+                    xyz=[round(v, 2) for v in last["xyz"]] if last.get("xyz") else None,
+                    psiDeg=round(math.degrees(last["psi"]), 1) if last.get("psi") is not None else None,
+                    inliers=last.get("inliers"))
+
+    def fix_worker(self):
+        while True:
+            self.fix_event.wait(); self.fix_event.clear()
+            with self.lock:
+                fixer, sender, frame = self.fixer, self.fix_sender, self.fix_frame
+                self.fix_frame = None
+            if not fixer or not frame:
+                continue
+            try:
+                r = fixer.fix(frame[0], frame[1], self.attitudes)
+                if r.get("line"):
+                    sender.send(r["line"])
+            except Exception as exc:                   # (a bad picture, the network: say so, carry on)
+                r = dict(status=f"Failed: {exc}")
+            with self.lock:
+                self.fix_last = r
+
+    def drone_fixes(self, body):
+        if not body.get("on"):
+            self.fixer, self.fix_sender, self.fix_last = None, None, {}
+            self.message = "Fixes to the drone stopped"
+            return
+        if not self.run or not (self.run/"survey.json").is_file():
+            raise ValueError("Open the walk whose map the drone flies in.")
+        model = json.loads((self.run/"survey.json").read_bytes())
+        fixer = drone_fixes.Fixer(self.run, model, self.device["camera_turn_deg"])
+        self.fix_sender = drone_fixes.Sender(str(self.pi).split("@")[-1])
+        self.fixer, self.fix_last = fixer, {}
+        self.fix_walk = self.run.name
+        self.message = f"Fixes to the drone: its pictures placed in {self.run.name}'s map"
 
     def locate(self, body):
         with self.lock:
@@ -685,6 +737,8 @@ class Survey:
                 if any(np.mean(np.linalg.norm(pixels-s,axis=2)) < 12 for s in self.samples):
                     raise ValueError("Change the board position or tilt before adding another view.")
                 self.samples.append(pixels)
+            elif action == "drone-fixes":
+                self.drone_fixes(body)
             elif action == "device-settings":
                 if self.log:
                     raise ValueError("Finish the recording before changing device settings.")

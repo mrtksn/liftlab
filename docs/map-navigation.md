@@ -20,8 +20,8 @@ work over every link:
   (a kind and a length: unknown, free or occupied cells, or cells as the row or the layer before, since walls and
   floors repeat), then a CRC-32. A room or the parkour city at 11 cm is a few hundred bytes; the file link takes 32 KB.
 - **A fix**: `mapfix T X Y Z PSI [SIGMA]`: where the drone's hub was at time T [s], in the map's axes [m]. T is on
-  the flight core's clock (`dfb_pi`: the clock its NAV frames carry; the simulator: the board's), or, at zero or
-  below, that many seconds ago. PSI [rad] is the turn from the map's axes to the navigation's (the flight core's
+  the drone computer's clock (`dfb_pi`: CLOCK_MONOTONIC, the clock its camera's pictures and range readings carry;
+  the simulator: the board's), or, at zero or below, that many seconds ago. PSI [rad] is the turn from the map's axes to the navigation's (the flight core's
   heading has no north: it starts where the drone points and drifts, and the mapper sees both). SIGMA [m], how sure.
   The first fix anchors the map to the navigation's estimate (nothing jumps); after it each fix corrects the
   estimate, as a GPS fix does (the estimator's fix without a velocity, or with the GPS's velocity when there is a GPS),
@@ -61,7 +61,8 @@ map.
   a map takes a while).
 - **Room Survey** (survey/README.md, *A map for the drone*): a walk's clearance grid as the map file (node
   *Navigation map*), sent to the Pi's command port over the Wi-Fi with the guard's radius and an anchor (node *Send to
-  the drone*). Live fixes from the downward camera's frames come later.
+  the drone*). Live fixes (*Fixes to the drone*): each picture from the drone's own downward camera located in a walk
+  recorded through that camera, with the flight core's heading at that moment, sent as `mapfix` (`drone_fixes.py`).
 
 Which cameras a mapper uses, and where they are, is the design's: any camera part on the frame, any computer that
 reads it. The drone's side doesn't know or care.
@@ -77,7 +78,7 @@ reads it. The drone's side doesn't know or care.
 | Simulator: map from the World, sent up the radio or to the board, fixes with noise, delay and dropouts (World settings → The navigation's map) | built |
 | Simulator: map from what the cameras see (unknown until seen) | built |
 | Room Survey: map file, sent with an anchor | built |
-| Room Survey: live fixes from the camera's frames | next |
+| Room Survey: live fixes from the camera's frames | built (checked on a walk's own frames: the heading turn steady within ±2.5° over 560° of turns) |
 | `mapanchor` (placed by hand), the margin growing with distance since a fix | built |
 | Routes around obstacles | later |
 
